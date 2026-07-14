@@ -263,7 +263,8 @@ mut names: Set[String] = {}
 
 The full method surface includes `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`.
 
-Sets deduplicate values and can be iterated by value or through a shared borrow.
+Sets deduplicate values. Bare and explicit-`borrow` iteration are shared;
+`for value in own set:` consumes the set.
 
 See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 

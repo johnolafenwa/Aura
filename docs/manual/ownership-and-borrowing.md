@@ -55,13 +55,13 @@ A generic payload whose declared type is an unconstrained type parameter is not 
 A non-copy value is consumed when used in an owned position, including:
 
 - assignment into a new owned binding
-- a by-value function parameter or an `own self` method receiver
+- an `own` function parameter or an `own self` method receiver
 - a by-value return
 - a class or enum payload, collection literal, or mutating collection method that stores the value
 - by-value enum matching
-- by-value iteration over `Vec[T]` or `Set[T]`
+- `own` iteration over `Vec[T]` or `Set[T]`
 - the resource expression of `with`
-- a task-start argument for a by-value target parameter
+- a task-start argument copied or moved into task-owned capture storage
 
 An expression is evaluated before its move is recorded at that boundary. Aurora also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
@@ -69,12 +69,16 @@ An expression is evaluated before its move is recorded at that boundary. Aurora 
 
 | Form | Meaning |
 | --- | --- |
+| `value: T` | By value for copy `T`; shared borrow for non-copy or unresolved generic `T`. |
+| `value: own T` | Explicit owned ordinary parameter. |
 | `value: borrow T` | Shared borrowed ordinary parameter. |
 | `value: borrow mut T` | Exclusive mutable borrowed ordinary parameter. |
 | `self` | Shared method receiver and the default receiver spelling. |
 | `borrow self` | Explicit synonym for shared `self`. |
 | `own self` | Consuming method receiver. |
 | `borrow mut self` | Exclusive mutable method receiver. |
+| `for value in collection:` | Default shared iteration for `Vec` and `Set`. |
+| `for value in own collection:` | Consuming iteration for `Vec` and `Set`. |
 | `for value in borrow collection:` | Shared-borrow iteration. |
 | `for value in borrow mut collection:` | Mutable-borrow iteration where supported. |
 | `match borrow value:` | Shared borrowed pattern matching. |
@@ -96,7 +100,7 @@ print(name)
 A shared borrow permits reading but cannot be moved and cannot be used as a mutable place. A mutable borrow is exclusive and may mutate its source through the borrowed binding.
 
 ```python
-def add_name(names: borrow mut Vec[String], name: String):
+def add_name(names: borrow mut Vec[String], name: own String):
     names.push(name)
 
 mut names = Vec[String]()
@@ -200,9 +204,18 @@ Payload bindings are arm-local and cannot shadow a visible binding. Match typing
 
 ## Borrowed Iteration
 
-By-value `Vec` and `Set` iteration consumes the collection and yields owned elements. `for value in borrow collection` retains it and yields shared-borrowed non-copy elements. `for value in borrow mut vec` requires a mutable vector place and yields mutable-borrowed elements.
+Bare `Vec` and `Set` iteration retains the collection and yields shared-borrowed
+non-copy elements. `for value in own collection` consumes it and yields owned
+elements. `for value in borrow collection` is the explicit shared form.
+`for value in borrow mut vec` requires a mutable vector place and yields
+mutable-borrowed elements.
 
-The iterated place is frozen against overlapping mutation for the loop body. Mutable-borrow set iteration is not supported; mutate a set through `insert` and `remove` outside borrowed iteration. Queue iteration is a consuming/scheduler operation with separate rules in [Concurrency](/manual/concurrency).
+The iterated place is frozen against overlapping mutation for the loop body.
+Mutable-borrow set iteration is not supported; mutate a set through `insert`
+and `remove` outside borrowed iteration. Queue iteration receives values; it is
+a scheduler operation, not a place traversal. The bare form yields owned
+items, while all three explicit ownership modifiers are rejected. See
+[Concurrency](/manual/concurrency).
 
 ## Clone
 
@@ -219,10 +232,12 @@ String and collection clones copy their owned contents. Cloning runtime-backed r
 
 ## Tasks And Borrowing
 
-`TaskGroup.start` and `start_soon` accept only named functions or associated methods whose ordinary parameters are all by value. Borrowed target parameters are rejected because a child may outlive the starting call frame.
+`TaskGroup.start` and `start_soon` accept named functions or associated methods
+with default-mode, `own`, or explicit shared-borrow parameters. `borrow mut`
+targets are rejected.
 
 ```python
-def worker(label: String):
+def worker(label: borrow String):
     print(label)
 
 with group = TaskGroup():
@@ -231,7 +246,11 @@ with group = TaskGroup():
     print(label)
 ```
 
-Each task argument is copied or moved under ordinary call rules before the child runs. Copy task and queue handles still refer to shared runtime state. See [Concurrency](/manual/concurrency) and [Execution Model](/manual/execution-model#tasks-and-scheduler).
+Each task argument is copied or moved into task-owned capture storage before
+the child runs. The target then borrows or consumes that capture according to
+its declared mode; a default non-copy parameter is a shared borrow from the
+capture. Copy task and queue handles still refer to shared runtime state. See
+[Concurrency](/manual/concurrency) and [Execution Model](/manual/execution-model#tasks-and-scheduler).
 
 ## Resources And `with`
 

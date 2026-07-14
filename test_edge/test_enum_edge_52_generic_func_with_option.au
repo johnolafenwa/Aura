@@ -8,7 +8,7 @@ def unwrap_or_int(opt: Option[int32], default_val: int32) -> int32:
         case Option.None:
             return default_val
 
-def unwrap_or_str(opt: Option[String], default_val: String) -> String:
+def unwrap_or_str(opt: own Option[String], default_val: own String) -> String:
     match opt:
         case Option.Some(v):
             return v

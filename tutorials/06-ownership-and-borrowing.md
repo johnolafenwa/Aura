@@ -53,8 +53,11 @@ The built-in move types include:
 
 - `String`
 - `Vec[T]`, `Map[K, V]`, `Set[T]`
-- `Queue[T]`, `Task[T]`, `TaskGroup`
+- `TaskGroup`
 - user-defined classes (by default)
+
+`Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying a
+handle does not copy a queued value or task result.
 
 Here is where Python intuition breaks down:
 
@@ -113,14 +116,15 @@ print(ys.len())        # 3 -- unaffected
 
 ## Passing Values To Functions
 
-Function parameters follow the same rules. If the parameter type is a move type and you pass a value by value, ownership transfers to the function:
+Bare function parameters are by value for copy types and shared borrows for
+non-copy types. To transfer a move value to a function, write `own`:
 
 ```python
 class Document:
     title: String
     pages: int32
 
-def archive(doc: Document):
+def archive(doc: own Document):
     print(doc.title)
 
 doc = Document(title="Report", pages=42)
@@ -128,7 +132,7 @@ archive(doc)
 print(doc.pages)       # COMPILE ERROR: use of moved value `doc`
 ```
 
-The function `archive` took ownership of `doc`. After the call, `doc` is no longer valid in the calling scope.
+The explicit `own` parameter took ownership of `doc`. After the call, `doc` is no longer valid in the calling scope. If the declaration were simply `doc: Document`, it would borrow and the caller could keep using it.
 
 For copy types, passing by value just copies:
 
@@ -368,7 +372,7 @@ def get_name(user: borrow User) -> String:
 **Option 2: take ownership of the whole value**
 
 ```python
-def get_name(user: User) -> String:
+def get_name(user: own User) -> String:
     return user.name           # consumes user, moves name out
 ```
 
@@ -410,30 +414,40 @@ error: field `name` on `copy class Bad` must be a copy type, found `String`
 
 ## Borrowing In Loops
 
-Loops interact with ownership in important ways. If you iterate over a collection by value, the collection is consumed:
+Loops use the same readable default. Bare `Vec` and `Set` iteration borrows the
+collection, so it remains usable:
 
 ```python
 mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
-print(names.len())     # COMPILE ERROR: use of moved value `names`
+print(names.len())     # 3 -- still usable
 ```
 
-The `for name in names` loop moved each element out of the vector. After the loop, `names` is no longer valid.
+Write `own` when you intend to move each element out and consume the vector:
 
-**Note:** Even `Vec[int32]` (a vector of copy types) is itself a move type. The `for x in xs` loop consumes the vector, even though the individual elements are copy types:
+```python
+names: Vec[String] = ["Ada", "Grace", "Margaret"]
+for name in own names:
+    print(name)
+# names is moved
+```
+
+**Note:** Even `Vec[int32]` is itself a move type, but its bare loop still
+borrows. Only `own` consumes it:
 
 ```python
 mut xs: Vec[int32] = [1, 2, 3]
 for x in xs:
     print(x)
-for x in xs:          # COMPILE ERROR: use of moved value `xs`
+for x in own xs:
     print(x)
+# another use of xs would now be an error
 ```
 
-### Shared borrow iteration with `borrow`
+### Explicit shared iteration with `borrow`
 
-To iterate without consuming the collection, use `for ... in borrow`:
+Bare iteration is already shared; `for ... in borrow` makes that contract explicit:
 
 ```python
 mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
@@ -475,11 +489,12 @@ This requires the collection binding to be `mut`.
 
 | Form | Effect | Use when |
 |------|--------|----------|
-| `for x in collection` | Consumes the collection | You are done with the collection after the loop |
-| `for x in borrow collection` | Shared borrow, collection stays valid | You want to read elements and keep the collection |
+| `for x in collection` | Shared borrow, collection stays valid | Ordinary read-only iteration |
+| `for x in own collection` | Consumes the collection | You are done with the collection after the loop |
+| `for x in borrow collection` | Explicit shared borrow | You want the borrow visible in source |
 | `for x in borrow mut collection` | Mutable borrow, can modify elements | You want to update elements in place |
 
-**Default recommendation:** Use `for x in borrow collection` unless you have a specific reason to consume or mutate.
+**Default recommendation:** Use bare `for x in collection` for reads, `own` to consume, and `borrow mut` to update.
 
 ## Borrowing In Match
 
@@ -590,22 +605,20 @@ def get_title(doc: borrow Document) -> String:
     return doc.title.clone()
 ```
 
-### Pattern: "I need to iterate over a collection multiple times"
+### Pattern: "I need to consume collection elements"
 
 **Problem:**
 ```python
 for item in items:
-    process(item)
-for item in items:     # COMPILE ERROR: moved
-    verify(item)
+    inspect(item)
+print(items.len())     # still available
 ```
 
-**Fix -- borrow iterate:**
+**Use `own` when the consumer needs owned items:**
 ```python
-for item in borrow items:
+for item in own items:
     process(item)
-for item in borrow items:
-    verify(item)
+# items is now moved
 ```
 
 ### Pattern: "I need to modify elements in a collection"
@@ -647,8 +660,8 @@ Here is how to translate your Python intuition:
 | `def f(x): ...` reads x | `def f(x: borrow T): ...` |
 | `def f(x): x.mutate()` | `def f(x: borrow mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
-| `for x in list: ...` (list survives) | `for x in borrow list: ...` (list survives) |
-| No concept | `for x in list: ...` (list consumed) |
+| `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
+| No direct equivalent | `for x in own list: ...` (list consumed) |
 
 The key shift is: in Python, assignment creates aliases. In Aurora, assignment transfers ownership. Once you internalize this, the rest of the system follows naturally.
 
@@ -660,7 +673,7 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 4. Use `borrow T` to lend read-only access. Use `borrow mut T` to lend mutable access.
 5. `borrow mut` is exclusive -- no other borrows of the same value can exist at the same time.
 6. Method receivers follow the same rules: `self` (or `borrow self`) reads, `borrow mut self` modifies, and `own self` consumes.
-7. Use `for x in borrow collection` to iterate without consuming. Use `for x in borrow mut collection` to modify elements.
+7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in borrow mut collection` to modify elements.
 8. Use `match borrow value` to pattern-match without consuming.
 9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.
 

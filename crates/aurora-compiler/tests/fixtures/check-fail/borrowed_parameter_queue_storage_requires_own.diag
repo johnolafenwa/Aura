@@ -1,0 +1,5 @@
+error: parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_parameter_queue_storage_requires_own.au:2:16
+  |
+2 |     output.put(value)
+  |                ^

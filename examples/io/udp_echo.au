@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
+def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with server_socket = socket:
         match try server_socket.recv_from(1024, timeout=5s):
             case Option.Some(packet):

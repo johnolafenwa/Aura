@@ -64,6 +64,24 @@ declaring an associated method:
 `self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate
 ```
 
+Consuming a defaulted borrowed parameter has stable guidance that names the
+declaration fix and the local-copy alternative:
+
+```text
+parameter `x` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+```
+
+A mutable-borrow default is rejected at its signature:
+
+```text
+`borrow mut` parameter `x` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result
+```
+
+An ownership modifier on Queue iteration is rejected with teaching text: Queue
+iteration receives values, each received item is already owned by the loop
+binding, and the Queue handle is a copy value, so the modifier has nothing to
+modify. The diagnostic suggests the bare form `for item in queue:`.
+
 ## Runtime Diagnostics
 
 Runtime diagnostics use the source path and span embedded by MIR or native lowering whenever possible. Both maintained execution backends MUST preserve the same primary Aurora failure when cleanup also encounters an error.

@@ -1,0 +1,5 @@
+error: use of moved value `value`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_group_capture_moves_value.au:8:15
+  |
+8 |         print(value)
+  |               ^

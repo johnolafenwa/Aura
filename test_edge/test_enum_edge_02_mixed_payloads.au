@@ -4,7 +4,7 @@ enum Response:
     Timeout
     Data(float64)
 
-def describe(r: Response) -> String:
+def describe(r: own Response) -> String:
     match r:
         case Response.Success(code):
             print(code)

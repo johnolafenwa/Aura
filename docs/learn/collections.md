@@ -1,6 +1,6 @@
 # Working With Collections
 
-A program that manipulates a handful of values usually needs one of three shapes: an ordered sequence, a keyed lookup, or a membership test. Aurora ships these as `Vec[T]`, `Map[K, V]`, and `Set[T]`. All three are owned move types: passing one by value transfers ownership, and helpers that only need to inspect a collection take it by `borrow`.
+A program that manipulates a handful of values usually needs one of three shapes: an ordered sequence, a keyed lookup, or a membership test. Aurora ships these as `Vec[T]`, `Map[K, V]`, and `Set[T]`. All three are owned move types. A bare non-copy parameter or loop borrows them; write `own` when ownership should transfer.
 
 This chapter uses each of them to solve a small problem, then shows the patterns they share.
 
@@ -78,9 +78,9 @@ for an extremely negative insertion index. If one normalization still leaves
 the index below zero, Aurora reports the error instead of silently inserting
 at the start.
 
-## Borrowed Iteration
+## Collection Iteration
 
-`for value in names` iterates by value. For a move-type vector, that **consumes** the vector:
+`for value in names` uses the shared default, so the vector remains available:
 
 ```python
 names = ["Ada", "Grace"]
@@ -88,19 +88,20 @@ names = ["Ada", "Grace"]
 for name in names:
     print(name)
 
-# names is no longer available
+print(names.len())
 ```
 
-Use `borrow` when the collection should remain available after the loop:
+Write `own` to consume it and receive owned elements:
 
 ```python
 names = ["Ada", "Grace"]
 
-for name in borrow names:
+for name in own names:
     print(name)
-
-print(names.len())
+# names is no longer available
 ```
+
+`for name in borrow names:` is the explicit shared spelling.
 
 When the loop body needs to mutate the elements, borrow mutably:
 
@@ -186,7 +187,7 @@ if not users.insert("ada"):
     print("already present")
 ```
 
-Sets support read-only iteration through `borrow`:
+Sets support bare/default shared iteration as well as explicit `borrow`:
 
 ```python
 for value in borrow users:
@@ -199,24 +200,28 @@ for value in borrow users:
 
 Most of the friction people run into with Aurora collections is about keys and clones. Two common patterns will feel awkward the first time and obvious the second.
 
-### Cloning keys at lookup
+### Borrowing keys at lookup
 
-`Map.get`, `Map.set`, `Map.remove`, and `Map.contains_key` all take their key by value. If a program needs the same key for two calls in a row, it clones before the first and moves into the second:
+`Map.get`, `Map.remove`, and `Map.contains_key` borrow their key. `Map.set`
+owns the key and value because it stores them. A lookup followed by insertion
+therefore needs no clone:
 
 ```python
-def bump(counts: borrow mut Map[String, int32], key: String):
-    match counts.get(key.clone()):
+def bump(counts: borrow mut Map[String, int32], key: own String):
+    match counts.get(key):
         case Some(count):
             counts.set(key, count + 1)
         case None:
             counts.set(key, 1)
 ```
 
-The clone is deliberate. You can see the program keeping two copies of the string, which is almost always what you want to be able to see.
+The lookup only lends `key`; the later `set` transfers it into the map.
 
 ### Borrow to inspect, move to transfer
 
-Helpers that need to read a collection take it by `borrow`. Helpers that take ownership — transferring elements out, or consuming the whole thing — use by-value. The compiler enforces this at the boundary, so a program ends up with clear divisions between "inspection" and "transfer."
+Helpers that need to read a collection may use the bare non-copy default or
+spell `borrow` explicitly. Helpers that take ownership use `own`. The compiler
+enforces this boundary, so inspection and transfer remain visible.
 
 ## A Larger Example: Unique Count
 
@@ -226,7 +231,7 @@ Put the pieces together. The helper below walks a vector of strings and reports 
 def unique_count(values: borrow Vec[String]) -> int32:
     mut seen = Set[String]()
 
-    for value in borrow values:
+    for value in values:
         seen.insert(value.clone())
 
     return seen.len()
@@ -242,18 +247,20 @@ A small word counter updates a caller-owned map:
 def count_words(counts: borrow mut Map[String, int32], line: borrow String):
     words = line.split(" ")
 
-    for word in words:
+    for word in own words:
         if word.len() == 0:
             continue
 
-        match counts.get(word.clone()):
+        match counts.get(word):
             case Some(count):
                 counts.set(word, count + 1)
             case None:
                 counts.set(word, 1)
 ```
 
-`line.split(" ")` returns a `Vec[String]` of owned words. Each `word` is therefore owned. The `clone` on the key exists for the same reason as in `bump`: the lookup consumes the key, so the subsequent `set` needs the original copy.
+`line.split(" ")` returns a `Vec[String]` of owned words. The `own` loop
+consumes that temporary vector and gives each iteration an owned `word`.
+Lookup borrows the word; `set` then stores it.
 
 ## Reference
 

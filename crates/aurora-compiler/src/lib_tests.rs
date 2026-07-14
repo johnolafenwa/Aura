@@ -822,7 +822,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "trait HiddenTrait:",
             "    def hide(self)",
             "",
-            "public def wrap(value: Box[int32]) -> Box[int32]:",
+            "public def wrap(value: own Box[int32]) -> Box[int32]:",
             "    return value",
             "",
             "def hidden() -> int32:",

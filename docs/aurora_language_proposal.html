@@ -459,7 +459,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <ul>
 <li>class values are move types by default</li>
 <li>a class may be declared with <code>copy class Name:</code> only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically</li>
-<li>passing a class by value into a function or returning it by value moves ownership unless the class is <code>copy</code></li>
+<li>passing a class through an explicit <code>own</code> parameter or returning it by value moves ownership unless the class is <code>copy</code>; a bare non-copy parameter borrows</li>
 <li>method calls do not create hidden aliasing; shared <code>self</code>/<code>borrow self</code>, consuming <code>own self</code>, and mutable <code>borrow mut self</code> obey normal ownership and borrow rules</li>
 <li>field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of <code>self</code>, <code>borrow self</code>, or <code>borrow mut self</code> is illegal unless an explicit extraction operation is defined</li>
 <li>class fields are stored inline by default</li>
@@ -500,10 +500,10 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
     <span class="k">def</span><span class="w"> </span><span class="nf">name_copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">rename</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">new_name</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">rename</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">new_name</span><span class="p">:</span> <span class="n">own</span> <span class="n">String</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">new_name</span>   <span class="c1"># valid: mutate in place through an exclusive mutable borrow</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">into_name</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">into_name</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">own</span> <span class="n">User</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">user</span><span class="o">.</span><span class="n">name</span>           <span class="c1"># valid: `user` is owned by this function</span>
 
 <span class="c1"># invalid:</span>
@@ -805,9 +805,10 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <h2 id="74-iteration-and-for-loops">7.4 Iteration and for loops</h2>
 <p>Aurora uses a trait-based iteration protocol.</p>
 <p>Aurora distinguishes between iterable values and iterator objects.</p>
-<p>Core rules:</p>
+<p>Core rules (as amended by the implemented 0.1 ownership defaults):</p>
 <ul>
-<li><code>for x in expr:</code> consumes <code>expr</code> by value unless <code>expr</code> is explicitly borrowed</li>
+<li>bare <code>for x in expr:</code> over <code>Vec</code> or <code>Set</code> iterates by shared borrow</li>
+<li><code>for x in own expr:</code> consumes a <code>Vec</code> or <code>Set</code> and yields owned elements</li>
 <li><code>for x in borrow expr:</code> iterates by shared borrow</li>
 <li><code>for x in borrow mut expr:</code> iterates by mutable borrow</li>
 <li>iterable values implement an <code>Iterable[T, IterT: Iterator[T]]</code>-style capability and provide consuming <code>into_iter(own self)</code> to yield an iterator object</li>
@@ -820,7 +821,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </ul>
 <p>This lets ownership stay explicit:</p>
 <ul>
-<li>iterating over <code>Vec[T]</code> by value may consume the vector</li>
+<li>iterating over <code>Vec[T]</code> with <code>own</code> consumes the vector</li>
 <li>iterating over <code>borrow [int32]</code> yields copied <code>int32</code> values because <code>int32</code> is copy</li>
 <li>iterating over <code>borrow [String]</code> yields <code>borrow String</code> elements</li>
 <li>iterating over a channel receives values until the channel is closed</li>
@@ -849,6 +850,8 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>fallible constructors return <code>Result[Self, E]</code></li>
 <li>default argument expressions are evaluated at the call site in left-to-right parameter order</li>
 <li>default values may not reference other parameters in v1</li>
+<li>shared-borrow and <code>own</code> defaults are permitted; a shared default temporary lives through the call</li>
+<li><code>borrow mut</code> defaults are rejected because mutations to a caller-invisible temporary would be silently lost</li>
 <li>trait method declarations do not use default arguments in v1</li>
 <li>partial initialization is not part of v1</li>
 </ul>
@@ -857,11 +860,11 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
     <span class="n">public</span> <span class="n">name</span><span class="p">:</span> <span class="n">String</span>
     <span class="n">public</span> <span class="n">age</span><span class="p">:</span> <span class="n">int32</span> <span class="o">=</span> <span class="mi">0</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">age</span><span class="p">:</span> <span class="n">int32</span> <span class="o">=</span> <span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">new</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">own</span> <span class="n">String</span><span class="p">,</span> <span class="n">age</span><span class="p">:</span> <span class="n">int32</span> <span class="o">=</span> <span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">Self</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="n">age</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">guest</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">Self</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">String</span><span class="p">(</span><span class="s2">&quot;Guest&quot;</span><span class="p">),</span> <span class="n">age</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">Self</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Guest&quot;</span><span class="p">,</span> <span class="n">age</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </code></pre></div>
 
 <h2 id="76-control-flow">7.6 Control flow</h2>
@@ -1052,7 +1055,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>If the types differ, Aurora applies a <code>From[SourceError] for TargetError</code> conversion when one exists.</p>
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">From</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">from</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">own</span> <span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">load_and_parse</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
     <span class="n">text</span> <span class="o">=</span> <span class="k">try</span> <span class="n">fs</span><span class="o">.</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>   <span class="c1"># IoError converts into AppError</span>
@@ -1466,7 +1469,7 @@ aura<span class="w"> </span>publish
 <li>Assignment of non-copy values moves ownership.</li>
 <li>Nominal product types use <code>class</code>; inherent methods live in class bodies; <code>impl Trait for Type</code> is reserved for trait conformance; classes move by default, <code>copy class Name:</code> is the explicit copy spelling, and recursive fields use the built-in <code>indirect</code> storage modifier.</li>
 <li>Pattern matching is by value unless the scrutinee is explicitly borrowed with <code>match borrow value:</code> or <code>match borrow mut value:</code>.</li>
-<li><code>for</code> loops use a trait-based iteration model; <code>for x in expr:</code> consumes by value unless <code>expr</code> is explicitly borrowed.</li>
+<li><code>for</code> loops use a trait-based iteration model; bare <code>Vec</code>/<code>Set</code> iteration is shared and <code>for x in own expr:</code> is the consuming spelling. Queue iteration is a receive operation and accepts only the bare form.</li>
 <li>Concurrency uses <code>spawn</code>, <code>task_group</code>, <code>Channel[T]</code>, and <code>select</code>; detached tasks require explicit <code>spawn detached</code>; channel sharing uses cloned handles over shared channel state; <code>.send()</code> returns <code>Result[None, SendError[T]]</code>; <code>.recv()</code> returns <code>T?</code>; and ordinary network/timer APIs are task-aware rather than split into a separate <code>async</code> dialect.</li>
 <li>Recoverable errors use <code>Result[T, E]</code>, <code>try expr</code>, and <code>None</code> as the unit success payload when no value is needed.</li>
 <li>Text uses <code>String</code> for owned values, <code>borrow str</code> for borrowed string slices, <code>borrow [T]</code> for borrowed contiguous slices, and <code>f"..."</code> to produce owned interpolated strings.</li>
@@ -1662,7 +1665,7 @@ aura<span class="w"> </span>publish
 <p>A <code>class</code> is a value type by default. It does not imply inheritance, hidden heap allocation, or Python-style object identity.</p>
 <p>Additional frozen rules:</p>
 <ul>
-<li>classes move by default when passed, assigned, or returned by value</li>
+<li>classes move through explicit <code>own</code> parameters, assignment, or owned returns; bare class parameters borrow by default</li>
 <li><code>copy class Name:</code> is the explicit copy spelling in v1</li>
 <li><code>copy</code> is only legal when all fields are copy types</li>
 <li>direct recursive class fields are illegal; recursion uses the built-in <code>indirect</code> storage modifier</li>
@@ -1677,7 +1680,8 @@ aura<span class="w"> </span>publish
 <ul>
 <li><code>for</code> loops use a trait-based iteration protocol</li>
 <li>iterable values provide consuming <code>into_iter(own self)</code> and iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
-<li><code>for x in expr:</code> iterates by value unless <code>expr</code> is explicitly borrowed</li>
+<li>bare <code>for x in expr:</code> over <code>Vec</code> or <code>Set</code> iterates by shared borrow</li>
+<li><code>for x in own expr:</code> consumes the collection and yields owned elements</li>
 <li>multiple trait bounds use <code>T: Trait1 + Trait2</code></li>
 <li><code>for x in borrow expr:</code> over an already borrowed iterable is a reborrow</li>
 <li>shared borrowed iteration yields copied element values for copy element types and <code>borrow T</code> for non-copy element types</li>
@@ -1751,6 +1755,20 @@ aura<span class="w"> </span>publish
 <p><code>int</code> is an alias for <code>int64</code>; unsuffixed integer literals default to <code>int64</code> when they have no expected integer type. Explicit fixed-width API contracts, including those that use <code>int32</code>, are unchanged.</p>
 <p>Fixed-size owned arrays are deferred until after v1.</p>
 <p>Aurora supports a small built-in <code>@name</code> attribute syntax in v1, and <code>@test</code> is the canonical built-in attribute for the test runner.</p>
+<h2 id="2314-ratified-parameter-loop-and-capture-ownership-defaults">23.14 Ratified parameter, loop, and capture ownership defaults</h2>
+<p>The implemented 0.1 surface amends earlier proposal text that described every ordinary parameter and bare collection loop as by-value:</p>
+<ul>
+<li>a bare ordinary parameter <code>value: T</code> resolves at its declaration to value passing for a copy type and shared borrowing for a non-copy type</li>
+<li>an unresolved generic <code>T</code> is not assumed copyable, so its bare parameter is a shared borrow; this decision is declaration-stable even when a later call specializes <code>T</code> to a copy type</li>
+<li><code>value: own T</code> explicitly consumes, while <code>value: borrow T</code> and <code>value: borrow mut T</code> explicitly share or mutate</li>
+<li>class fields and enum payloads are owned constructor positions, as are retained or storing builtin arguments shown with <code>own</code> in the API reference</li>
+<li>bare <code>Vec</code> and <code>Set</code> loops share; <code>own</code> consumes; <code>borrow</code> is the explicit shared spelling; <code>borrow mut</code> is supported only where element writeback is defined</li>
+<li>Queue iteration receives each item already owned. The Queue handle is a copy value, so <code>own</code>, <code>borrow</code>, and <code>borrow mut</code> modifiers are all rejected; use <code>for item in queue:</code></li>
+<li>match and local assignment retain their consuming defaults</li>
+<li>shared-borrow defaults are valid and their temporary lives through the call; <code>own</code> defaults are consumed; <code>borrow mut</code> defaults are rejected because they would create silent lost writes to caller-invisible temporaries</li>
+<li>task-start capture is independent of the target ABI. Arguments first move or copy into task-owned storage; default/shared targets borrow that capture, <code>own</code> targets consume it, and <code>borrow mut</code> targets are rejected</li>
+</ul>
+<p>These rules supersede any incompatible historical examples elsewhere in this proposal. The normative detail is in the language manual and ADR-0006.</p>
 <hr />
 <h1 id="24-canonical-language-pitch">24. Canonical language pitch</h1>
 <p>Use this as the short public description:</p>

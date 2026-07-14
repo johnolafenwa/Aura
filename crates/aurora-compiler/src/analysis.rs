@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::ast::{
     AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
-    Module, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
+    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
 };
 use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
 use crate::diag::{Diagnostic, Result, Span};
@@ -286,7 +286,7 @@ impl<'a> AnalysisBuilder<'a> {
                         _ => Vec::new(),
                     },
                     definition: range.clone(),
-                    hover: format_value_hover("param", &param.name, ty),
+                    hover: format_param_hover(param, ty),
                 },
             );
         }
@@ -516,7 +516,7 @@ impl<'a> AnalysisBuilder<'a> {
             completions.push(AnalysisCompletion {
                 name: class_info.decl.name.clone(),
                 kind: "class".to_string(),
-                detail: "Aurora class".to_string(),
+                detail: format_class_detail(class_info),
             });
         }
         for enum_info in self.program.enums.values() {
@@ -586,7 +586,7 @@ impl<'a> AnalysisBuilder<'a> {
                     completions.push(AnalysisCompletion {
                         name: class_info.decl.name.clone(),
                         kind: "class".to_string(),
-                        detail: "Aurora class".to_string(),
+                        detail: format_class_detail(class_info),
                     });
                 }
                 for enum_info in namespace.enums.values() {
@@ -643,16 +643,26 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
-        if let Some(enum_info) = self.program.enums.get(base_name) {
+        if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
             for (name, variant) in &enum_info.variants {
                 completions.push(AnalysisCompletion {
                     name: name.clone(),
                     kind: "variant".to_string(),
-                    detail: variant
-                        .payloads
-                        .first()
-                        .map(|payload| format!("{}({}) -> {}", name, payload.ty, base_name))
-                        .unwrap_or_else(|| format!("{} -> {}", name, base_name)),
+                    detail: if variant.payloads.is_empty() {
+                        format!("{} -> {}", name, base_name)
+                    } else {
+                        format!(
+                            "{}({}) -> {}",
+                            name,
+                            variant
+                                .payloads
+                                .iter()
+                                .map(format_enum_variant_payload)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            enum_info.decl.name
+                        )
+                    },
                 });
             }
         }
@@ -978,12 +988,16 @@ impl<'a> AnalysisBuilder<'a> {
             .variants
             .iter()
             .find(|decl| decl.name == variant.variant_name)?;
-        let payload = enum_info
-            .variants
-            .get(&variant.variant_name)
-            .and_then(|variant_info| variant_info.payloads.first().map(|payload| &payload.ty));
+        let variant_info = enum_info.variants.get(&variant.variant_name)?;
         Some(ResolvedSymbol {
-            hover: format_variant_hover(&enum_info.decl.name, &variant.variant_name, payload),
+            hover: format_variant_hover_payloads(
+                &enum_info.decl.name,
+                &variant.variant_name,
+                variant_info
+                    .payloads
+                    .iter()
+                    .map(format_enum_variant_payload),
+            ),
             definition: Some(self.definition_range(
                 &enum_info.module_name,
                 variant_decl.span,
@@ -1417,7 +1431,10 @@ impl<'a> AnalysisBuilder<'a> {
                 return Some(ResolvedMember {
                     hover: format_enum_hover(enum_info),
                     definition: Some(self.enum_definition(enum_info)),
-                    ty: Some(Type::named(&enum_info.decl.name)),
+                    ty: Some(Type::named(format!(
+                        "{}.{}",
+                        namespace.path, enum_info.decl.name
+                    ))),
                 });
             }
             if let Some(trait_info) = namespace.traits.get(field) {
@@ -1505,13 +1522,16 @@ impl<'a> AnalysisBuilder<'a> {
             };
         }
 
-        if let Some(enum_info) = self.program.enums.get(base_name) {
+        if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 return Some(ResolvedMember {
-                    hover: format_variant_hover(
-                        base_name,
+                    hover: format_variant_hover_payloads(
+                        &enum_info.decl.name,
                         field,
-                        variant_info.payloads.first().map(|payload| &payload.ty),
+                        variant_info
+                            .payloads
+                            .iter()
+                            .map(format_enum_variant_payload),
                     ),
                     definition: Some(self.definition_range(
                         &enum_info.module_name,
@@ -2136,12 +2156,20 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("TaskResult")),
             }),
             "WaitAny" if field == "Ready" => Some(ResolvedMember {
-                hover: "Ready(int32, T) -> WaitAny".to_string(),
+                hover: format_variant_hover_payloads(
+                    "WaitAny",
+                    field,
+                    ["own int32".to_string(), "own T".to_string()],
+                ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
             }),
             "WaitAny" if field == "Error" => Some(ResolvedMember {
-                hover: "Error(int32, String) -> WaitAny".to_string(),
+                hover: format_variant_hover_payloads(
+                    "WaitAny",
+                    field,
+                    ["own int32".to_string(), "own String".to_string()],
+                ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
             }),
@@ -2151,12 +2179,16 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("WaitAny")),
             }),
             "WaitAll" if field == "Ready" => Some(ResolvedMember {
-                hover: "Ready(Vec[T]) -> WaitAll".to_string(),
+                hover: format_variant_hover_payloads("WaitAll", field, ["own Vec[T]".to_string()]),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
             "WaitAll" if field == "Error" => Some(ResolvedMember {
-                hover: "Error(int32, String) -> WaitAll".to_string(),
+                hover: format_variant_hover_payloads(
+                    "WaitAll",
+                    field,
+                    ["own int32".to_string(), "own String".to_string()],
+                ),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
@@ -2808,11 +2840,48 @@ fn format_value_hover(kind: &str, name: &str, ty: &Type) -> String {
     format!("```aurora\n{} {}: {}\n```", kind, name, ty)
 }
 
+fn format_param_hover(param: &Param, ty: &Type) -> String {
+    let mode = match param.mode {
+        ParamMode::Default => "",
+        ParamMode::Own => "own ",
+        ParamMode::Borrow => "borrow ",
+        ParamMode::BorrowMut => "borrow mut ",
+    };
+    format!("```aurora\nparam {}: {}{}\n```", param.name, mode, ty)
+}
+
+fn format_param_decl(param: &Param) -> String {
+    let mode = match param.mode {
+        ParamMode::Default => String::new(),
+        ParamMode::Own => "own ".to_string(),
+        ParamMode::Borrow => match param.borrow_label.as_deref() {
+            Some(label) => format!("borrow[{label}] "),
+            None => "borrow ".to_string(),
+        },
+        ParamMode::BorrowMut => match param.borrow_label.as_deref() {
+            Some(label) => format!("borrow mut[{label}] "),
+            None => "borrow mut ".to_string(),
+        },
+    };
+    let default = if param.default.is_some() {
+        " = ..."
+    } else {
+        ""
+    };
+    format!(
+        "{}: {}{}{}",
+        param.name,
+        mode,
+        lower_type_ref(&param.ty),
+        default
+    )
+}
+
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
     let params = function_decl
         .params
         .iter()
-        .map(|param| format!("{}: {}", param.name, lower_type_ref(&param.ty)))
+        .map(format_param_decl)
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -2829,12 +2898,7 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
         .map(canonical_receiver_spelling)
         .into_iter()
         .map(str::to_string)
-        .chain(
-            method_decl
-                .params
-                .iter()
-                .map(|param| format!("{}: {}", param.name, lower_type_ref(&param.ty))),
-        )
+        .chain(method_decl.params.iter().map(format_param_decl))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -2863,6 +2927,29 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
     }
 }
 
+fn format_class_detail(class_info: &ClassInfo) -> String {
+    let fields = class_info
+        .decl
+        .fields
+        .iter()
+        .map(|field| {
+            let default = if field.default.is_some() {
+                " = ..."
+            } else {
+                ""
+            };
+            format!(
+                "{}: own {}{}",
+                field.name,
+                lower_type_ref(&field.ty),
+                default
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}({})", class_info.decl.name, fields)
+}
+
 fn format_enum_hover(enum_info: &EnumInfo) -> String {
     format!("```aurora\nenum {}\n```", enum_info.decl.name)
 }
@@ -2876,12 +2963,35 @@ fn builtin_function_hover(detail: &str, docs: &str) -> String {
 }
 
 fn format_variant_hover(enum_name: &str, variant_name: &str, payload: Option<&Type>) -> String {
-    match payload {
-        Some(payload) => format!(
+    format_variant_hover_payloads(
+        enum_name,
+        variant_name,
+        payload.into_iter().map(|payload| format!("own {payload}")),
+    )
+}
+
+fn format_variant_hover_payloads(
+    enum_name: &str,
+    variant_name: &str,
+    payloads: impl IntoIterator<Item = String>,
+) -> String {
+    let payloads = payloads.into_iter().collect::<Vec<_>>();
+    if payloads.is_empty() {
+        format!("```aurora\nvariant {} -> {}\n```", variant_name, enum_name)
+    } else {
+        format!(
             "```aurora\nvariant {}({}) -> {}\n```",
-            variant_name, payload, enum_name
-        ),
-        None => format!("```aurora\nvariant {} -> {}\n```", variant_name, enum_name),
+            variant_name,
+            payloads.join(", "),
+            enum_name
+        )
+    }
+}
+
+fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> String {
+    match payload.name.as_deref() {
+        Some(name) => format!("{name}: own {}", payload.ty),
+        None => format!("own {}", payload.ty),
     }
 }
 
@@ -2933,7 +3043,7 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Some".to_string(),
                 kind: "variant".to_string(),
-                detail: "Some(T) -> Option".to_string(),
+                detail: "Some(own T) -> Option".to_string(),
             },
             AnalysisCompletion {
                 name: "None".to_string(),
@@ -2945,41 +3055,41 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ok".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ok(T) -> Result".to_string(),
+                detail: "Ok(own T) -> Result".to_string(),
             },
             AnalysisCompletion {
                 name: "Err".to_string(),
                 kind: "variant".to_string(),
-                detail: "Err(E) -> Result".to_string(),
+                detail: "Err(own E) -> Result".to_string(),
             },
         ],
         "SendError" => vec![
             AnalysisCompletion {
                 name: "Closed".to_string(),
                 kind: "variant".to_string(),
-                detail: "Closed(T) -> SendError".to_string(),
+                detail: "Closed(own T) -> SendError".to_string(),
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
-                detail: "Cancelled(T) -> SendError".to_string(),
+                detail: "Cancelled(own T) -> SendError".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
-                detail: "TimedOut(T) -> SendError".to_string(),
+                detail: "TimedOut(own T) -> SendError".to_string(),
             },
             AnalysisCompletion {
                 name: "Full".to_string(),
                 kind: "variant".to_string(),
-                detail: "Full(T) -> SendError".to_string(),
+                detail: "Full(own T) -> SendError".to_string(),
             },
         ],
         "QueueReceive" => vec![
             AnalysisCompletion {
                 name: "Item".to_string(),
                 kind: "variant".to_string(),
-                detail: "Item(T) -> QueueReceive".to_string(),
+                detail: "Item(own T) -> QueueReceive".to_string(),
             },
             AnalysisCompletion {
                 name: "Closed".to_string(),
@@ -3001,12 +3111,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(T) -> TaskResult".to_string(),
+                detail: "Ready(own T) -> TaskResult".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(String) -> TaskResult".to_string(),
+                detail: "Error(own String) -> TaskResult".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -3023,12 +3133,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(int32, T) -> WaitAny".to_string(),
+                detail: "Ready(own int32, own T) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(int32, String) -> WaitAny".to_string(),
+                detail: "Error(own int32, own String) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -3045,12 +3155,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(Vec[T]) -> WaitAll".to_string(),
+                detail: "Ready(own Vec[T]) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(int32, String) -> WaitAll".to_string(),
+                detail: "Error(own int32, own String) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -3090,7 +3200,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "push".to_string(),
                     kind: "method".to_string(),
-                    detail: "push(value) -> None".to_string(),
+                    detail: BuiltinMember::VecPush.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "pop".to_string(),
@@ -3105,7 +3215,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "set".to_string(),
                     kind: "method".to_string(),
-                    detail: "set(index: int32, value: T) -> Option[T]".to_string(),
+                    detail: BuiltinMember::VecSet.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
@@ -3125,7 +3235,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "insert".to_string(),
                     kind: "method".to_string(),
-                    detail: "insert(index: int32, value: T) -> bool".to_string(),
+                    detail: BuiltinMember::VecInsert.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),
@@ -3140,7 +3250,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "extend".to_string(),
                     kind: "method".to_string(),
-                    detail: "extend(other: Vec[T]) -> None".to_string(),
+                    detail: BuiltinMember::VecExtend.detail().to_string(),
                 },
             ]);
         }
@@ -3164,7 +3274,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "extend".to_string(),
                     kind: "method".to_string(),
-                    detail: "extend(other: Map[K, V]) -> None".to_string(),
+                    detail: BuiltinMember::MapExtend.detail().to_string(),
                 },
             ]);
         }
@@ -3193,7 +3303,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "insert".to_string(),
                     kind: "method".to_string(),
-                    detail: "insert(value: T) -> bool".to_string(),
+                    detail: BuiltinMember::SetInsert.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
@@ -3407,12 +3517,7 @@ fn format_function_detail(function_decl: &FunctionDecl) -> String {
         .map(canonical_receiver_spelling)
         .into_iter()
         .map(str::to_string)
-        .chain(
-            function_decl
-                .params
-                .iter()
-                .map(|param| lower_type_ref(&param.ty).to_string()),
-        )
+        .chain(function_decl.params.iter().map(format_param_decl))
         .collect::<Vec<_>>()
         .join(", ");
     format!(

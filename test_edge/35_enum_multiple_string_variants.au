@@ -3,7 +3,7 @@ enum Token:
     Punct(String)
     Whitespace
 
-def show(t: Token) -> String:
+def show(t: own Token) -> String:
     match t:
         case Token.Word(w):
             return "word(" + w + ")"

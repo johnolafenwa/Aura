@@ -3,7 +3,7 @@ enum Shape:
     Rectangle(float64)
     Named(String)
 
-def describe(s: Shape) -> String:
+def describe(s: own Shape) -> String:
     match s:
         case Shape.Circle(r):
             return "circle"

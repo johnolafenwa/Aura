@@ -8,7 +8,7 @@ class ServerConfig:
     timeout_ms: int32 = 5000
     debug: bool = false
 
-    def set_host(borrow mut self, h: String):
+    def set_host(borrow mut self, h: own String):
         self.host = h
 
     def set_port(borrow mut self, p: int32):

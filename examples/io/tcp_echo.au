@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server = listener:
         with stream = try server.accept():
             message = try stream.read_line()

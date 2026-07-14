@@ -1,4 +1,4 @@
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
 def main() -> int32:

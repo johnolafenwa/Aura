@@ -76,6 +76,72 @@ fn d3_mir_canonicalizes_int_and_defaults_unhinted_integer_values_to_int64() {
     );
 }
 
+#[test]
+fn d6_mir_uses_declaration_resolved_parameter_conventions() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def modes(copy_value: int32, inferred: String, owned: own String, shared: borrow String, mutable: borrow mut String):
+    pass
+
+def generic[T](value: T):
+    pass
+
+def main() -> int32:
+    generic[int32](1)
+    return 0
+"#,
+    )
+    .expect("D6 parameter modes should lower to MIR");
+
+    let modes = module
+        .functions
+        .iter()
+        .find(|function| function.name == "modes")
+        .expect("modes should lower");
+    assert_eq!(
+        modes
+            .params
+            .iter()
+            .map(|param| param.passing)
+            .collect::<Vec<_>>(),
+        vec![
+            MirReceiverKind::Value,
+            MirReceiverKind::Borrow,
+            MirReceiverKind::Value,
+            MirReceiverKind::Borrow,
+            MirReceiverKind::BorrowMut,
+        ]
+    );
+
+    let generic = module
+        .functions
+        .iter()
+        .find(|function| function.name == "generic")
+        .expect("generic should lower");
+    assert_eq!(generic.params[0].passing, MirReceiverKind::Borrow);
+}
+
+#[test]
+fn d6_shared_default_temporary_lives_through_the_call() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def shared(value: borrow String = "shared") -> String:
+    return value.clone()
+
+def owned(value: own String = "owned") -> String:
+    return value
+
+def main() -> int32:
+    print(shared())
+    print(owned())
+    return 0
+"#,
+    )
+    .expect("shared and owned defaults should lower");
+    let output = crate::run_mir(&module).expect("default temporaries should remain live in calls");
+    assert_eq!(output.stdout, "shared\nowned\n");
+}
+
 fn named_arg(name: &str, value: Expr) -> Argument {
     Argument {
         name: Some(name.to_string()),
@@ -240,7 +306,7 @@ def helper() -> int32:
 fn trait_lowerer() -> Lowerer<'static> {
     let source = r#"
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
+    def add(borrow self, rhs: own Rhs) -> Out
 
 trait Neg[Out]:
     def neg(borrow self) -> Out
@@ -278,7 +344,7 @@ impl Reset for User:
         self.label = ""
 
 impl Add[int32, bool] for User:
-    def add(borrow self, rhs: int32) -> bool:
+    def add(borrow self, rhs: own int32) -> bool:
         return rhs > 0
 
 impl Neg[String] for User:
@@ -286,7 +352,7 @@ impl Neg[String] for User:
         return self.label.clone()
 
 impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
-    def add(borrow self, rhs: Box[T]) -> Box[T]:
+    def add(borrow self, rhs: own Box[T]) -> Box[T]:
         return rhs
 "#;
     let program = Box::leak(Box::new(checked_program(source)));
@@ -1732,7 +1798,7 @@ def worker(value: int32) -> int32:
 def consume[T: Named](value: T) -> String:
     return value.name()
 
-def first_mut(values: Vec[int32]) -> int32:
+def first_mut(values: own Vec[int32]) -> int32:
     mut local = values
     for item in borrow mut local:
         return item

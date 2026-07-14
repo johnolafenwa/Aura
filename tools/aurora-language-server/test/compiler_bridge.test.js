@@ -768,6 +768,62 @@ test("compiler bridge preserves canonical receiver contracts in hover and comple
   }
 });
 
+test("compiler bridge preserves ordinary parameter ownership in hover and diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-param-contracts-"));
+  const source = [
+    "def inspect(value: String):",
+    "    print(value)",
+    "def consume(value: own String):",
+    "    print(value)",
+    "def explicit(value: borrow String = \"fallback\"):",
+    "    print(value)",
+    "def mutate(value: borrow mut String):",
+    "    pass",
+    "def main():",
+    "    mut text = \"aurora\"",
+    "    inspect(text)",
+    "    consume(text.clone())",
+    "    explicit()",
+    "    mutate(text)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    for (const signature of [
+      "function inspect(value: String) -> None",
+      "function consume(value: own String) -> None",
+      "function explicit(value: borrow String = ...) -> None",
+      "function mutate(value: borrow mut String) -> None"
+    ]) {
+      assert.ok(
+        analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
+        `missing hover signature: ${signature}`
+      );
+    }
+
+    const invalid = [
+      "def lost(value: borrow mut String = \"fallback\"):",
+      "    pass",
+      ""
+    ].join("\n");
+    const invalidAnalysis = await analyzeWithCompiler(mainUri, invalid);
+    assert.equal(invalidAnalysis.diagnostics.length, 1);
+    assert.equal(
+      invalidAnalysis.diagnostics[0].message,
+      "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge completes to_float for every integer type", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-int-to-float-"));
   const integerTypes = [
@@ -941,6 +997,103 @@ test("compiler bridge records enum variant occurrences in match patterns", async
           occurrence.definition !== null
       )
     );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves complete owned enum payload signatures", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-enum-payloads-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "pkg"));
+    const eventsPath = path.join(tempRoot, "pkg/events.au");
+    fs.writeFileSync(
+      eventsPath,
+      [
+        "public enum Event:",
+        "    Message(code: int32, body: String)",
+        ""
+      ].join("\n")
+    );
+    const canonicalEventsPath = fs.realpathSync(eventsPath);
+
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "import pkg.events",
+      "",
+      "def inspect(event: own pkg.events.Event):",
+      "    match event:",
+      "        case pkg.events.Event.Message(code, body):",
+      "            print(code)",
+      "            print(body)",
+      "",
+      "def main():",
+      "    event = pkg.events.Event.Message(code=7, body=\"hello\")",
+      "    inspect(event)",
+      ""
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    const matchingVariantOccurrences = analysis.occurrences.filter(
+      (occurrence) =>
+        occurrence.hover.includes(
+          "variant Message(code: own int32, body: own String) -> Event"
+        ) &&
+        occurrence.definition !== null &&
+        occurrence.definition.file_path === canonicalEventsPath
+    );
+    assert.equal(
+      matchingVariantOccurrences.length,
+      2,
+      JSON.stringify(analysis.occurrences, null, 2)
+    );
+
+    const completionSource = [
+      "import pkg.events",
+      "",
+      "def main():",
+      "    pkg.events.Event.",
+      ""
+    ].join("\n");
+    const lineIndex = completionSource
+      .split("\n")
+      .findIndex((line) => line.trim() === "pkg.events.Event.");
+    const character = completionSource.split("\n")[lineIndex].lastIndexOf(".") + 1;
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      lineIndex,
+      character,
+      "."
+    );
+    const message = completions.find((completion) => completion.name === "Message");
+    assert.ok(message);
+    assert.equal(
+      message.detail,
+      "Message(code: own int32, body: own String) -> Event"
+    );
+
+    for (const [enumName, variantName, detail] of [
+      ["WaitAny", "Ready", "Ready(own int32, own T) -> WaitAny"],
+      ["WaitAll", "Error", "Error(own int32, own String) -> WaitAll"]
+    ]) {
+      const builtinSource = `def main():\n    ${enumName}.\n`;
+      const builtinCompletions = await completeWithCompiler(
+        mainUri,
+        builtinSource,
+        1,
+        `    ${enumName}.`.length,
+        "."
+      );
+      assert.equal(
+        builtinCompletions.find((completion) => completion.name === variantName)?.detail,
+        detail
+      );
+    }
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1249,9 +1402,11 @@ test("compiler bridge includes Vec collection members in completions", async () 
     assert.ok(names.has("insert"));
     assert.ok(names.has("clear"));
     assert.ok(names.has("reverse"));
-    const insert = completions.find((item) => item.name === "insert");
-    assert.ok(insert);
-    assert.equal(insert.detail, "insert(index: int32, value: T) -> bool");
+    const details = new Map(completions.map((item) => [item.name, item.detail]));
+    assert.equal(details.get("push"), "push(value: own T) -> None");
+    assert.equal(details.get("set"), "set(index: int32, value: own T) -> Option[T]");
+    assert.equal(details.get("extend"), "extend(other: own Vec[T]) -> None");
+    assert.equal(details.get("insert"), "insert(index: int32, value: own T) -> bool");
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1331,6 +1486,14 @@ test("compiler bridge includes String and Map builtin members in completions", a
     assert.ok(mapNames.has("entries"));
     assert.ok(mapNames.has("clear"));
     assert.ok(mapNames.has("extend"));
+    assert.equal(
+      mapCompletions.find((item) => item.name === "set")?.detail,
+      "set(key: own K, value: own V) -> Option[V]"
+    );
+    assert.equal(
+      mapCompletions.find((item) => item.name === "extend")?.detail,
+      "extend(other: own Map[K, V]) -> None"
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

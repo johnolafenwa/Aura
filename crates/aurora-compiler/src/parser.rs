@@ -3,8 +3,8 @@ use crate::ast::{
     ContinueStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
     FieldDecl, ForStmt, FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl,
     ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TypeRef, UnaryOp,
-    VariantPattern, WhileStmt, WithStmt,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
+    TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -609,15 +609,23 @@ impl Parser {
                     "ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`",
                 ));
             }
-            let mut passing = ReceiverKind::Value;
+            if self.at_simple(&TokenKind::KwOwn) {
+                return Err(Diagnostic::at(
+                    self.current_span(),
+                    "ordinary owned parameters must be written as `name: own Type`",
+                ));
+            }
+            let mut mode = ParamMode::Default;
             let mut borrow_label = None;
             let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::Colon)?;
-            if passing == ReceiverKind::Value && self.eat_simple(&TokenKind::KwBorrow).is_some() {
-                passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                    ReceiverKind::BorrowMut
+            if self.eat_simple(&TokenKind::KwOwn).is_some() {
+                mode = ParamMode::Own;
+            } else if self.eat_simple(&TokenKind::KwBorrow).is_some() {
+                mode = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ParamMode::BorrowMut
                 } else {
-                    ReceiverKind::Borrow
+                    ParamMode::Borrow
                 };
                 borrow_label = self.parse_optional_borrow_label()?;
             }
@@ -629,7 +637,7 @@ impl Parser {
             };
             params.push(Param {
                 name,
-                passing,
+                mode,
                 borrow_label,
                 ty,
                 default,
@@ -807,7 +815,7 @@ impl Parser {
 
     fn parse_match_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwMatch)?.span;
-        let borrow_mode = self.parse_optional_borrow_mode();
+        let borrow_mode = self.parse_optional_match_borrow_mode();
         let scrutinee = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -836,7 +844,7 @@ impl Parser {
         let span = self.expect_keyword(TokenKind::KwFor)?.span;
         let binding = self.expect_identifier()?;
         self.expect_simple(TokenKind::KwIn)?;
-        let borrow_mode = self.parse_optional_borrow_mode();
+        let borrow_mode = self.parse_optional_for_mode();
         let iterable = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -1881,7 +1889,14 @@ impl Parser {
         idx
     }
 
-    fn parse_optional_borrow_mode(&mut self) -> Option<ReceiverKind> {
+    fn parse_optional_for_mode(&mut self) -> Option<ReceiverKind> {
+        if self.eat_simple(&TokenKind::KwOwn).is_some() {
+            return Some(ReceiverKind::Value);
+        }
+        self.parse_optional_match_borrow_mode()
+    }
+
+    fn parse_optional_match_borrow_mode(&mut self) -> Option<ReceiverKind> {
         self.eat_simple(&TokenKind::KwBorrow)?;
         if self.eat_simple(&TokenKind::KwMut).is_some() {
             Some(ReceiverKind::BorrowMut)

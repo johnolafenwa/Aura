@@ -97,7 +97,7 @@ The same job is rendered twice because `render` never takes ownership.
 When a helper should mutate a caller-owned value, the parameter uses `borrow mut T`:
 
 ```python
-def add_job(jobs: borrow mut Vec[String], job: String):
+def add_job(jobs: borrow mut Vec[String], job: own String):
     jobs.push(job)
 
 mut jobs = Vec[String]()
@@ -163,7 +163,10 @@ print(packet.body)
 
 ## Collections And Ownership
 
-Collection operations follow the same rule as function calls: values passed by value move into the collection. If the caller still needs them, clone.
+Collection operations that store values declare explicit `own` positions. For
+example, `Vec.push(value: own T)`, `Map.set(key: own K, value: own V)`, and
+`Set.insert(value: own T)` move non-copy values into their collection. If the
+caller still needs one, clone it.
 
 ```python
 mut jobs = Vec[String]()
@@ -188,10 +191,12 @@ This is why a program can read from a collection repeatedly without juggling its
 
 ## Tasks And Borrowing
 
-Child tasks receive **owned** arguments. A spawned function can outlive the stack frame that started it, so Aurora does not let spawned work borrow local values: the borrow could outlast the value it points at.
+Child tasks receive **owned captures**. The start operation moves or copies each
+argument into task-owned storage before the child can outlive the caller. The
+target function can then borrow that capture or consume it:
 
 ```python
-def worker(label: String):
+def worker(label: borrow String):
     print(label)
 
 with group = TaskGroup():
@@ -199,7 +204,9 @@ with group = TaskGroup():
     group.start_soon(worker, label)
 ```
 
-If the parent also needs the label, clone before starting the child:
+The capture itself is owned by the task, so starting it still moves the
+caller's non-copy value. If the parent also needs the label, clone before
+starting the child:
 
 ```python
 with group = TaskGroup():
@@ -209,6 +216,10 @@ with group = TaskGroup():
 ```
 
 `TaskGroup` itself is a resource. Normal practice is to keep it scoped with `with`, so that leaving the block waits for the children and accounts for their results.
+
+Default-mode and explicit shared target parameters borrow their task-owned
+capture; `own` targets consume it. `borrow mut` targets are rejected because
+mutation of detached capture storage would have no caller-visible writeback.
 
 ## Resources And Cleanup
 
@@ -228,7 +239,8 @@ When the block exits, Aurora runs the resource's cleanup path. Cleanup fires on 
 
 When a program starts to feel tangled, run down this list:
 
-- Pass by value when the function consumes the argument.
+- Write `own T` when the function consumes the argument; a bare non-copy
+  parameter borrows by default.
 - Pass `borrow T` when the function only needs to inspect.
 - Pass `borrow mut T` when the function should update a caller-owned value.
 - Clone as locally as possible when two owners are genuinely needed.

@@ -110,6 +110,23 @@ a mutable receiver place. Trait and implementation receiver matching compares
 these resolved modes, so bare and explicit shared receivers are compatible
 while an `own self` implementation cannot satisfy a shared receiver contract.
 
+Ordinary parameters keep their source mode until signature resolution. A bare
+`value: T` resolves to a value ABI when `T` is copyable and a shared-borrow ABI
+when `T` is non-copy. If `T` is unresolved at the declaration, the mode is
+fixed as a shared borrow and remains declaration-stable when a call later
+specializes `T` to a copy type. Explicit `own`, `borrow`, and `borrow mut`
+spelling overrides that default. Trait conformance and calls compare the
+resolved ABI, while hover and diagnostics retain enough source information to
+teach the spelling that created it.
+
+Loop ownership is resolved independently. Bare iteration over `Vec` and `Set`
+is shared, `own` consumes the collection, and `borrow mut` supplies mutable
+places only for collections that support writeback. Bare Queue iteration is a
+receive operation: each received item is already owned by the loop binding and
+the Queue handle is copyable, so all explicit loop ownership modifiers are
+rejected. Match and local assignment deliberately retain their consuming
+defaults.
+
 For Aurora 0.1, the checker permits borrowed-return calls only when the substituted result type is copyable. Those calls materialize copies. Non-copy borrowed-return declarations still receive provenance and trait-conformance checking, but calls are rejected before MIR lowering until Phase 6 supplies live alias storage.
 
 Aurora's `FunctionChecker` tracks local bindings with information such as:

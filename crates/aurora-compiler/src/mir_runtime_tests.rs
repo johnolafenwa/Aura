@@ -3311,19 +3311,29 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     runtime
         .require_task_startable_function(&by_value)
         .expect("by-value MIR functions should be task-startable");
-    let task_start_error = runtime
+    runtime
         .require_task_startable_function(&MirFunction {
             params: vec![MirParam {
                 name: "value".to_string(),
                 passing: crate::mir::MirReceiverKind::Borrow,
+                ty: Type::named("String"),
+            }],
+            ..by_value.clone()
+        })
+        .expect("shared borrowed MIR parameters should be task-startable");
+    let task_start_error = runtime
+        .require_task_startable_function(&MirFunction {
+            params: vec![MirParam {
+                name: "value".to_string(),
+                passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
             }],
             ..by_value
         })
-        .expect_err("borrowed params should not be task-startable in MIR");
+        .expect_err("mutable borrowed params should not be task-startable in MIR");
     assert!(task_start_error
         .message
-        .contains("does not yet support borrowed parameter `value`"));
+        .contains("does not support `borrow mut` parameter `value`"));
 }
 
 #[test]

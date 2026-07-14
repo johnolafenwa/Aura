@@ -16,7 +16,7 @@ enum MaybePair[T]:
     One(T)
     Two(T, T)
 
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 ```
 
@@ -46,6 +46,12 @@ The exact parameter-list forms are in [Grammar](/manual/grammar#type-references-
 ## Inference And Specialization
 
 Generic calls infer substitutions by unifying argument types with parameter type patterns. An available expected result type may add constraints. Generic class and enum construction similarly use provided fields/payloads and an expected constructed type.
+
+Parameter ownership is resolved at the generic declaration. Because an
+unconstrained `T` is not assumed copyable, a bare `value: T` is a shared borrow
+and remains declaration-stable even when a call later specializes `T` to a
+copy type. Use `value: own T` when the generic body consumes, stores, or returns
+the argument.
 
 ```python
 boxed = Box(value=7)          # Box[int64]
@@ -94,7 +100,7 @@ Trait names and method names must be unique in their scopes. Trait type paramete
 
 ```python
 trait Mapper[T]:
-    def map(borrow self, value: T) -> T
+    def map(borrow self, value: own T) -> T
 ```
 
 Bounds may appear on a trait method's own generic parameters. Ordinary trait method parameters cannot have defaults.
@@ -129,13 +135,13 @@ Generic and specialized implementations are supported:
 
 ```python
 impl Mapper[int32] for Doubler:
-    def map(borrow self, value: int32) -> int32:
+    def map(borrow self, value: own int32) -> int32:
         return value * self.factor
 ```
 
 ```python
 impl[T] Mapper[T] for Box[T]:
-    def map(borrow self, value: T) -> T:
+    def map(borrow self, value: own T) -> T:
         return value
 ```
 
@@ -159,7 +165,7 @@ For an explicitly implemented method, conformance compares:
 
 - receiver presence and passing mode (shared `self`/`borrow self`, consuming `own self`, `borrow mut self`, or none)
 - ordinary parameter count and substituted types
-- each ordinary parameter's by-value/shared-borrow/mutable-borrow mode
+- each ordinary parameter's resolved owned/shared-borrow/mutable-borrow mode
 - return type and owned/shared-borrow/mutable-borrow mode
 - the semantic source slot of a borrowed return
 
@@ -268,7 +274,7 @@ The conventional contract is:
 
 ```python
 trait From[Source]:
-    def from(value: Source) -> Self
+    def from(value: own Source) -> Self
 ```
 
 The selected conversion runs before `Result.Err` is returned from the enclosing function. If no applicable conversion exists, `try` is rejected. See [Functions](/manual/functions#try-and-result-returns).
@@ -279,7 +285,9 @@ The selected conversion runs before `Result.Err` is returned from the enclosing 
 - type inference is local/contextual rather than whole-program inference
 - trait and implementation method defaults for ordinary parameters are not supported
 - generic user classes cannot currently serve as `with` resources
-- generic task targets are permitted only when their callable type arguments can be resolved, and all task parameters must still be by value
+- generic task targets are permitted when their callable type arguments can be
+  resolved; default/shared and `own` targets use task-owned captures, while
+  `borrow mut` targets are rejected
 - equal-specificity overlapping implementations remain an error at the use site
 
 Observable syntax and implementation limits are collected in [Current Limits](/manual/current-limits), while cross-cutting type rules are in [Static Semantics](/manual/static-semantics#generics-traits-and-implementations).

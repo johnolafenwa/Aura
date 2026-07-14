@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{Argument, Param};
+use crate::ast::{Argument, Param, ParamMode};
 use crate::diag::{Diagnostic, Result, Span};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -11,9 +11,16 @@ pub enum CallConvention {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ParamOwnership {
+    Shared,
+    Own,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CallableParam<'a> {
     pub name: &'a str,
     pub required: bool,
+    pub ownership: ParamOwnership,
 }
 
 impl<'a> CallableParam<'a> {
@@ -21,6 +28,7 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: true,
+            ownership: ParamOwnership::Shared,
         }
     }
 
@@ -28,6 +36,23 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: false,
+            ownership: ParamOwnership::Shared,
+        }
+    }
+
+    pub const fn required_own(name: &'a str) -> Self {
+        Self {
+            name,
+            required: true,
+            ownership: ParamOwnership::Own,
+        }
+    }
+
+    pub const fn optional_own(name: &'a str) -> Self {
+        Self {
+            name,
+            required: false,
+            ownership: ParamOwnership::Own,
         }
     }
 }
@@ -35,12 +60,11 @@ impl<'a> CallableParam<'a> {
 pub fn callable_params_from_decl<'a>(params: &'a [Param]) -> Vec<CallableParam<'a>> {
     params
         .iter()
-        .map(|param| {
-            if param.default.is_some() {
-                CallableParam::optional(&param.name)
-            } else {
-                CallableParam::required(&param.name)
-            }
+        .map(|param| match (param.default.is_some(), param.mode) {
+            (true, ParamMode::Own) => CallableParam::optional_own(&param.name),
+            (false, ParamMode::Own) => CallableParam::required_own(&param.name),
+            (true, _) => CallableParam::optional(&param.name),
+            (false, _) => CallableParam::required(&param.name),
         })
         .collect()
 }
@@ -165,20 +189,21 @@ const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::optional("timeout"),
 ];
 const VALUE_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("value"),
+    CallableParam::required_own("value"),
     CallableParam::optional("timeout"),
 ];
 const DEFAULT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("default"),
+    CallableParam::required_own("default"),
     CallableParam::optional("timeout"),
 ];
 const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const TIMEOUT_ONLY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
-const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("value")];
+const VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const VEC_SET_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("index"),
-    CallableParam::required("value"),
+    CallableParam::required_own("value"),
 ];
 const VEC_SWAP_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("first"),
@@ -186,9 +211,9 @@ const VEC_SWAP_PARAMS: [CallableParam<'static>; 2] = [
 ];
 const VEC_INSERT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("index"),
-    CallableParam::required("value"),
+    CallableParam::required_own("value"),
 ];
-const VEC_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("other")];
+const VEC_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("other")];
 const STRING_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const STRING_REPLACE_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("from"),
@@ -197,11 +222,12 @@ const STRING_REPLACE_PARAMS: [CallableParam<'static>; 2] = [
 const STRING_JOIN_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("parts")];
 const MAP_KEY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("key")];
 const MAP_SET_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("key"),
-    CallableParam::required("value"),
+    CallableParam::required_own("key"),
+    CallableParam::required_own("value"),
 ];
-const MAP_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("other")];
+const MAP_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("other")];
 const SET_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const SET_INSERT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("value")];
 const COUNT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("count"),
     CallableParam::optional("timeout"),
@@ -219,17 +245,17 @@ const BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::optional("timeout"),
 ];
 const PROCESS_SUPERVISOR_START_PARAMS: [CallableParam<'static>; 11] = [
-    CallableParam::required("name"),
-    CallableParam::required("command"),
-    CallableParam::optional("cwd"),
-    CallableParam::optional("env"),
-    CallableParam::optional("stdin"),
-    CallableParam::optional("stdout"),
-    CallableParam::optional("stderr"),
-    CallableParam::optional("restart"),
-    CallableParam::optional("backoff"),
-    CallableParam::optional("max_restarts"),
-    CallableParam::optional("group"),
+    CallableParam::required_own("name"),
+    CallableParam::required_own("command"),
+    CallableParam::optional_own("cwd"),
+    CallableParam::optional_own("env"),
+    CallableParam::optional_own("stdin"),
+    CallableParam::optional_own("stdout"),
+    CallableParam::optional_own("stderr"),
+    CallableParam::optional_own("restart"),
+    CallableParam::optional_own("backoff"),
+    CallableParam::optional_own("max_restarts"),
+    CallableParam::optional_own("group"),
 ];
 const ADDRESS_TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
     CallableParam::required("address"),
@@ -243,13 +269,13 @@ const ADDRESS_BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
 ];
 const STATUS_TEXT_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
     CallableParam::required("status"),
-    CallableParam::required("text"),
-    CallableParam::required("headers"),
+    CallableParam::required_own("text"),
+    CallableParam::required_own("headers"),
 ];
 const STATUS_BYTES_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
     CallableParam::required("status"),
-    CallableParam::required("bytes"),
-    CallableParam::required("headers"),
+    CallableParam::required_own("bytes"),
+    CallableParam::required_own("headers"),
 ];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -995,22 +1021,22 @@ impl BuiltinMember {
             Self::VecLen => "len() -> int32",
             Self::VecIsEmpty => "is_empty() -> bool",
             Self::VecClone => "clone() -> Vec[T]",
-            Self::VecPush => "push(value) -> None",
+            Self::VecPush => "push(value: own T) -> None",
             Self::VecPop => "pop() -> Option[T]",
             Self::VecGet => "get(index: int32) -> Option[T]",
-            Self::VecSet => "set(index: int32, value: T) -> Option[T]",
+            Self::VecSet => "set(index: int32, value: own T) -> Option[T]",
             Self::VecRemove => "remove(index: int32) -> Option[T]",
             Self::VecSwap => "swap(first: int32, second: int32) -> bool",
             Self::VecContains => "contains(value: T) -> bool",
-            Self::VecExtend => "extend(other: Vec[T]) -> None",
-            Self::VecInsert => "insert(index: int32, value: T) -> bool",
+            Self::VecExtend => "extend(other: own Vec[T]) -> None",
+            Self::VecInsert => "insert(index: int32, value: own T) -> bool",
             Self::VecClear => "clear() -> None",
             Self::VecReverse => "reverse() -> None",
             Self::MapLen => "len() -> int32",
             Self::MapIsEmpty => "is_empty() -> bool",
             Self::MapClone => "clone() -> Map[K, V]",
             Self::MapGet => "get(key: K) -> Option[V]",
-            Self::MapSet => "set(key: K, value: V) -> Option[V]",
+            Self::MapSet => "set(key: own K, value: own V) -> Option[V]",
             Self::MapRemove => "remove(key: K) -> Option[V]",
             Self::MapContainsKey => "contains_key(key: K) -> bool",
             Self::MapKeys => "keys() -> Vec[K]",
@@ -1018,25 +1044,25 @@ impl BuiltinMember {
             Self::MapItems => "items() -> Vec[MapEntry[K, V]]",
             Self::MapEntries => "entries() -> Vec[MapEntry[K, V]]",
             Self::MapClear => "clear() -> None",
-            Self::MapExtend => "extend(other: Map[K, V]) -> None",
+            Self::MapExtend => "extend(other: own Map[K, V]) -> None",
             Self::SetLen => "len() -> int32",
             Self::SetIsEmpty => "is_empty() -> bool",
             Self::SetClone => "clone() -> Set[T]",
             Self::SetContains => "contains(value: T) -> bool",
-            Self::SetInsert => "insert(value: T) -> bool",
+            Self::SetInsert => "insert(value: own T) -> bool",
             Self::SetRemove => "remove(value: T) -> bool",
             Self::StringClone => "clone() -> String",
-            Self::QueuePut => "put(value: T, timeout: Duration = ...) -> Result[None, SendError[T]]",
-            Self::QueueTryPut => "try_put(value: T) -> Result[None, SendError[T]]",
+            Self::QueuePut => "put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]",
+            Self::QueueTryPut => "try_put(value: own T) -> Result[None, SendError[T]]",
             Self::QueueGet => "get(timeout: Duration = ...) -> QueueReceive[T]",
             Self::QueueGetOrNone => "get_or_none(timeout: Duration = ...) -> Option[T]",
-            Self::QueueGetOr => "get_or(default: T, timeout: Duration = ...) -> T",
+            Self::QueueGetOr => "get_or(default: own T, timeout: Duration = ...) -> T",
             Self::QueueClose => "close() -> None",
             Self::TaskResult => "result(timeout: Duration = ...) -> TaskResult[T]",
             Self::TaskResultOrNone => "result_or_none(timeout: Duration = ...) -> Option[T]",
-            Self::TaskResultOr => "result_or(default: T, timeout: Duration = ...) -> T",
-            Self::TaskGroupStart => "start(function, ...) -> Task[T]",
-            Self::TaskGroupStartSoon => "start_soon(function, ...) -> None",
+            Self::TaskResultOr => "result_or(default: own T, timeout: Duration = ...) -> T",
+            Self::TaskGroupStart => "start(function, own ...) -> Task[T]",
+            Self::TaskGroupStartSoon => "start_soon(function, own ...) -> None",
             Self::TaskGroupCancel => "cancel() -> None",
             Self::FileReadAll => "read_all() -> Result[String, io.Error]",
             Self::FileReadBytes => "read_bytes() -> Result[Vec[uint8], io.Error]",
@@ -1078,8 +1104,8 @@ impl BuiltinMember {
             Self::HttpExchangeHeaders => "headers() -> Map[String, String]",
             Self::HttpExchangeBodyText => "body_text() -> Result[String, io.Error]",
             Self::HttpExchangeBodyBytes => "body_bytes() -> Vec[uint8]",
-            Self::HttpExchangeRespondText => "respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]",
-            Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]",
+            Self::HttpExchangeRespondText => "respond_text(status: int32, text: own String, headers: own Map[String, String]) -> Result[None, io.Error]",
+            Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: own Vec[uint8], headers: own Map[String, String]) -> Result[None, io.Error]",
             Self::HttpResponseStatus => "status() -> int32",
             Self::HttpResponseReason => "reason() -> String",
             Self::HttpResponseHeaders => "headers() -> Map[String, String]",
@@ -1140,7 +1166,7 @@ impl BuiltinMember {
             Self::ProcessCompletedStderr => "stderr() -> String",
             Self::ProcessCompletedStderrBytes => "stderr_bytes() -> Vec[uint8]",
             Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
-            Self::ProcessSupervisorStart => "start(name: String, command: Vec[String], cwd: Option[String] = ..., env: Map[String, String] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., restart: process.RestartPolicy = ..., backoff: Duration = ..., max_restarts: int32 = ..., group: bool = ...) -> Result[None, process.Error]",
+            Self::ProcessSupervisorStart => "start(name: own String, command: own Vec[String], cwd: own Option[String] = ..., env: own Map[String, String] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]",
             Self::ProcessSupervisorWait => {
                 "wait(timeout: Duration = ...) -> process.SupervisorWait"
             }
@@ -1530,7 +1556,7 @@ impl BuiltinMember {
             ),
             Self::VecContains => bind_call_arguments(
                 "`contains`",
-                &VEC_PUSH_PARAMS,
+                &VALUE_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1602,9 +1628,16 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::SetContains | Self::SetInsert | Self::SetRemove => bind_call_arguments(
+            Self::SetContains | Self::SetRemove => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &SET_VALUE_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::SetInsert => bind_call_arguments(
+                "`insert`",
+                &SET_INSERT_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1618,7 +1651,7 @@ impl BuiltinMember {
             ),
             Self::QueueTryPut => bind_call_arguments(
                 &format!("`{}`", self.name()),
-                &[CallableParam::required("value")],
+                &[CallableParam::required_own("value")],
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1776,6 +1809,34 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOnly,
             ),
+        }
+    }
+
+    pub const fn argument_ownership(self, index: usize) -> ParamOwnership {
+        match self {
+            Self::VecPush if index == 0 => ParamOwnership::Own,
+            Self::VecSet | Self::VecInsert if index == 1 => ParamOwnership::Own,
+            Self::VecExtend if index == 0 => ParamOwnership::Own,
+            Self::MapSet if index < 2 => ParamOwnership::Own,
+            Self::MapExtend if index == 0 => ParamOwnership::Own,
+            Self::SetInsert if index == 0 => ParamOwnership::Own,
+            Self::QueuePut if index == 0 => ParamOwnership::Own,
+            Self::QueueTryPut if index == 0 => ParamOwnership::Own,
+            Self::QueueGetOr | Self::TaskResultOr if index == 0 => ParamOwnership::Own,
+            Self::ProcessSupervisorStart if index < 11 => ParamOwnership::Own,
+            Self::HttpExchangeRespondText | Self::HttpExchangeRespondBytes
+                if index == 1 || index == 2 =>
+            {
+                ParamOwnership::Own
+            }
+            _ => ParamOwnership::Shared,
+        }
+    }
+
+    pub const fn variadic_argument_ownership(self) -> Option<ParamOwnership> {
+        match self {
+            Self::TaskGroupStart | Self::TaskGroupStartSoon => Some(ParamOwnership::Own),
+            _ => None,
         }
     }
 

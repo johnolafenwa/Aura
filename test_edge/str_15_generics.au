@@ -10,7 +10,7 @@ enum Wrapper[T]:
     Some(T)
     None
 
-def unwrap_or(w: Wrapper[String], default: borrow str) -> String:
+def unwrap_or(w: own Wrapper[String], default: own String) -> String:
     match w:
         case Wrapper.Some(v):
             return v

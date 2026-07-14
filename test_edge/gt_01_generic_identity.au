@@ -1,7 +1,7 @@
 ## Test 01: Generic identity function with single type param
 ## Expects: 42 then "hello"
 
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
 def main() -> int32:

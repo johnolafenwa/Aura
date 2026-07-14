@@ -100,25 +100,27 @@ See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
 ## `for` Over Collections
 
-Vectors and sets can be iterated in three ways. The choice matters because of Aurora's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+Vectors and sets can be iterated in three ownership modes. The choice matters because of Aurora's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
-**By value** -- consumes the collection. After the loop, the collection is no longer valid:
+**Bare/default** -- reads through a shared borrow. The collection stays valid:
 
 ```python
 names = ["Ada", "Grace"]
 for name in names:
     print(name)
-# names is consumed -- cannot use it after this loop
+print(names.len())       # still usable
 ```
 
-**By shared borrow** -- reads without consuming. The collection stays valid:
+**Owned** -- consumes the collection. After the loop, it is no longer valid:
 
 ```python
 names = ["Ada", "Grace"]
-for name in borrow names:
+for name in own names:
     print(name)
-print(names.len())       # still usable
+# names is consumed -- cannot use it after this loop
 ```
+
+`for name in borrow names:` is the explicit spelling of shared iteration.
 
 **By mutable borrow** -- modifies elements in place. Requires a `mut` binding:
 
@@ -129,11 +131,13 @@ for item in borrow mut scores:
 # scores is now [2, 3, 4]
 ```
 
-Use `for x in borrow collection` as the default when you want to keep the collection. Use `for x in collection` only when you are done with it. Use `for x in borrow mut collection` when you need to update elements.
+Use bare `for x in collection` for ordinary reads, `for x in own collection`
+when you are done with it, and `for x in borrow mut collection` when you need
+to update vector elements.
 
 See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
-Sets support by-value and shared-borrow iteration:
+Sets support default shared, explicit `borrow`, and `own` iteration:
 
 ```python
 seen = {1, 2, 3}
@@ -148,8 +152,8 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 The current compiler supports `for` over:
 
 - `range(stop)` and `range(start, stop)` with named-argument forms
-- `Vec[T]`, `borrow Vec[T]`, and `borrow mut Vec[T]`
-- `Set[T]` and `borrow Set[T]`
+- default/`borrow`/`own` `Vec[T]`, plus `borrow mut Vec[T]`
+- default/`borrow`/`own` `Set[T]`
 - `Queue[T]` (iterates until the queue closes)
 
 Not yet supported:
@@ -157,3 +161,7 @@ Not yet supported:
 - user-defined iterable protocols
 - `borrow mut Set[T]`
 - custom step values for `range`
+
+Queue iteration is different: it receives each item already owned, and the
+Queue handle is copyable. The explicit `own`, `borrow`, and `borrow mut` forms
+are rejected for Queue; use `for item in queue:`.

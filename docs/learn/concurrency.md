@@ -53,7 +53,9 @@ with group = TaskGroup():
 
 ## Ownership When Starting Tasks
 
-Spawned tasks receive **owned** arguments. A child task may outlive the stack frame that started it, so Aurora refuses to let a task borrow a local value — the borrow could outlast the value it refers to.
+Starting a task creates **owned captures**. Each argument moves or copies into
+task-owned storage before the child can outlive the caller. The target may then
+borrow that capture or consume it; it never borrows the caller's stack value.
 
 When both the parent and the child want the same move value, clone before starting:
 
@@ -67,7 +69,10 @@ with group = TaskGroup():
     print(label)
 ```
 
-Copy types (numbers, `bool`, `Duration`, queue handles, task handles) pass through unchanged.
+Copy types (numbers, `bool`, `Duration`, queue handles, task handles) pass
+through unchanged. Bare/default and explicit shared parameters borrow the
+task-owned capture, `own` parameters consume it, and `borrow mut` targets are
+rejected because detached capture has no caller-visible writeback.
 
 ## `Queue[T]`: Typed Channels
 
@@ -88,7 +93,13 @@ with group = TaskGroup():
         print(job)
 ```
 
-Two things are happening in that `for` loop. The consumer receives values until one of three things is true: the queue is closed, cancellation interrupts the loop, or every producer in the surrounding task group has completed. The last case means the program can often rely on normal exit to drain the queue; explicitly calling `close()` is still the clearest signal.
+Two things are happening in that `for` loop. The consumer receives each value
+already owned until one of three things is true: the queue is closed,
+cancellation interrupts the loop, or every producer in the surrounding task
+group has completed. Queue is not a place traversal, so explicit `own`,
+`borrow`, and `borrow mut` loop modifiers are rejected. The last case means the
+program can often rely on normal exit to drain the queue; explicitly calling
+`close()` is still the clearest signal.
 
 ## Bounded Queues And Backpressure
 

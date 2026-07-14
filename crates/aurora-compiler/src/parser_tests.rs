@@ -125,6 +125,44 @@ fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() 
 }
 
 #[test]
+fn d6_parser_preserves_parameter_modes_and_keeps_own_out_of_match() {
+    let item = parse_item_from(
+        "def modes(copy_value: int32, inferred: String, owned: own String, shared: borrow String, mutable: borrow mut String):\n    pass\n",
+    )
+    .expect("all ordinary parameter modes should parse");
+    let Item::Function(function) = item else {
+        panic!("expected function item");
+    };
+    assert_eq!(
+        function
+            .params
+            .iter()
+            .map(|param| param.mode)
+            .collect::<Vec<_>>(),
+        vec![
+            ParamMode::Default,
+            ParamMode::Default,
+            ParamMode::Own,
+            ParamMode::Borrow,
+            ParamMode::BorrowMut,
+        ]
+    );
+
+    let own_loop = parse_stmt_from("for item in own values:\n    pass\n")
+        .expect("owned place iteration should parse");
+    assert!(matches!(
+        own_loop,
+        Stmt::For(ForStmt {
+            borrow_mode: Some(ReceiverKind::Value),
+            ..
+        })
+    ));
+
+    parse_stmt_from("match own value:\n    case _:\n        pass\n")
+        .expect_err("match remains consume-by-default and must not accept `own`");
+}
+
+#[test]
 fn parse_item_rejects_public_impl_and_non_item_tokens() {
     let public_impl =
         parse_item_from("public impl Show for Point:\n    pass\n").expect_err("public impl");
@@ -361,6 +399,17 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     assert!(bad_param
         .message
         .contains("ordinary borrowed parameters must be written as"));
+
+    let bad_owned_param = parse_item_from(
+        ["def read(own counter: Counter):", "    pass"]
+            .join("\n")
+            .as_str(),
+    )
+    .expect_err("prefix owned parameter should fail");
+    assert_eq!(
+        bad_owned_param.message,
+        "ordinary owned parameters must be written as `name: own Type`"
+    );
 
     let late_borrow_receiver = parse_item_from(
         [
@@ -1241,7 +1290,7 @@ fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covere
     let Item::Function(function) = borrowed_return else {
         panic!("expected function item");
     };
-    assert_eq!(function.params[0].passing, ReceiverKind::Borrow);
+    assert_eq!(function.params[0].mode, ParamMode::Borrow);
     assert_eq!(function.params[0].borrow_label.as_deref(), Some("src"));
     assert_eq!(function.return_passing, ReceiverKind::BorrowMut);
     assert_eq!(function.return_borrow_source.as_deref(), Some("src"));

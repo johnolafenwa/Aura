@@ -3,7 +3,7 @@ enum Message:
     Number(int32)
     Empty
 
-def describe(msg: Message) -> String:
+def describe(msg: own Message) -> String:
     match msg:
         case Message.Text(content):
             return "text: " + content

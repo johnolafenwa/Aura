@@ -1,5 +1,5 @@
 trait From[T]:
-    def from(value: T) -> Self
+    def from(value: own T) -> Self
 
 enum ReadError:
     Missing
@@ -8,7 +8,7 @@ enum AppError:
     Read(ReadError)
 
 impl From[ReadError] for AppError:
-    def from(value: ReadError) -> AppError:
+    def from(value: own ReadError) -> AppError:
         return AppError.Read(value)
 
 def read(flag: bool) -> Result[int32, ReadError]:

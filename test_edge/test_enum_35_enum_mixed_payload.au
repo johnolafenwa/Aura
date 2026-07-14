@@ -3,7 +3,7 @@ enum Event:
     Key(String)
     Close
 
-def handle(e: Event) -> String:
+def handle(e: own Event) -> String:
     match e:
         case Event.Click(pos):
             print(pos)

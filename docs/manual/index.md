@@ -15,7 +15,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
 - [Expressions](/manual/expressions): operators, calls, indexing, member access, literals, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, and top-level execution.
-- [Functions](/manual/functions): signatures, default arguments, named arguments, `main`, borrowed parameters, returns, and call binding.
+- [Functions](/manual/functions): signatures, default/`own`/borrowed parameter
+  modes, default arguments, named arguments, `main`, returns, and call binding.
 - [Classes](/manual/classes): fields, constructors, methods, receivers, associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads, exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait declarations, impls, bounds, dispatch, and current restrictions.

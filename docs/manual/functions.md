@@ -51,22 +51,24 @@ The passing mode is part of the function signature:
 
 | Declaration | Contract at the call boundary |
 | --- | --- |
-| `value: T` | By value. A move value is consumed; a copy value is duplicated. |
-| `value: borrow T` | Shared borrow. The caller retains ownership; the callee cannot move through the borrow. |
+| `value: T` | Shared borrow when `T` is non-copy; by value when `T` is copy. |
+| `value: own T` | Owned argument. A move value is consumed; a copy value is duplicated. |
+| `value: borrow T` | Explicit shared borrow. The caller retains ownership; the callee cannot move through the borrow. |
 | `value: borrow mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
 
 ```python
-def consume(name: String):
+def consume(name: own String):
     print(name)
 
 def length(text: borrow String) -> int32:
     return text.len()
 
-def push_name(names: borrow mut Vec[String], name: String):
+def push_name(names: borrow mut Vec[String], name: own String):
     names.push(name)
 ```
 
-`borrow` is written in the declaration after the colon. Calls pass the expression directly; Aurora has no call-site `borrow` syntax:
+The modifier is written in the declaration after the colon. Calls pass the
+expression directly; Aurora has no call-site `own` or `borrow` syntax:
 
 ```python
 mut names = Vec[String]()
@@ -74,6 +76,13 @@ push_name(names, "Ada")
 ```
 
 Arguments must have exactly the substituted parameter type. Calls also reject overlapping move, shared-borrow, and mutable-borrow access at the same call boundary. The ownership and place rules are specified in [Ownership And Borrowing](/manual/ownership-and-borrowing).
+
+The bare rule is resolved where the function is declared, not independently
+at each call. An unconstrained generic `value: T` therefore resolves to a
+shared borrow because `T` is not known copyable there. That choice is
+**declaration-stable**: specializing the function later with `T = int32` does
+not turn the parameter into an owned value. Write `value: own T` when a generic
+function must consume or return its argument.
 
 ## Call Binding
 
@@ -101,7 +110,8 @@ Positional arguments cannot follow a named argument. Parameter and argument list
 
 ## Default Arguments
 
-A default is permitted only on an ordinary by-value parameter of a top-level function or class method:
+A default is permitted on an ordinary default-mode, `own`, or shared-`borrow`
+parameter of a top-level function or class method:
 
 ```python
 def greet(name: String = "world"):
@@ -110,7 +120,13 @@ def greet(name: String = "world"):
 
 The complete rules are:
 
-- a borrowed or mutable-borrowed parameter cannot have a default
+- `borrow mut` parameters cannot have defaults, regardless of whether their
+  types are copyable; the default would be a caller-invisible temporary, so
+  every mutation would be a silent lost write. Require the caller to pass a
+  value, or take the parameter as `own T` and return the result
+- a shared-borrow default is permitted; its default temporary lives until the
+  call completes
+- an `own` default is permitted and its fresh temporary is consumed by the call
 - after the first defaulted parameter, every remaining parameter must also have a default
 - the default expression must have exactly the declared parameter type
 - a default expression cannot reference any parameter of the same declaration, including an earlier parameter
@@ -183,7 +199,7 @@ A borrowed return of a copy type is materialized as an ordinary copy value. A ca
 Type parameters follow the function name:
 
 ```python
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 ```
 
@@ -217,7 +233,12 @@ with group = TaskGroup():
     task = group.start(work, 21)
 ```
 
-Every task target parameter must be by value. Borrowed task parameters are rejected because the child may outlive the starting call frame. Task arguments are copied or consumed before the child runs. See [Concurrency](/manual/concurrency).
+Task capture ownership is independent of the target function's call ABI. Each
+argument is first copied or moved into task-owned capture storage: `own` target
+parameters consume their capture, while default-mode and explicit shared
+parameters borrow from that storage for the duration of the child call.
+`borrow mut` targets are rejected because mutable access to detached capture
+storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
 
 ## `main`
 

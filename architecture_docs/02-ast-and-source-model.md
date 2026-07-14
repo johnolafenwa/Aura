@@ -116,17 +116,21 @@ This is a common Rust compiler pattern: use algebraic data types to mirror langu
 
 There are a few choices worth calling out because they affect later stages:
 
-- `ReceiverKind`
-  Aurora stores the resolved passing mode for a receiver or parameter. For
-  receivers, both bare `self` and the explicit synonym `borrow self` become
-  `ReceiverKind::Borrow`; `own self` becomes `ReceiverKind::Value`; and
-  `borrow mut self` becomes `ReceiverKind::BorrowMut`. The AST therefore
-  preserves the semantic distinction needed by checking and lowering, while
-  deliberately canonicalizing the two shared-receiver spellings.
+- parameter and receiver passing modes
+  The AST preserves whether an ordinary parameter was written with no
+  modifier, `own`, `borrow`, or `borrow mut`. That source mode is deliberately
+  separate from the resolved call ABI: an unmodified parameter resolves to a
+  value for copy types and to a shared borrow for non-copy types. Receiver
+  syntax is normalized more aggressively: bare `self` and `borrow self`
+  become the shared receiver mode, `own self` becomes the value mode, and
+  `borrow mut self` becomes the exclusive mutable mode.
 - `return_passing` and `return_borrow_source`
   Function declarations carry borrowed-return metadata in the AST so the checker can validate it.
-- `borrow_mode` on `match` and `for`
-  Borrowing choices are part of syntax, not an afterthought.
+- ownership modes on `match` and `for`
+  A `for` statement preserves its default, `own`, `borrow`, or `borrow mut`
+  spelling so collection-specific checking can resolve it. A `match`
+  statement retains its explicit borrow mode; unlike `for`, an unmodified
+  `match` still consumes a non-copy scrutinee.
 - `top_level_stmts`
   Aurora explicitly supports file-level execution, so the AST models it directly.
 - `Specialize`

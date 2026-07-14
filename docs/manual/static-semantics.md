@@ -125,9 +125,15 @@ Arguments are written as positional arguments followed by named arguments. Bindi
 5. omitted parameters require defaults
 6. each argument type must equal the substituted parameter type
 
-Default expressions are evaluated for each call where the parameter is omitted. Defaults may refer only to names valid under the declaration's default-expression rules; they do not capture a caller's locals.
+Default expressions are evaluated for each call where the parameter is omitted. Defaults may refer only to names valid under the declaration's default-expression rules; they do not capture a caller's locals. A shared-borrow default's temporary lives through the call. An `own` default is consumed. A `borrow mut` default is rejected because mutations to its caller-invisible temporary would be silently lost.
 
-A by-value parameter consumes a non-copy argument. A `borrow` parameter requires a readable place or compatible borrowed value. A `borrow mut` parameter requires a mutable place. All arguments at one call boundary are checked together for overlapping move/shared/mutable access.
+A bare parameter resolves to value passing for a copy type and shared borrowing
+for a non-copy type. An unresolved generic type is not assumed copyable, so its
+bare mode resolves to shared borrow and remains declaration-stable after
+specialization. An `own` parameter consumes a non-copy argument. A `borrow`
+parameter requires a readable place or compatible borrowed value. A `borrow
+mut` parameter requires a mutable place. All arguments at one call boundary
+are checked together for overlapping move/shared/mutable access.
 
 ## Class Construction
 
@@ -173,9 +179,13 @@ The managed binding cannot be moved out in a way that would prevent required cle
 
 ## Tasks And Static Safety
 
-`TaskGroup.start` and `start_soon` accept named functions and associated methods without `self`. The target's ordinary parameters must be by value; borrowed task parameters are rejected because a child may outlive the starting call frame.
+`TaskGroup.start` and `start_soon` accept named functions and associated methods
+without `self`. Target arguments are copied or moved into task-owned capture
+storage independently of the target ABI. Default-mode and explicit shared
+target parameters borrow that storage for the child call; `own` parameters
+consume it. `borrow mut` target parameters are rejected.
 
-Arguments are consumed or copied under ordinary call rules before the child runs. Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
+Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
 
 ## Entrypoint Rules
 

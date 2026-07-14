@@ -176,7 +176,7 @@ def run_env() -> Result[None, process.Error]:
     print(completed.status())
     return Result.Ok(None)
 
-def run_pwd(cwd: String) -> Result[None, process.Error]:
+def run_pwd(cwd: own String) -> Result[None, process.Error]:
     completed = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())

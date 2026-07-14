@@ -4,7 +4,7 @@ class NamedCounter:
     name: String
     count: int32
 
-    def new(name: String) -> NamedCounter:
+    def new(name: own String) -> NamedCounter:
         return NamedCounter(name=name, count=0)
 
     def increment(borrow mut self):

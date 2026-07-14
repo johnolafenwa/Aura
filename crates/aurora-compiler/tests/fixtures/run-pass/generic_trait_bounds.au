@@ -1,11 +1,11 @@
 trait Mapper[T]:
-    def map(borrow self, item: T) -> T
+    def map(borrow self, item: own T) -> T
 
 class Doubler:
     factor: int32
 
 impl Mapper[int32] for Doubler:
-    def map(borrow self, item: int32) -> int32:
+    def map(borrow self, item: own int32) -> int32:
         return item * self.factor
 
 def apply_twice[T: Mapper[int32]](mapper: T, value: int32) -> int32:

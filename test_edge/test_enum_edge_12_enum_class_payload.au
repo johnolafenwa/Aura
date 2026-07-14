@@ -12,7 +12,7 @@ enum MapItem:
     Tag(Label)
     Empty
 
-def describe_item(item: MapItem) -> String:
+def describe_item(item: own MapItem) -> String:
     match item:
         case MapItem.Marker(coords):
             print(coords.x)

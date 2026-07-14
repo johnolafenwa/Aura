@@ -1,7 +1,7 @@
 ## Test 38: Generic function that returns a Result
 ## Expects: 42 then -1
 
-def safe_get[T](val: T, ok: bool) -> Result[T, int32]:
+def safe_get[T](val: own T, ok: bool) -> Result[T, int32]:
     if ok:
         return Result.Ok(val)
     return Result.Err(-1)

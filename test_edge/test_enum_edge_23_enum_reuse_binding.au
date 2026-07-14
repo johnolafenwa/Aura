@@ -4,7 +4,7 @@ enum Value:
     StrVal(String)
     FloatVal(float64)
 
-def show(v: Value) -> String:
+def show(v: own Value) -> String:
     match v:
         case Value.IntVal(x):
             print(x)

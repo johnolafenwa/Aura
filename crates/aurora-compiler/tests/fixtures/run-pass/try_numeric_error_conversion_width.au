@@ -1,5 +1,5 @@
 trait From[T]:
-    def from(value: T) -> Self
+    def from(value: own T) -> Self
 
 enum AppError:
     Narrow(int32)
@@ -12,11 +12,11 @@ class Resource:
         print("closed " + self.label)
 
 impl From[int32] for AppError:
-    def from(value: int32) -> AppError:
+    def from(value: own int32) -> AppError:
         return AppError.Narrow(value)
 
 impl From[int64] for AppError:
-    def from(value: int64) -> AppError:
+    def from(value: own int64) -> AppError:
         return AppError.Wide(value)
 
 def read(ok: bool) -> Result[int32, int32]:

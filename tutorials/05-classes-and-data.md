@@ -169,7 +169,7 @@ class Greeter:
     def say(self, name: String) -> String:
         return self.prefix + name
 
-    def named(prefix: String) -> Greeter:
+    def named(prefix: own String) -> Greeter:
         return Greeter(prefix=prefix)
 
 greeter = Greeter.named(prefix="hello, ")

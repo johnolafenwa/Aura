@@ -4,7 +4,7 @@ class Greeter:
     def say(borrow self, name: String) -> String:
         return self.prefix + name
 
-    def named(prefix: String) -> Greeter:
+    def named(prefix: own String) -> Greeter:
         return Greeter(prefix=prefix)
 
 def subtract(left: int32, right: int32) -> int32:

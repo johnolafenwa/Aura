@@ -1,10 +1,10 @@
 ## Test 29c: Generic function called from generic with positional args
 ## Expects: 77
 
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
-def wrap_identity[T](value: T) -> T:
+def wrap_identity[T](value: own T) -> T:
     return identity(value)
 
 def main() -> int32:

@@ -410,7 +410,7 @@ Rules:
 
 - class values are move types by default
 - a class may be declared with `copy class Name:` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
-- passing a class by value into a function or returning it by value moves ownership unless the class is `copy`
+- passing a class through an explicit `own` parameter or returning it by value moves ownership unless the class is `copy`; a bare non-copy parameter borrows
 - method calls do not create hidden aliasing; shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self` obey normal ownership and borrow rules
 - field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self`, `borrow self`, or `borrow mut self` is illegal unless an explicit extraction operation is defined
 - class fields are stored inline by default
@@ -456,10 +456,10 @@ class User:
     def name_copy(self) -> String:
         return self.name.clone()
 
-    def rename(borrow mut self, new_name: String):
+    def rename(borrow mut self, new_name: own String):
         self.name = new_name   # valid: mutate in place through an exclusive mutable borrow
 
-def into_name(user: User) -> String:
+def into_name(user: own User) -> String:
     return user.name           # valid: `user` is owned by this function
 
 # invalid:
@@ -849,9 +849,10 @@ Aurora uses a trait-based iteration protocol.
 
 Aurora distinguishes between iterable values and iterator objects.
 
-Core rules:
+Core rules (as amended by the implemented 0.1 ownership defaults):
 
-- `for x in expr:` consumes `expr` by value unless `expr` is explicitly borrowed
+- bare `for x in expr:` over `Vec` or `Set` iterates by shared borrow
+- `for x in own expr:` consumes a `Vec` or `Set` and yields owned elements
 - `for x in borrow expr:` iterates by shared borrow
 - `for x in borrow mut expr:` iterates by mutable borrow
 - iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide consuming `into_iter(own self)` to yield an iterator object
@@ -864,7 +865,7 @@ Core rules:
 
 This lets ownership stay explicit:
 
-- iterating over `Vec[T]` by value may consume the vector
+- iterating over `Vec[T]` with `own` consumes the vector
 - iterating over `borrow [int32]` yields copied `int32` values because `int32` is copy
 - iterating over `borrow [String]` yields `borrow String` elements
 - iterating over a channel receives values until the channel is closed
@@ -897,6 +898,10 @@ Rules:
 - fallible constructors return `Result[Self, E]`
 - default argument expressions are evaluated at the call site in left-to-right parameter order
 - default values may not reference other parameters in v1
+- shared-borrow and `own` defaults are permitted; a shared default temporary
+  lives through the call
+- `borrow mut` defaults are rejected because mutations to a caller-invisible
+  temporary would be silently lost
 - trait method declarations do not use default arguments in v1
 - partial initialization is not part of v1
 
@@ -907,11 +912,11 @@ class User:
     public name: String
     public age: int32 = 0
 
-    def new(name: String, age: int32 = 0) -> Self:
+    def new(name: own String, age: int32 = 0) -> Self:
         return Self(name=name, age=age)
 
     def guest() -> Self:
-        return Self(name=String("Guest"), age=0)
+        return Self(name="Guest", age=0)
 ```
 
 ## 7.6 Control flow
@@ -1166,7 +1171,7 @@ Example:
 
 ```python
 trait From[T]:
-    def from(value: T) -> Self
+    def from(value: own T) -> Self
 
 def load_and_parse(path: borrow str) -> Result[Config, AppError]:
     text = try fs.read_to_string(path)   # IoError converts into AppError
@@ -1711,7 +1716,7 @@ Before writing the full compiler, freeze these decisions. The rest of this docum
 5. Assignment of non-copy values moves ownership.
 6. Nominal product types use `class`; inherent methods live in class bodies; `impl Trait for Type` is reserved for trait conformance; classes move by default, `copy class Name:` is the explicit copy spelling, and recursive fields use the built-in `indirect` storage modifier.
 7. Pattern matching is by value unless the scrutinee is explicitly borrowed with `match borrow value:` or `match borrow mut value:`.
-8. `for` loops use a trait-based iteration model; `for x in expr:` consumes by value unless `expr` is explicitly borrowed.
+8. `for` loops use a trait-based iteration model; bare `Vec`/`Set` iteration is shared and `for x in own expr:` is the consuming spelling. Queue iteration is a receive operation and accepts only the bare form.
 9. Concurrency uses `spawn`, `task_group`, `Channel[T]`, and `select`; detached tasks require explicit `spawn detached`; channel sharing uses cloned handles over shared channel state; `.send()` returns `Result[None, SendError[T]]`; `.recv()` returns `T?`; and ordinary network/timer APIs are task-aware rather than split into a separate `async` dialect.
 10. Recoverable errors use `Result[T, E]`, `try expr`, and `None` as the unit success payload when no value is needed.
 11. Text uses `String` for owned values, `borrow str` for borrowed string slices, `borrow [T]` for borrowed contiguous slices, and `f"..."` to produce owned interpolated strings.
@@ -1940,7 +1945,8 @@ A `class` is a value type by default. It does not imply inheritance, hidden heap
 
 Additional frozen rules:
 
-- classes move by default when passed, assigned, or returned by value
+- classes move through explicit `own` parameters, assignment, or owned returns;
+  bare class parameters borrow by default
 - `copy class Name:` is the explicit copy spelling in v1
 - `copy` is only legal when all fields are copy types
 - direct recursive class fields are illegal; recursion uses the built-in `indirect` storage modifier
@@ -1958,7 +1964,8 @@ Additional frozen rules:
 
 - `for` loops use a trait-based iteration protocol
 - iterable values provide consuming `into_iter(own self)` and iterator objects provide `next(borrow mut self) -> Option[T]`
-- `for x in expr:` iterates by value unless `expr` is explicitly borrowed
+- bare `for x in expr:` over `Vec` or `Set` iterates by shared borrow
+- `for x in own expr:` consumes the collection and yields owned elements
 - multiple trait bounds use `T: Trait1 + Trait2`
 - `for x in borrow expr:` over an already borrowed iterable is a reborrow
 - shared borrowed iteration yields copied element values for copy element types and `borrow T` for non-copy element types
@@ -2065,6 +2072,37 @@ Aurora v1 primitive scalar type spellings are `bool`, `int`, `int8`, `int16`, `i
 Fixed-size owned arrays are deferred until after v1.
 
 Attribute syntax and `@test` were proposed here but are not implemented in Aurora 0.1.
+
+## 23.14 Ratified parameter, loop, and capture ownership defaults
+
+The implemented 0.1 surface amends earlier proposal text that described every
+ordinary parameter and bare collection loop as by-value:
+
+- a bare ordinary parameter `value: T` resolves at its declaration to value
+  passing for a copy type and shared borrowing for a non-copy type
+- an unresolved generic `T` is not assumed copyable, so its bare parameter is
+  a shared borrow; this decision is declaration-stable even when a later call
+  specializes `T` to a copy type
+- `value: own T` explicitly consumes, while `value: borrow T` and `value:
+  borrow mut T` explicitly share or mutate
+- class fields and enum payloads are owned constructor positions, as are the
+  retained/storing builtin arguments shown with `own` in the API reference
+- bare `Vec` and `Set` loops share; `own` consumes; `borrow` is the explicit
+  shared spelling; `borrow mut` is supported only where element writeback is
+  defined
+- Queue iteration receives each item already owned. The Queue handle is a copy
+  value, so `own`, `borrow`, and `borrow mut` modifiers are all rejected; use
+  `for item in queue:`
+- match and local assignment retain their consuming defaults
+- shared-borrow defaults are valid and their temporary lives through the call;
+  `own` defaults are consumed; `borrow mut` defaults are rejected because they
+  would create silent lost writes to caller-invisible temporaries
+- task-start capture is independent of the target ABI. Arguments first move or
+  copy into task-owned storage; default/shared targets borrow that capture,
+  `own` targets consume it, and `borrow mut` targets are rejected
+
+These rules supersede any incompatible historical examples elsewhere in this
+proposal. The normative detail is in the language manual and ADR-0006.
 
 ---
 

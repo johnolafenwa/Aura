@@ -165,7 +165,7 @@ A server usually has its listener at the top of a scope and each accepted connec
 import io
 import net
 
-def handle(stream: net.TcpStream) -> Result[None, io.Error]:
+def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
     with conn = stream:
         line = try conn.read_line(timeout=5s)
         match line:

@@ -182,6 +182,12 @@ Related process-supervisor enums:
 Supervisor children default to `group=true` so `stop()` and `close()` shut down full child trees instead of only the leader process.
 When `restart` is `process.RestartPolicy.OnFailure` or `process.RestartPolicy.Always`, `backoff` must be at least `10ms` to prevent zero-delay restart loops.
 
+`Supervisor.start` retains the configuration it may need for a restart, so all
+of its configuration slots are explicit `own` parameters. This includes the
+copy-valued restart, backoff, count, and group settings; `own` is harmless for
+copy values and keeps the retention contract uniform. Clone a move value before
+the call only when the caller also needs an independent copy.
+
 `process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly. For grouped children it waits for the full child process group to disappear before returning.
 
 One-shot example:
@@ -288,7 +294,7 @@ Text example:
 import io
 import net
 
-def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server = listener:
         with stream = try server.accept(timeout=1s):
             match try stream.read_line(timeout=1s):

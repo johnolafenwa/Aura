@@ -8,7 +8,7 @@ enum Response[T]:
     Success(Payload[T])
     Failure(String)
 
-def make_response[T](data: T, tag: int32) -> Response[T]:
+def make_response[T](data: own T, tag: int32) -> Response[T]:
     payload = Payload(data=data, tag=tag)
     return Response.Success(payload)
 

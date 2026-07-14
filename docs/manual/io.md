@@ -59,7 +59,7 @@ match io.read_line():
 | `InvalidData` | Data could not be decoded or was malformed for the operation. |
 | `Closed` | The resource was already closed or closed while waiting. |
 | `Cancelled` | Cancellation interrupted the operation. |
-| `Other(message: String)` | A remaining platform or runtime error with a message. |
+| `Other(message: own String)` | A remaining platform or runtime error with a message. |
 
 ## Matching Errors
 

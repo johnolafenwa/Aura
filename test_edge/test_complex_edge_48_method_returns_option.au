@@ -12,7 +12,7 @@ class NumberParser:
             return Option.Some(3)
         return Option.None
 
-def parse_and_double(text: String) -> String:
+def parse_and_double(text: own String) -> String:
     parser = NumberParser(raw=text)
     match parser.parse():
         case Some(n):

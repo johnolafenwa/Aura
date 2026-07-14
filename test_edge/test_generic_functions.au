@@ -1,13 +1,13 @@
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
-def first[T](a: T, b: T) -> T:
+def first[T](a: own T, b: T) -> T:
     return a
 
-def second[T](a: T, b: T) -> T:
+def second[T](a: T, b: own T) -> T:
     return b
 
-def make_box[T](value: T) -> Box[T]:
+def make_box[T](value: own T) -> Box[T]:
     return Box(value=value)
 
 class Box[T]:

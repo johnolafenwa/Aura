@@ -1,7 +1,7 @@
 class User:
     name: String
 
-def read(user: User) -> String:
+def read(user: own User) -> String:
     return user.name
 
 def main() -> int32:

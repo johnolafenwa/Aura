@@ -2541,10 +2541,10 @@ impl MirRuntime {
         if let Some(param) = function
             .params
             .iter()
-            .find(|param| param.passing != MirReceiverKind::Value)
+            .find(|param| param.passing == MirReceiverKind::BorrowMut)
         {
             return Err(Diagnostic::new(format!(
-                "task starting does not yet support borrowed parameter `{}` on function `{}` in the MIR runtime",
+                "task starting does not support `borrow mut` parameter `{}` on function `{}` in the MIR runtime",
                 param.name, function.name
             )));
         }

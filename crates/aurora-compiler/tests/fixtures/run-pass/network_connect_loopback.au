@@ -2,7 +2,7 @@ import fs
 import io
 import net
 
-def serve_tcp(listener: net.TcpListener) -> Result[None, io.Error]:
+def serve_tcp(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
@@ -13,7 +13,7 @@ def serve_tcp(listener: net.TcpListener) -> Result[None, io.Error]:
                     pass
     return Result.Ok(None)
 
-def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:

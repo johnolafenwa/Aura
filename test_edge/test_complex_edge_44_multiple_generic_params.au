@@ -4,10 +4,10 @@ class Either[A, B]:
     left: A?
     right: B?
 
-def make_left[A, B](val: A) -> Either[A, B]:
+def make_left[A, B](val: own A) -> Either[A, B]:
     return Either(left=Option.Some(val), right=Option.None)
 
-def make_right[A, B](val: B) -> Either[A, B]:
+def make_right[A, B](val: own B) -> Either[A, B]:
     return Either(left=Option.None, right=Option.Some(val))
 
 def main() -> int32:

@@ -73,7 +73,7 @@ Example echo handler:
 import io
 import net
 
-def handle(stream: net.TcpStream) -> Result[None, io.Error]:
+def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
     with conn = stream:
         match try conn.read_line(timeout=5s):
             case Option.Some(line):
@@ -126,8 +126,8 @@ UDP preserves datagram boundaries. `max_bytes` must be in `1..=65535`; zero or a
 | `headers` | `headers() -> Map[String, String]` | Returns request headers. |
 | `body_text` | `body_text() -> Result[String, io.Error]` | Decodes the request body as UTF-8. |
 | `body_bytes` | `body_bytes() -> Vec[uint8]` | Returns the raw request body. |
-| `respond_text` | `respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]` | Sends a text response. |
-| `respond_bytes` | `respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]` | Sends a byte response. |
+| `respond_text` | `respond_text(status: int32, text: own String, headers: own Map[String, String]) -> Result[None, io.Error]` | Consumes and sends a text response. |
+| `respond_bytes` | `respond_bytes(status: int32, bytes: own Vec[uint8], headers: own Map[String, String]) -> Result[None, io.Error]` | Consumes and sends a byte response. |
 
 Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. A parsed HTTP message is limited to 1 MiB and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
 

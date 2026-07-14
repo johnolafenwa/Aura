@@ -7,7 +7,7 @@ class Box[T]:
     def get(borrow self) -> T:
         return self.value
 
-def wrap[T](item: T) -> Box[T]:
+def wrap[T](item: own T) -> Box[T]:
     return Box(value=item)
 
 def main() -> int32:

@@ -1,0 +1,17 @@
+def worker(value: own String, output: Queue[String]):
+    output.put(value)
+
+def main() -> int32:
+    output = Queue[String]()
+    with TaskGroup() as group:
+        group.start_soon(worker, "task value", output)
+        match output.get():
+            case QueueReceive.Item(value):
+                print(value)
+            case QueueReceive.Closed:
+                print("closed")
+            case QueueReceive.TimedOut:
+                print("timed out")
+            case QueueReceive.Cancelled:
+                print("cancelled")
+    return 0

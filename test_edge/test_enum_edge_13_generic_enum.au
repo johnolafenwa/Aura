@@ -9,7 +9,7 @@ def unwrap_int(m: Maybe[int32], default_val: int32) -> int32:
         case Maybe.Nothing:
             return default_val
 
-def unwrap_str(m: Maybe[String], default_val: String) -> String:
+def unwrap_str(m: own Maybe[String], default_val: own String) -> String:
     match m:
         case Maybe.Just(v):
             return v
@@ -20,7 +20,7 @@ enum Either[A, B]:
     Left(A)
     Right(B)
 
-def show_either(e: Either[int32, String]) -> String:
+def show_either(e: own Either[int32, String]) -> String:
     match e:
         case Either.Left(n):
             print(n)

@@ -1,5 +1,5 @@
 # Test: generic function to unwrap Result or return default
-def unwrap_result_or[T](res: Result[T, String], default_val: T) -> T:
+def unwrap_result_or[T](res: own Result[T, String], default_val: own T) -> T:
     match res:
         case Result.Ok(v):
             return v

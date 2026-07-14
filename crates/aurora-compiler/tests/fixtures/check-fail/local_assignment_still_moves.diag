@@ -1,0 +1,5 @@
+error: use of moved value `first`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/local_assignment_still_moves.au:5:11
+  |
+5 |     print(first)
+  |           ^

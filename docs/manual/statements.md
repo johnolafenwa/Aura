@@ -170,6 +170,9 @@ for value in values:
     print(value)
 ```
 
+Use `for value in own values:` when the loop deliberately consumes a `Vec` or
+`Set` and needs owned element bindings.
+
 The target is one identifier; tuple/destructuring loop targets are not implemented. The loop binding is local to the body, does not escape, and cannot shadow a name already visible in the same scope.
 
 Maintained iterable forms include:
@@ -178,14 +181,26 @@ Maintained iterable forms include:
 | --- | --- |
 | `for i in range(n):` | Yields `int32` values from zero up to `n`, excluding `n`. |
 | `for i in range(start, end):` | Yields `int32` values from `start` up to `end`, excluding `end`. |
-| `for value in vec:` | Consumes a non-copy vector and yields owned elements. |
-| `for value in borrow vec:` | Retains the vector and yields shared-borrowed access for non-copy elements. |
+| `for value in vec:` | Retains the vector and yields shared-borrowed access for non-copy elements. |
+| `for value in own vec:` | Consumes the vector and yields owned elements. |
+| `for value in borrow vec:` | Explicit form of shared iteration. |
 | `for value in borrow mut vec:` | Retains a mutable vector and yields mutable-borrowed access; the iterable place must be mutable. |
-| `for value in set:` | Consumes a non-copy set and yields owned elements. |
-| `for value in borrow set:` | Retains the set and yields shared-borrowed access. |
+| `for value in set:` | Retains the set and yields shared-borrowed access. |
+| `for value in own set:` | Consumes the set and yields owned elements. |
+| `for value in borrow set:` | Explicit form of shared iteration. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 
-`for value in borrow mut set:` is not supported in Aurora 0.1. Queue iteration ends according to close, cancellation, producer-completion, and task-failure rules defined in [Concurrency](/manual/concurrency).
+`for value in borrow mut set:` is not supported in Aurora 0.1. Queue iteration
+receives values rather than traversing places: each item arrives owned and the
+queue handle is a copy value. Consequently `own`, `borrow`, and `borrow mut`
+are all rejected for Queue iteration; use the bare form. Queue iteration ends
+according to close, cancellation, producer-completion, and task-failure rules
+defined in [Concurrency](/manual/concurrency).
+
+The parser also accepts ownership modifiers before a `range(...)` expression.
+In Aurora 0.1 they do not change Range iteration: every form yields the same
+copy `int32` values. This historical behavior is preserved pending a separate
+decision about modifiers on non-place iterables.
 
 ## `break` And `continue`
 

@@ -1,0 +1,6 @@
+def main() -> int32:
+    names = ["Ada", "Grace"]
+    for name in own names:
+        print(name)
+    print(names.len())
+    return 0

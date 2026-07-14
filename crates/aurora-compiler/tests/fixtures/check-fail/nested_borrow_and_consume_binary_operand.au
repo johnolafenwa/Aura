@@ -1,7 +1,7 @@
 class Container:
     name: String
 
-def consume_c(c: Container) -> int32:
+def consume_c(c: own Container) -> int32:
     return 1
 
 def len_of(text: borrow String) -> int32:

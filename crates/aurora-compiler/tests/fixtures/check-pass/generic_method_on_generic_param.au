@@ -4,7 +4,7 @@ class Box[T]:
     def get(own self) -> T:
         return self.value
 
-def extract[T](box: Box[T]) -> T:
+def extract[T](box: own Box[T]) -> T:
     return box.get()
 
 def main() -> int32:

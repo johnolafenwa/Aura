@@ -6,7 +6,7 @@ Aurora provides three generic owned collection types:
 - `Map[K, V]` for key/value lookup
 - `Set[T]` for uniqueness and membership tests
 
-Collections are move types. Assigning a collection to another binding or passing it by value transfers ownership. Use `borrow` to inspect a collection without consuming it, and `borrow mut` to mutate a caller-owned collection.
+Collections are move types. Assigning one to another binding transfers ownership. A bare non-copy parameter or loop borrows it by default; use `own` to transfer it deliberately, `borrow` to make shared access explicit, and `borrow mut` to mutate caller-owned storage.
 
 ## Literals And Constructors
 
@@ -38,11 +38,14 @@ Empty collection literals always need an expected type.
 
 ## Iteration
 
-Vectors support by-value, shared-borrow, and mutable-borrow iteration:
+Vectors support default shared, explicit consuming, explicit shared, and mutable-borrow iteration:
 
 ```python
 for value in values:
     print(value)
+
+for value in own values:
+    consume(value)
 
 for value in borrow values:
     print(value)
@@ -51,7 +54,9 @@ for value in borrow mut values:
     value += 1
 ```
 
-Maps and sets support by-value and shared-borrow iteration through their public surfaces. For maps, prefer `items()` or `entries()` when you want key/value pairs:
+Sets support default shared, `own`, and explicit shared iteration. Maps expose
+iteration through returned collection values; prefer `items()` or `entries()`
+when you want key/value pairs:
 
 ```python
 for entry in counts.items():
@@ -76,15 +81,15 @@ normalization, each operation keeps its normal bounds contract.
 | `len` | `len() -> int32` | Returns the current number of elements. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when `len() == 0`. |
 | `clone` | `clone() -> Vec[T]` | Returns a new owned vector with cloned element values. |
-| `push` | `push(value: T) -> None` | Moves `value` to the end of the vector. |
+| `push` | `push(value: own T) -> None` | Moves `value` to the end of the vector. |
 | `pop` | `pop() -> Option[T]` | Removes and returns the final element, or `None` when empty. |
 | `get` | `get(index: int32) -> Option[T]` | Returns a cloned element after normalization, or `None` when the normalized index is out of bounds. |
-| `set` | `set(index: int32, value: T) -> Option[T]` | Replaces the normalized index and returns the previous element. Out-of-bounds indices raise a runtime error. |
+| `set` | `set(index: int32, value: own T) -> Option[T]` | Replaces the normalized index and returns the previous element. Out-of-bounds indices raise a runtime error. |
 | `remove` | `remove(index: int32) -> Option[T]` | Removes and returns the normalized index. Out-of-bounds indices raise a runtime error. |
 | `swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`. Out-of-bounds indices raise a runtime error. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |
-| `extend` | `extend(other: Vec[T]) -> None` | Moves every element from `other` to the end of the receiver. |
-| `insert` | `insert(index: int32, value: T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
+| `extend` | `extend(other: own Vec[T]) -> None` | Moves every element from `other` to the end of the receiver. |
+| `insert` | `insert(index: int32, value: own T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
 
@@ -130,7 +135,7 @@ contract and returns `None`.
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no entries. |
 | `clone` | `clone() -> Map[K, V]` | Returns a new owned map with cloned keys and values. |
 | `get` | `get(key: K) -> Option[V]` | Looks up `key` and returns a cloned value when present. |
-| `set` | `set(key: K, value: V) -> Option[V]` | Inserts or replaces `key`, returning the previous value when present. |
+| `set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces `key`, returning the previous value when present. |
 | `remove` | `remove(key: K) -> Option[V]` | Removes `key`, returning the previous value when present. |
 | `contains_key` | `contains_key(key: K) -> bool` | Returns `true` when `key` exists. |
 | `keys` | `keys() -> Vec[K]` | Returns the current keys as cloned owned values. |
@@ -138,7 +143,7 @@ contract and returns `None`.
 | `items` | `items() -> Vec[MapEntry[K, V]]` | Returns key/value entries in insertion order. |
 | `entries` | `entries() -> Vec[MapEntry[K, V]]` | Same contract as `items()`. |
 | `clear` | `clear() -> None` | Removes all entries. |
-| `extend` | `extend(other: Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
+| `extend` | `extend(other: own Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
 
 `MapEntry[K, V]` is the entry type returned by `items()` and `entries()`:
 
@@ -147,11 +152,12 @@ contract and returns `None`.
 | `key` | `K` |
 | `value` | `V` |
 
-Because `get`, `set`, `remove`, and `contains_key` receive owned keys, clone the key when the caller needs to use it again:
+`get`, `remove`, and `contains_key` borrow their keys, while `set` owns and
+stores its key and value. No clone is needed for lookup followed by insertion:
 
 ```python
-def bump(counts: borrow mut Map[String, int32], key: String):
-    match counts.get(key.clone()):
+def bump(counts: borrow mut Map[String, int32], key: own String):
+    match counts.get(key):
         case Option.Some(count):
             counts.set(key, count + 1)
         case Option.None:
@@ -170,7 +176,7 @@ def bump(counts: borrow mut Map[String, int32], key: String):
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no values. |
 | `clone` | `clone() -> Set[T]` | Returns a new owned set with cloned values. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |
-| `insert` | `insert(value: T) -> bool` | Inserts `value`; returns `true` only when it was not already present. |
+| `insert` | `insert(value: own T) -> bool` | Inserts `value`; returns `true` only when it was not already present. |
 | `remove` | `remove(value: T) -> bool` | Removes `value`; returns `true` only when it was present. |
 
 Set literals need a contextual type:

@@ -1,0 +1,33 @@
+def default_target(value: String) -> int32:
+    return value.len()
+
+def explicit_shared_target(value: borrow String) -> int32:
+    return value.len()
+
+def main() -> int32:
+    first = "default"
+    second = "shared"
+    with TaskGroup() as group:
+        default_task = group.start(default_target, first)
+        shared_task = group.start(explicit_shared_target, second)
+
+        match default_task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(_message):
+                print(-1)
+            case TaskResult.Cancelled:
+                print(-2)
+            case TaskResult.TimedOut:
+                print(-3)
+
+        match shared_task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(_message):
+                print(-1)
+            case TaskResult.Cancelled:
+                print(-2)
+            case TaskResult.TimedOut:
+                print(-3)
+    return 0

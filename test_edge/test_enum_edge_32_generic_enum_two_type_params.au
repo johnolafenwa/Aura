@@ -5,7 +5,7 @@ enum Pair[A, B]:
     Second(B)
     Neither
 
-def show_pair(p: Pair[int32, String]) -> String:
+def show_pair(p: own Pair[int32, String]) -> String:
     match p:
         case Pair.Both(a):
             print(a)

@@ -19,13 +19,13 @@ impl Orderable for Score:
         return self.points
 
 # Generic min of two values using trait
-def min_of[T: Orderable](a: T, b: T) -> T:
+def min_of[T: Orderable](a: own T, b: own T) -> T:
     if a.rank() <= b.rank():
         return a
     return b
 
 # Generic max of two values using trait
-def max_of[T: Orderable](a: T, b: T) -> T:
+def max_of[T: Orderable](a: own T, b: own T) -> T:
     if a.rank() >= b.rank():
         return a
     return b

@@ -1,0 +1,5 @@
+class Box:
+    value: String
+
+def wrap(value: String) -> Box:
+    return Box(value=value)

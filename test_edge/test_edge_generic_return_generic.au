@@ -5,13 +5,13 @@ class Box[T]:
     def get(borrow self) -> T:
         return self.value
 
-def wrap[T](value: T) -> Box[T]:
+def wrap[T](value: own T) -> Box[T]:
     return Box(value=value)
 
-def unwrap[T](box: Box[T]) -> T:
+def unwrap[T](box: own Box[T]) -> T:
     return box.value
 
-def rewrap[T](box: Box[T]) -> Box[Box[T]]:
+def rewrap[T](box: own Box[T]) -> Box[Box[T]]:
     return Box(value=box)
 
 def main() -> int32:

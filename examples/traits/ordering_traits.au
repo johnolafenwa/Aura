@@ -20,7 +20,7 @@ impl Ord[Score] for Score:
     def ge(borrow self, rhs: Score) -> bool:
         return self.value >= rhs.value
 
-def choose_smaller[T: Ord[T]](left: T, right: T) -> T:
+def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
     if left < right:
         return left
     return right

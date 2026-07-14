@@ -1,4 +1,4 @@
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
 trait Show:
@@ -12,7 +12,7 @@ impl Show for int64:
     def show(borrow self) -> String:
         return "int64"
 
-def contextual[T: Show](value: T) -> T:
+def contextual[T: Show](value: own T) -> T:
     print(value.show())
     return value
 

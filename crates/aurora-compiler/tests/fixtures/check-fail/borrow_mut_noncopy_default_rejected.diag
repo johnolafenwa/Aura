@@ -1,0 +1,5 @@
+error: `borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrow_mut_noncopy_default_rejected.au:4:13
+  |
+4 | def replace(value: borrow mut Box = Box(value="before")):
+  |             ^

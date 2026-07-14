@@ -9,7 +9,7 @@ def worker_slow(value: int32) -> int32:
 def announce(queue: Queue[String]) -> None:
     queue.put("ready")
 
-def print_string_receive(value: QueueReceive[String]):
+def print_string_receive(value: own QueueReceive[String]):
     match value:
         case QueueReceive.Item(text):
             print(text)
@@ -20,7 +20,7 @@ def print_string_receive(value: QueueReceive[String]):
         case QueueReceive.Cancelled:
             print("cancelled")
 
-def print_any(value: WaitAny[int32]):
+def print_any(value: own WaitAny[int32]):
     match value:
         case WaitAny.Ready(index, result):
             print(index)
@@ -33,10 +33,10 @@ def print_any(value: WaitAny[int32]):
         case WaitAny.Cancelled:
             print("cancelled")
 
-def print_all(value: WaitAll[int32]):
+def print_all(value: own WaitAll[int32]):
     match value:
         case WaitAll.Ready(results):
-            for result in results:
+            for result in own results:
                 print(result)
         case WaitAll.Error(index, message):
             print(index)
@@ -46,7 +46,7 @@ def print_all(value: WaitAll[int32]):
         case WaitAll.Cancelled:
             print("cancelled")
 
-def print_task_result(value: TaskResult[int32]):
+def print_task_result(value: own TaskResult[int32]):
     match value:
         case TaskResult.Ready(result):
             print(result)

@@ -3,7 +3,7 @@
 class Box[T]:
     value: T?
 
-def make_box[T](val: T) -> Box[T]:
+def make_box[T](val: own T) -> Box[T]:
     return Box(value=Option.Some(val))
 
 def main() -> int32:

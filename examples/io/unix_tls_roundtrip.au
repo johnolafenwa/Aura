@@ -23,7 +23,7 @@ def tls_key_pem() -> String:
     pem += "-----END PRIVATE KEY-----\n"
     return pem
 
-def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:
@@ -34,7 +34,7 @@ def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
+def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:

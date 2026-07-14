@@ -4,6 +4,5 @@ class Box[T]:
 enum Wrapper[T]:
     Item(T)
 
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
-

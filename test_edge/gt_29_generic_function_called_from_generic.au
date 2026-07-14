@@ -1,10 +1,10 @@
 ## Test 29: Generic function called from another generic function
 ## Expects: 77
 
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
-def wrap_identity[T](value: T) -> T:
+def wrap_identity[T](value: own T) -> T:
     return identity(value=value)
 
 def main() -> int32:

@@ -29,7 +29,7 @@ Generic traits use the same `Name[T]` syntax as classes:
 
 ```python
 trait Mapper[T]:
-    def map(borrow self, value: T) -> T
+    def map(borrow self, value: own T) -> T
 ```
 
 Trait methods and impl methods may also use `Self` in parameter and return positions:
@@ -88,7 +88,7 @@ And generic traits can be implemented for generic classes:
 
 ```python
 impl Mapper[T] for Box[T]:
-    def map(borrow self, value: T) -> T:
+    def map(borrow self, value: own T) -> T:
         return value
 ```
 
@@ -246,7 +246,7 @@ trait Ord[Rhs]:
 This lets you write generic ordered code such as:
 
 ```python
-def choose_smaller[T: Ord[T]](left: T, right: T) -> T:
+def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
     if left < right:
         return left
     return right

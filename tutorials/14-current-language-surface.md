@@ -144,12 +144,16 @@ Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) ar
 
 Borrowing forms:
 
+- bare `value: T` -- by value for copy types, shared for non-copy types
+- `value: own T` -- explicit consuming parameter
 - `borrow T` -- shared, read-only parameter
 - `borrow mut T` -- exclusive, mutable parameter
 - `self` -- shared receiver and default spelling
 - `borrow self` -- explicit shared-receiver synonym
 - `borrow mut self` -- mutable receiver
 - `own self` -- by-value (consuming) receiver
+- `for x in collection:` -- default shared collection iteration
+- `for x in own collection:` -- consuming collection iteration
 - `for x in borrow collection:` -- shared borrow iteration
 - `for x in borrow mut collection:` -- mutable borrow iteration
 - `match borrow value:` -- shared borrow pattern matching
@@ -226,10 +230,14 @@ Ordinary functions, instance methods, and associated methods support:
 - named arguments
 - mixed calls where positional arguments come first and named arguments come after
 - default parameter values on ordinary functions and class methods
-- ordinary borrowed parameters with `value: borrow T` and `value: borrow mut T`
+- ordinary default, `own`, `borrow`, and `borrow mut` parameters
 - builtin named arguments for `print(value=...)`, `range(...)`, `wait_any(...)`, and `wait_all(...)`
 
-Borrowed ordinary parameters currently work for normal calls, but `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` still require by-value parameters.
+Bare non-copy parameters and unresolved generic parameters resolve to shared
+borrows at their declarations; the generic choice is stable after
+specialization. Task starts move/copy arguments into task-owned capture
+storage, then allow default/shared or `own` target parameters; `borrow mut`
+targets are rejected.
 Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
@@ -241,7 +249,7 @@ Top-level declarations may also be generic:
 - `class Box[T: Trait]: ...`
 - `enum Wrapper[T]: ...`
 - `enum Wrapper[T: Trait]: ...`
-- `def identity[T](value: T) -> T: ...`
+- `def identity[T](value: own T) -> T: ...`
 - `trait Child: Parent: ...`
 - `trait Child[T]: Parent[T]: ...`
 
@@ -531,7 +539,8 @@ Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies
 Current collection notes:
 
 - `Vec.len()` returns `int32`, so `range(values.len())` works directly
-- `for value in vec:`, `for value in borrow vec:`, and `for value in borrow mut vec:` are supported for `Vec[T]`
+- bare and explicit-`borrow` Vec iteration are shared; `for value in own vec:`
+  consumes; `for value in borrow mut vec:` supports writeback
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
@@ -543,13 +552,15 @@ Current collection notes:
 - `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
 - `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
-- `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
+- bare and explicit-`borrow` Set iteration are shared; `for value in own set:` consumes
 - `for value in borrow mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
 - `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
 - `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback; without a timeout it returns the fallback immediately when no item is ready
+- Queue iteration receives owned items and accepts only bare `for value in
+  queue:`; all explicit ownership modifiers are rejected
 - `Task.result(timeout=...)` returns `TaskResult[T]`, distinguishing `Ready(value)`, `Error(message)`, `TimedOut`, and `Cancelled`
 - `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`, `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns `TimedOut` immediately
 - `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`, `Error(index, message)`, `TimedOut`, and `Cancelled`
@@ -607,7 +618,8 @@ Current expression/ergonomics limitations:
 - empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
-- `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` support named functions plus associated methods without `self`
+- `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` support named functions
+  plus associated methods without `self`, using task-owned captures
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, and `wait_all(...)` surface

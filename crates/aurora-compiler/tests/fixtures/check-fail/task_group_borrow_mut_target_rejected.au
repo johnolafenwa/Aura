@@ -1,0 +1,11 @@
+class Counter:
+    value: int64
+
+def mutate(counter: borrow mut Counter):
+    counter.value += 1
+
+def main() -> int32:
+    mut counter = Counter(value=0)
+    with TaskGroup() as group:
+        group.start_soon(mutate, counter)
+    return 0

@@ -8,7 +8,7 @@ def main() -> int32:
     values.extend([4, 5])
 
     mut total: int32 = 0
-    for value in values:
+    for value in own values:
         total += value
     print(total)
     return 0

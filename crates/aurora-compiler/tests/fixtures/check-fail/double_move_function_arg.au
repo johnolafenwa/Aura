@@ -1,4 +1,4 @@
-def consume(text: String):
+def consume(text: own String):
     print(text)
 
 def main() -> int32:

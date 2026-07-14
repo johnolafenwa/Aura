@@ -39,6 +39,19 @@ def distance(a: Point, b: Point) -> float64:
 
 See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
+An unmodified parameter uses Aurora's familiar default: copy types are passed
+by value, while non-copy types are shared-borrowed. Write `own` when the
+function takes ownership:
+
+```python
+def archive(doc: own Document):
+    print(doc.title)
+```
+
+The choice is fixed at the declaration. For an unresolved generic `T`, the
+bare form is a declaration-stable shared borrow even if a later call uses a
+copy type; use `value: own T` for an identity, storing, or consuming helper.
+
 ## Borrowed Parameters
 
 When a function only needs to read a value, it should borrow rather than take ownership. This lets the caller keep using the value after the call. If you are new to borrowing, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full explanation.
@@ -76,7 +89,10 @@ This rule prevents subtle bugs where a function reads from and writes to the sam
 
 See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.au).
 
-Borrowed parameters are supported on ordinary calls. `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` still require by-value parameters because task capture does not yet model borrowed argument lifetimes.
+Task targets may use bare/default, `own`, or explicit shared-borrow parameters.
+Arguments are moved or copied into task-owned capture storage before the child
+runs, and a shared target borrows that capture. `borrow mut` targets are
+rejected.
 
 ## Calling Functions
 
@@ -109,7 +125,11 @@ greet()               # "hello world"
 greet(name="aurora")  # "hello aurora"
 ```
 
-Default values are evaluated on each call, in parameter order. They cannot reference other parameters, and are not allowed in trait or trait-impl method declarations.
+Default values are evaluated on each call, in parameter order. They cannot
+reference other parameters, and are not allowed in trait or trait-impl method
+declarations. Bare/shared-borrow defaults are valid and the temporary lives
+through the call; `own` defaults are consumed. `borrow mut` defaults are
+rejected because mutations to a caller-invisible temporary would be lost.
 
 See [examples/basics/default_arguments.au](../examples/basics/default_arguments.au).
 
@@ -170,7 +190,7 @@ See [examples/basics/borrowed_returns.au](../examples/basics/borrowed_returns.au
 Functions can be generic over type parameters:
 
 ```python
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 ```
 

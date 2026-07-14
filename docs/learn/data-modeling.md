@@ -34,10 +34,11 @@ job = Job(id=42, queue="image")
 
 Fields can have defaults. The caller above did not supply `attempts`, so it starts at `0`.
 
-By default, classes are **move types**. Passing a class by value transfers ownership:
+By default, classes are **move types**. A bare class parameter borrows; write
+`own` to transfer ownership:
 
 ```python
-def consume(job: Job):
+def consume(job: own Job):
     print(job.id)
 
 job = Job(id=42, queue="image")
@@ -182,10 +183,10 @@ class TrackedJob:
     job: Job
     state: JobState = JobState.Queued
 
-    def mark_running(borrow mut self, worker: String):
+    def mark_running(borrow mut self, worker: own String):
         self.state = JobState.Running(worker=worker)
 
-    def mark_failed(borrow mut self, message: String):
+    def mark_failed(borrow mut self, message: own String):
         self.state = JobState.Failed(message=message)
 ```
 

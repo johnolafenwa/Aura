@@ -8,11 +8,12 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
     FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
-    Module, Param, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern,
-    WithStmt,
+    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
+    VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
+    ParamOwnership,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::integer::{
@@ -224,6 +225,9 @@ impl Default for ModuleContext {
 #[derive(Clone, Debug)]
 pub struct FunctionSignature {
     pub params: Vec<Type>,
+    /// Parameter conventions resolved from the declaration before any
+    /// generic substitution is applied.
+    pub param_passings: Vec<ReceiverKind>,
     pub return_type: Type,
     pub return_passing: ReceiverKind,
     pub return_borrow_source: Option<String>,
@@ -280,9 +284,62 @@ fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
     }
 }
 
+fn resolve_param_passing(
+    mode: ParamMode,
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+) -> ReceiverKind {
+    match mode {
+        ParamMode::Default => {
+            if type_is_copy_in_context_with_modules(
+                ty,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+            ) {
+                ReceiverKind::Value
+            } else {
+                ReceiverKind::Borrow
+            }
+        }
+        ParamMode::Own => ReceiverKind::Value,
+        ParamMode::Borrow => ReceiverKind::Borrow,
+        ParamMode::BorrowMut => ReceiverKind::BorrowMut,
+    }
+}
+
+fn resolve_param_passings(
+    params: &[Param],
+    param_types: &[Type],
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+) -> Vec<ReceiverKind> {
+    params
+        .iter()
+        .zip(param_types)
+        .map(|(param, ty)| {
+            resolve_param_passing(
+                param.mode,
+                ty,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+            )
+        })
+        .collect()
+}
+
 fn resolve_return_borrow_source(
     receiver: Option<ReceiverKind>,
     params: &[Param],
+    param_passings: &[ReceiverKind],
     return_passing: ReceiverKind,
     explicit_source: Option<&str>,
     span: crate::diag::Span,
@@ -297,17 +354,17 @@ fn resolve_return_borrow_source(
             candidates.push(("self".to_string(), None, receiver_kind));
         }
     }
-    for param in params {
-        if param.passing == ReceiverKind::Value {
+    for (param, param_passing) in params.iter().zip(param_passings.iter().copied()) {
+        if param_passing == ReceiverKind::Value {
             continue;
         }
-        if return_passing == ReceiverKind::BorrowMut && param.passing != ReceiverKind::BorrowMut {
+        if return_passing == ReceiverKind::BorrowMut && param_passing != ReceiverKind::BorrowMut {
             continue;
         }
         candidates.push((
             param.name.clone(),
             param.borrow_label.clone(),
-            param.passing,
+            param_passing,
         ));
     }
 
@@ -368,18 +425,136 @@ fn borrow_source_slot(
         .map(BorrowSourceSlot::Param)
 }
 
+#[cfg(test)]
 fn type_is_copy_in_context(
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
     enums: &BTreeMap<String, EnumInfo>,
 ) -> bool {
-    type_is_copy_in_context_inner(ty, classes, enums, &mut BTreeSet::new())
+    type_is_copy_in_context_inner(ty, classes, enums, None, None, &mut BTreeSet::new())
+}
+
+fn type_is_copy_in_context_with_modules(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+) -> bool {
+    type_is_copy_in_context_inner(
+        ty,
+        classes,
+        enums,
+        Some(imported_modules),
+        Some(module_registry),
+        &mut BTreeSet::new(),
+    )
+}
+
+fn copy_class_info_from_modules<'a>(
+    name: &str,
+    imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+    module_registry: &'a BTreeMap<String, ModuleNamespace>,
+) -> Option<&'a ClassInfo> {
+    if let Some((module_path, item_name)) = name.rsplit_once('.') {
+        let namespace = module_registry
+            .get(module_path)
+            .or_else(|| find_namespace_in_modules(imported_modules, module_path))?;
+        return namespace
+            .classes
+            .get(item_name)
+            .or_else(|| namespace.all_classes.get(item_name));
+    }
+
+    let mut found = None;
+    let mut ambiguous = false;
+    find_copy_class_in_modules(imported_modules, name, &mut found, &mut ambiguous);
+    (!ambiguous).then_some(found).flatten()
+}
+
+fn find_copy_class_in_modules<'a>(
+    modules: &'a BTreeMap<String, ModuleNamespace>,
+    name: &str,
+    found: &mut Option<&'a ClassInfo>,
+    ambiguous: &mut bool,
+) {
+    for namespace in modules.values() {
+        if let Some(candidate) = namespace
+            .classes
+            .get(name)
+            .or_else(|| namespace.all_classes.get(name))
+        {
+            match found {
+                Some(existing)
+                    if existing.module_name != candidate.module_name
+                        || existing.decl.name != candidate.decl.name =>
+                {
+                    *ambiguous = true;
+                }
+                None => *found = Some(candidate),
+                Some(_) => {}
+            }
+        }
+        find_copy_class_in_modules(&namespace.modules, name, found, ambiguous);
+        find_copy_class_in_modules(&namespace.imported_modules, name, found, ambiguous);
+    }
+}
+
+fn copy_enum_info_from_modules<'a>(
+    name: &str,
+    imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+    module_registry: &'a BTreeMap<String, ModuleNamespace>,
+) -> Option<&'a EnumInfo> {
+    if let Some((module_path, item_name)) = name.rsplit_once('.') {
+        let namespace = module_registry
+            .get(module_path)
+            .or_else(|| find_namespace_in_modules(imported_modules, module_path))?;
+        return namespace
+            .enums
+            .get(item_name)
+            .or_else(|| namespace.all_enums.get(item_name));
+    }
+
+    let mut found = None;
+    let mut ambiguous = false;
+    find_copy_enum_in_modules(imported_modules, name, &mut found, &mut ambiguous);
+    (!ambiguous).then_some(found).flatten()
+}
+
+fn find_copy_enum_in_modules<'a>(
+    modules: &'a BTreeMap<String, ModuleNamespace>,
+    name: &str,
+    found: &mut Option<&'a EnumInfo>,
+    ambiguous: &mut bool,
+) {
+    for namespace in modules.values() {
+        if let Some(candidate) = namespace
+            .enums
+            .get(name)
+            .or_else(|| namespace.all_enums.get(name))
+        {
+            match found {
+                Some(existing)
+                    if existing.module_name != candidate.module_name
+                        || existing.decl.name != candidate.decl.name =>
+                {
+                    *ambiguous = true;
+                }
+                None => *found = Some(candidate),
+                Some(_) => {}
+            }
+        }
+        find_copy_enum_in_modules(&namespace.modules, name, found, ambiguous);
+        find_copy_enum_in_modules(&namespace.imported_modules, name, found, ambiguous);
+    }
 }
 
 fn type_is_copy_in_context_inner(
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
     enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: Option<&BTreeMap<String, ModuleNamespace>>,
+    module_registry: Option<&BTreeMap<String, ModuleNamespace>>,
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     match ty {
@@ -388,16 +563,44 @@ fn type_is_copy_in_context_inner(
         Type::TypeParam(_) => false,
         Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
         Type::Named(name, args) if name == "Option" && args.len() == 1 => {
-            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
+            type_is_copy_in_context_inner(
+                &args[0],
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
         }
-        Type::Named(name, args) if name == "Result" && args.len() == 2 => args
-            .iter()
-            .all(|arg| type_is_copy_in_context_inner(arg, classes, enums, visiting)),
+        Type::Named(name, args) if name == "Result" && args.len() == 2 => args.iter().all(|arg| {
+            type_is_copy_in_context_inner(
+                arg,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
+        }),
         Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
+            type_is_copy_in_context_inner(
+                &args[0],
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
         }
         Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
-            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
+            type_is_copy_in_context_inner(
+                &args[0],
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
         }
         Type::Named(name, args)
             if matches!(name.as_str(), "TaskResult" | "WaitAny" | "WaitAll") && args.len() == 1 =>
@@ -409,18 +612,45 @@ fn type_is_copy_in_context_inner(
             if !visiting.insert(key.clone()) {
                 return false;
             }
-            if let Some(class_info) = classes.get(name) {
+            if let Some(class_info) = classes
+                .get(name)
+                .or_else(|| copy_class_info_from_modules(name, imported_modules?, module_registry?))
+            {
                 let result = class_info.decl.copy
-                    && args
-                        .iter()
-                        .all(|arg| type_is_copy_in_context_inner(arg, classes, enums, visiting));
+                    && args.iter().all(|arg| {
+                        type_is_copy_in_context_inner(
+                            arg,
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                        )
+                    });
                 visiting.remove(&key);
                 return result;
             }
-            if let Some(enum_info) = enums.get(name) {
+            if let Some(enum_info) = enums
+                .get(name)
+                .or_else(|| copy_enum_info_from_modules(name, imported_modules?, module_registry?))
+            {
+                if args.len() != enum_info.decl.type_params.len() {
+                    visiting.remove(&key);
+                    return false;
+                }
+                let substitutions =
+                    substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
                 let result = enum_info.variants.values().all(|variant| {
                     variant.payloads.iter().all(|payload| {
-                        type_is_copy_in_context_inner(&payload.ty, classes, enums, visiting)
+                        let payload_ty = substitute_type(&payload.ty, &substitutions);
+                        type_is_copy_in_context_inner(
+                            &payload_ty,
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                        )
                     })
                 });
                 visiting.remove(&key);
@@ -637,13 +867,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method_type_param_scope,
                 Some(&self_placeholder),
             )?;
-            let return_borrow_source = resolve_return_borrow_source(
-                method.receiver,
-                &method.params,
-                method.return_passing,
-                method.return_borrow_source.as_deref(),
-                method.return_type.span,
-            )?;
             let type_param_bounds = lower_trait_bounds_with_self(
                 &method.type_param_bounds,
                 &traits,
@@ -659,9 +882,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         decl: method.clone(),
                         signature: FunctionSignature {
                             params,
+                            param_passings: Vec::new(),
                             return_type,
                             return_passing: method.return_passing,
-                            return_borrow_source,
+                            return_borrow_source: None,
                         },
                         type_param_bounds,
                     },
@@ -853,13 +1077,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method_type_param_scope,
                 Some(&class_self_type),
             )?;
-            let return_borrow_source = resolve_return_borrow_source(
-                method.receiver,
-                &method.params,
-                method.return_passing,
-                method.return_borrow_source.as_deref(),
-                method.return_type.span,
-            )?;
             if methods
                 .insert(
                     method.name.clone(),
@@ -867,9 +1084,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         decl: method.clone(),
                         signature: FunctionSignature {
                             params,
+                            param_passings: Vec::new(),
                             return_type,
                             return_passing: method.return_passing,
-                            return_borrow_source,
+                            return_borrow_source: None,
                         },
                         type_param_bounds,
                     },
@@ -963,7 +1181,13 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     )
                 })?
                 .ty;
-            if !type_is_copy_in_context(field_ty, &classes, &enums) {
+            if !type_is_copy_in_context_with_modules(
+                field_ty,
+                &classes,
+                &enums,
+                &imported_modules,
+                &context.module_registry,
+            ) {
                 return Err(Diagnostic::at(
                     field_decl.span,
                     format!(
@@ -973,6 +1197,101 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 ));
             }
         }
+    }
+
+    // Class and enum copy-ness is now complete, so source-level default
+    // parameter modes can be resolved without accidentally treating a user
+    // `copy class` as a move type. Trait and class signatures were collected
+    // earlier to support forward references; finalize their declaration ABI
+    // here, before any generic substitution or body checking occurs.
+    let mut trait_signature_updates = Vec::new();
+    for item in &module.items {
+        let Item::Trait(trait_decl) = item else {
+            continue;
+        };
+        let trait_info = traits
+            .get(&trait_decl.name)
+            .expect("collected trait should remain available during signature finalization");
+        for method in trait_info.methods.values() {
+            let param_passings = resolve_param_passings(
+                &method.decl.params,
+                &method.signature.params,
+                &classes,
+                &enums,
+                &imported_modules,
+                &context.module_registry,
+            );
+            let return_borrow_source = resolve_return_borrow_source(
+                method.decl.receiver,
+                &method.decl.params,
+                &param_passings,
+                method.decl.return_passing,
+                method.decl.return_borrow_source.as_deref(),
+                method.decl.return_type.span,
+            )?;
+            trait_signature_updates.push((
+                trait_decl.name.clone(),
+                method.decl.name.clone(),
+                param_passings,
+                return_borrow_source,
+            ));
+        }
+    }
+    for (trait_name, method_name, param_passings, return_borrow_source) in trait_signature_updates {
+        let signature = &mut traits
+            .get_mut(&trait_name)
+            .expect("finalized trait should exist")
+            .methods
+            .get_mut(&method_name)
+            .expect("finalized trait method should exist")
+            .signature;
+        signature.param_passings = param_passings;
+        signature.return_borrow_source = return_borrow_source;
+    }
+
+    let mut class_signature_updates = Vec::new();
+    for item in &module.items {
+        let Item::Class(class_decl) = item else {
+            continue;
+        };
+        let class_info = classes
+            .get(&class_decl.name)
+            .expect("collected class should remain available during signature finalization");
+        for method in class_info.methods.values() {
+            let param_passings = resolve_param_passings(
+                &method.decl.params,
+                &method.signature.params,
+                &classes,
+                &enums,
+                &imported_modules,
+                &context.module_registry,
+            );
+            let return_borrow_source = resolve_return_borrow_source(
+                method.decl.receiver,
+                &method.decl.params,
+                &param_passings,
+                method.decl.return_passing,
+                method.decl.return_borrow_source.as_deref(),
+                method.decl.return_type.span,
+            )?;
+            class_signature_updates.push((
+                class_decl.name.clone(),
+                method.decl.name.clone(),
+                param_passings,
+                return_borrow_source,
+            ));
+        }
+    }
+    for (class_name, method_name, param_passings, return_borrow_source) in class_signature_updates {
+        let signature = &mut classes
+            .get_mut(&class_name)
+            .expect("finalized class should exist")
+            .methods
+            .get_mut(&method_name)
+            .expect("finalized class method should exist")
+            .signature;
+        signature.param_passings = param_passings;
+        signature.return_borrow_source = return_borrow_source;
     }
 
     let empty_functions = BTreeMap::new();
@@ -1061,9 +1380,18 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &type_arities,
             &function_type_param_scope,
         )?;
+        let param_passings = resolve_param_passings(
+            &function_decl.params,
+            &params,
+            &classes,
+            &enums,
+            &imported_modules,
+            &context.module_registry,
+        );
         let return_borrow_source = resolve_return_borrow_source(
             function_decl.receiver,
             &function_decl.params,
+            &param_passings,
             function_decl.return_passing,
             function_decl.return_borrow_source.as_deref(),
             function_decl.return_type.span,
@@ -1075,6 +1403,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 decl: function_decl.clone(),
                 signature: FunctionSignature {
                     params,
+                    param_passings,
                     return_type,
                     return_passing: function_decl.return_passing,
                     return_borrow_source,
@@ -1223,9 +1552,18 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method_type_param_scope,
                 Some(&for_type),
             )?;
+            let param_passings = resolve_param_passings(
+                &method.params,
+                &params,
+                &classes,
+                &enums,
+                &imported_modules,
+                &context.module_registry,
+            );
             let return_borrow_source = resolve_return_borrow_source(
                 method.receiver,
                 &method.params,
+                &param_passings,
                 method.return_passing,
                 method.return_borrow_source.as_deref(),
                 method.return_type.span,
@@ -1240,11 +1578,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 .collect::<Vec<_>>();
             let expected_return_type =
                 substitute_type(&trait_method.signature.return_type, &trait_substitutions);
-            let params_have_matching_passing = method
-                .params
-                .iter()
-                .zip(&trait_method.decl.params)
-                .all(|(actual, expected)| actual.passing == expected.passing);
+            let params_have_matching_passing =
+                param_passings == trait_method.signature.param_passings;
             let return_sources_match = borrow_source_slot(
                 method.receiver,
                 &method.params,
@@ -1274,6 +1609,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     decl: method.clone(),
                     signature: FunctionSignature {
                         params,
+                        param_passings,
                         return_type,
                         return_passing: method.return_passing,
                         return_borrow_source,
@@ -1317,6 +1653,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             .iter()
                             .map(|param| substitute_type(param, &trait_substitutions))
                             .collect(),
+                        param_passings: trait_method.signature.param_passings.clone(),
                         return_type: substitute_type(
                             &trait_method.signature.return_type,
                             &trait_substitutions,
@@ -1426,14 +1763,14 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         }
         checker
             .with_module_name(&function.module_name)
-            .check_function(&function.decl)?;
+            .check_function(function)?;
     }
 
     for class in program.classes.values() {
         for method in class.methods.values() {
             checker
                 .with_module_name(&class.module_name)
-                .check_method(&class.decl, &method.decl)?;
+                .check_method(&class.decl, method)?;
         }
     }
 
@@ -1461,7 +1798,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     &trait_impl.for_type,
                     &trait_impl.type_params,
                     &trait_impl.type_param_bounds,
-                    &method.decl,
+                    method,
                 )?;
         }
     }
@@ -2524,6 +2861,7 @@ struct FunctionChecker<'a> {
     current_return_borrow_source: Option<String>,
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_mut_places: Rc<RefCell<Vec<PlacePath>>>,
 }
 
@@ -2581,7 +2919,13 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn is_copy_type(&self, ty: &Type) -> bool {
-        type_is_copy_in_context(ty, self.classes, self.enums)
+        type_is_copy_in_context_with_modules(
+            ty,
+            self.classes,
+            self.enums,
+            self.imported_modules,
+            self.module_registry,
+        )
     }
 
     fn check_builtin_argument_type(
@@ -2598,7 +2942,19 @@ impl<'a> FunctionChecker<'a> {
                 format!("`{}` expects `{}`, found `{}`", label, expected, actual),
             ));
         }
-        self.consume_value_expr(&argument.value, locals)?;
+        Ok(())
+    }
+
+    fn apply_builtin_argument_ownership(
+        &self,
+        member: BuiltinMember,
+        index: usize,
+        argument: &Argument,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if member.argument_ownership(index) == ParamOwnership::Own {
+            self.consume_value_expr(&argument.value, locals)?;
+        }
         Ok(())
     }
 
@@ -2670,6 +3026,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: None,
             type_params: BTreeMap::new(),
             type_param_bounds: BTreeMap::new(),
+            implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_mut_places: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -2696,6 +3053,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: return_borrow_source,
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
+            implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
     }
@@ -2721,6 +3079,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params,
             type_param_bounds,
+            implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
     }
@@ -2742,8 +3101,27 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
+            implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
+    }
+
+    fn with_implicit_param_borrows(
+        mut self,
+        params: &[Param],
+        param_types: &[Type],
+        param_passings: &[ReceiverKind],
+    ) -> Self {
+        self.implicit_borrowed_params = params
+            .iter()
+            .zip(param_types)
+            .zip(param_passings)
+            .filter(|((param, _), passing)| {
+                param.mode == ParamMode::Default && **passing == ReceiverKind::Borrow
+            })
+            .map(|((param, ty), _)| (param.name.clone(), ty.clone()))
+            .collect();
+        self
     }
 
     fn peel_specialization<'b>(&self, expr: &'b Expr) -> (&'b Expr, Option<&'b [TypeRef]>) {
@@ -2855,6 +3233,15 @@ impl<'a> FunctionChecker<'a> {
             return Ok(());
         }
         if binding.passing != ReceiverKind::Value {
+            if let Some(ty) = self.implicit_borrowed_params.get(name) {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "parameter `{}` is borrowed; declare it as `own {}` to take ownership, or clone the value before consuming it",
+                        name, ty
+                    ),
+                ));
+            }
             return Err(Diagnostic::at(
                 span,
                 format!("cannot move borrowed value `{}`", name),
@@ -3153,11 +3540,11 @@ impl<'a> FunctionChecker<'a> {
             .collect::<Vec<_>>();
 
         for param in params {
-            if param.passing != ReceiverKind::Value && param.default.is_some() {
+            if param.mode == ParamMode::BorrowMut && param.default.is_some() {
                 return Err(Diagnostic::at(
                     param.span,
                     format!(
-                        "borrowed parameter `{}` may not have a default value",
+                        "`borrow mut` parameter `{}` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
                         param.name
                     ),
                 ));
@@ -3248,6 +3635,11 @@ impl<'a> FunctionChecker<'a> {
                 return_type.clone(),
                 method_info.signature.return_passing,
                 method_info.signature.return_borrow_source.clone(),
+            )
+            .with_implicit_param_borrows(
+                &method.params,
+                &method_info.signature.params,
+                &method_info.signature.param_passings,
             );
         let mut locals = HashMap::new();
         checker.seed_imported_modules(&mut locals);
@@ -3271,21 +3663,21 @@ impl<'a> FunctionChecker<'a> {
                 },
             );
         }
-        for (param, ty) in method
+        for ((param, ty), passing) in method
             .params
             .iter()
             .zip(method_info.signature.params.iter())
+            .zip(method_info.signature.param_passings.iter().copied())
         {
             locals.insert(
                 param.name.clone(),
                 LocalBinding {
                     ty: ty.clone(),
                     assignable: false,
-                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    mutable_place: passing == ReceiverKind::BorrowMut,
                     managed_resource: false,
-                    passing: param.passing,
-                    borrow_origin: (param.passing != ReceiverKind::Value)
-                        .then(|| param.name.clone()),
+                    passing,
+                    borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
@@ -3306,7 +3698,8 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn check_function(&self, function: &FunctionDecl) -> Result<()> {
+    fn check_function(&self, function_info: &FunctionInfo) -> Result<()> {
+        let function = &function_info.decl;
         let type_param_scope = type_param_scope(&function.type_params);
         let type_param_bounds = lower_trait_bounds(
             &function.type_param_bounds,
@@ -3321,19 +3714,17 @@ impl<'a> FunctionChecker<'a> {
             self.type_arities,
             &type_param_scope,
         )?;
-        let return_borrow_source = resolve_return_borrow_source(
-            function.receiver,
-            &function.params,
-            function.return_passing,
-            function.return_borrow_source.as_deref(),
-            function.return_type.span,
-        )?;
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
             .with_return_type(
                 return_type.clone(),
                 function.return_passing,
-                return_borrow_source,
+                function_info.signature.return_borrow_source.clone(),
+            )
+            .with_implicit_param_borrows(
+                &function.params,
+                &function_info.signature.params,
+                &function_info.signature.param_passings,
             );
         checker.check_param_defaults(
             &function.params,
@@ -3344,23 +3735,21 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let mut locals = HashMap::new();
         checker.seed_imported_modules(&mut locals);
-        for param in &function.params {
-            let ty = lower_type(
-                &param.ty,
-                self.type_names,
-                self.type_arities,
-                &type_param_scope,
-            )?;
+        for ((param, ty), passing) in function
+            .params
+            .iter()
+            .zip(function_info.signature.params.iter())
+            .zip(function_info.signature.param_passings.iter().copied())
+        {
             locals.insert(
                 param.name.clone(),
                 LocalBinding {
-                    ty,
+                    ty: ty.clone(),
                     assignable: false,
-                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    mutable_place: passing == ReceiverKind::BorrowMut,
                     managed_resource: false,
-                    passing: param.passing,
-                    borrow_origin: (param.passing != ReceiverKind::Value)
-                        .then(|| param.name.clone()),
+                    passing,
+                    borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
@@ -3382,7 +3771,8 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn check_method(&self, class_decl: &ClassDecl, method: &FunctionDecl) -> Result<()> {
+    fn check_method(&self, class_decl: &ClassDecl, method_info: &MethodInfo) -> Result<()> {
+        let method = &method_info.decl;
         let class_type_param_scope = type_param_scope(&class_decl.type_params);
         let class_self_type = Type::Named(
             class_decl.name.clone(),
@@ -3418,19 +3808,17 @@ impl<'a> FunctionChecker<'a> {
             &method_type_param_scope,
             Some(&class_self_type),
         )?;
-        let return_borrow_source = resolve_return_borrow_source(
-            method.receiver,
-            &method.params,
-            method.return_passing,
-            method.return_borrow_source.as_deref(),
-            method.return_type.span,
-        )?;
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
             .with_return_type(
                 return_type.clone(),
                 method.return_passing,
-                return_borrow_source,
+                method_info.signature.return_borrow_source.clone(),
+            )
+            .with_implicit_param_borrows(
+                &method.params,
+                &method_info.signature.params,
+                &method_info.signature.param_passings,
             );
         checker.check_param_defaults(
             &method.params,
@@ -3469,24 +3857,21 @@ impl<'a> FunctionChecker<'a> {
                 },
             );
         }
-        for param in &method.params {
-            let ty = lower_type_with_self(
-                &param.ty,
-                self.type_names,
-                self.type_arities,
-                &method_type_param_scope,
-                Some(&class_self_type),
-            )?;
+        for ((param, ty), passing) in method
+            .params
+            .iter()
+            .zip(method_info.signature.params.iter())
+            .zip(method_info.signature.param_passings.iter().copied())
+        {
             locals.insert(
                 param.name.clone(),
                 LocalBinding {
-                    ty,
+                    ty: ty.clone(),
                     assignable: false,
-                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    mutable_place: passing == ReceiverKind::BorrowMut,
                     managed_resource: false,
-                    passing: param.passing,
-                    borrow_origin: (param.passing != ReceiverKind::Value)
-                        .then(|| param.name.clone()),
+                    passing,
+                    borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
@@ -3559,8 +3944,9 @@ impl<'a> FunctionChecker<'a> {
         for_type: &Type,
         impl_type_params: &[String],
         impl_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
-        method: &FunctionDecl,
+        method_info: &TraitImplMethodInfo,
     ) -> Result<()> {
+        let method = &method_info.decl;
         let impl_type_param_scope = type_param_scope(impl_type_params);
         let type_param_scope = merged_type_param_scope(&impl_type_param_scope, &method.type_params);
         let type_param_bounds = merge_trait_bounds(
@@ -3581,19 +3967,17 @@ impl<'a> FunctionChecker<'a> {
             &type_param_scope,
             Some(for_type),
         )?;
-        let return_borrow_source = resolve_return_borrow_source(
-            method.receiver,
-            &method.params,
-            method.return_passing,
-            method.return_borrow_source.as_deref(),
-            method.return_type.span,
-        )?;
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
             .with_return_type(
                 return_type.clone(),
                 method.return_passing,
-                return_borrow_source,
+                method_info.signature.return_borrow_source.clone(),
+            )
+            .with_implicit_param_borrows(
+                &method.params,
+                &method_info.signature.params,
+                &method_info.signature.param_passings,
             );
         checker.check_param_defaults(
             &method.params,
@@ -3624,24 +4008,21 @@ impl<'a> FunctionChecker<'a> {
                 },
             );
         }
-        for param in &method.params {
-            let ty = lower_type_with_self(
-                &param.ty,
-                self.type_names,
-                self.type_arities,
-                &type_param_scope,
-                Some(for_type),
-            )?;
+        for ((param, ty), passing) in method
+            .params
+            .iter()
+            .zip(method_info.signature.params.iter())
+            .zip(method_info.signature.param_passings.iter().copied())
+        {
             locals.insert(
                 param.name.clone(),
                 LocalBinding {
-                    ty,
+                    ty: ty.clone(),
                     assignable: false,
-                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    mutable_place: passing == ReceiverKind::BorrowMut,
                     managed_resource: false,
-                    passing: param.passing,
-                    borrow_origin: (param.passing != ReceiverKind::Value)
-                        .then(|| param.name.clone()),
+                    passing,
+                    borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
@@ -3840,6 +4221,14 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Stmt::For(for_stmt) => {
                     let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
+                    if matches!(&iterable_ty, Type::Named(name, args) if name == "Queue" && args.len() == 1)
+                        && for_stmt.borrow_mode.is_some()
+                    {
+                        return Err(Diagnostic::at(
+                            for_stmt.span,
+                            "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`",
+                        ));
+                    }
                     let (binding_ty, binding_passing, binding_mutable_place) =
                         match (&iterable_ty, for_stmt.borrow_mode) {
                         (Type::Named(name, _), _) if name == "Range" => {
@@ -3849,16 +4238,8 @@ impl<'a> FunctionChecker<'a> {
                             if name == "Queue" && args.len() == 1 =>
                         {
                             let element_ty = args[0].clone();
-                            let passing = if let Some(borrow_mode) = borrow_mode {
-                                if !self.is_copy_type(&element_ty) {
-                                    borrow_mode
-                                } else {
-                                    ReceiverKind::Value
-                                }
-                            } else {
-                                ReceiverKind::Value
-                            };
-                            (element_ty, passing, false)
+                            debug_assert!(borrow_mode.is_none());
+                            (element_ty, ReceiverKind::Value, false)
                         }
                         (Type::Named(name, args), borrow_mode) if name == "Vec" && args.len() == 1 => {
                             if borrow_mode == Some(ReceiverKind::BorrowMut)
@@ -3872,7 +4253,9 @@ impl<'a> FunctionChecker<'a> {
                             let element_ty = args[0].clone();
                             let passing = match borrow_mode {
                                 Some(ReceiverKind::BorrowMut) => ReceiverKind::BorrowMut,
-                                Some(ReceiverKind::Borrow) if !self.is_copy_type(&element_ty) => {
+                                None | Some(ReceiverKind::Borrow)
+                                    if !self.is_copy_type(&element_ty) =>
+                                {
                                     ReceiverKind::Borrow
                                 }
                                 _ => ReceiverKind::Value,
@@ -3894,7 +4277,9 @@ impl<'a> FunctionChecker<'a> {
                         (Type::Named(name, args), borrow_mode) if name == "Set" && args.len() == 1 => {
                             let element_ty = args[0].clone();
                             let passing = match borrow_mode {
-                                Some(ReceiverKind::Borrow) if !self.is_copy_type(&element_ty) => {
+                                None | Some(ReceiverKind::Borrow)
+                                    if !self.is_copy_type(&element_ty) =>
+                                {
                                     ReceiverKind::Borrow
                                 }
                                 _ => ReceiverKind::Value,
@@ -3927,7 +4312,9 @@ impl<'a> FunctionChecker<'a> {
                             "`for` with `borrow mut` requires a mutable iterable place",
                         ));
                     }
-                    if for_stmt.borrow_mode.is_none() && !self.is_copy_type(&iterable_ty) {
+                    if for_stmt.borrow_mode == Some(ReceiverKind::Value)
+                        && !self.is_copy_type(&iterable_ty)
+                    {
                         self.consume_value_expr(&for_stmt.iterable, locals)?;
                     }
                     if locals.contains_key(&for_stmt.binding) {
@@ -3940,7 +4327,15 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     let mut body_locals = locals.clone();
-                    if let Some(borrow_mode) = for_stmt.borrow_mode {
+                    let effective_borrow_mode = match &iterable_ty {
+                        Type::Named(name, args) if name == "Queue" && args.len() == 1 => None,
+                        _ => match for_stmt.borrow_mode {
+                            Some(ReceiverKind::Value) => None,
+                            Some(mode) => Some(mode),
+                            None => Some(ReceiverKind::Borrow),
+                        },
+                    };
+                    if let Some(borrow_mode) = effective_borrow_mode {
                         if let Some(place) = self.borrow_call_place(&for_stmt.iterable) {
                             let root = place.root.clone();
                             if let Some(binding) = body_locals.get_mut(&root) {
@@ -5451,6 +5846,7 @@ impl<'a> FunctionChecker<'a> {
                             .iter()
                             .map(|param| substitute_type(param, &trait_substitutions))
                             .collect(),
+                        param_passings: method.signature.param_passings.clone(),
                         return_type: substitute_type(
                             &method.signature.return_type,
                             &trait_substitutions,
@@ -5550,6 +5946,7 @@ impl<'a> FunctionChecker<'a> {
                             .iter()
                             .map(|param| substitute_type(param, &substitutions))
                             .collect(),
+                        param_passings: method.signature.param_passings.clone(),
                         return_type: substitute_type(&method.signature.return_type, &substitutions),
                         return_passing: method.signature.return_passing,
                         return_borrow_source: method.signature.return_borrow_source.clone(),
@@ -6048,6 +6445,7 @@ impl<'a> FunctionChecker<'a> {
                     &format!("function `{}`", name),
                     &function.decl.type_params,
                     &function.decl.params,
+                    &function.signature.param_passings,
                     &function.signature.params,
                     &function.signature.return_type,
                     function.signature.return_passing,
@@ -6275,6 +6673,7 @@ impl<'a> FunctionChecker<'a> {
                                         &format!("method `{}`", field),
                                         &method.decl.type_params,
                                         &method.decl.params,
+                                        &method.signature.param_passings,
                                         &method.signature.params,
                                         &method.signature.return_type,
                                         method.signature.return_passing,
@@ -6346,6 +6745,7 @@ impl<'a> FunctionChecker<'a> {
                                 &format!("method `{}`", field),
                                 &method.decl.type_params,
                                 &method.decl.params,
+                                &method.signature.param_passings,
                                 &method.signature.params,
                                 &method.signature.return_type,
                                 method.signature.return_passing,
@@ -6605,6 +7005,7 @@ impl<'a> FunctionChecker<'a> {
                             &format!("function `{}`", function.decl.name),
                             &function.decl.type_params,
                             &function.decl.params,
+                            &function.signature.param_passings,
                             &function.signature.params,
                             &function.signature.return_type,
                             function.signature.return_passing,
@@ -6773,9 +7174,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&push_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        push_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecPop => {
@@ -6835,9 +7239,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&value_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        1,
+                                        value_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[0].clone()],
@@ -6932,7 +7339,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.consume_value_expr(&other_arg.value, locals)?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        other_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecInsert => {
@@ -6968,9 +7380,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&value_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        1,
+                                        value_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::VecClear | BuiltinMember::VecReverse => {
@@ -7213,12 +7628,18 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&key_arg.value, locals)?;
-                                    }
-                                    if !self.is_copy_type(&receiver_args[1]) {
-                                        self.consume_value_expr(&value_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        key_arg,
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        1,
+                                        value_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[1].clone()],
@@ -7245,9 +7666,6 @@ impl<'a> FunctionChecker<'a> {
                                                 receiver_args[0], actual
                                             ),
                                         ));
-                                    }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&key_arg.value, locals)?;
                                     }
                                     Ok(Type::Named(
                                         "Option".to_string(),
@@ -7323,7 +7741,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.consume_value_expr(&other_arg.value, locals)?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        other_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Unit)
                                 }
                                 _ => unreachable!("unexpected map builtin member"),
@@ -7383,9 +7806,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&value_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        value_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::named("bool"))
                                 }
                                 _ => unreachable!("unexpected set builtin member"),
@@ -7418,9 +7844,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&send_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        send_arg,
+                                        locals,
+                                    )?;
                                     if matches!(builtin_member, BuiltinMember::QueuePut) {
                                         if let Some(timeout_arg) =
                                             ordered_args.get(1).and_then(|arg| *arg)
@@ -7502,9 +7931,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&default_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        default_arg,
+                                        locals,
+                                    )?;
                                     if let Some(timeout_arg) = ordered_args[1] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -7583,9 +8015,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !self.is_copy_type(&receiver_args[0]) {
-                                        self.consume_value_expr(&default_arg.value, locals)?;
-                                    }
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        0,
+                                        default_arg,
+                                        locals,
+                                    )?;
                                     if let Some(timeout_arg) = ordered_args[1] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -7631,13 +8066,19 @@ impl<'a> FunctionChecker<'a> {
                                 self.require_task_startable_function(
                                     &callable.display_name,
                                     &callable.decl.params,
+                                    &callable.signature.param_passings,
                                     args[0].span,
                                 )?;
                                 let spawn_args = &args[1..];
+                                let capture_passings = vec![
+                                    ReceiverKind::Value;
+                                    callable.signature.param_passings.len()
+                                ];
                                 self.type_check_callable_args(
                                     &callable.display_name,
                                     &callable.decl.type_params,
                                     &callable.decl.params,
+                                    &capture_passings,
                                     &callable.signature.params,
                                     &callable.signature.return_type,
                                     callable.signature.return_passing,
@@ -7704,7 +8145,6 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.consume_value_expr(&text_arg.value, locals)?;
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![Type::Unit, crate::builtin_modules::io_error_type()],
@@ -7876,7 +8316,6 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "write_all",
                                     )?;
-                                    self.consume_value_expr(&text_arg.value, locals)?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -8047,7 +8486,6 @@ impl<'a> FunctionChecker<'a> {
                                                 ),
                                             ));
                                         }
-                                        self.consume_value_expr(&argument.value, locals)?;
                                     }
                                     if let Some(argument) = ordered_args.get(8).copied().flatten() {
                                         self.check_builtin_argument_type(
@@ -8073,6 +8511,16 @@ impl<'a> FunctionChecker<'a> {
                                             locals,
                                             "start",
                                         )?;
+                                    }
+                                    for (index, argument) in ordered_args.iter().enumerate() {
+                                        if let Some(argument) = *argument {
+                                            self.apply_builtin_argument_ownership(
+                                                builtin_member,
+                                                index,
+                                                argument,
+                                                locals,
+                                            )?;
+                                        }
                                     }
                                     Ok(Type::Named(
                                         "Result".to_string(),
@@ -8269,7 +8717,6 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.consume_value_expr(&text_arg.value, locals)?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -8595,6 +9042,18 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "respond_text",
                                     )?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        1,
+                                        text_arg,
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        2,
+                                        headers_arg,
+                                        locals,
+                                    )?;
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![Type::Unit, crate::builtin_modules::io_error_type()],
@@ -8636,6 +9095,18 @@ impl<'a> FunctionChecker<'a> {
                                         &headers_ty,
                                         locals,
                                         "respond_bytes",
+                                    )?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        1,
+                                        bytes_arg,
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_ownership(
+                                        builtin_member,
+                                        2,
+                                        headers_arg,
+                                        locals,
                                     )?;
                                     Ok(Type::Named(
                                         "Result".to_string(),
@@ -9045,6 +9516,7 @@ impl<'a> FunctionChecker<'a> {
                                 &format!("method `{}`", field),
                                 &method.decl.type_params,
                                 &method.decl.params,
+                                &method.signature.param_passings,
                                 &method.signature.params,
                                 &method.signature.return_type,
                                 method.signature.return_passing,
@@ -9075,6 +9547,7 @@ impl<'a> FunctionChecker<'a> {
                             &format!("method `{}`", field),
                             &method.decl.type_params,
                             &method.decl.params,
+                            &method.signature.param_passings,
                             &method.signature.params,
                             &method.signature.return_type,
                             method.signature.return_passing,
@@ -9110,6 +9583,7 @@ impl<'a> FunctionChecker<'a> {
                         &format!("method `{}`", field),
                         &method.decl.type_params,
                         &method.decl.params,
+                        &method.signature.param_passings,
                         &substituted_params,
                         &substituted_return_type,
                         method.signature.return_passing,
@@ -10499,20 +10973,21 @@ impl<'a> FunctionChecker<'a> {
                     callee.span,
                     CallConvention::PositionalOrNamed,
                 )?;
-                for (argument, param) in ordered_args.into_iter().zip(function.decl.params.iter()) {
+                for ((argument, param), passing) in ordered_args
+                    .into_iter()
+                    .zip(function.decl.params.iter())
+                    .zip(function.signature.param_passings.iter().copied())
+                {
                     let Some(argument) = argument else {
                         continue;
                     };
-                    if !matches!(
-                        param.passing,
-                        ReceiverKind::Borrow | ReceiverKind::BorrowMut
-                    ) {
+                    if !matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
                         continue;
                     }
                     if let Some(path) = self.borrow_call_place(&argument.value) {
                         places.push(BorrowedCallPlace {
                             path,
-                            passing: param.passing,
+                            passing,
                             param_name: param.name.clone(),
                         });
                     }
@@ -10525,12 +11000,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 self.collect_method_borrowed_places(
-                                    object,
-                                    callee,
-                                    args,
-                                    &method.decl.params,
-                                    method.decl.receiver,
-                                    places,
+                                    object, callee, args, method, places,
                                 )?;
                                 return Ok(());
                             }
@@ -10547,14 +11017,7 @@ impl<'a> FunctionChecker<'a> {
                 let Some(method) = class_info.methods.get(field) else {
                     return Ok(());
                 };
-                self.collect_method_borrowed_places(
-                    object,
-                    callee,
-                    args,
-                    &method.decl.params,
-                    method.decl.receiver,
-                    places,
-                )
+                self.collect_method_borrowed_places(object, callee, args, method, places)
             }
             _ => Ok(()),
         }
@@ -10565,43 +11028,43 @@ impl<'a> FunctionChecker<'a> {
         object: &Expr,
         callee: &Expr,
         args: &[Argument],
-        params: &[Param],
-        receiver: Option<ReceiverKind>,
+        method: &MethodInfo,
         places: &mut Vec<BorrowedCallPlace>,
     ) -> Result<()> {
         if matches!(
-            receiver,
+            method.decl.receiver,
             Some(ReceiverKind::Borrow | ReceiverKind::BorrowMut)
         ) {
             if let Some(path) = self.borrow_call_place(object) {
                 places.push(BorrowedCallPlace {
                     path,
-                    passing: receiver.expect("receiver kind should exist"),
+                    passing: method.decl.receiver.expect("receiver kind should exist"),
                     param_name: "self".to_string(),
                 });
             }
         }
         let ordered_args = bind_call_arguments(
             "method call",
-            &callable_params_from_decl(params),
+            &callable_params_from_decl(&method.decl.params),
             args,
             callee.span,
             CallConvention::PositionalOrNamed,
         )?;
-        for (argument, param) in ordered_args.into_iter().zip(params.iter()) {
+        for ((argument, param), passing) in ordered_args
+            .into_iter()
+            .zip(method.decl.params.iter())
+            .zip(method.signature.param_passings.iter().copied())
+        {
             let Some(argument) = argument else {
                 continue;
             };
-            if !matches!(
-                param.passing,
-                ReceiverKind::Borrow | ReceiverKind::BorrowMut
-            ) {
+            if !matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
                 continue;
             }
             if let Some(path) = self.borrow_call_place(&argument.value) {
                 places.push(BorrowedCallPlace {
                     path,
-                    passing: param.passing,
+                    passing,
                     param_name: param.name.clone(),
                 });
             }
@@ -11806,6 +12269,7 @@ impl<'a> FunctionChecker<'a> {
                                     .iter()
                                     .map(|param| substitute_type(param, &trait_substitutions))
                                     .collect(),
+                                param_passings: method.signature.param_passings.clone(),
                                 return_type: substitute_type(
                                     &method.signature.return_type,
                                     &trait_substitutions,
@@ -11995,6 +12459,7 @@ impl<'a> FunctionChecker<'a> {
         callee_name: &str,
         callee_type_params: &[String],
         param_decls: &[Param],
+        param_passings: &[ReceiverKind],
         param_types: &[Type],
         return_type: &Type,
         return_passing: ReceiverKind,
@@ -12009,6 +12474,7 @@ impl<'a> FunctionChecker<'a> {
             callee_name,
             callee_type_params,
             param_decls,
+            param_passings,
             param_types,
             return_type,
             return_passing,
@@ -12028,6 +12494,7 @@ impl<'a> FunctionChecker<'a> {
         callee_name: &str,
         callee_type_params: &[String],
         param_decls: &[Param],
+        param_passings: &[ReceiverKind],
         param_types: &[Type],
         return_type: &Type,
         return_passing: ReceiverKind,
@@ -12165,13 +12632,15 @@ impl<'a> FunctionChecker<'a> {
         )?;
 
         let mut borrowed_places = seeded_borrowed_places;
-        for ((((argument, actual), nested_moved_places), expected), param_decl) in resolved_args
-            .into_iter()
-            .map(|(argument, actual, nested_moved_places)| {
-                ((argument, actual), nested_moved_places)
-            })
-            .zip(param_types.iter())
-            .zip(param_decls.iter())
+        for (((((argument, actual), nested_moved_places), expected), param_decl), param_passing) in
+            resolved_args
+                .into_iter()
+                .map(|(argument, actual, nested_moved_places)| {
+                    ((argument, actual), nested_moved_places)
+                })
+                .zip(param_types.iter())
+                .zip(param_decls.iter())
+                .zip(param_passings.iter().copied())
         {
             let expected = substitute_type(expected, &substitutions);
             if actual != expected {
@@ -12187,7 +12656,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             if let Some(argument) = argument {
-                match param_decl.passing {
+                match param_passing {
                     ReceiverKind::Value => {
                         if !self.is_copy_type(&expected) {
                             if let Some(place) = self.borrow_call_place(&argument.value) {
@@ -12585,16 +13054,18 @@ impl<'a> FunctionChecker<'a> {
         &self,
         function_name: &str,
         params: &[Param],
+        param_passings: &[ReceiverKind],
         span: crate::diag::Span,
     ) -> Result<()> {
         if let Some(param) = params
             .iter()
-            .find(|param| param.passing != ReceiverKind::Value)
+            .zip(param_passings)
+            .find_map(|(param, passing)| (*passing == ReceiverKind::BorrowMut).then_some(param))
         {
             return Err(Diagnostic::at(
                 span,
                 format!(
-                    "task starting does not yet support borrowed parameter `{}` on function `{}`",
+                    "task starting does not support `borrow mut` parameter `{}` on function `{}`; child tasks cannot write back through the starting call frame",
                     param.name, function_name
                 ),
             ));

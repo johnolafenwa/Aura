@@ -3,7 +3,7 @@ enum Maybe[T]:
     Just(T)
     Nothing
 
-def unwrap_or[T](val: Maybe[T], default: T) -> T:
+def unwrap_or[T](val: own Maybe[T], default: own T) -> T:
     match val:
         case Maybe.Just(v):
             return v

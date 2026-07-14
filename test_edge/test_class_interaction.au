@@ -17,7 +17,7 @@ class Account:
 class Bank:
     name: String
 
-    def create_account(borrow self, holder: String) -> Account:
+    def create_account(borrow self, holder: own String) -> Account:
         return Account(name=holder, balance=Money(amount=0))
 
 def main() -> int32:

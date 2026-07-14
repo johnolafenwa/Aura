@@ -1,0 +1,5 @@
+error: use of moved value `names`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:5:11
+  |
+5 |     print(names.len())
+  |           ^

@@ -1,0 +1,5 @@
+error: parameter `value` is borrowed; declare it as `own T` to take ownership, or clone the value before consuming it
+ --> crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au:2:17
+  |
+2 |     values.push(value)
+  |                 ^

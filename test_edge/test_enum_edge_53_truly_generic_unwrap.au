@@ -1,5 +1,5 @@
 # Test: truly generic function unwrap_or[T]
-def unwrap_or[T](opt: Option[T], default_val: T) -> T:
+def unwrap_or[T](opt: own Option[T], default_val: own T) -> T:
     match opt:
         case Option.Some(v):
             return v

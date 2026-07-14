@@ -1,7 +1,7 @@
 class Holder:
     values: Vec[int32]
 
-def consume(holder: Holder):
+def consume(holder: own Holder):
     pass
 
 def main():

@@ -36,13 +36,13 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 - a receiver is evaluated before call arguments
 - explicit call and constructor arguments are evaluated in source order
 
-Omitted function parameters and class fields evaluate their default expressions when the call/construction occurs. Defaults are associated with declaration-order slots. Each omission causes a fresh evaluation; a mutable default value is not a process-global singleton.
+Omitted function parameters and class fields evaluate their default expressions when the call/construction occurs. Defaults are associated with declaration-order slots. Each omission causes a fresh evaluation; a mutable default value is not a process-global singleton. A shared-borrow parameter's default temporary lives until the call completes. An `own` parameter consumes its fresh default temporary. Mutable-borrow defaults are statically rejected.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
 
 ## Calls And Returns
 
-A call evaluates and binds arguments, then transfers control to the target body or runtime builtin. By-value non-copy arguments have been moved at the call boundary; borrowed arguments remain owned by the caller and are constrained for the duration of the call.
+A call evaluates and binds arguments, then transfers control to the target body or runtime builtin. Explicitly owned non-copy arguments have been moved at the call boundary; default-mode non-copy and explicitly borrowed arguments remain owned by the caller and are constrained for the duration of the call.
 
 `return value` evaluates `value`, performs any required borrow-source or move operation, runs active lexical cleanups, and returns to the caller. Reaching the end of a `None` function returns `None`. A non-`None` function cannot pass static checking if a reachable path falls through.
 
@@ -95,9 +95,14 @@ Moving a field marks that field unavailable while leaving disjoint fields usable
 
 `Vec` preserves element order. `Map` and `Set` use the maintained insertion-oriented runtime representation; `Map.items()`/`entries()` explicitly return insertion order. Algorithms should rely on ordering only where the relevant API promises it.
 
-By-value iteration over a non-copy `Vec` or `Set` consumes the collection and yields owned elements. Borrowed iteration retains the collection and yields shared or mutable-borrowed element access as allowed by the static rules. Range iteration yields `int32` values from `start` inclusive to `end` exclusive.
+Bare iteration over a `Vec` or `Set` retains the collection and yields shared
+element access. `own` iteration consumes a non-copy collection and yields owned
+elements. Explicit `borrow` and `borrow mut` iteration retain the collection as
+allowed by the static rules. Range iteration yields `int32` values from
+`start` inclusive to `end` exclusive; its currently accepted modifiers do not
+change behavior and remain a tracked language-design follow-up.
 
-Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot.
+Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify.
 
 ## Pattern Matching
 
@@ -145,6 +150,11 @@ The scheduler is not preemptive and does not inject fuel checks into ordinary lo
 Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
 
 `Task[T]` and `Queue[T]` are copy handles to shared runtime state. Copying a handle does not duplicate the underlying task or queue.
+
+Starting a task first copies or moves every argument into task-owned capture
+storage. The child then applies the target's declared parameter ABI to that
+capture: a default non-copy or explicit shared parameter borrows it, and an
+`own` parameter consumes it. Mutable-borrow targets are rejected statically.
 
 A task stores its completed result. Repeated result observation clones the stored runtime value. For ordinary copy data this produces another ordinary value. A result containing an exclusive runtime resource is single-observer-only in 0.1; the checker does not yet enforce that restriction, and a second observation can alias the same host resource through shared handles. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 

@@ -4,7 +4,7 @@ class Handle:
     def close(borrow mut self):
         print(self.name.len())
 
-def mutate(s: Vec[int32]) -> int32:
+def mutate(s: own Vec[int32]) -> int32:
     return s.len()
 
 def main() -> int32:

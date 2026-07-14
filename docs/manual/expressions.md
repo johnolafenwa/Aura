@@ -179,9 +179,18 @@ Positional arguments come before named arguments. Static binding proceeds as fol
 
 Arguments do not accept a trailing comma and ordinary calls remain on one physical line. Explicit arguments are evaluated in source order. A default expression is evaluated afresh each time its parameter is omitted; mutable defaults are not shared process-global singletons.
 
-Call sites pass a value directly to owned, `borrow`, and `borrow mut` parameters. Prefix argument forms such as `borrow value` are not expressions. The callee signature selects whether the argument is moved, shared-borrowed, or mutable-borrowed. See [Functions](/manual/functions#parameter-passing-modes) and [Ownership And Borrowing](/manual/ownership-and-borrowing).
+Call sites pass a value directly to default-mode, `own`, `borrow`, and `borrow
+mut` parameters. Prefix argument forms such as `own value` or `borrow value`
+are not expressions. The callee signature selects whether the argument is
+moved, shared-borrowed, or mutable-borrowed. A bare non-copy parameter is a
+shared borrow; an explicit `own` parameter moves it. See
+[Functions](/manual/functions#parameter-passing-modes) and [Ownership And
+Borrowing](/manual/ownership-and-borrowing).
 
-Calling a class name constructs the class. Calling an enum variant constructs that variant. Constructor arguments follow the same positional-then-named rule and must supply every required field or payload exactly once.
+Calling a class name constructs the class. Calling an enum variant constructs
+that variant. Every class field and enum payload is an owned position.
+Constructor arguments follow the same positional-then-named rule and must
+supply every required field or payload exactly once.
 
 ## Explicit Generic Specialization
 

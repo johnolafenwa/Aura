@@ -62,8 +62,8 @@ The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping
 Counting is a map from string to integer. The helper is deliberately small:
 
 ```python
-def increment(counts: borrow mut Map[String, int32], key: String):
-    current = match counts.get(key.clone()):
+def increment(counts: borrow mut Map[String, int32], key: own String):
+    current = match counts.get(key):
         case Option.Some(value):
             value
         case Option.None:
@@ -72,7 +72,9 @@ def increment(counts: borrow mut Map[String, int32], key: String):
     counts.set(key, current + 1)
 ```
 
-`key.clone()` is the small ownership detail that matters. `Map.get` takes its key by value; the function still needs the key for the subsequent `counts.set`, so it clones before the first call and moves the original into the second. The program keeps exactly two strings because the program said so.
+The small ownership detail is now visible in the signature. `Map.get` borrows
+`key`; `counts.set` then consumes it because the map retains the key. No clone
+is needed.
 
 ## Step 4: The Report
 

@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
+def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=5s)
         with server_socket = socket:

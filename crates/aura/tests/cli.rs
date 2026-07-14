@@ -898,7 +898,7 @@ fn large_http_responses_complete_without_timing_out() {
 import io
 import net
 
-def serve(listener: net.HttpListener, path: String) -> Result[None, io.Error]:
+def serve(listener: own net.HttpListener, path: String) -> Result[None, io.Error]:
     server = listener
     req = try server.accept(timeout=2s)
     body = try fs.read_to_string(path)
@@ -4738,17 +4738,17 @@ def main() -> int32:
 #[test]
 fn build_executes_nested_generic_trait_bound_dispatch() {
     let source = r#"trait Add2[Rhs, Out]:
-    def add2(borrow self, rhs: Rhs) -> Out
+    def add2(borrow self, rhs: own Rhs) -> Out
 
 class Box[T]:
     value: T
 
 impl Add2[int32, int32] for int32:
-    def add2(borrow self, rhs: int32) -> int32:
+    def add2(borrow self, rhs: own int32) -> int32:
         return self + rhs
 
 impl[T: Add2[T, T]] Add2[Box[T], Box[T]] for Box[T]:
-    def add2(borrow self, rhs: Box[T]) -> Box[T]:
+    def add2(borrow self, rhs: own Box[T]) -> Box[T]:
         return Box(value=self.value.add2(rhs=rhs.value))
 
 def main() -> int32:
@@ -4847,7 +4847,7 @@ fn direct_backend_build_supports_advanced_io_and_network_surface() {
 import fs
 import net
 
-def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
+def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with server_socket = socket:
         match try server_socket.recv_from(1024, timeout=1s):
             case Option.Some(packet):
@@ -4857,7 +4857,7 @@ def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("missing")
 
-def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
+def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
@@ -4866,7 +4866,7 @@ def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
             return Result.Ok(None)
 
-def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
+def serve_http_bytes(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
@@ -4874,7 +4874,7 @@ def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
-def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
+def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
@@ -6094,7 +6094,7 @@ fn direct_backend_build_supports_process_module_surface() {
     let source = format!(
         r#"import process
 
-def run(cwd: String) -> Result[None, process.Error]:
+def run(cwd: own String) -> Result[None, process.Error]:
     env: Map[String, String] = {{"AURORA_PROCESS_VAR": "present"}}
     completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], env=env, timeout=2s, group=true)
     print(completed.stdout().trim())
@@ -6190,7 +6190,7 @@ fn direct_backend_build_supports_unix_and_tls_network_surface() {
         r#"import io
 import net
 
-def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
@@ -6201,7 +6201,7 @@ def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
+def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
@@ -6333,4 +6333,141 @@ def main() -> int32:
         run.stdout.is_empty(),
         "overflow should stop before metrics.get"
     );
+}
+
+#[test]
+fn run_and_direct_backend_match_d6_parameter_loop_and_task_defaults() {
+    let source = r#"class Message:
+    text: String
+
+def read(message: Message) -> int32:
+    return message.text.len()
+
+def consume(value: own String):
+    print(value)
+
+def task_read(value: String) -> int32:
+    return value.len()
+
+def main() -> int32:
+    message = Message(text="shared")
+    print(read(message))
+    print(message.text)
+
+    names = ["Ada", "Grace"]
+    for name in names:
+        print(name)
+    print(names.len())
+
+    owned = ["moved"]
+    for value in own owned:
+        consume(value)
+
+    captured = "capture"
+    with TaskGroup() as group:
+        task = group.start(task_read, captured)
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(_message):
+                print(-1)
+            case TaskResult.Cancelled:
+                print(-2)
+            case TaskResult.TimedOut:
+                print(-3)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-d6-defaults",
+        source,
+        "6\nshared\nAda\nGrace\n2\nmoved\n7\n",
+    );
+}
+
+#[test]
+fn check_and_direct_backend_preserve_d6_own_parameter_guidance() {
+    let source = r#"def take(value: String) -> String:
+    return value
+"#;
+    let (temp, source_path) = write_temp_source("aurora-d6-own-guidance", source);
+    let expected = "parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it";
+
+    let checked = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run D6 ownership check");
+    assert!(
+        !checked.status.success(),
+        "borrowed parameter move should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&checked.stderr).contains(expected),
+        "unexpected D6 check diagnostic:\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let direct = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(temp.path().join("out"))
+        .arg(&source_path)
+        .output()
+        .expect("failed to run forced-direct D6 ownership check");
+    assert!(
+        !direct.status.success(),
+        "forced direct should reject a borrowed parameter move before code generation"
+    );
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains(expected),
+        "unexpected forced-direct D6 diagnostic:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn check_and_direct_backend_reject_queue_iteration_modifiers() {
+    let expected = "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
+
+    for (name, modifier) in [
+        ("own", "own "),
+        ("borrow", "borrow "),
+        ("borrow-mut", "borrow mut "),
+    ] {
+        let source = format!(
+            "def main() -> int32:\n    queue = Queue[int64]()\n    for item in {modifier}queue:\n        print(item)\n    return 0\n"
+        );
+        let (temp, source_path) = write_temp_source(&format!("aurora-d6-queue-{name}"), &source);
+
+        let checked = Command::new(aura_bin())
+            .arg("check")
+            .arg(&source_path)
+            .output()
+            .expect("failed to check a Queue iteration modifier");
+        assert!(
+            !checked.status.success(),
+            "Queue iteration modifier `{name}` should fail"
+        );
+        assert!(
+            String::from_utf8_lossy(&checked.stderr).contains(expected),
+            "unexpected Queue `{name}` diagnostic:\n{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+
+        let direct = Command::new(aura_bin())
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(temp.path().join("out"))
+            .arg(&source_path)
+            .output()
+            .expect("failed to run forced-direct Queue modifier check");
+        assert!(
+            !direct.status.success(),
+            "forced direct should reject Queue iteration modifier `{name}`"
+        );
+        assert!(
+            String::from_utf8_lossy(&direct.stderr).contains(expected),
+            "unexpected forced-direct Queue `{name}` diagnostic:\n{}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+    }
 }

@@ -28,9 +28,334 @@ fn d4_string_indexing_remains_rejected() {
 }
 
 #[test]
+fn d6_parameter_defaults_resolve_once_from_declared_types() {
+    let program = crate::check_source(
+        r#"
+copy class CopyBox:
+    value: int32
+
+enum Maybe[T]:
+    Some(T)
+    None
+
+def modes(scalar: int32, text: String, copy_box: CopyBox, copy_enum: Maybe[int32], heap_enum: Maybe[String], owned: own String, shared: borrow int32, mutable: borrow mut int32):
+    pass
+
+def generic[T](value: T):
+    pass
+
+def generic_enum[T](value: Maybe[T]):
+    pass
+
+def main() -> int32:
+    generic[int32](1)
+    generic_enum[int32](Maybe.Some(1))
+    return 0
+"#,
+    )
+    .expect("D6 parameter conventions should resolve from declaration types");
+
+    assert_eq!(
+        program.functions["modes"].signature.param_passings,
+        vec![
+            ReceiverKind::Value,
+            ReceiverKind::Borrow,
+            ReceiverKind::Value,
+            ReceiverKind::Value,
+            ReceiverKind::Borrow,
+            ReceiverKind::Value,
+            ReceiverKind::Borrow,
+            ReceiverKind::BorrowMut,
+        ]
+    );
+    assert_eq!(
+        program.functions["generic"].signature.param_passings,
+        vec![ReceiverKind::Borrow],
+        "specializing an unresolved generic with a copy type must not change its declaration ABI"
+    );
+    assert_eq!(
+        program.functions["generic_enum"].signature.param_passings,
+        vec![ReceiverKind::Borrow],
+        "copy-ness inside an unresolved generic enum is declaration-stable"
+    );
+}
+
+#[test]
+fn d6_qualified_imported_copy_types_resolve_through_module_namespaces() {
+    let mut token = class_info(
+        "Token",
+        true,
+        vec![("value", Type::TypeParam("T".to_string()), false)],
+    );
+    token.module_name = "pkg.types".to_string();
+    token.decl.type_params = vec!["T".to_string()];
+
+    let mut marker = enum_info("Marker", Some(Type::TypeParam("T".to_string())));
+    marker.module_name = "pkg.types".to_string();
+    marker.decl.type_params = vec!["T".to_string()];
+
+    let mut types = namespace("pkg.types");
+    types.classes.insert("Token".to_string(), token.clone());
+    types.all_classes.insert("Token".to_string(), token.clone());
+    types.enums.insert("Marker".to_string(), marker.clone());
+    types.all_enums.insert("Marker".to_string(), marker);
+
+    let program = check_with_context(
+        crate::parser::parse(
+            r#"
+def return_token(value: pkg.types.Token[int32]) -> pkg.types.Token[int32]:
+    return value
+
+def return_marker(value: pkg.types.Marker[int32]) -> pkg.types.Marker[int32]:
+    return value
+
+def reuse(token: pkg.types.Token[int32], marker: pkg.types.Marker[int32]) -> int32:
+    return_token(token)
+    return_token(token)
+    return_marker(marker)
+    return_marker(marker)
+    print(token.value)
+    print(marker)
+    return 0
+"#,
+        )
+        .expect("qualified imported types should parse"),
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "types".to_string(),
+                ImportedBinding::Module(types),
+            )]),
+            module_registry: BTreeMap::new(),
+            is_entry_module: true,
+        },
+    )
+    .expect("qualified imported copy parameters should be movable and returnable");
+
+    assert_eq!(
+        program.functions["return_token"].signature.param_passings,
+        vec![ReceiverKind::Value]
+    );
+    assert_eq!(
+        program.functions["return_marker"].signature.param_passings,
+        vec![ReceiverKind::Value]
+    );
+}
+
+#[test]
+fn d6_implicit_borrows_are_reusable_and_consumption_teaches_own() {
+    crate::check_source(
+        r#"
+def view(value: String):
+    print(value)
+
+def main() -> int32:
+    text = "aurora"
+    view(text)
+    view(text)
+    print(text)
+    return 0
+"#,
+    )
+    .expect("a bare non-copy parameter should borrow and remain reusable");
+
+    let error = crate::check_source(
+        r#"
+def sink(value: own String):
+    print(value)
+
+def broken(value: String):
+    sink(value)
+"#,
+    )
+    .expect_err("consuming an implicitly borrowed parameter should teach explicit ownership");
+    assert_eq!(
+        error.message,
+        "parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it"
+    );
+
+    let caller_move = crate::check_source(
+        r#"
+def sink(value: own String):
+    print(value)
+
+def main() -> int32:
+    text = "aurora"
+    sink(text)
+    print(text)
+    return 0
+"#,
+    )
+    .expect_err("an explicit owned parameter should consume the caller argument");
+    assert!(caller_move.message.contains("use of moved value `text`"));
+}
+
+#[test]
+fn d6_parameter_defaults_allow_shared_and_owned_temporaries_but_reject_borrow_mut() {
+    crate::check_source(
+        r#"
+def shared(value: borrow String = "shared") -> String:
+    return value.clone()
+
+def owned(value: own String = "owned") -> String:
+    return value
+
+def main() -> int32:
+    print(shared())
+    print(owned())
+    return 0
+"#,
+    )
+    .expect("shared and owned defaults should remain valid");
+
+    let expected = "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result";
+    for source in [
+        "def invalid(value: borrow mut int32 = 1):\n    pass\n",
+        "def invalid(value: borrow mut String = \"lost\"):\n    pass\n",
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("borrow-mut defaults must be rejected for copy and non-copy types");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn d6_place_iteration_and_queue_receive_have_distinct_ownership() {
+    crate::check_source(
+        r#"
+class Job:
+    name: String
+
+def consume(value: own Job):
+    print(value.name)
+
+def main() -> int32:
+    jobs = Queue[Job]()
+    for job in jobs:
+        consume(job)
+    values: Vec[Job] = [Job(name="one")]
+    for value in own values:
+        consume(value)
+    return 0
+"#,
+    )
+    .expect("Queue items and owned place-iteration items should arrive owned");
+
+    let borrowed_item = crate::check_source(
+        r#"
+class Job:
+    name: String
+
+def consume(value: own Job):
+    print(value.name)
+
+def main() -> int32:
+    values: Vec[Job] = [Job(name="one")]
+    for value in values:
+        consume(value)
+    return 0
+"#,
+    )
+    .expect_err("bare place iteration over non-copy elements should bind shared items");
+    assert!(borrowed_item
+        .message
+        .contains("cannot move borrowed value `value`"));
+
+    let expected = "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
+    for mode in ["own ", "borrow ", "borrow mut "] {
+        let source = format!(
+            "def main() -> int32:\n    jobs = Queue[int32]()\n    for item in {mode}jobs:\n        print(item)\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("Queue iteration must reject every explicit ownership modifier");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn d6_task_captures_are_owned_while_shared_child_parameters_are_allowed() {
+    crate::check_source(
+        r#"
+def worker(value: String):
+    print(value)
+
+def main() -> int32:
+    text = "aurora"
+    with TaskGroup() as group:
+        group.start(worker, text)
+    return 0
+"#,
+    )
+    .expect("a task may own its capture while the target observes it through a shared parameter");
+
+    let moved_capture = crate::check_source(
+        r#"
+def worker(value: String):
+    print(value)
+
+def main() -> int32:
+    text = "aurora"
+    with TaskGroup() as group:
+        group.start(worker, text)
+    print(text)
+    return 0
+"#,
+    )
+    .expect_err("task captures should consume non-copy caller values");
+    assert!(moved_capture.message.contains("use of moved value `text`"));
+
+    let mutable_target = crate::check_source(
+        r#"
+def worker(value: borrow mut String):
+    pass
+
+def main() -> int32:
+    mut text = "aurora"
+    with TaskGroup() as group:
+        group.start(worker, text)
+    return 0
+"#,
+    )
+    .expect_err("child tasks cannot write back through their starting frame");
+    assert!(mutable_target
+        .message
+        .contains("does not support `borrow mut` parameter `value`"));
+}
+
+#[test]
+fn d6_builtin_retention_metadata_controls_observable_consumption() {
+    for source in [
+        "def main() -> int32:\n    mut values = Vec[String]()\n    text = \"owned\"\n    values.push(text)\n    print(text)\n    return 0\n",
+        "def main() -> int32:\n    jobs = Queue[String]()\n    text = \"owned\"\n    jobs.put(text)\n    print(text)\n    return 0\n",
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("retaining builtins should consume non-copy arguments");
+        assert!(error.message.contains("use of moved value `text`"));
+    }
+
+    crate::check_source(
+        r#"
+import fs
+
+def keep_after_remove() -> int32:
+    mut values = Set{"kept"}
+    text = "kept"
+    values.remove(text)
+    print(text)
+    return 0
+
+def keep_after_write(file: borrow mut fs.File, text: String):
+    file.write_all(text)
+    print(text)
+"#,
+    )
+    .expect("non-retaining remove and I/O write arguments should stay reusable");
+}
+
+#[test]
 fn d3_int_alias_canonicalizes_across_signatures_generics_and_casts() {
     let source = r#"
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
 def round_trip(value: int, values: Vec[int]) -> int:
@@ -176,7 +501,7 @@ fn d3_vec_index_contract_rejects_default_int64_variables() {
 fn d3_generic_calls_use_expected_results_to_contextually_type_literal_arguments() {
     crate::check_source(
         r#"
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 
 def main() -> int32:
@@ -306,8 +631,10 @@ fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
 }
 
 fn function_signature(params: Vec<Type>, return_type: Type) -> FunctionSignature {
+    let param_passings = vec![ReceiverKind::Value; params.len()];
     FunctionSignature {
         params,
+        param_passings,
         return_type,
         return_passing: ReceiverKind::Value,
         return_borrow_source: None,
@@ -7584,10 +7911,10 @@ fn operator_trait_helpers_map_supported_operators() {
 
 #[test]
 fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
-    fn borrowed_param(name: &str, passing: ReceiverKind, label: Option<&str>) -> Param {
+    fn borrowed_param(name: &str, mode: ParamMode, label: Option<&str>) -> Param {
         Param {
             name: name.to_string(),
-            passing,
+            mode,
             borrow_label: label.map(str::to_string),
             ty: type_ref("String"),
             default: None,
@@ -7597,13 +7924,14 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
 
     let span = Span::new(1, 1);
     assert_eq!(
-        resolve_return_borrow_source(None, &[], ReceiverKind::Value, None, span)
+        resolve_return_borrow_source(None, &[], &[], ReceiverKind::Value, None, span)
             .expect("owned returns do not need a borrow source"),
         None
     );
     assert_eq!(
         resolve_return_borrow_source(
             Some(ReceiverKind::BorrowMut),
+            &[],
             &[],
             ReceiverKind::BorrowMut,
             None,
@@ -7615,7 +7943,8 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
     assert_eq!(
         resolve_return_borrow_source(
             None,
-            &[borrowed_param("text", ReceiverKind::Borrow, None)],
+            &[borrowed_param("text", ParamMode::Borrow, None)],
+            &[ReceiverKind::Borrow],
             ReceiverKind::Borrow,
             None,
             span,
@@ -7626,7 +7955,8 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
 
     let missing = resolve_return_borrow_source(
         None,
-        &[borrowed_param("text", ReceiverKind::Borrow, None)],
+        &[borrowed_param("text", ParamMode::Borrow, None)],
+        &[ReceiverKind::Borrow],
         ReceiverKind::Borrow,
         Some("other"),
         span,
@@ -7636,7 +7966,8 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
 
     let immutable_for_mut = resolve_return_borrow_source(
         None,
-        &[borrowed_param("text", ReceiverKind::Borrow, Some("src"))],
+        &[borrowed_param("text", ParamMode::Borrow, Some("src"))],
+        &[ReceiverKind::Borrow],
         ReceiverKind::BorrowMut,
         Some("src"),
         span,
@@ -7648,7 +7979,8 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
 
     let none_available = resolve_return_borrow_source(
         None,
-        &[borrowed_param("text", ReceiverKind::Value, None)],
+        &[borrowed_param("text", ParamMode::Own, None)],
+        &[ReceiverKind::Value],
         ReceiverKind::Borrow,
         None,
         span,
@@ -7661,9 +7993,10 @@ fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
     let ambiguous_mut = resolve_return_borrow_source(
         None,
         &[
-            borrowed_param("left", ReceiverKind::BorrowMut, None),
-            borrowed_param("right", ReceiverKind::BorrowMut, None),
+            borrowed_param("left", ParamMode::BorrowMut, None),
+            borrowed_param("right", ParamMode::BorrowMut, None),
         ],
+        &[ReceiverKind::BorrowMut, ReceiverKind::BorrowMut],
         ReceiverKind::BorrowMut,
         None,
         span,
@@ -7693,6 +8026,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
             },
             signature: FunctionSignature {
                 params: Vec::new(),
+                param_passings: Vec::new(),
                 return_type: Type::named("String"),
                 return_passing: ReceiverKind::Borrow,
                 return_borrow_source: Some("self".to_string()),
@@ -7709,7 +8043,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
                 decl.params = vec![Param {
                     name: "source".to_string(),
                     ty: type_ref("String"),
-                    passing: ReceiverKind::Borrow,
+                    mode: ParamMode::Borrow,
                     borrow_label: None,
                     default: None,
                     span,
@@ -7721,6 +8055,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
             },
             signature: FunctionSignature {
                 params: vec![Type::named("String")],
+                param_passings: vec![ReceiverKind::Borrow],
                 return_type: Type::named("String"),
                 return_passing: ReceiverKind::Borrow,
                 return_borrow_source: Some("source".to_string()),
@@ -8334,17 +8669,17 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
 #[test]
 fn checker_function_default_loop_and_resource_validation_cover_additional_branches() {
     for source in [
-        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in borrow jobs:\n        pass\n",
-        "def main() -> None:\n    jobs = Queue[int32]()\n    for job in borrow jobs:\n        pass\n",
+        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in jobs:\n        pass\n",
+        "def main() -> None:\n    jobs = Queue[int32]()\n    for job in jobs:\n        pass\n",
         "class Job:\n    label: String\n\ndef main() -> None:\n    jobs: Set[Job] = Set[Job]()\n    for job in borrow jobs:\n        pass\n",
     ] {
-        crate::check_source(source).expect("borrowed loop source should type check");
+        crate::check_source(source).expect("supported loop source should type check");
     }
 
     for (source, expected) in [
             (
-                "def helper(value: borrow int32 = 1) -> None:\n    pass\n\ndef main() -> None:\n    pass\n",
-                "borrowed parameter `value` may not have a default value",
+                "def helper(value: borrow mut int32 = 1) -> None:\n    pass\n\ndef main() -> None:\n    pass\n",
+                "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
             ),
             (
                 "def helper(value: int32 = true) -> int32:\n    return value\n\ndef main() -> None:\n    pass\n",
@@ -8613,6 +8948,12 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         value: Some(expr(ExprKind::Int(7))),
         span,
     })];
+    let function_ok = FunctionInfo {
+        module_name: "<test>".to_string(),
+        signature: function_signature(Vec::new(), Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: function_ok,
+    };
     checker
         .check_function(&function_ok)
         .expect("ordinary functions with matching returns should pass");
@@ -8620,6 +8961,12 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     let mut function_missing_return = function_decl("missing");
     function_missing_return.return_type = type_ref("int32");
     function_missing_return.body = vec![Stmt::Pass(PassStmt { span })];
+    let function_missing_return = FunctionInfo {
+        module_name: "<test>".to_string(),
+        signature: function_signature(Vec::new(), Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: function_missing_return,
+    };
     let function_error = checker
         .check_function(&function_missing_return)
         .expect_err("non-unit functions without returns should fail");
@@ -8642,6 +8989,11 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         })),
         span,
     })];
+    let method_ok = MethodInfo {
+        signature: function_signature(Vec::new(), Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: method_ok,
+    };
     checker
         .check_method(&class_decl, &method_ok)
         .expect("class methods should be checked with an implicit self binding");
@@ -8650,6 +9002,11 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     method_missing_return.receiver = Some(ReceiverKind::Borrow);
     method_missing_return.return_type = type_ref("int32");
     method_missing_return.body = vec![Stmt::Pass(PassStmt { span })];
+    let method_missing_return = MethodInfo {
+        signature: function_signature(Vec::new(), Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: method_missing_return,
+    };
     let method_error = checker
         .check_method(&class_decl, &method_missing_return)
         .expect_err("non-unit methods without returns should fail");
@@ -8664,6 +9021,11 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         value: Some(expr(ExprKind::Int(1))),
         span,
     })];
+    let impl_method_ok = TraitImplMethodInfo {
+        signature: function_signature(Vec::new(), Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: impl_method_ok,
+    };
     checker
         .check_trait_impl_method(
             &Type::named("Counter"),
@@ -8679,7 +9041,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     impl_method_with_default.params = vec![Param {
         name: "value".to_string(),
         ty: type_ref("int32"),
-        passing: ReceiverKind::Value,
+        mode: ParamMode::Default,
         borrow_label: None,
         default: Some(expr(ExprKind::Int(1))),
         span,
@@ -8688,6 +9050,11 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         value: Some(expr(ExprKind::Int(1))),
         span,
     })];
+    let impl_method_with_default = TraitImplMethodInfo {
+        signature: function_signature(vec![Type::named("int32")], Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+        decl: impl_method_with_default,
+    };
     let impl_default_error = checker
         .check_trait_impl_method(
             &Type::named("Counter"),
@@ -10158,7 +10525,7 @@ trait Named:
     def name(borrow self) -> String
 
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
+    def add(borrow self, rhs: own Rhs) -> Out
 
 trait Neg[Out]:
     def neg(borrow self) -> Out
@@ -10177,7 +10544,7 @@ impl Named for User:
         return self.label.clone()
 
 impl Add[Point, Point] for Point:
-    def add(borrow self, rhs: Point) -> Point:
+    def add(borrow self, rhs: own Point) -> Point:
         return Point(x=self.x + rhs.x)
 
 impl Neg[Point] for Point:
@@ -10185,7 +10552,7 @@ impl Neg[Point] for Point:
         return Point(x=0 - self.x)
 
 impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
-    def add(borrow self, rhs: Box[T]) -> Box[T]:
+    def add(borrow self, rhs: own Box[T]) -> Box[T]:
         return rhs
 
 def main():
@@ -10550,7 +10917,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
     add_decl.receiver = Some(ReceiverKind::Borrow);
     add_decl.params = vec![Param {
         name: "rhs".to_string(),
-        passing: ReceiverKind::Value,
+        mode: ParamMode::Default,
         borrow_label: None,
         ty: type_ref("Rhs"),
         default: None,
@@ -11201,7 +11568,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         Param {
             name: "left".to_string(),
             ty: type_ref("Widget"),
-            passing: ReceiverKind::BorrowMut,
+            mode: ParamMode::BorrowMut,
             borrow_label: None,
             default: None,
             span,
@@ -11209,7 +11576,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         Param {
             name: "right".to_string(),
             ty: type_ref("Widget"),
-            passing: ReceiverKind::BorrowMut,
+            mode: ParamMode::BorrowMut,
             borrow_label: None,
             default: None,
             span,
@@ -11219,10 +11586,13 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         "merge".to_string(),
         MethodInfo {
             decl: merge_decl.clone(),
-            signature: function_signature(
-                vec![Type::named("Widget"), Type::named("Widget")],
-                Type::Unit,
-            ),
+            signature: FunctionSignature {
+                params: vec![Type::named("Widget"), Type::named("Widget")],
+                param_passings: vec![ReceiverKind::BorrowMut, ReceiverKind::BorrowMut],
+                return_type: Type::Unit,
+                return_passing: ReceiverKind::Value,
+                return_borrow_source: None,
+            },
             type_param_bounds: BTreeMap::new(),
         },
     );
@@ -12039,25 +12409,41 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     assert!(unit_with.message.contains("requires a class resource"));
 
     checker
-        .require_task_startable_function("work", &[], span)
+        .require_task_startable_function("work", &[], &[], span)
         .expect("by-value params should be task-startable");
+    checker
+        .require_task_startable_function(
+            "work",
+            &[Param {
+                name: "value".to_string(),
+                ty: type_ref("String"),
+                mode: ParamMode::Borrow,
+                borrow_label: None,
+                default: None,
+                span,
+            }],
+            &[ReceiverKind::Borrow],
+            span,
+        )
+        .expect("shared borrowed parameters should be task-startable");
     let task_start_error = checker
         .require_task_startable_function(
             "work",
             &[Param {
                 name: "value".to_string(),
                 ty: type_ref("int32"),
-                passing: ReceiverKind::Borrow,
+                mode: ParamMode::BorrowMut,
                 borrow_label: None,
                 default: None,
                 span,
             }],
+            &[ReceiverKind::BorrowMut],
             span,
         )
-        .expect_err("borrowed params should not be task-startable");
+        .expect_err("mutable borrowed params should not be task-startable");
     assert!(task_start_error
         .message
-        .contains("does not yet support borrowed parameter `value`"));
+        .contains("does not support `borrow mut` parameter `value`"));
 
     let consumed_then_borrowed = checker
         .reject_overlapping_borrow(
@@ -12083,6 +12469,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &["T".to_string()],
             &[],
             &[],
+            &[],
             &Type::TypeParam("T".to_string()),
             ReceiverKind::Value,
             &BTreeMap::new(),
@@ -12101,6 +12488,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .type_check_callable_args_seeded(
             "function `make`",
             &["T".to_string()],
+            &[],
             &[],
             &[],
             &Type::TypeParam("T".to_string()),
@@ -12484,7 +12872,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
 
     for source in [
-        "trait Show:\n    def show(borrow self, text: borrow String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(borrow self, text: String) -> int32:\n        return self.value\n",
+        "trait Show:\n    def show(borrow self, text: borrow String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(borrow self, text: own String) -> int32:\n        return self.value\n",
         "trait Named:\n    def name(borrow self) -> borrow String\n\nclass User:\n    name: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.name.clone()\n",
         "trait Choose:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[left] String\n\nclass Picker:\n    value: int32\n\nimpl Choose for Picker:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[right] String:\n        return right\n",
     ] {
@@ -12663,7 +13051,7 @@ fn check_reports_top_level_lowering_errors_from_source() {
 fn check_lowers_generic_top_level_items_and_impls() {
     let program = check(
             crate::parser::parse(
-                "trait Mapper[T]:\n    def map(self, value: T) -> T\n\nenum Maybe[T]:\n    Some(T)\n    None\n\nclass Box[T]:\n    value: T\n    def take(self, value: T) -> T:\n        return value\n\ndef wrap[T](value: T, maybe: Maybe[T]) -> T:\n    return value\n\nimpl[T] Mapper[T] for Box[T]:\n    def map(self, value: T) -> T:\n        return value\n",
+                "trait Mapper[T]:\n    def map(self, value: own T) -> T\n\nenum Maybe[T]:\n    Some(T)\n    None\n\nclass Box[T]:\n    value: T\n    def take(self, value: own T) -> T:\n        return value\n\ndef wrap[T](value: own T, maybe: Maybe[T]) -> T:\n    return value\n\nimpl[T] Mapper[T] for Box[T]:\n    def map(self, value: own T) -> T:\n        return value\n",
             )
             .expect("generic lowering snippet should parse"),
         )
@@ -12783,7 +13171,7 @@ fn check_lowers_generic_top_level_items_and_impls() {
     let default_method_program = crate::check_source(
         "\
 trait DefaultMapper[T]:
-    def identity(self, value: T) -> T:
+    def identity(self, value: own T) -> T:
         return value
 
 class Box:
@@ -12807,6 +13195,7 @@ def main():
         .get("identity")
         .expect("default method should be inherited by the impl");
     assert_eq!(identity.signature.params, vec![Type::named("int32")]);
+    assert_eq!(identity.signature.param_passings, vec![ReceiverKind::Value]);
     assert_eq!(identity.signature.return_type, Type::named("int32"));
 
     let default_associated_program = crate::check_source(

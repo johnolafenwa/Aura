@@ -1,0 +1,17 @@
+class Message:
+    text: String
+
+def length(message: Message) -> int32:
+    return message.text.len()
+
+def consume(message: own Message) -> String:
+    return message.text
+
+def main() -> int32:
+    shared = Message(text="borrowed")
+    print(length(shared))
+    print(shared.text)
+
+    owned = Message(text="consumed")
+    print(consume(owned))
+    return 0

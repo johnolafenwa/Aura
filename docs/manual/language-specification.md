@@ -87,6 +87,16 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 **Borrow**
 : Temporary access to an existing place without transferring ownership. A shared borrow permits reading; a mutable borrow permits exclusive mutation.
 
+**Owned position**
+: A source position that consumes a non-copy value, including an explicit
+  `own` parameter or collection loop, a class field or enum payload
+  constructor, assignment, return, and maintained storing APIs.
+
+**Default parameter mode**
+: The unmodified `value: T` spelling. It resolves at the declaration to value
+  passing for a copy type and shared borrowing for a non-copy or unresolved
+  generic type; that resolution is stable after generic specialization.
+
 **Resource**
 : A runtime-backed value with an explicit `close()` contract and, where documented, lexical cleanup through `with`.
 

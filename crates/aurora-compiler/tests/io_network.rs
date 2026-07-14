@@ -49,7 +49,7 @@ def read_file(path: String) -> Result[String, io.Error]:
     with file = try fs.open(path):
         return file.read_all()
 
-def send_line(stream: net.TcpStream, text: String) -> Result[None, io.Error]:
+def send_line(stream: own net.TcpStream, text: String) -> Result[None, io.Error]:
     with socket = stream:
         try socket.write_all(text)
         try socket.flush()
@@ -72,7 +72,7 @@ fn builtin_fs_and_net_modules_run_through_public_api() {
 import fs
 import net
 
-def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept()
         with server_stream = socket:
@@ -179,7 +179,7 @@ def touch_bytes(path: String) -> Result[Vec[uint8], io.Error]:
         try file.flush()
     return fs.read_bytes(path)
 
-def inspect_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
+def inspect_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with bound = socket:
         match try bound.recv_from(1024, timeout=100ms):
             case Option.Some(packet):
@@ -191,7 +191,7 @@ def inspect_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("none")
 
-def inspect_http(listener: net.HttpListener) -> Result[None, io.Error]:
+def inspect_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with bound = listener:
         exchange = try bound.accept(timeout=100ms)
         with request = exchange:
@@ -204,7 +204,7 @@ def inspect_http(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_bytes(201, body_bytes, headers)
             return Result.Ok(None)
 
-def inspect_http_response(response: net.HttpResponse) -> Result[String, io.Error]:
+def inspect_http_response(response: own net.HttpResponse) -> Result[String, io.Error]:
     with received = response:
         print(received.status())
         print(received.reason())
@@ -214,7 +214,7 @@ def inspect_http_response(response: net.HttpResponse) -> Result[String, io.Error
         print(bytes.len())
         return Result.Ok(text)
 
-def inspect_websocket(listener: net.WebSocketListener, client: net.WebSocket) -> Result[None, io.Error]:
+def inspect_websocket(listener: own net.WebSocketListener, client: own net.WebSocket) -> Result[None, io.Error]:
     with bound = listener:
         with accepted = try bound.accept(timeout=100ms):
             match try accepted.recv_text(timeout=100ms):
@@ -232,7 +232,7 @@ def inspect_websocket(listener: net.WebSocketListener, client: net.WebSocket) ->
         try connected.send_bytes([1 as uint8, 2 as uint8], timeout=100ms)
         return Result.Ok(None)
 
-def inspect_unix(listener: net.UnixListener, stream: net.UnixStream) -> Result[None, io.Error]:
+def inspect_unix(listener: own net.UnixListener, stream: own net.UnixStream) -> Result[None, io.Error]:
     with bound = listener:
         accepted = try bound.accept(timeout=100ms)
         with server_stream = accepted:
@@ -247,7 +247,7 @@ def inspect_unix(listener: net.UnixListener, stream: net.UnixStream) -> Result[N
         try client_stream.write_all("ok\n", timeout=100ms)
         return Result.Ok(None)
 
-def inspect_tls(listener: net.TlsListener, stream: net.TlsStream) -> Result[None, io.Error]:
+def inspect_tls(listener: own net.TlsListener, stream: own net.TlsStream) -> Result[None, io.Error]:
     with bound = listener:
         print(try bound.local_addr())
         accepted = try bound.accept(timeout=100ms)
@@ -298,7 +298,7 @@ fn advanced_io_and_network_modules_run_through_public_api() {
 import fs
 import net
 
-def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
+def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with server_socket = socket:
         match try server_socket.recv_from(1024, timeout=1s):
             case Option.Some(packet):
@@ -308,7 +308,7 @@ def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("missing")
 
-def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
+def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
@@ -317,7 +317,7 @@ def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
             return Result.Ok(None)
 
-def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
+def serve_http_bytes(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
@@ -325,7 +325,7 @@ def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
-def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
+def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
@@ -484,7 +484,7 @@ fn unix_and_tls_modules_run_through_public_api() {
         r#"import io
 import net
 
-def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
@@ -495,7 +495,7 @@ def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
+def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:

@@ -1,0 +1,17 @@
+def consume(value: own String):
+    print(value)
+
+def main() -> int32:
+    jobs = Queue[String]()
+    jobs.put("one")
+    jobs.close()
+
+    for job in jobs:
+        consume(job)
+
+    match jobs.get_or_none():
+        case Some(_unexpected):
+            print("unexpected")
+        case None:
+            print("closed")
+    return 0

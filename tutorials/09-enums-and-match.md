@@ -26,6 +26,10 @@ ok = ParseResult.Success(42)
 bad = ParseResult.Failure("invalid input")
 ```
 
+Variant payloads are owned constructor positions. `Failure(String)` therefore
+acts like `Failure(own String)`, and the same is true of builtins such as
+`Option.Some(own T)` and `Result.Err(own E)`.
+
 ## Generic Enums
 
 Enums can be generic:
@@ -49,7 +53,7 @@ See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.
 Aurora's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
 
 ```python
-def value_or_zero(result: ParseResult) -> int32:
+def value_or_zero(result: own ParseResult) -> int32:
     match result:
         case ParseResult.Success(value):
             return value

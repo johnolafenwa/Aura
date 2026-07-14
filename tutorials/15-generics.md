@@ -74,7 +74,7 @@ enum MaybeNamed[T: Greeter]:
 ## Generic Functions
 
 ```python
-def identity[T](value: T) -> T:
+def identity[T](value: own T) -> T:
     return value
 ```
 
@@ -89,9 +89,14 @@ print(text)
 Method calls on generic class instances work inside generic functions:
 
 ```python
-def extract[T](box: Box[T]) -> T:
+def extract[T](box: own Box[T]) -> T:
     return box.get()
 ```
+
+The `own` spelling matters for unresolved generics. A bare `value: T` is fixed
+as a shared borrow when this declaration is checked and stays shared even if a
+call later uses a copy type. Use `own T` when the body returns, stores, or
+otherwise consumes the value.
 
 ## Current Limits
 

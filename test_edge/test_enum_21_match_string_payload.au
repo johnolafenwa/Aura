@@ -3,7 +3,7 @@ enum Message:
     Goodbye(String)
     Empty
 
-def greet(m: Message) -> String:
+def greet(m: own Message) -> String:
     match m:
         case Message.Hello(name):
             return name

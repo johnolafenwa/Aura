@@ -1,11 +1,11 @@
 trait Mapper[T]:
-    def map(borrow self, value: T) -> T
+    def map(borrow self, value: own T) -> T
 
 class Box[T]:
     value: T
 
 impl Mapper[T] for Box[T]:
-    def map(borrow self, value: T) -> T:
+    def map(borrow self, value: own T) -> T:
         return value
 
 def main() -> int32:

@@ -60,7 +60,7 @@ def add_parsed(a: String, b: String) -> Result[int32, String]:
 `try` works inside `with` blocks. The resource cleanup still runs when `try` triggers an early return:
 
 ```python
-def process_file(handle: FileHandle) -> Result[String, String]:
+def process_file(handle: own FileHandle) -> Result[String, String]:
     with file = handle:
         value = try validate(file.read())
         return Result.Ok(value)

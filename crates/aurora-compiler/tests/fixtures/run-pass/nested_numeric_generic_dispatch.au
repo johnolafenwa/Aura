@@ -61,7 +61,7 @@ def render_first[T: Show](values: Vec[T]) -> None:
         case Option.None:
             print("missing")
 
-def identity_option[T](value: Option[T]) -> Option[T]:
+def identity_option[T](value: own Option[T]) -> Option[T]:
     return value
 
 def main() -> int32:

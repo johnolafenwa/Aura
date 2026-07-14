@@ -654,13 +654,17 @@ public class User:
 impl Named for User:
     def name(borrow self) -> String:
         return self.label.clone()
+
+public enum Outcome:
+    Ready(code: int32, reason: String)
+    Empty
 "#,
     );
     temp.write(
         "helpers/factory.au",
         r#"from pkg.user import User
 
-public def describe_user(name: String) -> String:
+public def describe_user(name: own String) -> String:
     user = User(label=name)
     return user.name()
 "#,
@@ -670,6 +674,7 @@ from helpers.factory import describe_user
 
 def main() -> int32:
     user: pkg.user.User = pkg.user.User(label="Ada")
+    outcome = pkg.user.Outcome.Ready(code=7, reason="ok")
     print(describe_user(name=user.label.clone()))
     print(user.name())
     return 0
@@ -682,6 +687,20 @@ def main() -> int32:
         analysis.diagnostics.is_empty(),
         "path analysis should stay clean: {:?}",
         analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .occurrences
+            .iter()
+            .any(|occurrence| occurrence.hover == "```aurora\nenum Outcome\n```"),
+        "qualified enum references should expose the imported enum hover"
+    );
+    assert!(
+        analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover
+                == "```aurora\nvariant Ready(code: own int32, reason: own String) -> Outcome\n```"
+        }),
+        "qualified enum constructors should expose every named payload as owned"
     );
 
     let completion_source = r#"import pkg.user
@@ -702,6 +721,29 @@ def main() -> int32:
         .map(|item| item.name.as_str())
         .collect::<BTreeSet<_>>();
     assert!(!completion_names.is_empty());
+
+    let enum_completion_source = r#"import pkg.user
+
+def main() -> int32:
+    outcome = pkg.user.Outcome.
+    return 0
+"#;
+    let (line, character) = line_and_character(enum_completion_source, "pkg.user.Outcome.");
+    let enum_completions = complete_path_source(
+        &main_path,
+        enum_completion_source,
+        line,
+        character,
+        Some('.'),
+    )
+    .expect("qualified imported enum completion should recover through the module namespace");
+    assert_eq!(
+        enum_completions
+            .iter()
+            .find(|completion| completion.name == "Ready")
+            .map(|completion| completion.detail.as_str()),
+        Some("Ready(code: own int32, reason: own String) -> Outcome")
+    );
 
     let output = run_path(&main_path).expect("package program should run");
     let mir = lower_path_to_mir(&main_path).expect("package program should lower to MIR");

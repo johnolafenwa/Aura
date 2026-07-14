@@ -28,11 +28,16 @@ with group = TaskGroup():
 | API | Signature | Contract |
 | --- | --- | --- |
 | constructor | `TaskGroup()` | Creates a task group resource. |
-| `start` | `start(function, ...) -> Task[T]` | Starts a child task and returns its handle. |
-| `start_soon` | `start_soon(function, ...) -> None` | Starts a child task without returning a handle. |
+| `start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage, starts a child task, and returns its handle. |
+| `start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child task without returning a handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
-`start` and `start_soon` currently accept named functions and associated methods without `self`. Arguments are moved into the task unless they are copy types. Borrowed task parameters are not supported.
+`start` and `start_soon` accept named functions and associated methods without
+`self`. Every argument is copied or moved into task-owned capture storage. A
+default-mode non-copy or explicit shared target parameter borrows from that
+storage for the child call; an `own` parameter consumes it. `borrow mut`
+targets are rejected because detached mutable capture has no caller-visible
+writeback.
 
 On normal scope exit, the runtime joins children that continue making bounded progress. It cancels a child left in an indefinitely blocked group-owned wait so cleanup cannot deadlock forever. A failure already observed through its `Task` result is not raised a second time; an unread child failure aborts the group scope and wakes dependent queue/task waits.
 
@@ -44,14 +49,14 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 | --- | --- | --- |
 | `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome. |
 | `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation. Without an explicit timeout, this helper performs an immediate check. |
-| `result_or` | `result_or(default: T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation. Without an explicit timeout, this helper performs an immediate check. |
+| `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation. Without an explicit timeout, this helper performs an immediate check. |
 
 `TaskResult[T]` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Ready(value: T)` | The task returned normally. |
-| `Error(message: String)` | The task failed with a runtime error. |
+| `Ready(value: own T)` | The task returned normally. |
+| `Error(message: own String)` | The task failed with a runtime error. |
 | `TimedOut` | The wait timed out. |
 | `Cancelled` | The wait was interrupted by cancellation. |
 
@@ -71,27 +76,27 @@ bounded = Queue[String](capacity=8)
 | API | Signature | Contract |
 | --- | --- | --- |
 | constructor | `Queue[T](capacity: int32 = ...)` | Creates an unbounded queue when `capacity` is omitted, or a bounded queue when supplied. |
-| `put` | `put(value: T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends `value`, waiting for capacity when needed. Returns the unsent value in the error variant. |
-| `try_put` | `try_put(value: T) -> Result[None, SendError[T]]` | Attempts to send without waiting. Returns `Full(value)` when a bounded queue is full. |
+| `put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends `value`, waiting for capacity when needed. Returns the unsent value in the error variant. |
+| `try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Attempts to send without waiting. Returns `Full(value)` when a bounded queue is full. |
 | `get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives one structured queue outcome. |
 | `get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` for an item and `None` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
-| `get_or` | `get_or(default: T, timeout: Duration = ...) -> T` | Returns an item or `default` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
+| `get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Returns an item or `default` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
 | `close` | `close() -> None` | Closes the queue and wakes blocked senders and receivers. |
 
 `SendError[T]` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Closed(value: T)` | The queue was closed before the value could be sent. |
-| `Cancelled(value: T)` | Cancellation interrupted the send. |
-| `TimedOut(value: T)` | The send timeout expired. |
-| `Full(value: T)` | `try_put` found a bounded queue at capacity. |
+| `Closed(value: own T)` | The queue was closed before the value could be sent. |
+| `Cancelled(value: own T)` | Cancellation interrupted the send. |
+| `TimedOut(value: own T)` | The send timeout expired. |
+| `Full(value: own T)` | `try_put` found a bounded queue at capacity. |
 
 `QueueReceive[T]` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Item(value: T)` | A value was received. |
+| `Item(value: own T)` | A value was received. |
 | `Closed` | The queue is closed and no value was available. |
 | `TimedOut` | The receive timeout expired. |
 | `Cancelled` | Cancellation interrupted the receive. |
@@ -103,7 +108,13 @@ for value in jobs:
     print(value)
 ```
 
-The iterator receives `Item(value)` outcomes until the queue is closed, cancellation interrupts the loop, or the relevant producers in the active task group complete. Closing queues explicitly is still the clearest program shape.
+Queue iteration receives values: every `Item(value)` arrives already owned by
+the loop binding. The Queue handle is a copy value, so ownership modifiers
+have nothing to modify. `for value in own jobs`, `for value in borrow jobs`,
+and `for value in borrow mut jobs` are all rejected; use the bare form above.
+The receive loop ends when the queue closes, cancellation interrupts it, or
+the relevant producers in the active task group complete. Closing queues
+explicitly is still the clearest program shape.
 
 ## Top-Level Concurrency Builtins
 
@@ -118,8 +129,8 @@ The iterator receives `Item(value)` outcomes until the queue is closed, cancella
 
 | Variant | Meaning |
 | --- | --- |
-| `Ready(index: int32, value: T)` | Task at `index` returned normally. |
-| `Error(index: int32, message: String)` | Task at `index` failed. |
+| `Ready(index: own int32, value: own T)` | Task at `index` returned normally. |
+| `Error(index: own int32, message: own String)` | Task at `index` failed. |
 | `TimedOut` | No task completed before the timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
@@ -127,8 +138,8 @@ The iterator receives `Item(value)` outcomes until the queue is closed, cancella
 
 | Variant | Meaning |
 | --- | --- |
-| `Ready(values: Vec[T])` | Every task returned normally. Values are in the same order as the input tasks. |
-| `Error(index: int32, message: String)` | Task at `index` failed before all tasks completed. |
+| `Ready(values: own Vec[T])` | Every task returned normally. Values are in the same order as the input tasks. |
+| `Error(index: own int32, message: own String)` | Task at `index` failed before all tasks completed. |
 | `TimedOut` | Not every task completed before the timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 

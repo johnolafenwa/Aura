@@ -50,7 +50,11 @@ The default does not widen explicitly typed APIs. Existing fixed `int32` contrac
 
 Numeric literals are checked against the target type. Integer literals must fit the annotated integer type. Integer-to-float casts reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
-Use `borrow String` for a shared string parameter. The spelling `str` is accepted for compatibility but currently lowers to the same canonical `String` type; code must not assume a separate slice layout or lifetime-bearing runtime representation.
+A bare `value: String` parameter resolves to a shared borrow; use `borrow
+String` when that contract should be explicit in source. The spelling `str` is
+accepted for compatibility but currently lowers to the same canonical `String`
+type; code must not assume a separate slice layout or lifetime-bearing runtime
+representation.
 
 `String.len() -> int32` scans the text and counts Unicode scalar values in
 O(n). `String.byte_len() -> int32` reads the UTF-8 byte count in O(1). Aurora
@@ -61,7 +65,8 @@ for the Phase 3 control-plane surface; String slicing remains part of the Phase
 
 ## Copy And Move Categories
 
-Copy values may be reused after assignment or by-value calls:
+Copy values may be reused after assignment or calls through value/`own`
+positions:
 
 - numbers
 - `bool`

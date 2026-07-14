@@ -1,0 +1,2 @@
+def send(output: Queue[String], value: String):
+    output.put(value)

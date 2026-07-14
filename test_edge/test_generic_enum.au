@@ -9,7 +9,7 @@ enum Either[L, R]:
     Left(L)
     Right(R)
 
-def describe_either(value: Either[int32, String]):
+def describe_either(value: own Either[int32, String]):
     match value:
         case Either.Left(n):
             print(n)

@@ -79,7 +79,7 @@ Aurora's parser covers a large surface:
 - `if`, `match`, `for`, `while`, `with`
 - expression-form `match`, including binding, argument, and nested block positions
 - calls, named arguments, member access, indexing, specialization, casts
-- borrowed parameters and borrowed returns
+- default, `own`, `borrow`, and `borrow mut` parameters, plus borrowed returns
 - patterns for `match`
 - f-string interpolation parsing
 
@@ -204,7 +204,7 @@ Aurora's real parser adds:
 - indentation-based block parsing
 - optional type parameter lists and bounds
 - receiver syntax (`self`, `borrow self`, `own self`, and `borrow mut self`)
-- borrowed parameter syntax
+- parameter and loop ownership-modifier syntax
 - pattern parsing for `match`
 - postfix parsing for calls, member access, indexing, casts, and specialization
 - f-string interpolation by recursively invoking expression parsing on the embedded text

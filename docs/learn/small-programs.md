@@ -203,8 +203,8 @@ def classify(value: int32) -> String:
     else:
         return "large"
 
-def bump(counts: borrow mut Map[String, int32], key: String):
-    match counts.get(key.clone()):
+def bump(counts: borrow mut Map[String, int32], key: own String):
+    match counts.get(key):
         case Some(value):
             counts.set(key, value + 1)
         case None:
@@ -225,7 +225,9 @@ There are two details in `bump` worth slowing down for.
 
 `counts: borrow mut Map[String, int32]` says the helper will mutate a map owned by its caller. The parameter type is where the borrow is declared; the caller does not write `borrow` at the call site. Aurora supplies it from the signature.
 
-`key.clone()` appears because `Map.get` takes its key by value. The function still needs `key` afterwards for `counts.set`, so it clones before the first call and moves the original into the second. Clones in Aurora are explicit, which is a feature: you see where the program deliberately keeps two copies.
+`Map.get` borrows its key, so the same owned `key` can be moved into the later
+`counts.set`. The `own` annotation says `bump` takes responsibility for storing
+the category string.
 
 Run the program and you should see a tally for each category that appeared in `values`.
 

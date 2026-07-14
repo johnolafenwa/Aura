@@ -1,0 +1,5 @@
+def main() -> int32:
+    jobs = Queue[int64]()
+    for job in borrow jobs:
+        print(job)
+    return 0

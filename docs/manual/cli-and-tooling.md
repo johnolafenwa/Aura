@@ -140,6 +140,11 @@ receivers as `own self`, and mutable receivers as `borrow mut self`. A source
 declaration written with the explicit shared synonym `borrow self` therefore
 appears as `self` in these signatures.
 
+Ordinary parameter signatures preserve `own`, `borrow`, and `borrow mut`
+spelling, and built-in hover/completion detail exposes retained-value contracts
+such as `Vec.push(value: own T)`. Class field and enum payload completion detail
+also renders their implicit constructor ownership as `own`.
+
 Useful repo commands:
 
 ```bash

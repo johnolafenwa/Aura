@@ -1,0 +1,12 @@
+def consume(value: own String):
+    print(value)
+
+def main() -> int32:
+    names = ["Ada", "Grace"]
+    for name in own names:
+        consume(name)
+
+    tags: Set[String] = {"red", "blue"}
+    for tag in own tags:
+        consume(tag)
+    return 0

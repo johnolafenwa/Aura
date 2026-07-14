@@ -6,7 +6,7 @@ def pair_up[A, B](a: A, b: B) -> String:
 class Box[T]:
     value: T
 
-def box_both[A, B](a: A, b: B) -> Box[A]:
+def box_both[A, B](a: own A, b: B) -> Box[A]:
     return Box(value=a)
 
 def main() -> int32:

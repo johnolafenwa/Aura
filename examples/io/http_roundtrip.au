@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
+def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=5s)
         with request = exchange:

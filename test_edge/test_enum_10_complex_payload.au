@@ -3,7 +3,7 @@ enum Payload:
     Number(int32)
     Pair(int32)
 
-def describe_payload(p: Payload) -> String:
+def describe_payload(p: own Payload) -> String:
     match p:
         case Payload.Text(s):
             return s

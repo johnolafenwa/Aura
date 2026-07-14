@@ -6,7 +6,7 @@ class Box[T]:
     def get(borrow self) -> T:
         return self.value
 
-    def create(value: T) -> Box[T]:
+    def create(value: own T) -> Box[T]:
         return Box(value=value)
 
 def main() -> int32:

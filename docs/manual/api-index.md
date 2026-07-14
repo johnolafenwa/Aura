@@ -54,15 +54,15 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Vec.len` | `len() -> int32` | Element count. |
 | `Vec.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Vec.clone` | `clone() -> Vec[T]` | Clones the vector and elements. |
-| `Vec.push` | `push(value: T) -> None` | Appends `value`. |
+| `Vec.push` | `push(value: own T) -> None` | Appends `value`. |
 | `Vec.pop` | `pop() -> Option[T]` | Removes the last element or returns `None`. |
 | `Vec.get` | `get(index: int32) -> Option[T]` | Cloned element after negative-index normalization, or `None` when out of bounds. |
-| `Vec.set` | `set(index: int32, value: T) -> Option[T]` | Replaces and returns the old element after negative-index normalization; out of bounds is a runtime error. |
+| `Vec.set` | `set(index: int32, value: own T) -> Option[T]` | Replaces and returns the old element after negative-index normalization; out of bounds is a runtime error. |
 | `Vec.remove` | `remove(index: int32) -> Option[T]` | Removes an element after negative-index normalization; out of bounds is a runtime error. |
 | `Vec.swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`; out of bounds is a runtime error. |
 | `Vec.contains` | `contains(value: T) -> bool` | Equality lookup. |
-| `Vec.extend` | `extend(other: Vec[T]) -> None` | Moves elements from `other` into the receiver. |
-| `Vec.insert` | `insert(index: int32, value: T) -> bool` | Normalizes a negative index, inserts before it, and returns `true`; valid range is `0..=len`, without clamping. |
+| `Vec.extend` | `extend(other: own Vec[T]) -> None` | Moves elements from `other` into the receiver. |
+| `Vec.insert` | `insert(index: int32, value: own T) -> bool` | Normalizes a negative index, inserts before it, and returns `true`; valid range is `0..=len`, without clamping. |
 | `Vec.clear` | `clear() -> None` | Removes all elements. |
 | `Vec.reverse` | `reverse() -> None` | Reverses in place. |
 
@@ -75,7 +75,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Map.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Map.clone` | `clone() -> Map[K, V]` | Clones keys and values. |
 | `Map.get` | `get(key: K) -> Option[V]` | Cloned value or `None` when absent. |
-| `Map.set` | `set(key: K, value: V) -> Option[V]` | Inserts or replaces, returning the previous value. |
+| `Map.set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces, returning the previous value. |
 | `Map.remove` | `remove(key: K) -> Option[V]` | Removes an entry and returns the previous value. |
 | `Map.contains_key` | `contains_key(key: K) -> bool` | Key lookup. |
 | `Map.keys` | `keys() -> Vec[K]` | Cloned keys. |
@@ -83,7 +83,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Map.items` | `items() -> Vec[MapEntry[K, V]]` | Entries in insertion order. |
 | `Map.entries` | `entries() -> Vec[MapEntry[K, V]]` | Same as `items()`. |
 | `Map.clear` | `clear() -> None` | Removes all entries. |
-| `Map.extend` | `extend(other: Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
+| `Map.extend` | `extend(other: own Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
 | `MapEntry.key` | field `key: K` | Entry key. |
 | `MapEntry.value` | field `value: V` | Entry value. |
 
@@ -96,7 +96,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Set.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Set.clone` | `clone() -> Set[T]` | Clones the set. |
 | `Set.contains` | `contains(value: T) -> bool` | Membership lookup. |
-| `Set.insert` | `insert(value: T) -> bool` | `true` only when newly inserted. |
+| `Set.insert` | `insert(value: own T) -> bool` | `true` only when newly inserted. |
 | `Set.remove` | `remove(value: T) -> bool` | `true` only when a value was removed. |
 
 ## Concurrency
@@ -106,18 +106,18 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied. |
-| `Queue.put` | `put(value: T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error. |
-| `Queue.try_put` | `try_put(value: T) -> Result[None, SendError[T]]` | Sends without waiting. |
+| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error. |
+| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting. |
 | `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome. |
 | `Queue.get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for closed, timeout, cancellation, or immediate absence. |
-| `Queue.get_or` | `get_or(default: T, timeout: Duration = ...) -> T` | Value or fallback. |
+| `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
 | `Queue.close` | `close() -> None` | Closes the queue and wakes waiters. |
 | `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome. |
 | `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence. |
-| `Task.result_or` | `result_or(default: T, timeout: Duration = ...) -> T` | Value or fallback. |
+| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, ...) -> Task[T]` | Starts a child task and returns a handle. |
-| `TaskGroup.start_soon` | `start_soon(function, ...) -> None` | Starts a child task without returning a handle. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage and starts a child task. |
+| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child without returning a handle. |
 | `TaskGroup.cancel` | `cancel() -> None` | Signals cancellation to children. |
 
 ## I/O And Filesystem
@@ -241,8 +241,8 @@ Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535
 | `net.HttpExchange` | `headers` | `headers() -> Map[String, String]` |
 | `net.HttpExchange` | `body_text` | `body_text() -> Result[String, io.Error]` |
 | `net.HttpExchange` | `body_bytes` | `body_bytes() -> Vec[uint8]` |
-| `net.HttpExchange` | `respond_text` | `respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]` |
-| `net.HttpExchange` | `respond_bytes` | `respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]` |
+| `net.HttpExchange` | `respond_text` | `respond_text(status: int32, text: own String, headers: own Map[String, String]) -> Result[None, io.Error]` |
+| `net.HttpExchange` | `respond_bytes` | `respond_bytes(status: int32, bytes: own Vec[uint8], headers: own Map[String, String]) -> Result[None, io.Error]` |
 | `net.HttpResponse` | `status` | `status() -> int32` |
 | `net.HttpResponse` | `reason` | `reason() -> String` |
 | `net.HttpResponse` | `headers` | `headers() -> Map[String, String]` |
@@ -304,7 +304,7 @@ See [Process Module](/manual/process) for defaults, groups, and supervisor behav
 | `process.Completed.stderr` | `stderr() -> String` |
 | `process.Completed.stderr_bytes` | `stderr_bytes() -> Vec[uint8]` |
 | `process.Completed.check` | `check() -> Result[None, process.Error]` |
-| `process.Supervisor.start` | `start(name: String, command: Vec[String], cwd: Option[String] = ..., env: Map[String, String] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., restart: process.RestartPolicy = ..., backoff: Duration = ..., max_restarts: int32 = ..., group: bool = ...) -> Result[None, process.Error]` |
+| `process.Supervisor.start` | `start(name: own String, command: own Vec[String], cwd: own Option[String] = ..., env: own Map[String, String] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` |
 | `process.Supervisor.wait` | `wait(timeout: Duration = ...) -> process.SupervisorWait` |
 | `process.Supervisor.wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]` |
 | `process.Supervisor.stop` | `stop() -> Result[None, process.Error]` |
@@ -317,18 +317,18 @@ Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `
 
 | Type | Variants |
 | --- | --- |
-| `Option[T]` | `Some(value: T)`, `None` |
-| `Result[T, E]` | `Ok(value: T)`, `Err(error: E)` |
-| `SendError[T]` | `Closed(value: T)`, `Cancelled(value: T)`, `TimedOut(value: T)`, `Full(value: T)` |
-| `QueueReceive[T]` | `Item(value: T)`, `Closed`, `TimedOut`, `Cancelled` |
-| `TaskResult[T]` | `Ready(value: T)`, `Error(message: String)`, `TimedOut`, `Cancelled` |
-| `WaitAny[T]` | `Ready(index: int32, value: T)`, `Error(index: int32, message: String)`, `TimedOut`, `Cancelled` |
-| `WaitAll[T]` | `Ready(values: Vec[T])`, `Error(index: int32, message: String)`, `TimedOut`, `Cancelled` |
-| `io.Error` | `NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `ConnectionRefused`, `ConnectionReset`, `ConnectionAborted`, `NotConnected`, `AddrInUse`, `AddrNotAvailable`, `BrokenPipe`, `TimedOut`, `WouldBlock`, `UnexpectedEof`, `InvalidInput`, `InvalidData`, `Closed`, `Cancelled`, `Other(message: String)` |
+| `Option[T]` | `Some(value: own T)`, `None` |
+| `Result[T, E]` | `Ok(value: own T)`, `Err(error: own E)` |
+| `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
+| `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
+| `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
+| `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
+| `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
+| `io.Error` | `NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `ConnectionRefused`, `ConnectionReset`, `ConnectionAborted`, `NotConnected`, `AddrInUse`, `AddrNotAvailable`, `BrokenPipe`, `TimedOut`, `WouldBlock`, `UnexpectedEof`, `InvalidInput`, `InvalidData`, `Closed`, `Cancelled`, `Other(message: own String)` |
 | `process.Stdio` | `Inherit`, `Null`, `Pipe` |
-| `process.ExitStatus` | `Exited(code: int32)`, `Signaled(signal: int32)` |
-| `process.Wait` | `Exited(status: process.ExitStatus)`, `TimedOut`, `Cancelled`, `Failed(error: process.Error)` |
+| `process.ExitStatus` | `Exited(code: own int32)`, `Signaled(signal: own int32)` |
+| `process.Wait` | `Exited(status: own process.ExitStatus)`, `TimedOut`, `Cancelled`, `Failed(error: own process.Error)` |
 | `process.RestartPolicy` | `Never`, `OnFailure`, `Always` |
-| `process.Error` | `NoCommand`, `TimedOut`, `Cancelled`, `Io(error: io.Error)`, `Spawn(message: String)`, `Other(message: String)` |
-| `process.SupervisorEvent` | `Exited(name: String, status: process.ExitStatus, restart_count: int32)`, `Restarted(name: String, status: process.ExitStatus, restart_count: int32)`, `Failed(name: String, error: process.Error, restart_count: int32)` |
-| `process.SupervisorWait` | `Event(event: process.SupervisorEvent)`, `TimedOut`, `Cancelled` |
+| `process.Error` | `NoCommand`, `TimedOut`, `Cancelled`, `Io(error: own io.Error)`, `Spawn(message: own String)`, `Other(message: own String)` |
+| `process.SupervisorEvent` | `Exited(name: own String, status: own process.ExitStatus, restart_count: own int32)`, `Restarted(name: own String, status: own process.ExitStatus, restart_count: own int32)`, `Failed(name: own String, error: own process.Error, restart_count: own int32)` |
+| `process.SupervisorWait` | `Event(event: own process.SupervisorEvent)`, `TimedOut`, `Cancelled` |

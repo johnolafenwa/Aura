@@ -47,6 +47,11 @@ custom = Server("0.0.0.0", port=9090)
 named = Point(x=3.0, y=4.0)
 ```
 
+Every constructor field is an owned position. Conceptually, `Point` exposes
+`Point(x: own float64, y: own float64)` and `Box[T]` exposes `Box(value: own
+T)`: a non-copy argument moves into the new object. Defaults likewise create
+fresh owned field values.
+
 Construction follows these rules:
 
 1. positional arguments fill fields in declaration order
@@ -55,7 +60,8 @@ Construction follows these rules:
 4. an unknown field name or excess positional argument is rejected
 5. every field without a default must be supplied
 6. each provided or default value must have the field's exact substituted type
-7. constructing with a move value consumes that value; copy values are duplicated
+7. every field argument is `own`; constructing with a move value consumes it,
+   while copy values are duplicated
 
 Generic arguments may be explicit:
 

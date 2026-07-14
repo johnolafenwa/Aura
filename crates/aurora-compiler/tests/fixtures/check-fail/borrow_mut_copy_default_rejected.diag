@@ -1,0 +1,5 @@
+error: `borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrow_mut_copy_default_rejected.au:1:15
+  |
+1 | def increment(value: borrow mut int64 = 0):
+  |               ^

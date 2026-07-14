@@ -6,7 +6,7 @@ enum Status[T]:
     Completed(T)
     Failed(String)
 
-def check_status(s: Status[int32]):
+def check_status(s: own Status[int32]):
     match s:
         case Status.Pending(v):
             print("pending")

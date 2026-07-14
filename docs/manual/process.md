@@ -79,17 +79,17 @@ The caller is responsible for waiting, killing, terminating, or closing the chil
 
 | Variant | Meaning |
 | --- | --- |
-| `Exited(status: process.ExitStatus)` | The child exited or was signaled. |
+| `Exited(status: own process.ExitStatus)` | The child exited or was signaled. |
 | `TimedOut` | The wait timeout expired. |
 | `Cancelled` | Cancellation interrupted the wait. |
-| `Failed(error: process.Error)` | Waiting failed. |
+| `Failed(error: own process.Error)` | Waiting failed. |
 
 `process.ExitStatus` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Exited(code: int32)` | The process exited with a numeric code. |
-| `Signaled(signal: int32)` | The process was terminated by a signal on platforms that expose signal status. |
+| `Exited(code: own int32)` | The process exited with a numeric code. |
+| `Signaled(signal: own int32)` | The process was terminated by a signal on platforms that expose signal status. |
 
 ## process.Pipe
 
@@ -162,7 +162,7 @@ def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `start` | `start(name: String, command: Vec[String], cwd: Option[String] = ..., env: Map[String, String] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., restart: process.RestartPolicy = ..., backoff: Duration = ..., max_restarts: int32 = ..., group: bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision. Names must be unique within the supervisor. |
+| `start` | `start(name: own String, command: own Vec[String], cwd: own Option[String] = ..., env: own Map[String, String] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision and retains the owned configuration needed for restarts. Names must be unique within the supervisor. |
 | `wait` | `wait(timeout: Duration = ...) -> process.SupervisorWait` | Waits for the next supervisor event, timeout, or cancellation. |
 | `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]` | Returns `Ok(Some(event))`, `Ok(None)` on timeout, or `Err(...)` on cancellation or wait failure. |
 | `stop` | `stop() -> Result[None, process.Error]` | Stops every supervised child and clears the supervisor. |
@@ -197,15 +197,15 @@ When restart is enabled, `backoff` must be at least `10ms`.
 
 | Variant | Meaning |
 | --- | --- |
-| `Exited(name: String, status: process.ExitStatus, restart_count: int32)` | A child exited and was not restarted. |
-| `Restarted(name: String, status: process.ExitStatus, restart_count: int32)` | A child exited and a replacement was started. |
-| `Failed(name: String, error: process.Error, restart_count: int32)` | A child failed to start or restart. |
+| `Exited(name: own String, status: own process.ExitStatus, restart_count: own int32)` | A child exited and was not restarted. |
+| `Restarted(name: own String, status: own process.ExitStatus, restart_count: own int32)` | A child exited and a replacement was started. |
+| `Failed(name: own String, error: own process.Error, restart_count: own int32)` | A child failed to start or restart. |
 
 `process.SupervisorWait` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Event(event: process.SupervisorEvent)` | A supervisor event is available. |
+| `Event(event: own process.SupervisorEvent)` | A supervisor event is available. |
 | `TimedOut` | No event arrived before timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
@@ -216,9 +216,9 @@ When restart is enabled, `backoff` must be at least `10ms`.
 | `NoCommand` | The command vector was empty. |
 | `TimedOut` | A process operation timed out. |
 | `Cancelled` | Cancellation interrupted the operation. |
-| `Io(error: io.Error)` | The operation failed with an I/O error. |
-| `Spawn(message: String)` | The child could not be spawned. |
-| `Other(message: String)` | A process-specific failure not covered by another variant. |
+| `Io(error: own io.Error)` | The operation failed with an I/O error. |
+| `Spawn(message: own String)` | The child could not be spawned. |
+| `Other(message: own String)` | A process-specific failure not covered by another variant. |
 
 ## Cleanup Rules
 

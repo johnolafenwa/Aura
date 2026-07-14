@@ -71,6 +71,35 @@ grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
 grep -Fq '`self: Type` is not a method receiver' architecture_docs/decisions/0005-method-receivers.md
 grep -Fq '`own self` for by-value consumption' docs/aurora_language_proposal.md
 grep -Fq '<code>own self</code> for by-value consumption' docs/aurora_language_proposal.html
+grep -Fq '`value: T` | Shared borrow when `T` is non-copy' docs/manual/functions.md
+grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
+grep -Fq 'caller-invisible temporary' docs/manual/functions.md
+grep -Fq 'declaration-stable' docs/manual/generics-and-traits.md
+grep -Fq 'for value in own values' docs/manual/statements.md
+grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
+grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md
+grep -Fq 'default temporary lives until the call completes' docs/manual/execution-model.md
+grep -Fq 'push(value: own T)' docs/manual/api-index.md
+grep -Fq 'set(key: own K, value: own V)' docs/manual/api-index.md
+grep -Fq 'put(value: own T' docs/manual/api-index.md
+grep -Fq 'result_or(default: own T' docs/manual/api-index.md
+grep -Fq 'start(function, own ...) -> Task[T]' docs/manual/api-index.md
+grep -Fq 'restart: own process.RestartPolicy' docs/manual/api-index.md
+grep -Fq 'bare `for value in queue:` form' architecture_docs/decisions/0006-parameter-and-loop-ownership-defaults.md
+grep -Fq 'borrow mut' architecture_docs/decisions/0006-parameter-and-loop-ownership-defaults.md
+grep -Fq 'for name in own names' tutorials/06-ownership-and-borrowing.md
+grep -Fq 'def handle(stream: own net.TcpStream)' docs/manual/network.md
+grep -Fq 'def handle(stream: own net.TcpStream)' docs/learn/io-process-networking.md
+grep -Fq 'def serve(listener: own net.TcpListener)' tutorials/19-io-and-networking.md
+grep -Fq 'def process_file(handle: own FileHandle)' tutorials/12-error-propagation.md
+grep -Fq 'Queue and task handles are cheap copy-like values' tutorials/06-ownership-and-borrowing.md
+grep -Fq 'declaration-stable' docs/aurora_language_proposal.html
+grep -Fq 'Queue iteration receives each item already owned' docs/aurora_language_proposal.html
+
+if grep -Fq -- '- `Queue[T]`, `Task[T]`, `TaskGroup`' tutorials/06-ownership-and-borrowing.md; then
+  echo "ownership tutorial still classifies Queue and Task copy handles as move types" >&2
+  exit 1
+fi
 
 if rg -n 'no (integer )?floor division|integer division truncates toward zero|Result\.Ok\([^)]* / [^)]*\)' \
   docs/manual \
@@ -102,6 +131,16 @@ if rg -n '`self` -- by-value|plain `self` receiver|`self` consumes|\| `self` \| 
   tutorials \
   docs/learn; then
   echo "reference still describes bare self as a consuming receiver" >&2
+  exit 1
+fi
+
+if rg -n 'for x in expr:` consumes|for value in vec:` \| Consumes|`for value in names` iterates by value|Map\.get[^\n]*(takes|consumes) (its )?key by value|Every task target parameter must be by value|target.s ordinary parameters must be by value|TaskGroup[^\n]*(do not|does not) yet support borrowed parameters' \
+  docs/manual \
+  tutorials \
+  docs/learn \
+  docs/aurora_language_proposal.md \
+  docs/aurora_language_proposal.html; then
+  echo "reference still describes retired parameter, loop, lookup, or task-capture ownership behavior" >&2
   exit 1
 fi
 

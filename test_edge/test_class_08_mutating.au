@@ -14,7 +14,7 @@ class Stats:
         self.count = 0
         self.total = 0.0
 
-    def rename(borrow mut self, new_label: String):
+    def rename(borrow mut self, new_label: own String):
         self.label = new_label
 
     def get_total(borrow self) -> float64:

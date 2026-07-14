@@ -241,7 +241,7 @@ receiver
 
 parameter
     = identifier, ":",
-      [ "borrow", [ "mut" ], [ borrow-label ] ],
+      [ "own" | "borrow", [ "mut" ], [ borrow-label ] ],
       type,
       [ "=", expression ] ;
 
@@ -253,9 +253,9 @@ return-annotation
       type ;
 ```
 
-A receiver, when present, is the first method parameter. Bare `self` and `borrow self` are the two spellings of a shared receiver, `own self` is consuming, and `borrow mut self` is mutable. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary borrowed parameters place `borrow` after the colon; call sites pass the value directly and never prefix an argument with `borrow`.
+A receiver, when present, is the first method parameter. Bare `self` and `borrow self` are the two spellings of a shared receiver, `own self` is consuming, and `borrow mut self` is mutable. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary parameter modifiers appear after the colon: `own T`, `borrow T`, or `borrow mut T`. Call sites pass the value directly and never prefix an argument with an ownership modifier.
 
-Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, borrowed task targets, and borrowed return sources.
+Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, mutable-borrow task targets, and borrowed return sources.
 
 ## Traits And Implementations
 
@@ -348,11 +348,14 @@ while-statement
 
 for-statement
     = "for", identifier, "in",
-      [ "borrow", [ "mut" ] ],
+      [ "own" | "borrow", [ "mut" ] ],
       expression, ":", NEWLINE, suite ;
 ```
 
-The loop binding is one identifier. Destructuring loop targets and loop `else` clauses are not supported.
+The loop binding is one identifier. Destructuring loop targets and loop `else`
+clauses are not supported. Static semantics resolve the absent modifier by
+iterable kind. Explicit modifiers are rejected for Queue iteration because it
+is a receive operation rather than collection-place traversal.
 
 ## `with` Statements
 

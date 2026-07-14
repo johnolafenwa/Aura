@@ -1,0 +1,15 @@
+enum Message:
+    Text(String)
+    Empty
+
+def consume(value: own String):
+    print(value)
+
+def main() -> int32:
+    message = Message.Text("owned payload")
+    match message:
+        case Message.Text(text):
+            consume(text)
+        case Message.Empty:
+            print("empty")
+    return 0

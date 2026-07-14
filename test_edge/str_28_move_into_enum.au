@@ -4,10 +4,10 @@ enum Container:
     Full(String)
     Empty
 
-def pack(text: String) -> Container:
+def pack(text: own String) -> Container:
     return Container.Full(text)
 
-def unpack(c: Container) -> String:
+def unpack(c: own Container) -> String:
     match c:
         case Container.Full(s):
             return s

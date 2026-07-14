@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::ast::{
     Argument, ClassDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    FunctionDecl, Param, ReceiverKind, TypeRef,
+    FunctionDecl, Param, ParamMode, ReceiverKind, TypeRef,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::sema::{
@@ -36,7 +36,7 @@ fn lower_type_ref(type_ref: &TypeRef) -> Type {
 fn value_param(name: &str, ty: TypeRef) -> Param {
     Param {
         name: name.to_string(),
-        passing: ReceiverKind::Value,
+        mode: ParamMode::Default,
         borrow_label: None,
         ty,
         default: None,
@@ -47,7 +47,7 @@ fn value_param(name: &str, ty: TypeRef) -> Param {
 fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
     Param {
         name: name.to_string(),
-        passing: ReceiverKind::Value,
+        mode: ParamMode::Default,
         borrow_label: None,
         ty,
         default: Some(default),
@@ -105,6 +105,26 @@ fn function_info(
     params: Vec<Param>,
     return_type: TypeRef,
 ) -> FunctionInfo {
+    let lowered_params = params
+        .iter()
+        .map(|param| lower_type_ref(&param.ty))
+        .collect::<Vec<_>>();
+    let param_passings = params
+        .iter()
+        .zip(&lowered_params)
+        .map(|(param, ty)| match param.mode {
+            ParamMode::Default => {
+                if ty.is_copy() {
+                    ReceiverKind::Value
+                } else {
+                    ReceiverKind::Borrow
+                }
+            }
+            ParamMode::Own => ReceiverKind::Value,
+            ParamMode::Borrow => ReceiverKind::Borrow,
+            ParamMode::BorrowMut => ReceiverKind::BorrowMut,
+        })
+        .collect();
     FunctionInfo {
         module_name: module_name.to_string(),
         decl: FunctionDecl {
@@ -121,10 +141,8 @@ fn function_info(
             span: builtin_span(),
         },
         signature: FunctionSignature {
-            params: params
-                .iter()
-                .map(|param| lower_type_ref(&param.ty))
-                .collect(),
+            params: lowered_params,
+            param_passings,
             return_type: lower_type_ref(&return_type),
             return_passing: ReceiverKind::Value,
             return_borrow_source: None,

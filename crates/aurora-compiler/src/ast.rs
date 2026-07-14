@@ -137,10 +137,24 @@ pub enum ReceiverKind {
     BorrowMut,
 }
 
+/// Source-level ownership spelling for an ordinary parameter.
+///
+/// `Default` is resolved exactly once from the declared type: copy types use
+/// value passing, while non-copy and unresolved generic types use a shared
+/// borrow. Keeping this source intent separate prevents generic
+/// specialization from changing the function ABI.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum ParamMode {
+    Default,
+    Own,
+    Borrow,
+    BorrowMut,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Param {
     pub name: String,
-    pub passing: ReceiverKind,
+    pub mode: ParamMode,
     pub borrow_label: Option<String>,
     pub ty: TypeRef,
     pub default: Option<Expr>,

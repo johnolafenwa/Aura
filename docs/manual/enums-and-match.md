@@ -48,12 +48,18 @@ empty = Status.Empty
 
 A payload-free variant is a value and is not called. A payload variant is called with its exact payload shape:
 
+Every payload slot is owned. A declaration such as `Failed(String)` therefore
+has the constructor contract `Failed(own String)`, and a named `Ready(value:
+T)` slot is constructed as `Ready(value: own T)`. This rule also applies to
+builtin variants such as `Option.Some(own T)`, `Result.Ok(own T)`, and
+`Result.Err(own E)`.
+
 - positional variants accept positional arguments in declaration order; a single positional payload also accepts `value=`
 - named variants accept either positional arguments in declaration order or their declared payload names
 - every payload must be supplied exactly once
 - unknown, duplicate, missing, or excess payload arguments are rejected
 - each payload expression must have the exact substituted payload type
-- a non-copy payload expression is consumed
+- a non-copy payload expression is consumed by its `own` payload slot
 
 Do not mix positional and named construction styles in one variant call. User-defined named variants should use their declared names for clarity; multi-payload positional variants cannot be constructed with arbitrary named arguments.
 
@@ -116,7 +122,7 @@ The wildcard binds nothing, may appear only once, and must be the final arm. Dup
 A match expression produces a value:
 
 ```python
-def status_label(status: Status) -> String:
+def status_label(status: own Status) -> String:
     return match status:
         case Status.Ready(count):
             f"ready: {count}"
@@ -220,17 +226,19 @@ Boolean matching is exhaustive when both `true` and `false` are covered. Integer
 
 ## Builtin Enum Shapes
 
-These builtin generic enums are available without a module prefix:
+These builtin generic enums are available without a module prefix. The table
+shows constructor contracts, so `own` makes their implicit payload ownership
+visible; enum declarations themselves continue to write only the payload type:
 
 | Type | Variants |
 | --- | --- |
-| `Option[T]` | `Some(value: T)`, `None` |
-| `Result[T, E]` | `Ok(value: T)`, `Err(error: E)` |
-| `SendError[T]` | `Closed(value: T)`, `Cancelled(value: T)`, `TimedOut(value: T)`, `Full(value: T)` |
-| `QueueReceive[T]` | `Item(value: T)`, `Closed`, `TimedOut`, `Cancelled` |
-| `TaskResult[T]` | `Ready(value: T)`, `Error(message: String)`, `TimedOut`, `Cancelled` |
-| `WaitAny[T]` | `Ready(index: int32, value: T)`, `Error(index: int32, message: String)`, `TimedOut`, `Cancelled` |
-| `WaitAll[T]` | `Ready(values: Vec[T])`, `Error(index: int32, message: String)`, `TimedOut`, `Cancelled` |
+| `Option[T]` | `Some(value: own T)`, `None` |
+| `Result[T, E]` | `Ok(value: own T)`, `Err(error: own E)` |
+| `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
+| `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
+| `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
+| `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
+| `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 
 Module-qualified builtin enums are specified by their API chapters:
 

@@ -110,6 +110,13 @@ diagnostics also preserve the teaching error for `self: Type`, while the
 compiler-unavailable lexical recovery path includes the reserved `own` keyword
 without attempting to duplicate receiver semantics.
 
+Ordinary parameter hovers and completions render the declared ownership
+contract as well. In particular, consuming APIs expose `own` in their
+signatures, while a bare generic parameter remains a declaration-stable shared
+borrow even if a later call specializes that generic to a copy type. Built-in
+API detail follows the same rule, so calls such as `Vec.push(value: own T)` and
+`Queue.put(value: own T)` do not hide a move behind editor shorthand.
+
 ## Indentation behavior
 
 Aurora's extension also includes a deliberately small but important editing feature in [`indentation.js`](../tools/vscode-aurora/src/indentation.js).

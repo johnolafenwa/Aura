@@ -6,7 +6,7 @@ enum Shape:
     Circle(int32)
     Dot(Point)
 
-def area_hint(s: Shape) -> int32:
+def area_hint(s: own Shape) -> int32:
     match s:
         case Shape.Circle(r):
             return r * r

@@ -396,6 +396,7 @@ pub fn lower(program: &Program) -> MirModule {
                 None,
                 &function.decl,
                 &function.signature.params,
+                &function.signature.param_passings,
                 &function.signature.return_type,
                 function.type_param_bounds.clone(),
             )
@@ -444,6 +445,7 @@ pub fn lower(program: &Program) -> MirModule {
                 )),
                 &method.decl,
                 &method.signature.params,
+                &method.signature.param_passings,
                 &method.signature.return_type,
                 method.type_param_bounds.clone(),
             ));
@@ -590,6 +592,7 @@ fn push_imported_module_classes_from_namespace(
                     )),
                     &method.decl,
                     &method.signature.params,
+                    &method.signature.param_passings,
                     &method.signature.return_type,
                     method.type_param_bounds.clone(),
                 ));
@@ -673,6 +676,7 @@ fn lower_trait_impl(
                 Some(trait_impl.for_type.clone()),
                 &method.decl,
                 &method.signature.params,
+                &method.signature.param_passings,
                 &method.signature.return_type,
                 crate::sema::merge_trait_bounds(
                     &trait_impl.type_param_bounds,
@@ -725,6 +729,7 @@ fn push_imported_module_functions_from_namespace(
                 None,
                 &function.decl,
                 &function.signature.params,
+                &function.signature.param_passings,
                 &function.signature.return_type,
                 function.type_param_bounds.clone(),
             ));
@@ -756,6 +761,7 @@ fn lower_function(
     receiver_type: Option<Type>,
     function: &crate::ast::FunctionDecl,
     param_types: &[Type],
+    param_passings: &[ReceiverKind],
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
 ) -> MirFunction {
@@ -763,9 +769,10 @@ fn lower_function(
         .params
         .iter()
         .zip(param_types.iter())
-        .map(|(param, ty)| MirParam {
+        .zip(param_passings.iter().copied())
+        .map(|((param, ty), passing)| MirParam {
             name: param.name.clone(),
-            passing: lower_receiver_kind(param.passing),
+            passing: lower_receiver_kind(passing),
             ty: ty.clone(),
         })
         .collect::<Vec<_>>();
@@ -3396,7 +3403,7 @@ impl<'a> Lowerer<'a> {
                     },
                 )),
                 writeback_place: argument.and_then(|argument| {
-                    if param.passing == crate::ast::ReceiverKind::BorrowMut {
+                    if param.mode == crate::ast::ParamMode::BorrowMut {
                         self.render_place_expr_option(&argument.value)
                     } else {
                         None

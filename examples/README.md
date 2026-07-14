@@ -32,7 +32,8 @@ The examples are organized by topic so they can serve both as quick references a
     - `42.0`
     - `true`
 - `named_arguments.au`
-  - named arguments on functions, instance methods, and associated methods
+  - named arguments on functions, instance methods, and associated methods,
+    including an explicit `own` constructor parameter
   - prints:
     - `hello, aurora`
     - `7`
@@ -40,7 +41,7 @@ The examples are organized by topic so they can serve both as quick references a
   - named arguments on supported builtins like `print(...)` and `range(...)`
   - prints `10`
 - `default_arguments.au`
-  - default parameter values evaluated on each call
+  - shared-borrow default parameter values evaluated freshly on each call
   - prints:
     - `hello world`
     - `hello aurora`
@@ -78,7 +79,8 @@ The examples are organized by topic so they can serve both as quick references a
     - `99`
     - `false`
 - `vec_iteration.au`
-  - empty-vector construction with `Vec[T]()`, `extend(...)`, explicit `Vec[T]` annotations, and iteration by value or `borrow`
+  - empty-vector construction with `Vec[T]()`, `extend(...)`, explicit `Vec[T]`
+    annotations, explicit shared iteration, and consuming `own` iteration
   - prints:
     - `Ada`
     - `Grace`
@@ -202,7 +204,8 @@ The examples are organized by topic so they can serve both as quick references a
 ### `enums/`
 
 - `result_match.au`
-  - enum declarations, payload variants, and exhaustive `match`
+  - enum declarations, owned payload variants, an explicit `own` parameter,
+    and exhaustive consuming `match`
   - prints:
     - `42`
     - `bad`
@@ -252,12 +255,12 @@ The examples are organized by topic so they can serve both as quick references a
 ### `generics/`
 
 - `box_and_wrapper.au`
-  - user-defined generic classes, enums, and functions
+  - user-defined generic classes, enums, and an `own T` identity function
   - prints:
     - `7`
     - `ok`
 - `generic_method_calls.au`
-  - method calls on generic class instances inside generic functions
+  - method calls on generic class instances inside an `own` generic function
   - prints `7`
 - `generic_constructor_specialization.au`
   - explicit type arguments on class and queue constructors such as `Box[int32](...)`
@@ -281,7 +284,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `dog`
     - `cat`
 - `generic_trait_bounds.au`
-  - generic trait bounds such as `T: Mapper[int32]`
+  - generic trait bounds such as `T: Mapper[int32]` with an owned mapper input
   - prints `20`
 - `multiple_bounds.au`
   - bounded generic calls with `T: A + B`
@@ -306,7 +309,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `7`
     - `hi`
 - `generic_trait_impl.au`
-  - generic trait declarations plus generic impl headers for generic classes
+  - generic trait declarations plus generic impl headers with `own T` inputs
   - prints `11`
 - `default_trait_methods.au`
   - default trait method bodies with per-impl overrides
@@ -321,7 +324,8 @@ The examples are organized by topic so they can serve both as quick references a
     - `-6`
     - `-8`
 - `ordering_traits.au`
-  - ordering traits for `<`, `<=`, `>`, and `>=` through `Ord[...]`
+  - ordering traits with shared right-hand operands and an explicitly consuming
+    generic selector
   - prints:
     - `true`
     - `true`
@@ -459,7 +463,8 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `4`
     - `6`
 - `queue_iteration.au`
-  - `for value in jobs:` iteration over a `Queue[T]` until close
+  - bare `for value in jobs:` receive iteration, where every item arrives
+    owned, until close
   - prints:
     - `1`
     - `2`
@@ -497,7 +502,8 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `0`
     - `1`
 - `task_group_wait_helpers.au`
-  - `TaskResult[T]`, `WaitAny[T]`, `WaitAll[T]`, and bounded `Queue[T]` coordination helpers
+  - consuming `own` outcome helpers for `TaskResult[T]`, `WaitAny[T]`,
+    `WaitAll[T]`, and bounded `Queue[T]` coordination
   - prints:
     - `side-effect`
     - `11`
@@ -579,7 +585,11 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
   - `String.clone()` on owned strings
   - prints `aurora`
 - `string_methods.au`
-  - single-quoted strings plus the maintained `String` method surface: Unicode-scalar `len()`, UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
+  - single-quoted strings, an owned `Option[String]` match helper, and the
+    maintained `String` method surface: Unicode-scalar `len()`, UTF-8
+    `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`,
+    `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`,
+    `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
   - prints:
     - `15`
     - `true`

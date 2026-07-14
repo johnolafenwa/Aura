@@ -17,14 +17,14 @@ The pool needs four things:
 
 ## Step 1: The Work Itself
 
-A job is a small record, and the worker function that processes it takes one by value:
+A job is a small record, and the worker function explicitly takes ownership:
 
 ```python
 class Job:
     id: int32
     payload: String
 
-def handle(job: Job) -> String:
+def handle(job: own Job) -> String:
     return "done " + job.id.to_string() + " " + job.payload
 ```
 
@@ -49,13 +49,16 @@ Closing is part of the protocol. A consumer that sees the queue close knows its 
 A consumer reads jobs until the queue closes, the surrounding task group is cancelled, or all producers finish:
 
 ```python
-def consume(name: String, jobs: Queue[Job], results: Queue[String]):
+def consume(name: borrow String, jobs: Queue[Job], results: Queue[String]):
     for job in jobs:
-        result = name + ": " + handle(job)
+        result = f"{name}: {handle(job)}"
         results.put(result)
 ```
 
-The `for` loop does the receive structurally. There is no sentinel value, no magic token, no special return code — closing the queue is the signal.
+The bare `for` loop does the receive structurally and each item arrives already
+owned by `job`. Queue iteration is not collection-place traversal, so `own`,
+`borrow`, and `borrow mut` modifiers are rejected. There is no sentinel value,
+no magic token, no special return code — closing the queue is the signal.
 
 ## Step 4: The Parent
 

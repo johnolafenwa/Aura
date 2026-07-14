@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:

@@ -1,9 +1,9 @@
-use crate::ast::{Argument, Expr, ExprKind, Param, ReceiverKind, TypeRef};
+use crate::ast::{Argument, Expr, ExprKind, Param, ParamMode, TypeRef};
 use crate::diag::Span;
 
 use super::{
     bind_call_arguments, callable_params_from_decl, format_argument_count, BuiltinFunction,
-    BuiltinMember, CallConvention, CallableParam, ALL_BUILTIN_FUNCTIONS,
+    BuiltinMember, CallConvention, CallableParam, ParamOwnership, ALL_BUILTIN_FUNCTIONS,
 };
 
 fn dummy_arg(name: Option<&str>) -> Argument {
@@ -67,7 +67,7 @@ fn callable_params_follow_default_presence() {
     let params = vec![
         Param {
             name: "required".to_string(),
-            passing: ReceiverKind::Value,
+            mode: ParamMode::Default,
             borrow_label: None,
             ty: dummy_type("int32"),
             default: None,
@@ -75,7 +75,7 @@ fn callable_params_follow_default_presence() {
         },
         Param {
             name: "optional".to_string(),
-            passing: ReceiverKind::Value,
+            mode: ParamMode::Default,
             borrow_label: None,
             ty: dummy_type("int32"),
             default: Some(Expr {
@@ -271,7 +271,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
 fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     let params = vec![Param {
         name: "value".to_string(),
-        passing: ReceiverKind::Borrow,
+        mode: ParamMode::Borrow,
         borrow_label: None,
         ty: dummy_type("String"),
         default: None,
@@ -316,15 +316,85 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
     assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
     assert_eq!(
         BuiltinMember::QueueTryPut.detail(),
-        "try_put(value: T) -> Result[None, SendError[T]]"
+        "try_put(value: own T) -> Result[None, SendError[T]]"
     );
     assert_eq!(
         BuiltinMember::TaskGroupStartSoon.detail(),
-        "start_soon(function, ...) -> None"
+        "start_soon(function, own ...) -> None"
     );
     assert!(BuiltinMember::TaskResultOrNone
         .docs()
         .contains("Option.None"));
+}
+
+#[test]
+fn retaining_builtin_arguments_declare_owned_transfer_metadata() {
+    let owned = [
+        (BuiltinMember::VecPush, 0),
+        (BuiltinMember::VecSet, 1),
+        (BuiltinMember::VecInsert, 1),
+        (BuiltinMember::VecExtend, 0),
+        (BuiltinMember::MapSet, 0),
+        (BuiltinMember::MapSet, 1),
+        (BuiltinMember::MapExtend, 0),
+        (BuiltinMember::SetInsert, 0),
+        (BuiltinMember::QueuePut, 0),
+        (BuiltinMember::QueueTryPut, 0),
+        (BuiltinMember::QueueGetOr, 0),
+        (BuiltinMember::TaskResultOr, 0),
+        (BuiltinMember::ProcessSupervisorStart, 0),
+        (BuiltinMember::ProcessSupervisorStart, 1),
+        (BuiltinMember::ProcessSupervisorStart, 2),
+        (BuiltinMember::ProcessSupervisorStart, 3),
+        (BuiltinMember::ProcessSupervisorStart, 4),
+        (BuiltinMember::ProcessSupervisorStart, 5),
+        (BuiltinMember::ProcessSupervisorStart, 6),
+        (BuiltinMember::ProcessSupervisorStart, 7),
+        (BuiltinMember::ProcessSupervisorStart, 8),
+        (BuiltinMember::ProcessSupervisorStart, 9),
+        (BuiltinMember::ProcessSupervisorStart, 10),
+        (BuiltinMember::HttpExchangeRespondText, 1),
+        (BuiltinMember::HttpExchangeRespondText, 2),
+        (BuiltinMember::HttpExchangeRespondBytes, 1),
+        (BuiltinMember::HttpExchangeRespondBytes, 2),
+    ];
+    for (member, index) in owned {
+        assert_eq!(
+            member.argument_ownership(index),
+            ParamOwnership::Own,
+            "{} argument {index} must retain owned metadata",
+            member.name()
+        );
+    }
+
+    for (member, index) in [
+        (BuiltinMember::VecContains, 0),
+        (BuiltinMember::MapGet, 0),
+        (BuiltinMember::MapRemove, 0),
+        (BuiltinMember::SetContains, 0),
+        (BuiltinMember::SetRemove, 0),
+        (BuiltinMember::FileWriteAll, 0),
+        (BuiltinMember::ProcessPipeWriteAll, 0),
+    ] {
+        assert_eq!(
+            member.argument_ownership(index),
+            ParamOwnership::Shared,
+            "{} argument {index} must remain a one-shot shared input",
+            member.name()
+        );
+    }
+
+    assert_eq!(
+        BuiltinMember::TaskGroupStart.variadic_argument_ownership(),
+        Some(ParamOwnership::Own)
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartSoon.variadic_argument_ownership(),
+        Some(ParamOwnership::Own)
+    );
+    assert!(BuiltinMember::VecPush.detail().contains("own T"));
+    assert!(BuiltinMember::MapSet.detail().contains("own K"));
+    assert!(BuiltinMember::QueuePut.detail().contains("own T"));
 }
 
 #[test]
@@ -1125,7 +1195,7 @@ fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
     );
     assert_eq!(
         BuiltinMember::TaskGroupStartSoon.detail(),
-        "start_soon(function, ...) -> None"
+        "start_soon(function, own ...) -> None"
     );
     assert!(BuiltinFunction::WaitAny
         .docs()

@@ -15,7 +15,7 @@ use super::{
 };
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item,
-    PassStmt, ReceiverKind, ReturnStmt, TypeRef, VariantPattern,
+    ParamMode, PassStmt, ReceiverKind, ReturnStmt, TypeRef, VariantPattern,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::sema::{
@@ -119,7 +119,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         receiver: Some(ReceiverKind::Borrow),
         params: vec![crate::ast::Param {
             name: "value".to_string(),
-            passing: ReceiverKind::Value,
+            mode: ParamMode::Default,
             borrow_label: None,
             ty: type_ref("int32"),
             default: None,
@@ -153,7 +153,7 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
     let mut method = function_decl("render", "bool");
     assert_eq!(
         format_function_detail(&method),
-        "render(self, int32) -> bool"
+        "render(self, value: int32) -> bool"
     );
     assert_eq!(
         format_method_hover(&method),
@@ -163,7 +163,7 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
     method.receiver = Some(ReceiverKind::Value);
     assert_eq!(
         format_function_detail(&method),
-        "render(own self, int32) -> bool"
+        "render(own self, value: int32) -> bool"
     );
     assert_eq!(
         format_method_hover(&method),
@@ -173,7 +173,7 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
     method.receiver = Some(ReceiverKind::BorrowMut);
     assert_eq!(
         format_function_detail(&method),
-        "render(borrow mut self, int32) -> bool"
+        "render(borrow mut self, value: int32) -> bool"
     );
     assert_eq!(
         format_method_hover(&method),
@@ -185,6 +185,55 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
     assert!(completions
         .iter()
         .any(|completion| completion.name == "own" && completion.kind == "keyword"));
+}
+
+#[test]
+fn d6_analysis_renders_source_parameter_and_transfer_ownership() {
+    let source = r#"
+class Box:
+    value: String
+
+enum Message:
+    Text(String)
+
+def inspect(value: String):
+    print(value)
+
+def consume(value: own String):
+    print(value)
+"#;
+    let completions = complete_source(source, 0, 0, None).expect("D6 source should complete");
+    assert_eq!(
+        completions
+            .iter()
+            .find(|item| item.name == "inspect")
+            .map(|item| item.detail.as_str()),
+        Some("inspect(value: String) -> None")
+    );
+    assert_eq!(
+        completions
+            .iter()
+            .find(|item| item.name == "consume")
+            .map(|item| item.detail.as_str()),
+        Some("consume(value: own String) -> None")
+    );
+    assert_eq!(
+        completions
+            .iter()
+            .find(|item| item.name == "Box")
+            .map(|item| item.detail.as_str()),
+        Some("Box(value: own String)")
+    );
+
+    let vec_members =
+        builtin_member_completions(&Type::Named("Vec".to_string(), vec![Type::named("String")]));
+    assert!(vec_members
+        .iter()
+        .any(|item| item.name == "push" && item.detail.contains("own T")));
+    let message_members = builtin_enum_variant_completions("Option");
+    assert!(message_members
+        .iter()
+        .any(|item| item.name == "Some" && item.detail.contains("own T")));
 }
 
 #[test]
@@ -358,7 +407,7 @@ fn compiler_member_completion_for_vec_reports_insert_bool_detail() {
         .find(|item| item.name == "insert")
         .expect("insert completion should exist");
 
-    assert_eq!(insert.detail, "insert(index: int32, value: T) -> bool");
+    assert_eq!(insert.detail, "insert(index: int32, value: own T) -> bool");
 }
 
 #[test]
@@ -436,7 +485,7 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
         "        self.value",
         "        return 0",
         "",
-        "def unwrap(value: Option[String]) -> String:",
+        "def unwrap(value: own Option[String]) -> String:",
         "    match value:",
         "        case Option.Some(text):",
         "            text.len()",
@@ -838,7 +887,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "",
         "enum Status:",
         "    Ready",
-        "    Failed(String)",
+        "    Failed(code: int32, reason: String)",
         "",
         "def helper() -> int32:",
         "    return 1",
@@ -854,6 +903,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "",
         "enum RemoteStatus:",
         "    Ready",
+        "    Failed(code: int32, reason: String)",
         "",
         "class Remote:",
         "    value: int32",
@@ -1014,6 +1064,14 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .collect::<Vec<_>>();
     assert!(status_member_names.contains(&"Ready".to_string()));
     assert!(status_member_names.contains(&"Failed".to_string()));
+    assert_eq!(
+        builder
+            .member_completions(&Type::named("Status"))
+            .into_iter()
+            .find(|completion| completion.name == "Failed")
+            .map(|completion| completion.detail),
+        Some("Failed(code: own int32, reason: own String) -> Status".to_string())
+    );
     let ready_member = builder
         .resolve_member_type(&Type::named("Status"), "Ready")
         .expect("enum variants should resolve as static members");
@@ -1053,6 +1111,34 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .hover
         .contains("variant Ready -> Status"));
     assert!(inferred_status_variant.definition.is_some());
+    let imported_variant = builder
+        .resolve_match_variant(
+            Some(&Type::named("pkg.tools.RemoteStatus")),
+            &VariantPattern {
+                enum_name: Some("pkg.tools.RemoteStatus".to_string()),
+                variant_name: "Failed".to_string(),
+                subpatterns: Vec::new(),
+                span: Span::new(1, 1),
+            },
+        )
+        .expect("qualified imported enum variants should resolve in match patterns");
+    assert!(imported_variant
+        .hover
+        .contains("variant Failed(code: own int32, reason: own String) -> RemoteStatus"));
+    assert!(imported_variant.definition.is_some());
+    assert_eq!(
+        builder
+            .member_completions(&Type::named("pkg.tools.RemoteStatus"))
+            .into_iter()
+            .find(|completion| completion.name == "Failed")
+            .map(|completion| completion.detail),
+        Some("Failed(code: own int32, reason: own String) -> RemoteStatus".to_string())
+    );
+    assert!(builder
+        .resolve_member_type(&Type::named("pkg.tools.RemoteStatus"), "Failed")
+        .expect("qualified imported enum variants should resolve as static members")
+        .hover
+        .contains("variant Failed(code: own int32, reason: own String) -> RemoteStatus"));
     let remote_status = builder
         .resolve_match_variant_enum("pkg.tools.RemoteStatus")
         .expect("qualified imported enum should resolve as a match variant enum");
@@ -1063,6 +1149,40 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .expect("builtin SendError should resolve as a match variant enum")
         .hover
         .contains("SendError[T]"));
+    assert!(builder
+        .resolve_member_type(&Type::named("WaitAny"), "Ready")
+        .expect("WaitAny.Ready should resolve")
+        .hover
+        .contains("variant Ready(own int32, own T) -> WaitAny"));
+    assert!(builder
+        .resolve_member_type(&Type::named("WaitAny"), "Error")
+        .expect("WaitAny.Error should resolve")
+        .hover
+        .contains("variant Error(own int32, own String) -> WaitAny"));
+    assert!(builder
+        .resolve_member_type(&Type::named("WaitAll"), "Ready")
+        .expect("WaitAll.Ready should resolve")
+        .hover
+        .contains("variant Ready(own Vec[T]) -> WaitAll"));
+    assert!(builder
+        .resolve_member_type(&Type::named("WaitAll"), "Error")
+        .expect("WaitAll.Error should resolve")
+        .hover
+        .contains("variant Error(own int32, own String) -> WaitAll"));
+    assert_eq!(
+        builtin_enum_variant_completions("WaitAny")
+            .into_iter()
+            .find(|completion| completion.name == "Ready")
+            .map(|completion| completion.detail),
+        Some("Ready(own int32, own T) -> WaitAny".to_string())
+    );
+    assert_eq!(
+        builtin_enum_variant_completions("WaitAll")
+            .into_iter()
+            .find(|completion| completion.name == "Error")
+            .map(|completion| completion.detail),
+        Some("Error(own int32, own String) -> WaitAll".to_string())
+    );
 
     let string_member_names = builder
         .member_completions(&Type::named("String"))
@@ -1726,7 +1846,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         "    Ready",
         "    Failed(String)",
         "",
-        "def inspect(status: Status, value: Option[int32]) -> int32:",
+        "def inspect(status: own Status, value: Option[int32]) -> int32:",
         "    match status:",
         "        case Status.Ready:",
         "            return 1",
@@ -2672,7 +2792,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     assert!(builtin_function_hover("print(value)", "docs").contains("print(value)"));
     assert!(
         format_variant_hover("Option", "Some", Some(&Type::named("String")))
-            .contains("variant Some(String) -> Option")
+            .contains("variant Some(own String) -> Option")
     );
 
     let option_variants = builtin_enum_variant_completions("Option");
@@ -2737,7 +2857,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     assert_eq!(builtin_function_return_type("TaskGroup"), None);
     assert_eq!(
         format_function_detail(&function_decl("render", "bool")),
-        "render(self, int32) -> bool"
+        "render(self, value: int32) -> bool"
     );
 }
 
@@ -2928,6 +3048,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         decl: method_decl.clone(),
         signature: FunctionSignature {
             params: vec![Type::named("int32")],
+            param_passings: vec![ReceiverKind::Value],
             return_type: Type::Unit,
             return_passing: ReceiverKind::Value,
             return_borrow_source: None,

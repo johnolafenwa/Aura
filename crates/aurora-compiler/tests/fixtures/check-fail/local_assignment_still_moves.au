@@ -1,0 +1,6 @@
+def main() -> int32:
+    first = "value"
+    second = first
+    print(second)
+    print(first)
+    return 0

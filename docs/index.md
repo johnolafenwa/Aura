@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: Ownership You Can Read
-    details: Every value has an owner. Move types transfer ownership when passed. Borrow forms let helpers work without taking it. The compiler tracks this at every call boundary, and the runtime honours it without a garbage collector.
+    details: Every value has an owner. Bare non-copy parameters borrow; explicit own parameters transfer ownership. The compiler tracks this at every call boundary, and the runtime honours it without a garbage collector.
   - title: Concurrency With A Scope
     details: Child work lives inside a TaskGroup. Leaving the scope waits for the children. Queues carry values between tasks. Cancellation is a signal the scope observes, not an exception that lands anywhere.
   - title: APIs That Tell The Truth
@@ -31,7 +31,7 @@ Aurora is a compiled language for programs that manage resources on purpose: fil
 
 Three commitments shape every page of this book:
 
-1. **Values have owners.** Move types — strings, collections, class instances, task groups, file handles, sockets — transfer ownership when passed by value. Borrow forms let other code read or mutate without taking over.
+1. **Values have owners.** Move types — strings, collections, class instances, task groups, file handles, sockets — transfer ownership in explicit `own` positions. Bare non-copy parameters borrow; borrow forms can also make read or mutation access explicit.
 2. **Failure has a type.** Operations that a caller might handle return `Result`, `Option`, or a small set of outcome enums. Control flow over failure is visible in the program, not buried in hidden exception paths.
 3. **Concurrency has a scope.** A `TaskGroup` owns its child tasks. The block that created the group is the block that waits for them, cancels them, and accounts for their results.
 
@@ -47,11 +47,11 @@ def render(job: borrow Job) -> String:
 
 jobs = [Job(id=1, label="parse"), Job(id=2, label="compile")]
 
-for job in borrow jobs:
+for job in jobs:
     print(render(job))
 ```
 
-A few things are already in play. The class holds values that live together. The function `render` borrows its job because it only needs to read. The `for` loop borrows the vector so the jobs are still there afterwards. The call `render(job)` passes the borrow form the signature asks for; nothing extra is needed at the call site.
+A few things are already in play. The class holds values that live together. The function `render` explicitly borrows its job because it only needs to read. Bare vector iteration is shared, so the jobs are still there afterwards. The call `render(job)` passes the borrow form the signature asks for; nothing extra is needed at the call site.
 
 These are the ideas the Learn track builds on.
 
