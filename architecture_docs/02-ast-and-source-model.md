@@ -117,7 +117,12 @@ This is a common Rust compiler pattern: use algebraic data types to mirror langu
 There are a few choices worth calling out because they affect later stages:
 
 - `ReceiverKind`
-  Aurora stores whether a receiver or parameter is passed by value, `borrow`, or `borrow mut`.
+  Aurora stores the resolved passing mode for a receiver or parameter. For
+  receivers, both bare `self` and the explicit synonym `borrow self` become
+  `ReceiverKind::Borrow`; `own self` becomes `ReceiverKind::Value`; and
+  `borrow mut self` becomes `ReceiverKind::BorrowMut`. The AST therefore
+  preserves the semantic distinction needed by checking and lowering, while
+  deliberately canonicalizing the two shared-receiver spellings.
 - `return_passing` and `return_borrow_source`
   Function declarations carry borrowed-return metadata in the AST so the checker can validate it.
 - `borrow_mode` on `match` and `for`

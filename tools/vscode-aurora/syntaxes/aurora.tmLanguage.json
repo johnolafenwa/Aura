@@ -184,7 +184,7 @@
         },
         {
           "name": "storage.modifier.aurora",
-          "match": "\\b(public|mut|borrow|indirect|copy)\\b"
+          "match": "\\b(public|mut|borrow|own|indirect|copy)\\b"
         },
         {
           "name": "constant.language.aurora",

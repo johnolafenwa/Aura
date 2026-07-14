@@ -134,6 +134,12 @@ A broken stdout pipe is intentional clean termination and exits `0`; this lets c
 
 The VS Code extension keeps one persistent `aura lsp` process for diagnostics, symbols, hover, go-to-definition, and completions. Requests are debounced, cancellable, version-guarded, and invalidated by dependency. If the compiler process cannot start, a small lexical recovery layer provides declarations and top-level completion; it intentionally does not duplicate compiler semantics.
 
+Compiler-backed method hover and completion details include the receiver
+contract. They render shared receivers canonically as `self`, consuming
+receivers as `own self`, and mutable receivers as `borrow mut self`. A source
+declaration written with the explicit shared synonym `borrow self` therefore
+appears as `self` in these signatures.
+
 Useful repo commands:
 
 ```bash

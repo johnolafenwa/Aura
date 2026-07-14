@@ -223,17 +223,19 @@ Think of it like a library book: many people can read it at the same time (share
 
 Methods on classes use the same borrowing system through **receivers**. The receiver determines what the method can do with the instance:
 
-### `borrow self` -- read the instance
+### `self` -- read the instance
 
 ```python
 class Account:
     balance: float64
 
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return f"Balance: {self.balance}"
 ```
 
-The method can read fields but cannot modify them. The caller retains ownership.
+Bare `self` is a shared borrow. The method can read fields but cannot modify
+them, and the caller retains ownership. `borrow self` is accepted as an
+explicit synonym when spelling out the shared contract helps readability.
 
 ```python
 account = Account(balance=100.0)
@@ -250,7 +252,7 @@ class Account:
     def deposit(borrow mut self, amount: float64):
         self.balance += amount
 
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return f"Balance: {self.balance}"
 ```
 
@@ -269,17 +271,17 @@ account = Account(balance=100.0)
 account.deposit(50.0)       # COMPILE ERROR: must be a mutable place
 ```
 
-### `self` -- consume the instance
+### `own self` -- consume the instance
 
 ```python
 class Connection:
     host: String
 
-    def into_host(self) -> String:
+    def into_host(own self) -> String:
         return self.host
 ```
 
-A by-value receiver takes ownership. The instance is consumed after the call:
+An `own self` receiver takes ownership. A non-copy instance is consumed after the call:
 
 ```python
 conn = Connection(host="example.com")
@@ -288,7 +290,7 @@ print(host)               # "example.com"
 print(conn.host)          # COMPILE ERROR: use of moved value `conn`
 ```
 
-Use by-value receivers when the method needs to disassemble the instance or transfer ownership of its fields.
+Use `own self` when the method needs to disassemble the instance or transfer ownership of its fields.
 
 ### No receiver -- associated methods
 
@@ -310,12 +312,14 @@ c = Counter.zero()
 
 | Receiver | When to use | Example |
 |----------|-------------|---------|
-| `borrow self` | Read-only access, the most common choice | getters, display, serialization |
+| `self` | Read-only shared access, the default | getters, display, serialization |
+| `borrow self` | Explicit synonym for shared `self` | emphasizing a shared contract |
 | `borrow mut self` | Modify the instance in place | setters, increment, append |
-| `self` | Consume the instance to extract data | `into_*` conversions, one-shot use |
+| `own self` | Consume the instance to extract data | `into_*` conversions, one-shot use |
 | no receiver | Factory methods, utilities that don't need an instance | `Counter.zero()` |
 
-If you are not sure, start with `borrow self`. You can always change it later.
+If you are not sure, start with bare `self`. Add `own` only when the method
+must consume the instance, or `borrow mut` when it must mutate in place.
 
 ## Field Access And Move Semantics
 
@@ -655,7 +659,7 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 3. Use `.clone()` when you need an explicit independent copy of a move type.
 4. Use `borrow T` to lend read-only access. Use `borrow mut T` to lend mutable access.
 5. `borrow mut` is exclusive -- no other borrows of the same value can exist at the same time.
-6. Method receivers follow the same rules: `borrow self` reads, `borrow mut self` modifies, `self` consumes.
+6. Method receivers follow the same rules: `self` (or `borrow self`) reads, `borrow mut self` modifies, and `own self` consumes.
 7. Use `for x in borrow collection` to iterate without consuming. Use `for x in borrow mut collection` to modify elements.
 8. Use `match borrow value` to pattern-match without consuming.
 9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.

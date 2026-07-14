@@ -24,6 +24,7 @@ const KEYWORDS = [
   "match",
   "mut",
   "None",
+  "own",
   "pass",
   "public",
   "return",

@@ -28,12 +28,12 @@ An identifier spelling can still be rejected by static checking. Builtin types a
 The lexer recognizes these words specially:
 
 ```text
-class enum def trait impl import from mut borrow indirect public
+class enum def trait impl import from mut borrow own indirect public
 return if elif else and or not match case for in while break
 continue pass try with as true false
 ```
 
-`true` and `false` produce boolean-literal tokens. The other words introduce declarations, control flow, ownership forms, imports, or operators and cannot normally be used as ordinary identifiers.
+`true` and `false` produce boolean-literal tokens. The other words introduce declarations, control flow, ownership forms, imports, or operators and cannot normally be used as ordinary identifiers. `own` is reserved everywhere; in the current grammar its accepted use is the consuming receiver spelling `own self`.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 

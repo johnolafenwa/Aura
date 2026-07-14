@@ -67,7 +67,7 @@ class Job:
     def bump(borrow mut self):
         self.attempts += 1
 
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return self.queue + "#" + self.id.to_string()
 ```
 
@@ -83,9 +83,10 @@ Receiver forms:
 
 | Receiver | What it can do |
 | --- | --- |
-| `borrow self` | Read fields without taking ownership. |
+| `self` | Read fields without taking ownership; this is the default spelling. |
+| `borrow self` | Explicit synonym for shared `self`. |
 | `borrow mut self` | Mutate fields on a mutable receiver. |
-| `self` | Consume the instance. |
+| `own self` | Consume the instance. |
 | no receiver | Associated method called on the type, not an instance. |
 
 A borrowed method cannot move an owned field out of `self`. Clone when you need to return an owned copy:
@@ -94,7 +95,7 @@ A borrowed method cannot move an owned field out of `self`. Clone when you need 
 class User:
     name: String
 
-    def name_copy(borrow self) -> String:
+    def name_copy(self) -> String:
         return self.name.clone()
 ```
 

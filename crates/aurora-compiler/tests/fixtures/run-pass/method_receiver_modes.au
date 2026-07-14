@@ -1,0 +1,34 @@
+class Record:
+    label: String
+    count: int32
+
+    def label_copy(self) -> String:
+        return self.label.clone()
+
+    def label_copy_explicit(borrow self) -> String:
+        return self.label.clone()
+
+    def bump(borrow mut self):
+        self.count += 1
+
+    def into_label(own self) -> String:
+        return self.label
+
+copy class Ticket:
+    value: int32
+
+    def take(own self) -> int32:
+        return self.value
+
+def main() -> int32:
+    mut record = Record(label="aurora", count=1)
+    print(record.label_copy())
+    print(record.label_copy_explicit())
+    record.bump()
+    print(record.count)
+    print(record.label_copy())
+    print(Record(label="owned", count=0).into_label())
+    ticket = Ticket(value=7)
+    print(ticket.take())
+    print(ticket.value)
+    return 0

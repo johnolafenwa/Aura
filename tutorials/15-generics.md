@@ -8,7 +8,7 @@ Generics let you write code that works with any type. Instead of writing separat
 class Box[T]:
     value: T
 
-    def get(self) -> T:
+    def get(own self) -> T:
         return self.value
 ```
 

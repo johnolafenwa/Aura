@@ -442,7 +442,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>There is no general-purpose <code>defer</code> construct in v1.</p>
 <p>Conceptually, <code>with</code> lowers through a standard-library protocol like:</p>
 <div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">With</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">enter</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">enter</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">exit</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">)</span>
 </code></pre></div>
 
@@ -460,8 +460,8 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>class values are move types by default</li>
 <li>a class may be declared with <code>copy class Name:</code> only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically</li>
 <li>passing a class by value into a function or returning it by value moves ownership unless the class is <code>copy</code></li>
-<li>method calls do not create hidden aliasing; <code>self</code>, <code>borrow self</code>, and <code>borrow mut self</code> obey normal ownership and borrow rules</li>
-<li>field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of <code>borrow self</code> or <code>borrow mut self</code> is illegal unless an explicit extraction operation is defined</li>
+<li>method calls do not create hidden aliasing; shared <code>self</code>/<code>borrow self</code>, consuming <code>own self</code>, and mutable <code>borrow mut self</code> obey normal ownership and borrow rules</li>
+<li>field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of <code>self</code>, <code>borrow self</code>, or <code>borrow mut self</code> is illegal unless an explicit extraction operation is defined</li>
 <li>class fields are stored inline by default</li>
 <li>direct recursive class fields are illegal; recursive structures use the built-in <code>indirect</code> storage modifier</li>
 <li><code>indirect T</code> means the field owns a <code>T</code> value stored indirectly rather than inline; moving the outer object moves ownership of that indirect child</li>
@@ -491,13 +491,13 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
     <span class="nb">id</span><span class="p">:</span> <span class="n">uint64</span>
     <span class="n">name</span><span class="p">:</span> <span class="n">String</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">user_id</span><span class="p">(</span><span class="n">borrow</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">uint64</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">user_id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">uint64</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">id</span>         <span class="c1"># valid: `uint64` is a copy type</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">name_view</span><span class="p">(</span><span class="n">borrow</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">name_view</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">as_str</span><span class="p">()</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">name_copy</span><span class="p">(</span><span class="n">borrow</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">name_copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">rename</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">,</span> <span class="n">new_name</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span>
@@ -513,7 +513,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <span class="k">class</span><span class="w"> </span><span class="nc">Counter</span><span class="p">:</span>
     <span class="n">value</span><span class="p">:</span> <span class="n">int32</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">read</span><span class="p">(</span><span class="n">borrow</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int32</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">read</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">int32</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span>
 </code></pre></div>
 
@@ -522,7 +522,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li><code>Node.next</code> uses <code>indirect Node?</code> because a class cannot contain itself directly. Without <code>indirect</code>, the type would have infinite size.</li>
 <li><code>indirect T</code> means the field owns a <code>T</code>, but stores it out of line instead of inline inside the parent object.</li>
 <li><code>Node?</code> means the field is optional, so a node may or may not have a next node.</li>
-<li><code>user_id</code> is valid because <code>id</code> is a <code>uint64</code>, and <code>uint64</code> is a copy type. Reading it from <code>borrow self</code> copies the value.</li>
+<li><code>user_id</code> is valid because <code>id</code> is a <code>uint64</code>, and <code>uint64</code> is a copy type. Bare <code>self</code> is a shared receiver, so reading it copies the value.</li>
 <li><code>name_view</code> is valid because it does not take ownership of the <code>String</code>; it returns a borrowed string view instead.</li>
 <li><code>name_copy</code> is valid because <code>.clone()</code> creates a new owned <code>String</code> while leaving the original field in place.</li>
 <li><code>rename</code> is valid because <code>borrow mut self</code> gives exclusive mutable access, so replacing a field in place is allowed.</li>
@@ -781,10 +781,12 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>The self model must make ownership and mutability clear.</p>
 <p>Recommended receiver kinds:</p>
 <ul>
-<li><code>self</code> for by-value</li>
-<li><code>borrow self</code> for shared borrow</li>
+<li><code>self</code> for shared borrow by default</li>
+<li><code>borrow self</code> as an explicit synonym for shared borrow</li>
+<li><code>own self</code> for by-value consumption</li>
 <li><code>borrow mut self</code> for exclusive mutable borrow</li>
 </ul>
+<p>The typed spelling <code>self: SomeType</code> is not a receiver and is rejected with a diagnostic naming these forms.</p>
 <p>Associated methods omit a receiver and are called through the class name.</p>
 <h2 id="73-closures">7.3 Closures</h2>
 <p>Closures should be supported.</p>
@@ -808,7 +810,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li><code>for x in expr:</code> consumes <code>expr</code> by value unless <code>expr</code> is explicitly borrowed</li>
 <li><code>for x in borrow expr:</code> iterates by shared borrow</li>
 <li><code>for x in borrow mut expr:</code> iterates by mutable borrow</li>
-<li>iterable values implement an <code>Iterable[T, IterT: Iterator[T]]</code>-style capability and provide <code>into_iter()</code> to yield an iterator object</li>
+<li>iterable values implement an <code>Iterable[T, IterT: Iterator[T]]</code>-style capability and provide consuming <code>into_iter(own self)</code> to yield an iterator object</li>
 <li>iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
 <li>if <code>expr</code> already has a borrowed type, <code>for x in expr:</code> uses that borrowed iteration behavior</li>
 <li><code>for x in borrow expr:</code> where <code>expr</code> is already borrowed is treated as a reborrow, not as a nested <code>borrow borrow ...</code> type</li>
@@ -828,7 +830,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
     <span class="k">def</span><span class="w"> </span><span class="nf">next</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]</span>
 
 <span class="n">trait</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">IterT</span><span class="p">:</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">T</span><span class="p">]]:</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">into_iter</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">IterT</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">into_iter</span><span class="p">(</span><span class="n">own</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">IterT</span>
 
 <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
@@ -1654,6 +1656,7 @@ aura<span class="w"> </span>publish
 <h2 id="232-borrow-syntax">23.2 Borrow syntax</h2>
 <p>Aurora uses <code>borrow T</code> and <code>borrow mut T</code>.</p>
 <p>This keeps borrowing visually explicit in an indentation-based language and reads more naturally than sigils.</p>
+<p>Method receivers use bare <code>self</code> for the common shared case, <code>borrow self</code> as its explicit synonym, <code>own self</code> for consumption, and <code>borrow mut self</code> for exclusive mutation.</p>
 <h2 id="233-product-type-keyword">23.3 Product type keyword</h2>
 <p>Aurora uses <code>class</code> for nominal product types.</p>
 <p>A <code>class</code> is a value type by default. It does not imply inheritance, hidden heap allocation, or Python-style object identity.</p>
@@ -1664,7 +1667,7 @@ aura<span class="w"> </span>publish
 <li><code>copy</code> is only legal when all fields are copy types</li>
 <li>direct recursive class fields are illegal; recursion uses the built-in <code>indirect</code> storage modifier</li>
 <li><code>T?</code> is shorthand for <code>Option[T]</code> in type positions, so recursive fields commonly look like <code>indirect Node?</code></li>
-<li>accessing a non-copy field through <code>borrow self</code> does not move that field out of the object</li>
+<li>accessing a non-copy field through shared <code>self</code> or <code>borrow self</code> does not move that field out of the object</li>
 <li>shared identity must be modeled through explicit wrapper types rather than plain classes</li>
 </ul>
 <h2 id="234-trait-and-iteration-model">23.4 Trait and iteration model</h2>
@@ -1673,7 +1676,7 @@ aura<span class="w"> </span>publish
 <p>Additional frozen rules:</p>
 <ul>
 <li><code>for</code> loops use a trait-based iteration protocol</li>
-<li>iterable values provide <code>into_iter()</code> and iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
+<li>iterable values provide consuming <code>into_iter(own self)</code> and iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
 <li><code>for x in expr:</code> iterates by value unless <code>expr</code> is explicitly borrowed</li>
 <li>multiple trait bounds use <code>T: Trait1 + Trait2</code></li>
 <li><code>for x in borrow expr:</code> over an already borrowed iterable is a reborrow</li>

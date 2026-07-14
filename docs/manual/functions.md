@@ -34,7 +34,7 @@ def classify(value: int32) -> String:
 
 There is no implicit numeric widening or general return coercion. Contextual literal typing and `None`-to-`Option[T]` handling follow [Static Semantics](/manual/static-semantics#contextual-inference).
 
-Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
+Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `borrow self`, `own self`, or `borrow mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
 
 A function is private to its defining module by default. Prefix the declaration with `public` to make it importable from another module:
 

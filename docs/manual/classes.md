@@ -73,7 +73,7 @@ Classes, fields, and methods are private to their defining module unless marked 
 public class Counter:
     public value: int32 = 0
 
-    public def get(borrow self) -> int32:
+    public def get(self) -> int32:
         return self.value
 ```
 
@@ -87,13 +87,13 @@ Imported declarations retain their defining module identity for private-access c
 class Counter:
     value: int32 = 0
 
-    def get(borrow self) -> int32:
+    def get(self) -> int32:
         return self.value
 
     def increment(borrow mut self):
         self.value += 1
 
-    def into_value(self) -> int32:
+    def into_value(own self) -> int32:
         return self.value
 
     def zero() -> Counter:
@@ -104,9 +104,10 @@ The receiver, when present, is the first method parameter:
 
 | Receiver | Call contract |
 | --- | --- |
-| `borrow self` | Shared receiver. It can read, but cannot mutate or move non-copy fields out. |
+| `self` | Shared receiver and the default spelling. It can read, but cannot mutate or move non-copy fields out. |
+| `borrow self` | Explicit synonym for the shared `self` receiver. |
+| `own self` | Consuming receiver. A non-copy instance is moved into the call. |
 | `borrow mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
-| `self` | Consuming receiver. A non-copy instance is moved into the call. |
 | none | Associated method. It is called through the type, not an instance. |
 
 ```python
@@ -116,7 +117,7 @@ print(counter.get())
 value = counter.into_value()
 ```
 
-Methods otherwise follow the function rules for generic parameters, ordinary parameters, defaults, returns, and borrowed returns. Ordinary parameter names are unique and cannot collide with a declared `self` receiver. `Self` may be used in class method parameter and return type positions and denotes the enclosing class specialization.
+Methods otherwise follow the function rules for generic parameters, ordinary parameters, defaults, returns, and borrowed returns. Ordinary parameter names are unique and cannot collide with a declared `self` receiver. A typed first parameter such as `self: Counter` is not a receiver and is rejected with a diagnostic naming the valid forms. `Self` may be used in class method parameter and return type positions and denotes the enclosing class specialization.
 
 An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type.
 
@@ -130,7 +131,7 @@ counter.value = 10
 counter.increment()
 ```
 
-An owned local is mutable only when introduced with `mut`. Inside a `borrow mut self` method, `self` is a mutable place even though parameter bindings themselves are not reassigned. Inside `borrow self`, mutation through `self` is rejected.
+An owned local is mutable only when introduced with `mut`. Inside a `borrow mut self` method, `self` is a mutable place even though parameter bindings themselves are not reassigned. Inside shared `self` (whether written `self` or `borrow self`), mutation through `self` is rejected.
 
 Moving one non-copy field from an owned class partially moves that value. Disjoint fields remain usable, but use of the complete class is rejected until the moved field is reinitialized. See [Ownership And Borrowing](/manual/ownership-and-borrowing#partial-moves-and-reinitialization).
 
@@ -142,7 +143,7 @@ A consuming receiver may return an owned field because it owns the class value:
 class User:
     name: String
 
-    def into_name(self) -> String:
+    def into_name(own self) -> String:
         return self.name
 ```
 
@@ -152,7 +153,7 @@ A shared-borrowed receiver cannot move an owned field. Clone to produce an owned
 class User:
     name: String
 
-    def name_copy(borrow self) -> String:
+    def name_copy(self) -> String:
         return self.name.clone()
 ```
 
@@ -162,7 +163,7 @@ Copy-valued APIs may declare a borrowed return tied to `self`; calls materialize
 class Counter:
     value: int32
 
-    def value_ref(borrow self) -> borrow[self] int32:
+    def value_ref(self) -> borrow[self] int32:
         return self.value
 ```
 

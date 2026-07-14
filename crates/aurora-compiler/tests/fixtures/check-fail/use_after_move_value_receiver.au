@@ -1,7 +1,7 @@
 class Token:
     value: String
 
-    def consume(self):
+    def consume(own self):
         print(self.value)
 
 def main() -> int32:

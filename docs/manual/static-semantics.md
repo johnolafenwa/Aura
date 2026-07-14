@@ -133,7 +133,7 @@ A by-value parameter consumes a non-copy argument. A `borrow` parameter requires
 
 Calling a class name constructs a value. Constructor fields may be supplied positionally in declaration order, then by name. Positional arguments cannot follow a named argument. Every field without a declaration default must be supplied exactly once; provided and default values must match the substituted field types.
 
-A class receiver is declared as `self`, `borrow self`, or `borrow mut self`. A method without `self` is associated and is called through the class/type rather than an instance.
+A class receiver is declared as shared `self` (or its explicit synonym `borrow self`), consuming `own self`, or mutable `borrow mut self`. A first method parameter written `self: Type` is rejected with guidance naming those forms. A method without a receiver is associated and is called through the class/type rather than an instance.
 
 ## Enum Construction And Matching
 

@@ -149,6 +149,45 @@ fn expr(kind: ExprKind) -> Expr {
 }
 
 #[test]
+fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
+    let mut method = function_decl("render", "bool");
+    assert_eq!(
+        format_function_detail(&method),
+        "render(self, int32) -> bool"
+    );
+    assert_eq!(
+        format_method_hover(&method),
+        "```aurora\nmethod render(self, value: int32) -> bool\n```"
+    );
+
+    method.receiver = Some(ReceiverKind::Value);
+    assert_eq!(
+        format_function_detail(&method),
+        "render(own self, int32) -> bool"
+    );
+    assert_eq!(
+        format_method_hover(&method),
+        "```aurora\nmethod render(own self, value: int32) -> bool\n```"
+    );
+
+    method.receiver = Some(ReceiverKind::BorrowMut);
+    assert_eq!(
+        format_function_detail(&method),
+        "render(borrow mut self, int32) -> bool"
+    );
+    assert_eq!(
+        format_method_hover(&method),
+        "```aurora\nmethod render(borrow mut self, value: int32) -> bool\n```"
+    );
+
+    let completions = complete_source("def main():\n    pass\n", 0, 0, None)
+        .expect("top-level completion should succeed");
+    assert!(completions
+        .iter()
+        .any(|completion| completion.name == "own" && completion.kind == "keyword"));
+}
+
+#[test]
 fn d3_analysis_reports_canonical_int64_for_aliases_and_defaulted_expressions() {
     assert_eq!(lower_type_ref(&type_ref("int")), Type::named("int64"));
 
@@ -2393,7 +2432,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
                 == Some(user_path.as_str())
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
-        occurrence.hover.contains("method name() -> String")
+        occurrence.hover.contains("method name(self) -> String")
             && occurrence
                 .definition
                 .as_ref()
@@ -2698,7 +2737,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     assert_eq!(builtin_function_return_type("TaskGroup"), None);
     assert_eq!(
         format_function_detail(&function_decl("render", "bool")),
-        "render(int32) -> bool"
+        "render(self, int32) -> bool"
     );
 }
 

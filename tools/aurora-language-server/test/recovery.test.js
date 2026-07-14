@@ -44,6 +44,7 @@ test("recovery completion exposes keywords builtins and declarations but no memb
   assert.ok(names.includes("int"));
   assert.ok(names.includes("int32"));
   assert.ok(names.includes("int64"));
+  assert.ok(names.includes("own"));
   assert.ok(names.includes("print"));
   assert.ok(names.includes("Point"));
   assert.ok(names.includes("main"));
@@ -81,7 +82,12 @@ test("recovery hover and definition resolve only recovered declarations", () => 
 
 test("recovery document symbols tolerate empty and nested declarations", () => {
   assert.deepEqual(documentSymbols(""), []);
-  const symbols = documentSymbols("enum State:\n    Ready\ntrait Show:\n    def show(self) -> String\n");
+  const symbols = documentSymbols(
+    "enum State:\n    Ready\ntrait Show:\n    def show(self) -> String\n    def consume(own self) -> String\n"
+  );
   assert.deepEqual(symbols.map((symbol) => symbol.kind), ["enum", "trait"]);
-  assert.equal(symbols[1].children[0].kind, "method");
+  assert.deepEqual(
+    symbols[1].children.map((symbol) => [symbol.name, symbol.kind]),
+    [["show", "method"], ["consume", "method"]]
+  );
 });

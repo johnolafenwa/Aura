@@ -56,6 +56,14 @@ Integer `/` and `/=` are the deliberate exception whose teaching text is part of
 integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
 ```
 
+The typed-method-parameter trap likewise has maintained teaching text because
+the invalid spelling would otherwise look like an instance receiver while
+declaring an associated method:
+
+```text
+`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate
+```
+
 ## Runtime Diagnostics
 
 Runtime diagnostics use the source path and span embedded by MIR or native lowering whenever possible. Both maintained execution backends MUST preserve the same primary Aurora failure when cleanup also encounters an error.

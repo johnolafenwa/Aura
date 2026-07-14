@@ -64,6 +64,13 @@ grep -Fq "unicode = 'A🎉'" examples/strings/string_methods.au
 grep -Fq 'unicode.len()' examples/strings/string_methods.au
 grep -Fq 'unicode.byte_len()' examples/strings/string_methods.au
 grep -Fq 'values.insert(index=-1, value=2)' examples/collections/vec_polish.au
+grep -Fq 'mut borrow own indirect' docs/manual/lexical-structure.md
+grep -Fq '| "own", "self"' docs/manual/grammar.md
+grep -Fq 'Bare `self` and `borrow self` are the two spellings of a shared receiver' docs/manual/grammar.md
+grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
+grep -Fq '`self: Type` is not a method receiver' architecture_docs/decisions/0005-method-receivers.md
+grep -Fq '`own self` for by-value consumption' docs/aurora_language_proposal.md
+grep -Fq '<code>own self</code> for by-value consumption' docs/aurora_language_proposal.html
 
 if rg -n 'no (integer )?floor division|integer division truncates toward zero|Result\.Ok\([^)]* / [^)]*\)' \
   docs/manual \
@@ -87,6 +94,14 @@ if rg -n 'Strings use double quotes|Strings are double-quoted|`STRING` is a doub
   tutorials \
   docs/learn; then
   echo "reference still describes ordinary strings as double-quoted only" >&2
+  exit 1
+fi
+
+if rg -n '`self` -- by-value|plain `self` receiver|`self` consumes|\| `self` \| Consume' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes bare self as a consuming receiver" >&2
   exit 1
 fi
 

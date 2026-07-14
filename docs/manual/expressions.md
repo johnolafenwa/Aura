@@ -213,7 +213,7 @@ Status.Ready
 io.Error.NotFound
 ```
 
-An instance method call evaluates the receiver before its arguments. The method declaration determines whether the receiver is consumed, shared-borrowed, or mutable-borrowed. A method without `self` is associated and is called through its type.
+An instance method call evaluates the receiver before its arguments. The method declaration determines whether the receiver is shared-borrowed (`self` or `borrow self`), consumed (`own self`), or mutable-borrowed (`borrow mut self`). A method without a receiver is associated and is called through its type.
 
 Visibility and resolution are static. Missing or private members are compile-time errors.
 

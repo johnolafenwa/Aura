@@ -94,6 +94,10 @@ an `f"..."` token, it tracks the active delimiter of any ordinary string inside
 an interpolation. Braces inside either `'...'` or `"..."` therefore remain
 string contents rather than changing interpolation depth.
 
+`own` is a reserved keyword rather than a contextual identifier. The current
+parser accepts it in the consuming receiver spelling `own self`; every stage
+therefore sees one unambiguous ownership token.
+
 ## A tiny Aurora-like lexer in Rust
 
 The real Aurora lexer is much richer than this, but this example shows the core idea: tokenize one line and emit a `Newline`.

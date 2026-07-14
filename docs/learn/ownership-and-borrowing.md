@@ -119,14 +119,16 @@ Methods declare how they receive `self`, and the receiver form determines what t
 class Counter:
     value: int32
 
-    def get(borrow self) -> int32:
+    def get(self) -> int32:
         return self.value
 
     def inc(borrow mut self):
         self.value += 1
 ```
 
-`borrow self` reads. `borrow mut self` writes. A consuming method uses a plain `self` receiver and takes ownership of the whole instance.
+Bare `self` reads through a shared borrow; `borrow self` is its explicit
+synonym. `borrow mut self` writes. A consuming method uses `own self` and takes
+ownership of the whole instance.
 
 A borrowed method may look at non-copy fields but cannot move them out:
 
@@ -134,7 +136,7 @@ A borrowed method may look at non-copy fields but cannot move them out:
 class Label:
     text: String
 
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return self.text.clone()
 ```
 

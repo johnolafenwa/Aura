@@ -3,13 +3,13 @@ class Builder:
     port: int32
     debug: bool
 
-    def with_port(self, p: int32) -> Builder:
+    def with_port(own self, p: int32) -> Builder:
         return Builder(name=self.name, port=p, debug=self.debug)
 
-    def with_debug(self, d: bool) -> Builder:
+    def with_debug(own self, d: bool) -> Builder:
         return Builder(name=self.name, port=self.port, debug=d)
 
-    def build(self) -> String:
+    def build(own self) -> String:
         return self.name
 
 def main() -> int32:

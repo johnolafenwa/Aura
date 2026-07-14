@@ -388,7 +388,7 @@ Conceptually, `with` lowers through a standard-library protocol like:
 
 ```python
 trait With[T]:
-    def enter(self) -> T
+    def enter(borrow mut self) -> T
     def exit(borrow mut self)
 ```
 
@@ -411,8 +411,8 @@ Rules:
 - class values are move types by default
 - a class may be declared with `copy class Name:` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
 - passing a class by value into a function or returning it by value moves ownership unless the class is `copy`
-- method calls do not create hidden aliasing; `self`, `borrow self`, and `borrow mut self` obey normal ownership and borrow rules
-- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `borrow self` or `borrow mut self` is illegal unless an explicit extraction operation is defined
+- method calls do not create hidden aliasing; shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self` obey normal ownership and borrow rules
+- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self`, `borrow self`, or `borrow mut self` is illegal unless an explicit extraction operation is defined
 - class fields are stored inline by default
 - direct recursive class fields are illegal; recursive structures use the built-in `indirect` storage modifier
 - `indirect T` means the field owns a `T` value stored indirectly rather than inline; moving the outer object moves ownership of that indirect child
@@ -447,13 +447,13 @@ class User:
     id: uint64
     name: String
 
-    def user_id(borrow self) -> uint64:
+    def user_id(self) -> uint64:
         return self.id         # valid: `uint64` is a copy type
 
-    def name_view(borrow self) -> borrow str:
+    def name_view(self) -> borrow str:
         return self.name.as_str()
 
-    def name_copy(borrow self) -> String:
+    def name_copy(self) -> String:
         return self.name.clone()
 
     def rename(borrow mut self, new_name: String):
@@ -469,7 +469,7 @@ def into_name(user: User) -> String:
 class Counter:
     value: int32
 
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.value
 ```
 
@@ -478,7 +478,7 @@ How to read this example:
 - `Node.next` uses `indirect Node?` because a class cannot contain itself directly. Without `indirect`, the type would have infinite size.
 - `indirect T` means the field owns a `T`, but stores it out of line instead of inline inside the parent object.
 - `Node?` means the field is optional, so a node may or may not have a next node.
-- `user_id` is valid because `id` is a `uint64`, and `uint64` is a copy type. Reading it from `borrow self` copies the value.
+- `user_id` is valid because `id` is a `uint64`, and `uint64` is a copy type. Bare `self` is a shared receiver, so reading it copies the value.
 - `name_view` is valid because it does not take ownership of the `String`; it returns a borrowed string view instead.
 - `name_copy` is valid because `.clone()` creates a new owned `String` while leaving the original field in place.
 - `rename` is valid because `borrow mut self` gives exclusive mutable access, so replacing a field in place is allowed.
@@ -813,9 +813,13 @@ The self model must make ownership and mutability clear.
 
 Recommended receiver kinds:
 
-- `self` for by-value
-- `borrow self` for shared borrow
+- `self` for shared borrow by default
+- `borrow self` as an explicit synonym for shared borrow
+- `own self` for by-value consumption
 - `borrow mut self` for exclusive mutable borrow
+
+The typed spelling `self: SomeType` is not a receiver and is rejected with a
+diagnostic naming these forms.
 
 Associated methods omit a receiver and are called through the class name.
 
@@ -850,7 +854,7 @@ Core rules:
 - `for x in expr:` consumes `expr` by value unless `expr` is explicitly borrowed
 - `for x in borrow expr:` iterates by shared borrow
 - `for x in borrow mut expr:` iterates by mutable borrow
-- iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide `into_iter()` to yield an iterator object
+- iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide consuming `into_iter(own self)` to yield an iterator object
 - iterator objects provide `next(borrow mut self) -> Option[T]`
 - if `expr` already has a borrowed type, `for x in expr:` uses that borrowed iteration behavior
 - `for x in borrow expr:` where `expr` is already borrowed is treated as a reborrow, not as a nested `borrow borrow ...` type
@@ -872,7 +876,7 @@ trait Iterator[T]:
     def next(borrow mut self) -> Option[T]
 
 trait Iterable[T, IterT: Iterator[T]]:
-    def into_iter(self) -> IterT
+    def into_iter(own self) -> IterT
 
 for value in range(4):
     print(value)
@@ -1924,6 +1928,10 @@ Aurora uses `borrow T` and `borrow mut T`.
 
 This keeps borrowing visually explicit in an indentation-based language and reads more naturally than sigils.
 
+Method receivers use bare `self` for the common shared case, `borrow self` as
+its explicit synonym, `own self` for consumption, and `borrow mut self` for
+exclusive mutation.
+
 ## 23.3 Product type keyword
 
 Aurora uses `class` for nominal product types.
@@ -1937,7 +1945,7 @@ Additional frozen rules:
 - `copy` is only legal when all fields are copy types
 - direct recursive class fields are illegal; recursion uses the built-in `indirect` storage modifier
 - `T?` is shorthand for `Option[T]` in type positions, so recursive fields commonly look like `indirect Node?`
-- accessing a non-copy field through `borrow self` does not move that field out of the object
+- accessing a non-copy field through shared `self` or `borrow self` does not move that field out of the object
 - shared identity must be modeled through explicit wrapper types rather than plain classes
 
 ## 23.4 Trait and iteration model
@@ -1949,7 +1957,7 @@ Inherent methods are written inside class bodies. Trait implementations use expl
 Additional frozen rules:
 
 - `for` loops use a trait-based iteration protocol
-- iterable values provide `into_iter()` and iterator objects provide `next(borrow mut self) -> Option[T]`
+- iterable values provide consuming `into_iter(own self)` and iterator objects provide `next(borrow mut self) -> Option[T]`
 - `for x in expr:` iterates by value unless `expr` is explicitly borrowed
 - multiple trait bounds use `T: Trait1 + Trait2`
 - `for x in borrow expr:` over an already borrowed iterable is a reborrow

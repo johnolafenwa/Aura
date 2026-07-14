@@ -1,5 +1,5 @@
 trait Combine:
-    def combine(borrow self, other: borrow Self) -> Self
+    def combine(self, other: borrow Self) -> Self
 
 class Counter:
     value: int32

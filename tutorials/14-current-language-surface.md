@@ -146,9 +146,10 @@ Borrowing forms:
 
 - `borrow T` -- shared, read-only parameter
 - `borrow mut T` -- exclusive, mutable parameter
-- `borrow self` -- shared receiver
+- `self` -- shared receiver and default spelling
+- `borrow self` -- explicit shared-receiver synonym
 - `borrow mut self` -- mutable receiver
-- `self` -- by-value (consuming) receiver
+- `own self` -- by-value (consuming) receiver
 - `for x in borrow collection:` -- shared borrow iteration
 - `for x in borrow mut collection:` -- mutable borrow iteration
 - `match borrow value:` -- shared borrow pattern matching
@@ -210,10 +211,14 @@ Indexed expressions remain ordinary values after parsing. Copy-typed element rea
 
 Class methods currently support these receiver forms:
 
-- `self`
+- `self` for shared access
 - `borrow self`
+- `own self`
 - `borrow mut self`
 - no receiver for associated methods
+
+Bare `self` and `borrow self` have the same shared semantics. `self: Type` is
+not a receiver declaration and is rejected with guidance naming these forms.
 
 Ordinary functions, instance methods, and associated methods support:
 

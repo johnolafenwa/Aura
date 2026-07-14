@@ -55,7 +55,7 @@ A generic payload whose declared type is an unconstrained type parameter is not 
 A non-copy value is consumed when used in an owned position, including:
 
 - assignment into a new owned binding
-- a by-value function parameter or method receiver
+- a by-value function parameter or an `own self` method receiver
 - a by-value return
 - a class or enum payload, collection literal, or mutating collection method that stores the value
 - by-value enum matching
@@ -71,7 +71,9 @@ An expression is evaluated before its move is recorded at that boundary. Aurora 
 | --- | --- |
 | `value: borrow T` | Shared borrowed ordinary parameter. |
 | `value: borrow mut T` | Exclusive mutable borrowed ordinary parameter. |
-| `borrow self` | Shared method receiver. |
+| `self` | Shared method receiver and the default receiver spelling. |
+| `borrow self` | Explicit synonym for shared `self`. |
+| `own self` | Consuming method receiver. |
 | `borrow mut self` | Exclusive mutable method receiver. |
 | `for value in borrow collection:` | Shared-borrow iteration. |
 | `for value in borrow mut collection:` | Mutable-borrow iteration where supported. |
@@ -80,7 +82,7 @@ An expression is evaluated before its move is recorded at that boundary. Aurora 
 | `-> borrow[source] T` | Shared borrowed result from one declared source. |
 | `-> borrow mut[source] T` | Mutable borrowed result from one mutable source. |
 
-Call sites never prefix arguments with `borrow`. The parameter or receiver declaration selects the mode:
+Call sites never prefix arguments with `borrow` or `own`. The parameter or receiver declaration selects the mode:
 
 ```python
 def render(name: borrow String) -> String:

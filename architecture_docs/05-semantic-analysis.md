@@ -102,6 +102,14 @@ Aurora's checker covers more than "basic type checking". It performs:
 
 Aurora's syntax can say `borrow`, `borrow mut`, and borrowed return labels, but those words are only meaningful once the checker validates them.
 
+Receiver syntax is normalized before body checking. Bare `self` and
+`borrow self` both install a shared borrowed `self` binding. `own self`
+installs an owned binding and consumes a non-copy receiver at the call
+boundary. `borrow mut self` installs an exclusive mutable binding and requires
+a mutable receiver place. Trait and implementation receiver matching compares
+these resolved modes, so bare and explicit shared receivers are compatible
+while an `own self` implementation cannot satisfy a shared receiver contract.
+
 For Aurora 0.1, the checker permits borrowed-return calls only when the substituted result type is copyable. Those calls materialize copies. Non-copy borrowed-return declarations still receive provenance and trait-conformance checking, but calls are rejected before MIR lowering until Phase 6 supplies live alias storage.
 
 Aurora's `FunctionChecker` tracks local bindings with information such as:
@@ -211,6 +219,7 @@ The checker is where Aurora enforces:
 - non-copy moves
 - move-after-use and use-after-move
 - borrow exclusivity
+- receiver consumption and mutable-receiver requirements
 - borrow-return source constraints
 - `with` resource requirements
 

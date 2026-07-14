@@ -139,7 +139,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `localhost`
     - `8080`
 - `methods.au`
-  - instance methods with `borrow self` plus associated methods
+  - shared `self` methods, the explicit `borrow self` synonym, and associated methods
   - prints:
     - `4`
     - `8`

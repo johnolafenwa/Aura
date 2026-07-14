@@ -41,7 +41,7 @@ Today's working subset includes:
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
 - builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
-- class methods with `self`, `borrow self`, and `borrow mut self`
+- class methods with shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self`
 - arithmetic, comparisons, strings, booleans, and duration literals
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`
 - `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`

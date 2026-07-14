@@ -5263,13 +5263,13 @@ def main() -> int32:
 fn self_receiver_method_result_can_bind_to_a_name() {
     let source = r#"
 class Box:
-    value: int32
+    value: String
 
-    def take(self) -> int32:
+    def take(own self) -> String:
         return self.value
 
 def main() -> int32:
-    b = Box(value=7)
+    b = Box(value="held")
     x = b.take()
     print(x)
     return 0
@@ -5288,7 +5288,7 @@ def main() -> int32:
         String::from_utf8_lossy(&check.stderr)
     );
 
-    assert_run_and_direct_source_stdout("aurora-value-receiver-binding", source, "7\n");
+    assert_run_and_direct_source_stdout("aurora-value-receiver-binding", source, "held\n");
 }
 
 #[test]

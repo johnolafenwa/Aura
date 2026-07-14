@@ -157,7 +157,7 @@ An implementation may define only methods belonging to the trait. It must provid
 
 For an explicitly implemented method, conformance compares:
 
-- receiver presence and passing mode (`self`, `borrow self`, `borrow mut self`, or none)
+- receiver presence and passing mode (shared `self`/`borrow self`, consuming `own self`, `borrow mut self`, or none)
 - ordinary parameter count and substituted types
 - each ordinary parameter's by-value/shared-borrow/mutable-borrow mode
 - return type and owned/shared-borrow/mutable-borrow mode

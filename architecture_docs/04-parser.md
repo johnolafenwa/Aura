@@ -203,14 +203,28 @@ Aurora's real parser adds:
 - module-level declaration parsing
 - indentation-based block parsing
 - optional type parameter lists and bounds
-- borrowed receiver and parameter syntax
+- receiver syntax (`self`, `borrow self`, `own self`, and `borrow mut self`)
+- borrowed parameter syntax
 - pattern parsing for `match`
 - postfix parsing for calls, member access, indexing, casts, and specialization
 - f-string interpolation by recursively invoking expression parsing on the embedded text
 
 ## Aurora-specific parser details worth studying
 
-### 1. `parse_stmt` vs `is_assignment_stmt`
+### 1. Receiver recognition
+
+A method receiver, when present, must be first. The parser maps bare `self`
+and `borrow self` to the same shared receiver kind, maps `own self` to the
+value/consuming kind, and keeps `borrow mut self` as the mutable kind. This is
+why later passes do not need to special-case the source synonym.
+
+The lookahead is intentionally stricter than "an identifier named self".
+`self: SomeType` inside a method declaration is rejected immediately with a
+diagnostic that names the valid forms. Without that check, the spelling would
+silently create an associated method with an ordinary parameter rather than an
+instance method.
+
+### 2. `parse_stmt` vs `is_assignment_stmt`
 
 Aurora allows both:
 
@@ -219,7 +233,7 @@ Aurora allows both:
 
 Those can begin with similar tokens, so the parser uses lookahead logic in `is_assignment_stmt()` to decide whether it is parsing an assignment or an expression statement.
 
-### 2. `parse_postfix`
+### 3. `parse_postfix`
 
 Aurora treats many suffix forms uniformly:
 
@@ -231,7 +245,7 @@ Aurora treats many suffix forms uniformly:
 
 That makes chained parsing like `pkg.Box[int32](value).field` much easier.
 
-### 3. F-string parsing is split across lexer and parser
+### 4. F-string parsing is split across lexer and parser
 
 The lexer keeps the entire f-string as a literal token. The parser later splits it into `FormatPart::Literal` and `FormatPart::Expr`, and recursively parses the embedded expressions.
 

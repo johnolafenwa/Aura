@@ -90,7 +90,7 @@ class User:
     public name: String
     age: int32
 
-    public def read_name(borrow self) -> String:
+    public def read_name(self) -> String:
         return self.name.clone()
 ```
 
@@ -110,7 +110,7 @@ Aurora supports methods declared directly inside the class body.
 class Counter:
     value: int32
 
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.value
 ```
 
@@ -119,13 +119,20 @@ class Counter:
 The current compiler accepts these receiver forms. For a full explanation of how borrowing works and why these distinctions matter, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md).
 
 - `self`
-  - by-value receiver; consumes ownership of the instance
+  - shared receiver and the default spelling; read-only access
 - `borrow self`
-  - shared receiver; read-only access, the most common choice
+  - explicit synonym for shared `self`
+- `own self`
+  - consuming receiver; takes ownership of a non-copy instance
 - `borrow mut self`
   - mutable receiver; exclusive access, can modify fields in place
 - no receiver
   - associated method; called on the class, not an instance
+
+A receiver must be first and is never typed explicitly. `self: Counter` is
+rejected because it looks like an instance receiver but would otherwise be an
+ordinary parameter; use `self`, `borrow self`, `own self`, or
+`borrow mut self`.
 
 Example:
 
@@ -133,10 +140,10 @@ Example:
 class Counter:
     value: int32
 
-    def take(self) -> int32:
+    def take(own self) -> int32:
         return self.value
 
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.value
 
     def bump(borrow mut self):
@@ -159,7 +166,7 @@ Method calls follow the same argument rules as ordinary functions, so methods an
 class Greeter:
     prefix: String
 
-    def say(borrow self, name: String) -> String:
+    def say(self, name: String) -> String:
         return self.prefix + name
 
     def named(prefix: String) -> Greeter:

@@ -2,10 +2,10 @@ class Builder:
     name: String
     port: int32
 
-    def with_port(self, p: int32) -> Builder:
+    def with_port(own self, p: int32) -> Builder:
         return Builder(name=self.name, port=p)
 
-    def build(self) -> String:
+    def build(own self) -> String:
         return self.name
 
 def main() -> int32:

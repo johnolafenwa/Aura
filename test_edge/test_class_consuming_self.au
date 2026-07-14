@@ -1,16 +1,16 @@
 class Token:
     value: String
 
-    def consume(self) -> String:
+    def consume(own self) -> String:
         return self.value
 
-    def consume_and_print(self):
+    def consume_and_print(own self):
         print(self.value)
 
 class Wrapper:
     inner: int32
 
-    def unwrap(self) -> int32:
+    def unwrap(own self) -> int32:
         return self.inner
 
 def main() -> int32:

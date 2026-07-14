@@ -672,6 +672,102 @@ test("compiler bridge preserves the integer true-division teaching diagnostic", 
   }
 });
 
+test("compiler bridge reports typed self with the receiver-forms diagnostic", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-typed-self-"));
+  const source = [
+    "class Counter:",
+    "    def read(self: Counter) -> int32:",
+    "        return 0",
+    ""
+  ].join("\n");
+  const message =
+    "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate";
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const analysis = await analyzeWithCompiler(`file://${mainPath}`, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].message, message);
+    assert.deepEqual(
+      compilerDiagnosticsToLsp(analysis)[0].range,
+      {
+        start: { line: 1, character: 13 },
+        end: { line: 1, character: 14 }
+      }
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves canonical receiver contracts in hover and completion", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-receiver-contracts-"));
+  const source = [
+    "class Modes:",
+    "    value: int32",
+    "    def read(self) -> int32:",
+    "        return self.value",
+    "    def explicit(borrow self) -> int32:",
+    "        return self.value",
+    "    def take(own self) -> int32:",
+    "        return self.value",
+    "    def bump(borrow mut self):",
+    "        self.value += 1",
+    "",
+    "def main() -> int32:",
+    "    mut value = Modes(value=1)",
+    "    print(value.read())",
+    "    print(value.explicit())",
+    "    value.bump()",
+    "    print(Modes(value=3).take())",
+    "    return 0",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    for (const signature of [
+      "method read(self) -> int32",
+      "method explicit(self) -> int32",
+      "method take(own self) -> int32",
+      "method bump(borrow mut self) -> None"
+    ]) {
+      assert.ok(
+        analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
+        `missing hover signature: ${signature}`
+      );
+    }
+
+    const completionSource = source.replace("    return 0\n", "    value.\n    return 0\n");
+    const lineIndex = completionSource.split("\n").findIndex((line) => line.trim() === "value.");
+    const character = completionSource.split("\n")[lineIndex].indexOf(".") + 1;
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      lineIndex,
+      character,
+      "."
+    );
+    const details = new Map(completions.map((item) => [item.name, item.detail]));
+
+    assert.equal(details.get("read"), "read(self) -> int32");
+    assert.equal(details.get("explicit"), "explicit(self) -> int32");
+    assert.equal(details.get("take"), "take(own self) -> int32");
+    assert.equal(details.get("bump"), "bump(borrow mut self) -> None");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge completes to_float for every integer type", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-int-to-float-"));
   const integerTypes = [
@@ -743,7 +839,7 @@ test("compiler bridge understands trait symbols and trait method completions", a
     "."
   );
   assert.ok(completions);
-  assert.ok(completions.some((item) => item.name === "greet"));
+  assert.ok(completions.some((item) => item.name === "greet" && item.detail === "greet(self) -> String"));
 });
 
 test("compiler bridge resolves local module imports for analysis and completions", async () => {
@@ -879,7 +975,7 @@ test("compiler bridge includes imported trait methods in completions", async () 
 
     assert.ok(completions);
     assert.ok(completions.some((item) => item.name === "label"));
-    assert.ok(completions.some((item) => item.name === "name"));
+    assert.ok(completions.some((item) => item.name === "name" && item.detail === "name(self) -> String"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -951,7 +1047,7 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover.includes("method name() -> String") &&
+          occurrence.hover.includes("method name(self) -> String") &&
           occurrence.definition?.file_path === canonicalUserPath
       )
     );

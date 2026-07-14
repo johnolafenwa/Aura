@@ -184,7 +184,7 @@ fn parse_structural_items_tolerate_blank_lines_and_pass() {
             "",
             "    pass",
             "    value: T",
-            "    public def read(self) -> T:",
+            "    public def read(own self) -> T:",
             "        return self.value",
         ]
         .join("\n")
@@ -309,6 +309,10 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
             "class Counter:",
             "    def read(self):",
             "        pass",
+            "    def read_explicit(borrow self):",
+            "        pass",
+            "    def consume(own self):",
+            "        pass",
             "    def bump(borrow mut self, amount: int32 = 1):",
             "        pass",
         ]
@@ -320,14 +324,33 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     let Item::Class(class_decl) = class_item else {
         panic!("expected class");
     };
-    assert_eq!(class_decl.methods.len(), 2);
-    assert_eq!(class_decl.methods[0].receiver, Some(ReceiverKind::Value));
+    assert_eq!(class_decl.methods.len(), 4);
+    assert_eq!(class_decl.methods[0].receiver, Some(ReceiverKind::Borrow));
     assert_eq!(class_decl.methods[0].params.len(), 0);
+    assert_eq!(class_decl.methods[1].receiver, Some(ReceiverKind::Borrow));
+    assert_eq!(class_decl.methods[1].params.len(), 0);
+    assert_eq!(class_decl.methods[2].receiver, Some(ReceiverKind::Value));
+    assert_eq!(class_decl.methods[2].params.len(), 0);
     assert_eq!(
-        class_decl.methods[1].receiver,
+        class_decl.methods[3].receiver,
         Some(ReceiverKind::BorrowMut)
     );
-    assert_eq!(class_decl.methods[1].params.len(), 1);
+    assert_eq!(class_decl.methods[3].params.len(), 1);
+
+    let typed_self = parse_item_from(
+        [
+            "class Counter:",
+            "    def read(self: Counter) -> int32:",
+            "        return self.value",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect_err("typed self should fail with the receiver teaching diagnostic");
+    assert_eq!(
+        typed_self.message,
+        "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate"
+    );
 
     let bad_param = parse_item_from(
         ["def read(borrow counter: Counter):", "    pass"]
@@ -350,6 +373,20 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     )
     .expect_err("borrowed method receivers must come first");
     assert!(late_borrow_receiver
+        .message
+        .contains("method receiver must be the first parameter"));
+
+    let late_owned_receiver = parse_item_from(
+        [
+            "class Counter:",
+            "    def consume(value: int32, own self):",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect_err("owned method receivers must come first");
+    assert!(late_owned_receiver
         .message
         .contains("method receiver must be the first parameter"));
 }

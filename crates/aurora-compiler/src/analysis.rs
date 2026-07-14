@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::ast::{
     AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
-    Module, Pattern, Stmt, TypeRef, VariantPattern,
+    Module, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
 };
 use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
 use crate::diag::{Diagnostic, Result, Span};
@@ -2825,9 +2825,16 @@ fn format_function_hover(function_decl: &FunctionDecl) -> String {
 
 fn format_method_hover(method_decl: &FunctionDecl) -> String {
     let params = method_decl
-        .params
-        .iter()
-        .map(|param| format!("{}: {}", param.name, lower_type_ref(&param.ty)))
+        .receiver
+        .map(canonical_receiver_spelling)
+        .into_iter()
+        .map(str::to_string)
+        .chain(
+            method_decl
+                .params
+                .iter()
+                .map(|param| format!("{}: {}", param.name, lower_type_ref(&param.ty))),
+        )
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -2880,8 +2887,8 @@ fn format_variant_hover(enum_name: &str, variant_name: &str, payload: Option<&Ty
 
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
-    "with", "return", "try", "public", "mut", "borrow", "indirect", "copy", "break", "continue",
-    "pass",
+    "with", "return", "try", "public", "mut", "borrow", "own", "indirect", "copy", "break",
+    "continue", "pass",
 ];
 
 struct CompletionMeta {
@@ -3396,9 +3403,16 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
 
 fn format_function_detail(function_decl: &FunctionDecl) -> String {
     let params = function_decl
-        .params
-        .iter()
-        .map(|param| lower_type_ref(&param.ty).to_string())
+        .receiver
+        .map(canonical_receiver_spelling)
+        .into_iter()
+        .map(str::to_string)
+        .chain(
+            function_decl
+                .params
+                .iter()
+                .map(|param| lower_type_ref(&param.ty).to_string()),
+        )
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -3407,6 +3421,14 @@ fn format_function_detail(function_decl: &FunctionDecl) -> String {
         params,
         lower_type_ref(&function_decl.return_type)
     )
+}
+
+fn canonical_receiver_spelling(receiver: ReceiverKind) -> &'static str {
+    match receiver {
+        ReceiverKind::Value => "own self",
+        ReceiverKind::Borrow => "self",
+        ReceiverKind::BorrowMut => "borrow mut self",
+    }
 }
 
 fn callable_contains_line(stmts: &[Stmt], line: usize) -> bool {

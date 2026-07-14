@@ -44,7 +44,7 @@ There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-d
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut borrow indirect public
+class enum def trait impl import from mut borrow own indirect public
 return if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -235,7 +235,9 @@ method-parameter-list
 
 receiver
     = "self"
-    | "borrow", [ "mut" ], "self" ;
+    | "borrow", "self"
+    | "own", "self"
+    | "borrow", "mut", "self" ;
 
 parameter
     = identifier, ":",
@@ -251,7 +253,7 @@ return-annotation
       type ;
 ```
 
-A receiver, when present, is the first method parameter. Ordinary borrowed parameters place `borrow` after the colon; call sites pass the value directly and never prefix an argument with `borrow`.
+A receiver, when present, is the first method parameter. Bare `self` and `borrow self` are the two spellings of a shared receiver, `own self` is consuming, and `borrow mut self` is mutable. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary borrowed parameters place `borrow` after the colon; call sites pass the value directly and never prefix an argument with `borrow`.
 
 Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, borrowed task targets, and borrowed return sources.
 

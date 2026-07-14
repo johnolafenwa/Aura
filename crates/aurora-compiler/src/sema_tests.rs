@@ -12463,7 +12463,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let receiver_mismatch = check(
             crate::parser::parse(
-                "trait Show:\n    def show(borrow self) -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(borrow mut self) -> String:\n        return \"x\"\n",
+                "trait Show:\n    def show(self) -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(own self) -> String:\n        return \"x\"\n",
             )
             .expect("receiver-mismatch snippet should parse"),
         )

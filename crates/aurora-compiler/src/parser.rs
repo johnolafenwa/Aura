@@ -542,6 +542,13 @@ impl Parser {
 
         loop {
             if allow_receiver && receiver.is_none() {
+                if self.at_typed_receiver_start() {
+                    return Err(Diagnostic::at(
+                        self.current_span(),
+                        "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate",
+                    ));
+                }
+
                 if self.at_borrow_receiver_start() {
                     if !params.is_empty() {
                         return Err(Diagnostic::at(
@@ -563,6 +570,22 @@ impl Parser {
                     continue;
                 }
 
+                if self.at_own_receiver_start() {
+                    if !params.is_empty() {
+                        return Err(Diagnostic::at(
+                            self.current_span(),
+                            "method receiver must be the first parameter",
+                        ));
+                    }
+                    self.bump();
+                    self.expect_identifier()?;
+                    receiver = Some(ReceiverKind::Value);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                    continue;
+                }
+
                 if self.at_value_receiver_start() {
                     if !params.is_empty() {
                         return Err(Diagnostic::at(
@@ -571,7 +594,7 @@ impl Parser {
                         ));
                     }
                     self.bump();
-                    receiver = Some(ReceiverKind::Value);
+                    receiver = Some(ReceiverKind::Borrow);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
                         break;
                     }
@@ -642,6 +665,25 @@ impl Parser {
         matches!(
             (self.peek_kind_at(index), self.peek_kind_at(index + 1)),
             (Some(TokenKind::Identifier(name)), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
+        )
+    }
+
+    fn at_own_receiver_start(&self) -> bool {
+        matches!(
+            (
+                self.current_kind(),
+                self.peek_kind_at(self.index + 1),
+                self.peek_kind_at(self.index + 2),
+            ),
+            (TokenKind::KwOwn, Some(TokenKind::Identifier(name)), next)
+                if name == "self" && !matches!(next, Some(TokenKind::Colon))
+        )
+    }
+
+    fn at_typed_receiver_start(&self) -> bool {
+        matches!(
+            (self.current_kind(), self.peek_kind_at(self.index + 1)),
+            (TokenKind::Identifier(name), Some(TokenKind::Colon)) if name == "self"
         )
     }
 

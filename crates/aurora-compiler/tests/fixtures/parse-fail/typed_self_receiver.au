@@ -1,0 +1,5 @@
+class Counter:
+    value: int32
+
+    def read(self: Counter) -> int32:
+        return self.value
