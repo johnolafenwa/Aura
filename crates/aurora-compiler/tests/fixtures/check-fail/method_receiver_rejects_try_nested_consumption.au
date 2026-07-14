@@ -1,0 +1,5 @@
+def consume(values: own Vec[int32]) -> Result[int32, String]:
+    return Result.Ok(0)
+
+def inspect(values: own Vec[int32]) -> Result[Option[int32], String]:
+    return Result.Ok(values.get(try consume(values)))

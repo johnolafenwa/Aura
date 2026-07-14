@@ -2,6 +2,15 @@
 
 Last updated: 2026-07-14
 
+## Active Work Session
+
+- Started: 2026-07-14 17:18:17 BST.
+- Current elapsed: 5h 26m 12s as of 2026-07-14 22:44:29 BST.
+- Target: Complete authorized Batch 2 of 5: close B2.0-a/b/c first, then Phase 3 practical control plane, Phase 3.5 Python expression kernel, Phase 4 native execution path, V6, the full-gated logical commits, and the single checkpoint coverage re-ratchet.
+- Stop rule: complete Batch 2 and report its checkpoint, encounter a genuine stop under the provisional-decision protocol, or reach 12 continuous hours at 2026-07-15 05:18:17 BST. Do not begin Phase 5.
+- Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
+- Coverage rule: floors stay frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only and one downward-truncated re-ratchet at sign-off.
+
 ## Latest Completed Session
 
 - Started: 2026-07-14 08:45:15 BST.

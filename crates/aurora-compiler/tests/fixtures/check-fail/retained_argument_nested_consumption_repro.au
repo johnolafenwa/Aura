@@ -1,0 +1,11 @@
+def eat(values: own Vec[int32]) -> int32:
+    mut consumed = values
+    consumed.push(99)
+    return 3 as int32
+
+def pair(values: borrow Vec[int32], measured: int32) -> int32:
+    return values.len()
+
+def main():
+    values: Vec[int32] = [1, 2]
+    print(pair(values, eat(values)))

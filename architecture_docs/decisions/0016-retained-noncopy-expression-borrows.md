@@ -1,6 +1,6 @@
 # ADR-0016: Retained non-copy expression borrows
 
-- Status: Provisional — Batch 1 checkpoint review
+- Status: Accepted
 - Date: 2026-07-14
 - Reference gap: later sibling mutation while an earlier non-copy place remains selected
 
@@ -20,7 +20,7 @@ Python retains object identity in comparable expressions and can expose the
 later mutation through the earlier reference. Aurora cannot implement that
 choice today without hidden cost or backend divergence.
 
-## Provisional decision
+## Decision
 
 - Evaluating a copy place captures its copied value at that sequence point.
 - An operation that produces a point-in-time representation completes that

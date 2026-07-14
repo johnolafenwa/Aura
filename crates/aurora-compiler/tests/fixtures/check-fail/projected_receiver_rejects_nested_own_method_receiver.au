@@ -1,0 +1,9 @@
+class Holder:
+    values: Vec[int32]
+
+    def consume(own self) -> int32:
+        return 0
+
+def main():
+    holder = Holder(values=[1])
+    print(holder.values.contains(holder.consume()))

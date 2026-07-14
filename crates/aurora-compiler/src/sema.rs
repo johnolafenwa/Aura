@@ -11624,51 +11624,92 @@ impl<'a> FunctionChecker<'a> {
         locals: &HashMap<String, LocalBinding>,
         places: &mut Vec<BorrowedCallPlace>,
     ) -> Result<()> {
+        self.collect_expr_call_places(expr, locals, places, false)
+    }
+
+    fn collect_expr_consumed_places(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        let mut call_places = Vec::new();
+        self.collect_expr_call_places(expr, locals, &mut call_places, true)?;
+        places.extend(
+            call_places
+                .into_iter()
+                .filter(|place| place.passing == ReceiverKind::Value),
+        );
+        Ok(())
+    }
+
+    fn collect_expr_call_places(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        places: &mut Vec<BorrowedCallPlace>,
+        include_consumed: bool,
+    ) -> Result<()> {
         match &expr.kind {
             ExprKind::Group(inner)
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::Specialize { expr: inner, .. }
-            | ExprKind::Try(inner) => self.collect_expr_borrowed_places(inner, locals, places),
+            | ExprKind::Try(inner) => {
+                self.collect_expr_call_places(inner, locals, places, include_consumed)
+            }
             ExprKind::Unary { expr: inner, .. } => {
-                self.collect_expr_borrowed_places(inner, locals, places)
+                self.collect_expr_call_places(inner, locals, places, include_consumed)
             }
             ExprKind::Binary { left, right, .. } => {
-                self.collect_expr_borrowed_places(left, locals, places)?;
-                self.collect_expr_borrowed_places(right, locals, places)
+                self.collect_expr_call_places(left, locals, places, include_consumed)?;
+                self.collect_expr_call_places(right, locals, places, include_consumed)
             }
             ExprKind::Call { callee, args } => {
-                self.collect_expr_borrowed_places(callee, locals, places)?;
+                self.collect_expr_call_places(callee, locals, places, include_consumed)?;
                 for argument in args {
-                    self.collect_expr_borrowed_places(&argument.value, locals, places)?;
+                    self.collect_expr_call_places(
+                        &argument.value,
+                        locals,
+                        places,
+                        include_consumed,
+                    )?;
                 }
-                self.collect_call_borrowed_places(callee, args, locals, places)
+                self.collect_call_borrowed_places(callee, args, locals, places, include_consumed)
             }
             ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
-                    self.collect_expr_borrowed_places(element, locals, places)?;
+                    self.collect_expr_call_places(element, locals, places, include_consumed)?;
                 }
                 Ok(())
             }
             ExprKind::Map(entries) => {
                 for entry in entries {
-                    self.collect_expr_borrowed_places(&entry.key, locals, places)?;
-                    self.collect_expr_borrowed_places(&entry.value, locals, places)?;
+                    self.collect_expr_call_places(&entry.key, locals, places, include_consumed)?;
+                    self.collect_expr_call_places(&entry.value, locals, places, include_consumed)?;
+                }
+                Ok(())
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FormatPart::Expr(value) = part {
+                        self.collect_expr_call_places(value, locals, places, include_consumed)?;
+                    }
                 }
                 Ok(())
             }
             ExprKind::Member { object, .. } => {
-                self.collect_expr_borrowed_places(object, locals, places)
+                self.collect_expr_call_places(object, locals, places, include_consumed)
             }
             ExprKind::Index { object, index } => {
-                self.collect_expr_borrowed_places(object, locals, places)?;
-                self.collect_expr_borrowed_places(index, locals, places)
+                self.collect_expr_call_places(object, locals, places, include_consumed)?;
+                self.collect_expr_call_places(index, locals, places, include_consumed)
             }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {
-                self.collect_expr_borrowed_places(scrutinee, locals, places)?;
+                self.collect_expr_call_places(scrutinee, locals, places, include_consumed)?;
                 for arm in arms {
-                    self.collect_expr_borrowed_places(&arm.value, locals, places)?;
+                    self.collect_expr_call_places(&arm.value, locals, places, include_consumed)?;
                 }
                 Ok(())
             }
@@ -11767,6 +11808,7 @@ impl<'a> FunctionChecker<'a> {
         args: &[Argument],
         locals: &HashMap<String, LocalBinding>,
         places: &mut Vec<BorrowedCallPlace>,
+        include_consumed: bool,
     ) -> Result<()> {
         let mut locals_for_resolution = locals.clone();
         let (base_callee, _) = self.peel_specialization(callee);
@@ -11790,10 +11832,15 @@ impl<'a> FunctionChecker<'a> {
                     let Some(argument) = argument else {
                         continue;
                     };
-                    if !matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
-                        continue;
-                    }
                     if let Some(path) = self.borrow_call_place(&argument.value) {
+                        if passing == ReceiverKind::Value
+                            && (!include_consumed
+                                || self
+                                    .place_path_type(&path, locals, argument.value.span)?
+                                    .is_none_or(|ty| self.is_copy_type(&ty)))
+                        {
+                            continue;
+                        }
                         places.push(BorrowedCallPlace {
                             path,
                             passing,
@@ -11813,7 +11860,12 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 self.collect_method_borrowed_places(
-                                    object, callee, args, method, places,
+                                    object,
+                                    (callee, args),
+                                    method,
+                                    locals,
+                                    places,
+                                    include_consumed,
                                 )?;
                                 return Ok(());
                             }
@@ -11830,7 +11882,14 @@ impl<'a> FunctionChecker<'a> {
                 let Some(method) = class_info.methods.get(field) else {
                     return Ok(());
                 };
-                self.collect_method_borrowed_places(object, callee, args, method, places)
+                self.collect_method_borrowed_places(
+                    object,
+                    (callee, args),
+                    method,
+                    locals,
+                    places,
+                    include_consumed,
+                )
             }
             _ => Ok(()),
         }
@@ -11839,22 +11898,28 @@ impl<'a> FunctionChecker<'a> {
     fn collect_method_borrowed_places(
         &self,
         object: &Expr,
-        callee: &Expr,
-        args: &[Argument],
+        call: (&Expr, &[Argument]),
         method: &MethodInfo,
+        locals: &HashMap<String, LocalBinding>,
         places: &mut Vec<BorrowedCallPlace>,
+        include_consumed: bool,
     ) -> Result<()> {
-        if matches!(
-            method.decl.receiver,
-            Some(ReceiverKind::Borrow | ReceiverKind::BorrowMut)
-        ) {
+        let (callee, args) = call;
+        if let Some(receiver_passing) = method.decl.receiver {
             if let Some(path) = self.borrow_call_place(object) {
-                places.push(BorrowedCallPlace {
-                    path,
-                    passing: method.decl.receiver.expect("receiver kind should exist"),
-                    param_name: "self".to_string(),
-                    origin_span: object.span,
-                });
+                if receiver_passing != ReceiverKind::Value
+                    || (include_consumed
+                        && self
+                            .place_path_type(&path, locals, object.span)?
+                            .is_some_and(|ty| !self.is_copy_type(&ty)))
+                {
+                    places.push(BorrowedCallPlace {
+                        path,
+                        passing: receiver_passing,
+                        param_name: "self".to_string(),
+                        origin_span: object.span,
+                    });
+                }
             }
         }
         let ordered_args = bind_call_arguments(
@@ -11872,10 +11937,15 @@ impl<'a> FunctionChecker<'a> {
             let Some(argument) = argument else {
                 continue;
             };
-            if !matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
-                continue;
-            }
             if let Some(path) = self.borrow_call_place(&argument.value) {
+                if passing == ReceiverKind::Value
+                    && (!include_consumed
+                        || self
+                            .place_path_type(&path, locals, argument.value.span)?
+                            .is_none_or(|ty| self.is_copy_type(&ty)))
+                {
+                    continue;
+                }
                 places.push(BorrowedCallPlace {
                     path,
                     passing,
@@ -11885,6 +11955,26 @@ impl<'a> FunctionChecker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn place_path_type(
+        &self,
+        path: &PlacePath,
+        locals: &HashMap<String, LocalBinding>,
+        span: crate::diag::Span,
+    ) -> Result<Option<Type>> {
+        let Some(binding) = locals.get(&path.root) else {
+            return Ok(None);
+        };
+        let mut ty = binding.ty.clone();
+        for projection in &path.projections.0 {
+            match projection {
+                PlaceProjection::Field(field) => {
+                    ty = self.resolve_member_type(&ty, field, span)?;
+                }
+            }
+        }
+        Ok(Some(ty))
     }
 
     fn retained_place_access(
@@ -11969,6 +12059,7 @@ impl<'a> FunctionChecker<'a> {
         let mut argument_accesses = Vec::new();
         for argument in args {
             self.collect_expr_borrowed_places(&argument.value, locals, &mut argument_accesses)?;
+            self.collect_expr_consumed_places(&argument.value, locals, &mut argument_accesses)?;
         }
         if builtin_member.variadic_argument_ownership().is_none() {
             let ordered_args = builtin_member.bind_args(args, object.span)?;
@@ -13692,7 +13783,16 @@ impl<'a> FunctionChecker<'a> {
                     Err(error) => return Err(error),
                 }
             };
-            let nested_moved_places = self.newly_moved_places(&locals_before, locals);
+            let nested_move_span = argument
+                .map(|argument| argument.value.span)
+                .or_else(|| param_decl.default.as_ref().map(|default| default.span))
+                .unwrap_or(span);
+            let nested_moved_accesses = self.newly_moved_place_accesses(
+                &locals_before,
+                locals,
+                "nested argument consumption",
+                nested_move_span,
+            );
             let mut nested_borrowed_places = Vec::new();
             if let Some(argument) = argument {
                 self.collect_expr_borrowed_places(
@@ -13716,7 +13816,7 @@ impl<'a> FunctionChecker<'a> {
             resolved_args.push((
                 argument,
                 actual,
-                nested_moved_places,
+                nested_moved_accesses,
                 nested_borrowed_places,
             ));
         }
@@ -13799,6 +13899,7 @@ impl<'a> FunctionChecker<'a> {
             }) else {
                 continue;
             };
+            self.reject_retained_access_overlap(&source_order_accesses, &resolved_args[index].2)?;
             let mut point_reads = Vec::new();
             self.collect_expr_place_reads(
                 &source_argument.value,
@@ -13828,7 +13929,7 @@ impl<'a> FunctionChecker<'a> {
         let mut borrowed_places = seeded_borrowed_places;
         for (
             (
-                ((argument, actual, nested_moved_places, _nested_borrowed_places), expected),
+                ((argument, actual, nested_moved_accesses, _nested_borrowed_places), expected),
                 param_decl,
             ),
             param_passing,
@@ -13871,20 +13972,20 @@ impl<'a> FunctionChecker<'a> {
                                     origin_span: argument.value.span,
                                 });
                             }
-                            for place in nested_moved_places {
+                            for moved_access in nested_moved_accesses {
                                 self.reject_overlapping_borrow(
                                     &borrowed_places,
-                                    &place,
+                                    &moved_access.path,
                                     ReceiverKind::Value,
                                     &param_decl.name,
                                     callee_name,
-                                    argument.span,
+                                    moved_access.origin_span,
                                 )?;
                                 borrowed_places.push(BorrowedCallPlace {
-                                    path: place,
+                                    path: moved_access.path,
                                     passing: ReceiverKind::Value,
                                     param_name: param_decl.name.clone(),
-                                    origin_span: argument.value.span,
+                                    origin_span: moved_access.origin_span,
                                 });
                             }
                             self.consume_value_expr(&argument.value, locals)?;

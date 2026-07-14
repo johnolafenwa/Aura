@@ -11941,6 +11941,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             ],
             &root_locals,
             &mut borrowed_places,
+            false,
         )
         .expect("module-qualified class methods should collect borrowed arguments");
     assert_eq!(borrowed_places.len(), 2);

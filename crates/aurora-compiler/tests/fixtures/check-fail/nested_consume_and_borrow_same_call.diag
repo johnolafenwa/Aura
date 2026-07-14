@@ -1,7 +1,7 @@
-error[AU3002]: argument for parameter `owned` in function `use_both` overlaps borrow for parameter `text`; consumed values must be exclusive
- --> crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au:10:21
+error[AU3002]: cannot consume `value` while `value` remains shared-borrowed by the parameter `text`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au:10:26
    |
 10 |     use_both(value, id_s(value))
-   |                     ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au:10:14: shared borrow for parameter `text` begins here
-  = help: pass non-overlapping places, or call `.clone()` before consuming a value that must remain borrowed
+   |                          ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au:10:14: shared borrow for the parameter `text` begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

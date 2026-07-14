@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `values` while `values` remains shared-borrowed by the parameter `values`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/retained_parameter_rejects_nested_argument_consumption.au:10:41
+   |
+10 |     inspect(values, consume_and_measure(values))
+   |                                         ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/retained_parameter_rejects_nested_argument_consumption.au:10:13: shared borrow for the parameter `values` begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

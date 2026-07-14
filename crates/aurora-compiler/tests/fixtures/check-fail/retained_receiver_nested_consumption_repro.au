@@ -1,0 +1,8 @@
+def eat(values: own Vec[int32]) -> int32:
+    mut consumed = values
+    consumed.push(99)
+    return 0
+
+def main():
+    values: Vec[int32] = []
+    print(values.get(eat(values)))

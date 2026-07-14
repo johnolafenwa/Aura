@@ -1,0 +1,11 @@
+class Consumer:
+    def consume(borrow self, values: own Vec[int32], label: String = "default") -> int32:
+        return 0
+
+class Holder:
+    values: Vec[int32]
+
+def main():
+    consumer = Consumer()
+    holder = Holder(values=[1])
+    print(holder.values.get(consumer.consume(holder.values)))

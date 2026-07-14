@@ -79,7 +79,12 @@ mut names = Vec[String]()
 push_name(names, "Ada")
 ```
 
-Arguments must have exactly the substituted parameter type. Calls also reject overlapping move, shared-borrow, and mutable-borrow access at the same call boundary. The ownership and place rules are specified in [Ownership And Borrowing](/manual/ownership-and-borrowing).
+Arguments must have exactly the substituted parameter type. A call retains each
+non-copy method receiver and non-copy argument access through every later sibling
+expression. A later sibling, including an access nested inside another call or
+expression, may shared-borrow the same place, but it may not mutably borrow or
+consume an overlapping place; violations report `AU3002`. The ownership and
+place rules are specified in [Ownership And Borrowing](/manual/ownership-and-borrowing).
 
 The bare rule is resolved where the function is declared, not independently
 at each call. An unconstrained generic `value: T` therefore resolves to a
