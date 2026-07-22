@@ -1667,7 +1667,7 @@ impl Parser {
                 span: token.span,
             }),
             TokenKind::DurationLiteral(value) => Ok(Expr {
-                kind: ExprKind::DurationMillis(value),
+                kind: ExprKind::DurationNanos(value),
                 span: token.span,
             }),
             TokenKind::FloatLiteral(value) => Ok(Expr {
@@ -2446,7 +2446,8 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         }
         ExprKind::Name(_)
         | ExprKind::Int(_)
-        | ExprKind::DurationMillis(_)
+        | ExprKind::DurationNanos(_)
+        | ExprKind::BuiltinOmitted
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::String(_) => {}

@@ -9,7 +9,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
 use crate::builtin_modules::host_builtin_metadata;
-use crate::call::BuiltinMember;
+use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::mir::{
@@ -18,14 +18,15 @@ use crate::mir::{
 };
 use crate::runtime_value::{
     cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
+    duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_host_builtin_with_program_args, float_floor_divmod, host_process_args, io_error,
     io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
     process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
     process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
     register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
     result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
@@ -40,12 +41,22 @@ use crate::runtime_value::{
     RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
     TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    VecValue, WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
+    NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
 const MIR_FLOOR_DIVISION_OPERANDS_ERROR: &str =
     "MIR floor division requires matching numeric operands";
+
+macro_rules! io_timeout_or_return {
+    ($value:expr, $label:expr) => {
+        match expect_io_optional_timeout($value, $label) {
+            Ok(timeout) => timeout,
+            Err(error) => return Ok(result_err(error)),
+        }
+    };
+}
 
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
@@ -2044,6 +2055,44 @@ impl MirRuntime {
                     return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
                 }
 
+                if let Some((type_name, member_name)) = name.split_once('.') {
+                    if let Some(constructor) =
+                        BuiltinAssociatedFunction::resolve(type_name, member_name)
+                    {
+                        let values = evaluate_named_args(args, env)?;
+                        let bound = bind_builtin_args(&["value"], values)?;
+                        let value = match &bound[0].value {
+                            Value::Int(value) => *value,
+                            _ => {
+                                return Err(Diagnostic::new(format!(
+                                    "`Duration.{}` expects `int64`",
+                                    constructor.name()
+                                )))
+                            }
+                        };
+                        let value = value
+                            .as_i128()
+                            .filter(|value| i64::try_from(*value).is_ok())
+                            .ok_or_else(|| {
+                                Diagnostic::new(format!(
+                                    "`Duration.{}` expects `int64`",
+                                    constructor.name()
+                                ))
+                            })?;
+                        let scale = match constructor {
+                            BuiltinAssociatedFunction::DurationMilliseconds => {
+                                NANOS_PER_MILLISECOND
+                            }
+                            BuiltinAssociatedFunction::DurationSeconds => NANOS_PER_SECOND,
+                            BuiltinAssociatedFunction::DurationMinutes => NANOS_PER_MINUTE,
+                        };
+                        return value
+                            .checked_mul(scale)
+                            .map(Value::Duration)
+                            .ok_or_else(|| Diagnostic::new("duration overflow"));
+                    }
+                }
+
                 if name == "cancelled" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
@@ -2053,27 +2102,17 @@ impl MirRuntime {
                 if name == "sleep" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["duration"], values)?;
-                    let duration = match bound[0].value.clone() {
-                        Value::Int(duration) => duration.as_i128().ok_or_else(|| {
-                            Diagnostic::new("`sleep(...)` duration must fit in signed timer range")
-                        })?,
-                        Value::Duration(duration) => duration,
+                    let duration = match bound[0].value {
+                        Value::Duration(duration) => duration_to_host_timer(duration, "sleep(...)")
+                            .map_err(|error| Diagnostic::coded("AU4001", error.to_string()))?,
                         _ => {
                             return Err(Diagnostic::new(
                                 "`sleep(...)` expects a duration value in MIR runtime",
                             ))
                         }
                     };
-                    let duration = u64::try_from(duration).map_err(|_| {
-                        Diagnostic::new(format!(
-                            "duration `{}ms` does not fit in the MIR runtime timer range",
-                            duration
-                        ))
-                    })?;
-                    let _ = sleep_with_runtime_scheduler(
-                        std::time::Duration::from_millis(duration),
-                        Some(&self.cancellation),
-                    );
+                    sleep_with_runtime_scheduler(duration, Some(&self.cancellation))
+                        .map_err(timer_error_to_diagnostic)?;
                     return Ok(Value::Unit);
                 }
 
@@ -2395,6 +2434,18 @@ impl MirRuntime {
                             return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
                         Ok(Value::String(value.to_string()))
+                    }
+                    Value::Duration(value) if field == "to_ms" => {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::new("`to_ms` does not take arguments"));
+                        }
+                        Ok(Value::Float(duration_to_milliseconds(*value)))
+                    }
+                    Value::Duration(value) if field == "to_seconds" => {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::new("`to_seconds` does not take arguments"));
+                        }
+                        Ok(Value::Float(duration_to_seconds(*value)))
                     }
                     Value::String(value) => {
                         self.evaluate_string_method(value.clone(), field, args, env)
@@ -2762,7 +2813,10 @@ impl MirRuntime {
                     )));
                 };
                 let timeout = expect_optional_timeout(Some(&bound[1].value), "put(timeout=...)")?;
-                match channel.send_with_timeout(value, timeout, Some(&self.cancellation)) {
+                let outcome = channel
+                    .send_with_timeout(value, timeout, Some(&self.cancellation))
+                    .map_err(timer_error_to_diagnostic)?;
+                match outcome {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(*value))),
                     Err(SendValueError::Cancelled(value)) => {
@@ -2799,14 +2853,15 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["timeout"], values)?;
                 let timeout = expect_optional_timeout(Some(&bound[0].value), "get(timeout=...)")?;
-                Ok(
-                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
-                        RecvValueResult::Value(value) => queue_receive_item(value),
-                        RecvValueResult::Closed => queue_receive_closed(),
-                        RecvValueResult::TimedOut => queue_receive_timed_out(),
-                        RecvValueResult::Cancelled => queue_receive_cancelled(),
-                    },
-                )
+                let outcome = channel
+                    .recv_result_with_cancellation(timeout, Some(&self.cancellation))
+                    .map_err(timer_error_to_diagnostic)?;
+                Ok(match outcome {
+                    RecvValueResult::Value(value) => queue_receive_item(value),
+                    RecvValueResult::Closed => queue_receive_closed(),
+                    RecvValueResult::TimedOut => queue_receive_timed_out(),
+                    RecvValueResult::Cancelled => queue_receive_cancelled(),
+                })
             }
             "__get_in_task_group" => {
                 let [task_group_arg] = args else {
@@ -2850,32 +2905,29 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["timeout"], values)?;
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "get_or_none(timeout=...)")?;
-                Ok(
-                    match if args.is_empty() {
-                        if self.cancellation.is_cancelled() {
-                            RecvValueResult::Cancelled
-                        } else {
-                            match channel.try_recv() {
-                                crate::runtime_value::TryRecvResult::Value(value) => {
-                                    RecvValueResult::Value(value)
-                                }
-                                crate::runtime_value::TryRecvResult::Closed => {
-                                    RecvValueResult::Closed
-                                }
-                                crate::runtime_value::TryRecvResult::Empty => {
-                                    RecvValueResult::TimedOut
-                                }
-                            }
-                        }
+                let outcome = if args.is_empty() {
+                    if self.cancellation.is_cancelled() {
+                        RecvValueResult::Cancelled
                     } else {
-                        channel.recv_result_with_cancellation(timeout, Some(&self.cancellation))
-                    } {
-                        RecvValueResult::Value(value) => option_some(value),
-                        RecvValueResult::Closed
-                        | RecvValueResult::TimedOut
-                        | RecvValueResult::Cancelled => option_none(),
-                    },
-                )
+                        match channel.try_recv() {
+                            crate::runtime_value::TryRecvResult::Value(value) => {
+                                RecvValueResult::Value(value)
+                            }
+                            crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
+                            crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
+                        }
+                    }
+                } else {
+                    channel
+                        .recv_result_with_cancellation(timeout, Some(&self.cancellation))
+                        .map_err(timer_error_to_diagnostic)?
+                };
+                Ok(match outcome {
+                    RecvValueResult::Value(value) => option_some(value),
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => option_none(),
+                })
             }
             "get_or" => {
                 let values = evaluate_named_args(args, env)?;
@@ -2887,32 +2939,29 @@ impl MirRuntime {
                 };
                 let timeout =
                     expect_optional_timeout(Some(&bound[1].value), "get_or(timeout=...)")?;
-                Ok(
-                    match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
-                        if self.cancellation.is_cancelled() {
-                            RecvValueResult::Cancelled
-                        } else {
-                            match channel.try_recv() {
-                                crate::runtime_value::TryRecvResult::Value(value) => {
-                                    RecvValueResult::Value(value)
-                                }
-                                crate::runtime_value::TryRecvResult::Closed => {
-                                    RecvValueResult::Closed
-                                }
-                                crate::runtime_value::TryRecvResult::Empty => {
-                                    RecvValueResult::TimedOut
-                                }
-                            }
-                        }
+                let outcome = if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
+                    if self.cancellation.is_cancelled() {
+                        RecvValueResult::Cancelled
                     } else {
-                        channel.recv_result_with_cancellation(timeout, Some(&self.cancellation))
-                    } {
-                        RecvValueResult::Value(value) => value,
-                        RecvValueResult::Closed
-                        | RecvValueResult::TimedOut
-                        | RecvValueResult::Cancelled => default,
-                    },
-                )
+                        match channel.try_recv() {
+                            crate::runtime_value::TryRecvResult::Value(value) => {
+                                RecvValueResult::Value(value)
+                            }
+                            crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
+                            crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
+                        }
+                    }
+                } else {
+                    channel
+                        .recv_result_with_cancellation(timeout, Some(&self.cancellation))
+                        .map_err(timer_error_to_diagnostic)?
+                };
+                Ok(match outcome {
+                    RecvValueResult::Value(value) => value,
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => default,
+                })
             }
             "close" => {
                 if !args.is_empty() {
@@ -3730,32 +3779,29 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["timeout"], values)?;
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
-                Ok(
-                    match if args.is_empty() {
-                        if self.cancellation.is_cancelled() {
-                            TaskWaitStatus::Cancelled
-                        } else if let Some(result) = task.completed_result_observed() {
-                            TaskWaitStatus::Ready(match result {
-                                crate::runtime_value::TaskExecutionResult::Ready(result) => result,
-                                crate::runtime_value::TaskExecutionResult::Cancelled => {
-                                    return Ok(option_none());
-                                }
-                            })
-                        } else {
-                            TaskWaitStatus::TimedOut
-                        }
+                let outcome = if args.is_empty() {
+                    if self.cancellation.is_cancelled() {
+                        TaskWaitStatus::Cancelled
+                    } else if let Some(result) = task.completed_result_observed() {
+                        TaskWaitStatus::Ready(match result {
+                            crate::runtime_value::TaskExecutionResult::Ready(result) => result,
+                            crate::runtime_value::TaskExecutionResult::Cancelled => {
+                                return Ok(option_none());
+                            }
+                        })
                     } else {
-                        task.wait_result_with_cancellation_observed(
-                            timeout,
-                            Some(&self.cancellation),
-                        )
-                    } {
-                        TaskWaitStatus::Ready(result) => {
-                            result.map(option_some).unwrap_or_else(|_| option_none())
-                        }
-                        TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => option_none(),
-                    },
-                )
+                        TaskWaitStatus::TimedOut
+                    }
+                } else {
+                    task.wait_result_with_cancellation_observed(timeout, Some(&self.cancellation))
+                        .map_err(timer_error_to_diagnostic)?
+                };
+                Ok(match outcome {
+                    TaskWaitStatus::Ready(result) => {
+                        result.map(option_some).unwrap_or_else(|_| option_none())
+                    }
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => option_none(),
+                })
             }
             "result_or" => {
                 let values = evaluate_named_args(args, env)?;
@@ -3767,32 +3813,29 @@ impl MirRuntime {
                 };
                 let timeout =
                     expect_optional_timeout(Some(&bound[1].value), "result_or(timeout=...)")?;
-                Ok(
-                    match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
-                        if self.cancellation.is_cancelled() {
-                            TaskWaitStatus::Cancelled
-                        } else if let Some(result) = task.completed_result_observed() {
-                            match result {
-                                crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                                    TaskWaitStatus::Ready(result)
-                                }
-                                crate::runtime_value::TaskExecutionResult::Cancelled => {
-                                    TaskWaitStatus::Cancelled
-                                }
+                let outcome = if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
+                    if self.cancellation.is_cancelled() {
+                        TaskWaitStatus::Cancelled
+                    } else if let Some(result) = task.completed_result_observed() {
+                        match result {
+                            crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                                TaskWaitStatus::Ready(result)
                             }
-                        } else {
-                            TaskWaitStatus::TimedOut
+                            crate::runtime_value::TaskExecutionResult::Cancelled => {
+                                TaskWaitStatus::Cancelled
+                            }
                         }
                     } else {
-                        task.wait_result_with_cancellation_observed(
-                            timeout,
-                            Some(&self.cancellation),
-                        )
-                    } {
-                        TaskWaitStatus::Ready(result) => result.unwrap_or(default.clone()),
-                        TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => default,
-                    },
-                )
+                        TaskWaitStatus::TimedOut
+                    }
+                } else {
+                    task.wait_result_with_cancellation_observed(timeout, Some(&self.cancellation))
+                        .map_err(timer_error_to_diagnostic)?
+                };
+                Ok(match outcome {
+                    TaskWaitStatus::Ready(result) => result.unwrap_or(default.clone()),
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => default,
+                })
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported task method `{}`",
@@ -3897,7 +3940,11 @@ impl MirRuntime {
                 let stdin = decode_process_stdio(&bound[3].value, "process.run(...)")?;
                 let stdout = decode_process_stdio(&bound[4].value, "process.run(...)")?;
                 let stderr = decode_process_stdio(&bound[5].value, "process.run(...)")?;
-                let timeout = expect_process_optional_timeout(&bound[6].value, "process.run(...)")?;
+                let timeout =
+                    match expect_process_optional_timeout(&bound[6].value, "process.run(...)") {
+                        Ok(timeout) => timeout,
+                        Err(error) => return Ok(result_err(error)),
+                    };
                 let group = expect_bool_value(&bound[7].value, "process.run(...)")?;
                 let child =
                     match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group)
@@ -4138,7 +4185,7 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["address", "timeout"], values)?;
                 let address = expect_string_value(&bound[0].value, "net.connect_timeout(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "net.connect_timeout(...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "net.connect_timeout(...)");
                 match TcpStreamValue::connect(&address, timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::TcpStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4184,10 +4231,8 @@ impl MirRuntime {
             "net::unix_connect_timeout" => {
                 let bound = bind_builtin_args(&["path", "timeout"], values)?;
                 let path = expect_string_value(&bound[0].value, "net.unix_connect_timeout(...)")?;
-                let timeout = expect_optional_timeout(
-                    Some(&bound[1].value),
-                    "net.unix_connect_timeout(...)",
-                )?;
+                let timeout =
+                    io_timeout_or_return!(Some(&bound[1].value), "net.unix_connect_timeout(...)");
                 match UnixStreamValue::connect(&path, timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4230,7 +4275,7 @@ impl MirRuntime {
                     expect_string_value(&bound[1].value, "net.tls_connect_timeout(...)")?;
                 let ca = expect_string_value(&bound[2].value, "net.tls_connect_timeout(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[3].value), "net.tls_connect_timeout(...)")?;
+                    io_timeout_or_return!(Some(&bound[3].value), "net.tls_connect_timeout(...)");
                 match TlsStreamValue::connect(
                     &address,
                     &server_name,
@@ -4262,7 +4307,7 @@ impl MirRuntime {
                 let body = expect_string_value(&bound[2].value, name)?;
                 let headers = expect_headers_map(&bound[3].value, name)?;
                 let timeout = if bound.len() == 5 {
-                    expect_optional_timeout(Some(&bound[4].value), name)?
+                    io_timeout_or_return!(Some(&bound[4].value), name)
                 } else {
                     None
                 };
@@ -4290,7 +4335,7 @@ impl MirRuntime {
                 let bytes = expect_bytes_value(&bound[2].value, name)?;
                 let headers = expect_headers_map(&bound[3].value, name)?;
                 let timeout = if bound.len() == 5 {
-                    expect_optional_timeout(Some(&bound[4].value), name)?
+                    io_timeout_or_return!(Some(&bound[4].value), name)
                 } else {
                     None
                 };
@@ -4326,10 +4371,10 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["url", "timeout"], values)?;
                 let url =
                     expect_string_value(&bound[0].value, "net.websocket_connect_timeout(...)")?;
-                let timeout = expect_optional_timeout(
+                let timeout = io_timeout_or_return!(
                     Some(&bound[1].value),
-                    "net.websocket_connect_timeout(...)",
-                )?;
+                    "net.websocket_connect_timeout(...)"
+                );
                 match WebSocketValue::connect(&url, timeout) {
                     Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4346,7 +4391,10 @@ impl MirRuntime {
         let Some(task) = task else {
             return Ok(Vec::new());
         };
-        match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
+        let outcome = task
+            .wait_result_with_cancellation(None, Some(&self.cancellation))
+            .map_err(timer_error_to_diagnostic)?;
+        match outcome {
             TaskWaitStatus::Ready(Ok(Value::Vec(vector)))
                 if vector.element_type == Type::named("uint8") =>
             {
@@ -4485,7 +4533,10 @@ impl MirRuntime {
             "wait" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)")?;
+                    match expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)") {
+                        Ok(timeout) => timeout,
+                        Err(error) => return Ok(process_wait_failed(error)),
+                    };
                 Ok(match child.wait(timeout, Some(&self.cancellation)) {
                     ProcessChildWaitStatus::Exited(status) => process_wait_exited(status),
                     ProcessChildWaitStatus::TimedOut => process_wait_timed_out(),
@@ -4497,8 +4548,13 @@ impl MirRuntime {
             }
             "wait_or_none" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "wait_or_none(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[0].value,
+                    "wait_or_none(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match child.wait_or_none(timeout, Some(&self.cancellation)) {
                     Ok(Some(status)) => Ok(result_ok(option_some(process_exit_status(status)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4507,8 +4563,13 @@ impl MirRuntime {
             }
             "wait_ok" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "wait_ok(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[0].value,
+                    "wait_ok(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match child.wait_ok(timeout, Some(&self.cancellation)) {
                     Ok(status) => Ok(result_ok(process_exit_status(status))),
                     Err(error) => Ok(result_err(error)),
@@ -4557,8 +4618,13 @@ impl MirRuntime {
             }
             "read_line" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "read_line(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[0].value,
+                    "read_line(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match pipe.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4572,8 +4638,13 @@ impl MirRuntime {
                 let max_bytes = usize::try_from(max_bytes).map_err(|_| {
                     Diagnostic::new("`read_bytes(...)` expects a non-negative `max_bytes`")
                 })?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[1].value, "read_bytes(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[1].value,
+                    "read_bytes(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match pipe.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4584,8 +4655,13 @@ impl MirRuntime {
                 let bound =
                     bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
                 let text = expect_string_value(&bound[0].value, "write_all(...)")?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[1].value, "write_all(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[1].value,
+                    "write_all(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match pipe.write_all(&text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
@@ -4595,8 +4671,13 @@ impl MirRuntime {
                 let bound =
                     bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
                 let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[1].value, "write_bytes(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[1].value,
+                    "write_bytes(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match pipe.write_bytes(&bytes, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
@@ -4734,7 +4815,10 @@ impl MirRuntime {
                     None => ProcessRestartPolicy::OnFailure,
                 };
                 let backoff = match &bound[8] {
-                    Some(argument) => expect_duration_value(&argument.value, "start(...)")?,
+                    Some(argument) => match expect_duration_value(&argument.value, "start(...)") {
+                        Ok(backoff) => backoff,
+                        Err(error) => return Ok(result_err(error)),
+                    },
                     None => StdDuration::from_millis(100),
                 };
                 let max_restarts = match &bound[9] {
@@ -4767,7 +4851,18 @@ impl MirRuntime {
             "wait" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)")?;
+                    match expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)") {
+                        Ok(timeout) => timeout,
+                        Err(error) => {
+                            return Ok(process_supervisor_wait_event(
+                                process_supervisor_event_failed(
+                                    "<supervisor>".to_string(),
+                                    error,
+                                    IntegerValue::from_signed(0),
+                                ),
+                            ))
+                        }
+                    };
                 Ok(match supervisor.wait(timeout, Some(&self.cancellation)) {
                     ProcessSupervisorWaitStatus::Event(event) => {
                         process_supervisor_wait_event(event)
@@ -4778,8 +4873,13 @@ impl MirRuntime {
             }
             "wait_or_none" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_process_optional_timeout(&bound[0].value, "wait_or_none(timeout=...)")?;
+                let timeout = match expect_process_optional_timeout(
+                    &bound[0].value,
+                    "wait_or_none(timeout=...)",
+                ) {
+                    Ok(timeout) => timeout,
+                    Err(error) => return Ok(result_err(error)),
+                };
                 match supervisor.wait_or_none(timeout, Some(&self.cancellation)) {
                     Ok(Some(event)) => Ok(result_ok(option_some(event))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4819,13 +4919,10 @@ impl MirRuntime {
         match field {
             "accept" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = bound
-                    .first()
-                    .map(|argument| {
-                        expect_optional_timeout(Some(&argument.value), "accept(timeout=...)")
-                    })
-                    .transpose()?
-                    .flatten();
+                let timeout = io_timeout_or_return!(
+                    bound.first().map(|argument| &argument.value),
+                    "accept(timeout=...)"
+                );
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::TcpStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4860,13 +4957,10 @@ impl MirRuntime {
         match field {
             "read_all" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = bound
-                    .first()
-                    .map(|argument| {
-                        expect_optional_timeout(Some(&argument.value), "read_all(timeout=...)")
-                    })
-                    .transpose()?
-                    .flatten();
+                let timeout = io_timeout_or_return!(
+                    bound.first().map(|argument| &argument.value),
+                    "read_all(timeout=...)"
+                );
                 match stream.read_all(timeout, Some(&self.cancellation)) {
                     Ok(text) => Ok(result_ok(Value::String(text))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4874,13 +4968,10 @@ impl MirRuntime {
             }
             "read_line" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = bound
-                    .first()
-                    .map(|argument| {
-                        expect_optional_timeout(Some(&argument.value), "read_line(timeout=...)")
-                    })
-                    .transpose()?
-                    .flatten();
+                let timeout = io_timeout_or_return!(
+                    bound.first().map(|argument| &argument.value),
+                    "read_line(timeout=...)"
+                );
                 match stream.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4896,7 +4987,7 @@ impl MirRuntime {
                             Diagnostic::new("`read_bytes(...)` requires a non-negative max_bytes")
                         })?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "read_bytes(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "read_bytes(timeout=...)");
                 match stream.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -4911,7 +5002,7 @@ impl MirRuntime {
                         Diagnostic::new("`read_exact(...)` requires a non-negative count")
                     })?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -4922,10 +5013,8 @@ impl MirRuntime {
                     bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
                 match &bound[0].value {
                     Value::String(text) => {
-                        let timeout = expect_optional_timeout(
-                            Some(&bound[1].value),
-                            "write_all(timeout=...)",
-                        )?;
+                        let timeout =
+                            io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
                         match stream.write_all(text, timeout, Some(&self.cancellation)) {
                             Ok(()) => Ok(result_ok(Value::Unit)),
                             Err(error) => Ok(result_err(io_error(error))),
@@ -4942,7 +5031,7 @@ impl MirRuntime {
                     bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
                 let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "write_bytes(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "write_bytes(timeout=...)");
                 match stream.write_bytes(&bytes, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5018,7 +5107,7 @@ impl MirRuntime {
                 let address = expect_string_value(&bound[0].value, "send_text(...)")?;
                 let text = expect_string_value(&bound[1].value, "send_text(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[2].value), "send_text(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[2].value), "send_text(timeout=...)");
                 match socket.send_to_text(&address, &text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5032,7 +5121,7 @@ impl MirRuntime {
                 let address = expect_string_value(&bound[0].value, "send_bytes(...)")?;
                 let bytes = expect_bytes_value(&bound[1].value, "send_bytes(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[2].value), "send_bytes(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[2].value), "send_bytes(timeout=...)");
                 match socket.send_to_bytes(&address, &bytes, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5045,7 +5134,7 @@ impl MirRuntime {
                     .map_err(|_| {
                         Diagnostic::new("`recv(...)` requires a non-negative max_bytes")
                     })?;
-                let timeout = expect_optional_timeout(Some(&bound[1].value), "recv(timeout=...)")?;
+                let timeout = io_timeout_or_return!(Some(&bound[1].value), "recv(timeout=...)");
                 match socket.recv(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5060,7 +5149,7 @@ impl MirRuntime {
                         |_| Diagnostic::new("`recv_from(...)` requires a non-negative max_bytes"),
                     )?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "recv_from(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "recv_from(timeout=...)");
                 match socket.recv_from(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(datagram)) => Ok(result_ok(option_some(Value::UdpDatagram(datagram)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5118,8 +5207,7 @@ impl MirRuntime {
         match field {
             "accept" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(exchange) => Ok(result_ok(Value::HttpExchange(exchange))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5240,8 +5328,7 @@ impl MirRuntime {
         match field {
             "accept" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
                 match listener.accept(timeout) {
                     Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5271,7 +5358,7 @@ impl MirRuntime {
                     bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
                 let text = expect_string_value(&bound[0].value, "send_text(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "send_text(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "send_text(timeout=...)");
                 match socket.send_text(&text, timeout) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5282,7 +5369,7 @@ impl MirRuntime {
                     bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
                 let bytes = expect_bytes_value(&bound[0].value, "send_bytes(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "send_bytes(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "send_bytes(timeout=...)");
                 match socket.send_bytes(&bytes, timeout) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5291,7 +5378,7 @@ impl MirRuntime {
             "recv_text" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "recv_text(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[0].value), "recv_text(timeout=...)");
                 match socket.recv_text(timeout) {
                     Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5301,7 +5388,7 @@ impl MirRuntime {
             "recv_bytes" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "recv_bytes(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[0].value), "recv_bytes(timeout=...)");
                 match socket.recv_bytes(timeout) {
                     Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5329,8 +5416,7 @@ impl MirRuntime {
         match field {
             "accept" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5358,7 +5444,7 @@ impl MirRuntime {
             "read_line" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "read_line(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5373,7 +5459,7 @@ impl MirRuntime {
                         Diagnostic::new("`read_exact(...)` requires a non-negative count")
                     })?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5384,7 +5470,7 @@ impl MirRuntime {
                     bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
                 let text = expect_string_value(&bound[0].value, "write_all(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "write_all(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
                 match stream.write_all(&text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5411,8 +5497,7 @@ impl MirRuntime {
         match field {
             "accept" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::TlsStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5444,7 +5529,7 @@ impl MirRuntime {
             "read_line" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "read_line(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
                     Ok(None) => Ok(result_ok(option_none())),
@@ -5459,7 +5544,7 @@ impl MirRuntime {
                         Diagnostic::new("`read_exact(...)` requires a non-negative count")
                     })?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5470,7 +5555,7 @@ impl MirRuntime {
                     bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
                 let text = expect_string_value(&bound[0].value, "write_all(...)")?;
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "write_all(timeout=...)")?;
+                    io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
                 match stream.write_all(&text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5508,16 +5593,17 @@ impl MirRuntime {
     }
 
     fn join_task(&mut self, task: TaskValue, timeout: Option<StdDuration>) -> Result<Value> {
-        Ok(
-            match task.wait_result_with_cancellation_observed(timeout, Some(&self.cancellation)) {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => task_result_ready(value),
-                    Err(error) => task_result_error(error.message),
-                },
-                TaskWaitStatus::TimedOut => task_result_timed_out(),
-                TaskWaitStatus::Cancelled => task_result_cancelled(),
+        let outcome = task
+            .wait_result_with_cancellation_observed(timeout, Some(&self.cancellation))
+            .map_err(timer_error_to_diagnostic)?;
+        Ok(match outcome {
+            TaskWaitStatus::Ready(result) => match result {
+                Ok(value) => task_result_ready(value),
+                Err(error) => task_result_error(error.message),
             },
-        )
+            TaskWaitStatus::TimedOut => task_result_timed_out(),
+            TaskWaitStatus::Cancelled => task_result_cancelled(),
+        })
     }
 
     fn wait_any(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
@@ -5571,7 +5657,10 @@ impl MirRuntime {
                     .checked_duration_since(Instant::now())
                     .or(Some(StdDuration::from_millis(0)))
             });
-            match task.wait_result_with_cancellation_observed(remaining, Some(&self.cancellation)) {
+            let outcome = task
+                .wait_result_with_cancellation_observed(remaining, Some(&self.cancellation))
+                .map_err(timer_error_to_diagnostic)?;
+            match outcome {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => results.push(value),
                     Err(error) => {
@@ -5602,7 +5691,10 @@ impl MirRuntime {
             group.cancel();
         }
         for task in tasks {
-            match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
+            let outcome = task
+                .wait_result_with_cancellation(None, Some(&self.cancellation))
+                .map_err(timer_error_to_diagnostic)?;
+            match outcome {
                 TaskWaitStatus::Ready(_result) => {
                     if let Some(error) = task.unobserved_error() {
                         return Err(error);
@@ -5635,6 +5727,11 @@ impl MirRuntime {
     ) -> Result<Value> {
         use crate::ast::BinaryOp;
 
+        let arithmetic_error = |message: &'static str| match span {
+            Some(span) => Diagnostic::at(span, message),
+            None => Diagnostic::new(message),
+        };
+
         match op {
             BinaryOp::And => match (left, right) {
                 (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left && right)),
@@ -5660,6 +5757,10 @@ impl MirRuntime {
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+                (Value::Duration(left), Value::Duration(right)) => left
+                    .checked_add(right)
+                    .map(Value::Duration)
+                    .ok_or_else(|| arithmetic_error("duration overflow")),
                 _ => Err(Diagnostic::new(
                     "MIR binary add requires matching supported operand types",
                 )),
@@ -5673,6 +5774,10 @@ impl MirRuntime {
                     }),
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
+                (Value::Duration(left), Value::Duration(right)) => left
+                    .checked_sub(right)
+                    .map(Value::Duration)
+                    .ok_or_else(|| arithmetic_error("duration overflow")),
                 _ => Err(Diagnostic::new(
                     "MIR binary subtraction requires matching numeric operands",
                 )),
@@ -5686,6 +5791,16 @@ impl MirRuntime {
                     }),
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
+                (Value::Duration(duration), Value::Int(multiplier))
+                | (Value::Int(multiplier), Value::Duration(duration)) => {
+                    let multiplier = duration_int64_scalar(multiplier).ok_or_else(|| {
+                        arithmetic_error("Duration multiplication requires an int64 scalar")
+                    })?;
+                    duration
+                        .checked_mul(multiplier)
+                        .map(Value::Duration)
+                        .ok_or_else(|| arithmetic_error("duration overflow"))
+                }
                 _ => Err(Diagnostic::new(
                     "MIR binary multiplication requires matching numeric operands",
                 )),
@@ -5724,6 +5839,17 @@ impl MirRuntime {
                 (Value::Float(left), Value::Float(right)) => {
                     Ok(Value::Float(float_floor_divmod(left, right).0))
                 }
+                (Value::Duration(_), Value::Int(divisor)) if divisor.is_zero() => {
+                    Err(arithmetic_error("division by zero"))
+                }
+                (Value::Duration(duration), Value::Int(divisor)) => {
+                    let divisor = duration_int64_scalar(divisor).ok_or_else(|| {
+                        arithmetic_error("Duration floor division requires an int64 divisor")
+                    })?;
+                    checked_duration_floor_div(duration, divisor)
+                        .map(Value::Duration)
+                        .ok_or_else(|| arithmetic_error("duration overflow"))
+                }
                 _ => Err(Diagnostic::new(MIR_FLOOR_DIVISION_OPERANDS_ERROR)),
             },
             BinaryOp::Mod => match (left, right) {
@@ -5759,7 +5885,9 @@ fn runtime_deadline_after_timeout(timeout: Option<StdDuration>) -> Result<Option
         Some(timeout) => Instant::now()
             .checked_add(timeout)
             .map(Some)
-            .ok_or_else(|| Diagnostic::new("timeout overflows the MIR runtime deadline range")),
+            .ok_or_else(|| {
+                Diagnostic::coded("AU4001", "timeout overflows the MIR runtime deadline range")
+            }),
         None => Ok(None),
     }
 }
@@ -6016,38 +6144,55 @@ fn expect_i32_value(value: &Value, label: &str) -> Result<i32> {
     }
 }
 
-fn expect_process_optional_timeout(value: &Value, label: &str) -> Result<Option<StdDuration>> {
+fn expect_process_optional_timeout(
+    value: &Value,
+    label: &str,
+) -> std::result::Result<Option<StdDuration>, Value> {
     match value {
         Value::Unit => Ok(None),
-        Value::Duration(duration) if *duration < 0 => Ok(None),
-        Value::Duration(duration) => {
-            let millis = u64::try_from(*duration).map_err(|_| {
-                Diagnostic::new(format!("`{}` duration must be non-negative", label))
-            })?;
-            Ok(Some(StdDuration::from_millis(millis)))
-        }
-        other => Err(Diagnostic::new(format!(
-            "`{}` expects `Duration`, found `{}`",
-            label,
-            other.render()
+        Value::Duration(duration) => duration_to_host_timer(*duration, label)
+            .map(Some)
+            .map_err(process_error_from_io),
+        other => Err(process_error_from_io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{}` expects `Duration`, found `{}`", label, other.render()),
         ))),
     }
 }
 
-fn expect_duration_value(value: &Value, label: &str) -> Result<StdDuration> {
+fn expect_duration_value(value: &Value, label: &str) -> std::result::Result<StdDuration, Value> {
     match value {
         Value::Duration(duration) => {
-            let millis = u64::try_from(*duration).map_err(|_| {
-                Diagnostic::new(format!("`{}` duration must be non-negative", label))
-            })?;
-            Ok(StdDuration::from_millis(millis))
+            duration_to_host_timer(*duration, label).map_err(process_error_from_io)
         }
-        other => Err(Diagnostic::new(format!(
-            "`{}` expects `Duration`, found `{}`",
-            label,
-            other.render()
+        other => Err(process_error_from_io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{}` expects `Duration`, found `{}`", label, other.render()),
         ))),
     }
+}
+
+fn expect_io_optional_timeout(
+    value: Option<&Value>,
+    label: &str,
+) -> std::result::Result<Option<StdDuration>, Value> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::Unit => Ok(None),
+        Value::Duration(duration) => duration_to_host_timer(*duration, label)
+            .map(Some)
+            .map_err(io_error),
+        other => Err(io_error(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{}` expects `Duration`, found `{}`", label, other.render()),
+        ))),
+    }
+}
+
+fn timer_error_to_diagnostic(error: io::Error) -> Diagnostic {
+    Diagnostic::coded("AU4001", error.to_string())
 }
 
 fn expect_supervisor_max_restarts(value: &Value, label: &str) -> Result<Option<i32>> {
@@ -6067,12 +6212,9 @@ fn expect_optional_timeout(value: Option<&Value>, label: &str) -> Result<Option<
     };
     match value {
         Value::Unit => Ok(None),
-        Value::Duration(duration) => {
-            let millis = u64::try_from(*duration).map_err(|_| {
-                Diagnostic::new(format!("`{}` duration must be non-negative", label))
-            })?;
-            Ok(Some(StdDuration::from_millis(millis)))
-        }
+        Value::Duration(duration) => duration_to_host_timer(*duration, label)
+            .map(Some)
+            .map_err(|error| Diagnostic::coded("AU4001", error.to_string())),
         other => Err(Diagnostic::new(format!(
             "`{}` expects `Duration`, found `{}`",
             label,
@@ -6246,9 +6388,32 @@ fn eval_ordering(op: crate::ast::BinaryOp, left: Value, right: Value) -> Result<
             crate::ast::BinaryOp::GreaterEq => left >= right,
             _ => unreachable!("non-ordering op passed to eval_ordering"),
         })),
+        (Value::Duration(left), Value::Duration(right)) => Ok(Value::Bool(match op {
+            crate::ast::BinaryOp::Less => left < right,
+            crate::ast::BinaryOp::LessEq => left <= right,
+            crate::ast::BinaryOp::Greater => left > right,
+            crate::ast::BinaryOp::GreaterEq => left >= right,
+            _ => unreachable!("non-ordering op passed to eval_ordering"),
+        })),
         _ => Err(Diagnostic::new(
-            "MIR ordering comparisons require matching numeric operands",
+            "MIR ordering comparisons require matching numeric or Duration operands",
         )),
+    }
+}
+
+fn duration_int64_scalar(value: IntegerValue) -> Option<i128> {
+    value
+        .as_i128()
+        .filter(|value| i64::try_from(*value).is_ok())
+}
+
+fn checked_duration_floor_div(dividend: i128, divisor: i128) -> Option<i128> {
+    let quotient = dividend.checked_div(divisor)?;
+    let remainder = dividend.checked_rem(divisor)?;
+    if remainder != 0 && (remainder < 0) != (divisor < 0) {
+        quotient.checked_sub(1)
+    } else {
+        Some(quotient)
     }
 }
 

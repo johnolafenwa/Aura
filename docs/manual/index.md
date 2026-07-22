@@ -47,5 +47,6 @@ Signatures use `Duration = ...` for optional timeout parameters whose default is
 - blocking APIs wait when a timeout is omitted
 - convenience helpers ending in `_or_none` or `_or` may use immediate non-blocking checks when documented that way
 - timeout results are explicit variants such as `TimedOut`, `None`, or `process.Error.TimedOut`
+- explicit timeout values must be non-negative and fit the host deadline; invalid values return the documented typed InvalidInput/process error or trap with `AU4001` when the API has no typed error carrier
 
 When a page says a value is returned "cloned", it means the caller receives a new owned value. When a page says a method "moves" an argument, the caller cannot use that argument after the call unless it is a copy type.

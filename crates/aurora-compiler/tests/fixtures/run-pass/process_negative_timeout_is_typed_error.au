@@ -1,0 +1,27 @@
+import process
+
+def main() -> int32:
+    match process.run(["/usr/bin/true"]):
+        case Result.Ok(_):
+            print("omitted: completed")
+        case Result.Err(error):
+            print("omitted: unexpected")
+            print(error)
+            return 1
+
+    match process.run(["/bin/sleep", "1"], timeout=0ms):
+        case Result.Ok(_):
+            print("zero: unexpected")
+            return 1
+        case Result.Err(error):
+            print("zero: expired")
+            print(error)
+
+    match process.run(["unused"], timeout=Duration.ms(-1)):
+        case Result.Ok(_):
+            print("negative: unexpected")
+            return 1
+        case Result.Err(error):
+            print("negative: invalid")
+            print(error)
+            return 0

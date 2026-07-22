@@ -239,6 +239,7 @@ const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
 ];
 const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
+const DURATION_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("tasks"),
@@ -560,9 +561,75 @@ impl BuiltinFunction {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum BuiltinAssociatedFunction {
+    DurationMilliseconds,
+    DurationSeconds,
+    DurationMinutes,
+}
+
+pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
+    BuiltinAssociatedFunction::DurationMilliseconds,
+    BuiltinAssociatedFunction::DurationSeconds,
+    BuiltinAssociatedFunction::DurationMinutes,
+];
+
+impl BuiltinAssociatedFunction {
+    pub fn resolve(type_name: &str, name: &str) -> Option<Self> {
+        match (type_name, name) {
+            ("Duration", "ms") => Some(Self::DurationMilliseconds),
+            ("Duration", "seconds") => Some(Self::DurationSeconds),
+            ("Duration", "minutes") => Some(Self::DurationMinutes),
+            _ => None,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::DurationMilliseconds => "ms",
+            Self::DurationSeconds => "seconds",
+            Self::DurationMinutes => "minutes",
+        }
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::DurationMilliseconds => "ms(value: int64) -> Duration",
+            Self::DurationSeconds => "seconds(value: int64) -> Duration",
+            Self::DurationMinutes => "minutes(value: int64) -> Duration",
+        }
+    }
+
+    pub const fn docs(self) -> &'static str {
+        match self {
+            Self::DurationMilliseconds => {
+                "Constructs a Duration from an exact signed number of milliseconds."
+            }
+            Self::DurationSeconds => {
+                "Constructs a Duration from an exact signed number of seconds."
+            }
+            Self::DurationMinutes => {
+                "Constructs a Duration from an exact signed number of minutes."
+            }
+        }
+    }
+
+    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
+        bind_call_arguments(
+            &format!("`Duration.{}`", self.name()),
+            &DURATION_VALUE_PARAMS,
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinMember {
     FloatSqrt,
     IntegerToFloat,
+    DurationToMilliseconds,
+    DurationToSeconds,
     StringLen,
     StringByteLen,
     StringContains,
@@ -737,6 +804,8 @@ impl BuiltinMember {
             | ("uint64", "to_float")
             | ("uint128", "to_float")
             | ("uintsize", "to_float") => Some(Self::IntegerToFloat),
+            ("Duration", "to_ms") => Some(Self::DurationToMilliseconds),
+            ("Duration", "to_seconds") => Some(Self::DurationToSeconds),
             ("bool", "to_string") => Some(Self::ScalarToString),
             ("int8", "to_string")
             | ("int16", "to_string")
@@ -915,6 +984,8 @@ impl BuiltinMember {
         match self {
             Self::FloatSqrt => "sqrt",
             Self::IntegerToFloat => "to_float",
+            Self::DurationToMilliseconds => "to_ms",
+            Self::DurationToSeconds => "to_seconds",
             Self::ScalarToString => "to_string",
             Self::StringLen => "len",
             Self::StringByteLen => "byte_len",
@@ -1076,6 +1147,8 @@ impl BuiltinMember {
         match self {
             Self::FloatSqrt => "sqrt() -> float64",
             Self::IntegerToFloat => "to_float() -> float64",
+            Self::DurationToMilliseconds => "to_ms() -> float64",
+            Self::DurationToSeconds => "to_seconds() -> float64",
             Self::ScalarToString => "to_string() -> String",
             Self::StringLen => "len() -> int32",
             Self::StringByteLen => "byte_len() -> int32",
@@ -1256,6 +1329,12 @@ impl BuiltinMember {
             Self::FloatSqrt => "Returns the square root of a `float64` value.",
             Self::IntegerToFloat => {
                 "Converts an integer to the nearest `float64` value; large values may round."
+            }
+            Self::DurationToMilliseconds => {
+                "Converts the Duration to the nearest representable number of milliseconds as `float64`."
+            }
+            Self::DurationToSeconds => {
+                "Converts the Duration to the nearest representable number of seconds as `float64`."
             }
             Self::ScalarToString => "Returns a `String` rendering of a numeric or `bool` value.",
             Self::StringLen => {
@@ -1484,6 +1563,8 @@ impl BuiltinMember {
         match self {
             Self::FloatSqrt
             | Self::IntegerToFloat
+            | Self::DurationToMilliseconds
+            | Self::DurationToSeconds
             | Self::ScalarToString
             | Self::StringLen
             | Self::StringByteLen

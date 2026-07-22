@@ -1,0 +1,4 @@
+def main() -> int32:
+    invalid = 1ms + 1
+    print(invalid)
+    return 0

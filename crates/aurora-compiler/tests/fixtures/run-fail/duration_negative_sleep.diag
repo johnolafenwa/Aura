@@ -1,0 +1,2 @@
+error[AU4001]: sleep(...) must be non-negative
+ --> crates/aurora-compiler/tests/fixtures/run-fail/duration_negative_sleep.au

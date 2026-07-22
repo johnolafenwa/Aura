@@ -437,9 +437,14 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 ## Timeouts And Cancellation
 
-Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`.
+Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as `attempt * 1ms`. Explicit values must be non-negative and fit the host deadline; invalid values return `io.Error.InvalidInput` rather than being treated as unlimited.
 
 For connect operations, one timeout budget covers hostname resolution, every resolved-address attempt, and the remaining protocol handshake. Aurora does not restart the full timeout for each address returned by DNS. Cancellation stops the Aurora task's wait immediately; an already-running host resolver or connect syscall may finish later on the bounded blocking service, and its result is discarded safely.
+
+`process.run(...)` follows the same rule through
+`process.Error.Io(io.Error.InvalidInput)`. Omitting its timeout uses an
+internal absence marker; explicit negative Duration values never act as that
+marker.
 
 The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns `io.Error.Cancelled` instead of waiting forever.
 

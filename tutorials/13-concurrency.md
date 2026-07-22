@@ -252,7 +252,15 @@ A simple delay:
 sleep(100ms)
 ```
 
+Computed delays use the same signed Duration arithmetic as other expressions.
+For example, a runtime attempt count can scale a base delay with
+`attempt * 1ms`. A sleep or timeout must be non-negative and fit the host
+deadline; invalid values fail instead of becoming unlimited waits.
+
 See [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au).
+For constructors, arithmetic, comparison, conversion, and sub-millisecond
+rendering, see
+[examples/concurrency/duration_arithmetic.au](../examples/concurrency/duration_arithmetic.au).
 
 ## Full Example
 

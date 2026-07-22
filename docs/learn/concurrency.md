@@ -36,6 +36,11 @@ The `with` block defines the task's lifetime. Leaving the block waits for childr
 
 Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
 
+The timeout is a signed nanosecond `Duration`. Literals cover integral `ms`,
+`s`, and `m` values; `Duration.ms(n)`, `Duration.seconds(n)`, checked
+arithmetic, and comparisons handle runtime-computed backoff. A negative or
+host-unrepresentable wait is invalid and never means “wait forever.”
+
 ## Fire-And-Forget Inside A Scope
 
 When the program does not need a handle to a child's result, use `start_soon`:

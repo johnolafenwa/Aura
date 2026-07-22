@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-13
+- Amended: 2026-07-22 (Phase 3 `FloorDiv` trigger)
 - Roadmap decision: D2
 
 ## Decision
@@ -17,10 +18,19 @@ Float `/` and `/=` remain true division. User-defined non-numeric `/` remains
 the `Div.div` operator-trait spelling.
 
 `//` is builtin floor division for equal integer operands and equal floating
-operands. `//=` is its compound-assignment form. Aurora does not add a
-`FloorDiv` trait; the new spellings do not participate in operator-trait
-dispatch. Together with the existing operators, the complete arithmetic
-compound-assignment family is `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`.
+operands. `//=` is its compound-assignment form. Together with the existing
+operators, the complete arithmetic compound-assignment family is `+=`, `-=`,
+`*=`, `/=`, `%=`, and `//=`.
+
+### Phase 3 amendment: `FloorDiv`
+
+The Phase 3 `Duration // int64` operation activates the extension point that
+this decision reserved. Aurora now has a `FloorDiv[Rhs, Out]` operator trait
+whose required method is `floor_div(borrow self, rhs: Rhs) -> Out`. Builtin
+numeric floor division and the builtin Duration rule take precedence; when no
+builtin rule applies, `//` and `//=` may dispatch through one applicable
+`FloorDiv.floor_div` implementation. This is an additive change to the
+original D2 surface and does not alter any numeric result.
 
 For integer operands and nonzero divisor `b`, floor division and remainder
 satisfy `a == (a // b) * b + (a % b)`, `a // b` is the mathematical quotient
@@ -46,7 +56,10 @@ either truncating division or floating true division. `//` makes the requested
 integer quotient explicit, while `.to_float()` makes a possibly rounding
 numeric-domain change explicit. Matching Python floor/remainder behavior keeps
 the quotient/remainder identity useful for negative values and avoids backend
-drift in difficult floating-point cases.
+drift in difficult floating-point cases. Adding `FloorDiv` only when a
+heterogeneous language operation needs it keeps the original builtin numeric
+semantics stable while giving `Duration // int64` and user-defined nonnumeric
+types one ordinary operator-dispatch contract.
 
 ## Completion tests
 
@@ -55,5 +68,7 @@ drift in difficult floating-point cases.
 - Run-pass fixtures covering signed integer and floating floor division and
   modulo, compound assignments, zero failures, and `.to_float()` rounding.
 - Backend-parity coverage for all observable arithmetic results and traps.
+- `FloorDiv` declaration, dispatch, ambiguity, compound-assignment, and
+  builtin-precedence tests, including `Duration // int64`.
 - LSP diagnostic fixtures under `tools/aurora-language-server/test/`.
 - Manual, tutorial, maintained example, and editor-grammar updates.

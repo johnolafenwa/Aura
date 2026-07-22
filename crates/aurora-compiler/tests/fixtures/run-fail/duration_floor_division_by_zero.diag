@@ -1,0 +1,5 @@
+error[AU4004]: division by zero
+ --> crates/aurora-compiler/tests/fixtures/run-fail/duration_floor_division_by_zero.au:2:11
+  |
+2 |     print(1ms // 0)
+  |           ^

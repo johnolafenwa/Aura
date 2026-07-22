@@ -45,6 +45,30 @@ fn d3_parser_accepts_int_alias_as_numeric_cast_target() {
 }
 
 #[test]
+fn parser_preserves_duration_nanoseconds_and_keeps_literal_payloads_nonnegative() {
+    for (source, expected_nanos) in [
+        ("5ms", 5_000_000),
+        ("2s", 2_000_000_000),
+        ("1m", 60_000_000_000),
+    ] {
+        let parsed = parse_expression(source).expect("duration literal should parse");
+        assert!(matches!(
+            parsed.kind,
+            ExprKind::DurationNanos(value) if value == expected_nanos
+        ));
+    }
+
+    let parsed = parse_expression("-1ms").expect("negative duration expression should parse");
+    assert!(matches!(
+        parsed.kind,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } if matches!(expr.kind, ExprKind::DurationNanos(1_000_000))
+    ));
+}
+
+#[test]
 fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     let lex_error =
         parse_expression("\"unterminated").expect_err("expected expression lexing failure");
@@ -880,8 +904,8 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
                                                                                 span,
                                                                             }),
                                                                             right: Box::new(Expr {
-                                                                                kind: ExprKind::DurationMillis(
-                                                                                    5,
+                                                                                kind: ExprKind::DurationNanos(
+                                                                                    5_000_000,
                                                                                 ),
                                                                                 span,
                                                                             }),

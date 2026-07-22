@@ -96,6 +96,14 @@ fn lexical_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU1001", span, message)
 }
 
+fn duration_literal_nanos(value: u128, nanos_per_unit: u128, span: Span) -> Result<TokenKind> {
+    let nanos = value
+        .checked_mul(nanos_per_unit)
+        .and_then(|value| i128::try_from(value).ok())
+        .ok_or_else(|| lexical_error(span, "invalid duration literal"))?;
+    Ok(TokenKind::DurationLiteral(nanos))
+}
+
 fn decode_escape(
     chars: &[(usize, char)],
     escape_start: usize,
@@ -622,61 +630,27 @@ fn tokenize_line(
                             'm' => {
                                 if matches!(chars.get(index + 1), Some((_, 's'))) {
                                     index += 2;
-                                    Some(TokenKind::DurationLiteral(match i128::try_from(value) {
-                                        Ok(value) => value,
-                                        Err(_) => {
-                                            return Err(lexical_error(
-                                                Span::new(line_no, column),
-                                                "invalid duration literal",
-                                            ));
-                                        }
-                                    }))
+                                    Some(duration_literal_nanos(
+                                        value,
+                                        1_000_000,
+                                        Span::new(line_no, column),
+                                    )?)
                                 } else {
                                     index += 1;
-                                    let multiplied = match value.checked_mul(60_000) {
-                                        Some(value) => value,
-                                        None => {
-                                            return Err(lexical_error(
-                                                Span::new(line_no, column),
-                                                "invalid duration literal",
-                                            ));
-                                        }
-                                    };
-                                    Some(TokenKind::DurationLiteral(
-                                        match i128::try_from(multiplied) {
-                                            Ok(value) => value,
-                                            Err(_) => {
-                                                return Err(lexical_error(
-                                                    Span::new(line_no, column),
-                                                    "invalid duration literal",
-                                                ));
-                                            }
-                                        },
-                                    ))
+                                    Some(duration_literal_nanos(
+                                        value,
+                                        60_000_000_000,
+                                        Span::new(line_no, column),
+                                    )?)
                                 }
                             }
                             's' => {
                                 index += 1;
-                                let multiplied = match value.checked_mul(1000) {
-                                    Some(value) => value,
-                                    None => {
-                                        return Err(lexical_error(
-                                            Span::new(line_no, column),
-                                            "invalid duration literal",
-                                        ));
-                                    }
-                                };
-                                Some(TokenKind::DurationLiteral(
-                                    match i128::try_from(multiplied) {
-                                        Ok(value) => value,
-                                        Err(_) => {
-                                            return Err(lexical_error(
-                                                Span::new(line_no, column),
-                                                "invalid duration literal",
-                                            ));
-                                        }
-                                    },
-                                ))
+                                Some(duration_literal_nanos(
+                                    value,
+                                    1_000_000_000,
+                                    Span::new(line_no, column),
+                                )?)
                             }
                             _ => None,
                         }

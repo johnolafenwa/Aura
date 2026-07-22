@@ -49,7 +49,23 @@ grep -Fq '{ ("*" | "/" | "//" | "%"), prefix-expression } ;' docs/manual/grammar
 grep -Fq 'integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division' docs/manual/static-semantics.md
 grep -Fq 'CPython-compatible divmod correction' docs/manual/execution-model.md
 grep -Fq 'integer `.to_float()` converts to `float64`' docs/manual/execution-model.md
-grep -Fq 'There is no `FloorDiv` operator trait.' docs/manual/generics-and-traits.md
+grep -Fq '| `left // right` | `FloorDiv.floor_div` |' docs/manual/generics-and-traits.md
+grep -Fq 'trait FloorDiv[Rhs, Out]:' docs/manual/generics-and-traits.md
+grep -Fq '`Duration` stores a signed 128-bit count of nanoseconds.' docs/manual/types.md
+grep -Fq '| `Duration.ms` | `Duration.ms(value: int64) -> Duration`' docs/manual/api-index.md
+grep -Fq '`Duration // int64`' docs/manual/expressions.md
+grep -Fq '`//=` uses the builtin numeric or' docs/manual/statements.md
+grep -Fq 'attempt * 1ms' docs/manual/concurrency.md
+grep -Fq 'using at most six fractional digits and trimming trailing fractional zeros' docs/manual/execution-model.md
+grep -Fq 'exact low and high 64-bit' docs/manual/execution-model.md
+grep -Fq 'Deadline overflow never' docs/manual/execution-model.md
+grep -Fq 'Omitting `process.run(timeout=...)` uses an internal absence marker' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
+grep -Fq '0019-duration-conversion-and-timer-policy.md' architecture_docs/decisions/README.md
+test -s examples/concurrency/duration_arithmetic.au
+grep -Fq 'Duration.minutes(-1) < 0ms' examples/concurrency/duration_arithmetic.au
+grep -Fq 'Duration.seconds(2).to_ms()' examples/concurrency/duration_arithmetic.au
+grep -Fq '`duration_arithmetic.au`' examples/README.md
 test -s examples/basics/numbers.au
 grep -Fq '`numbers.au`' examples/README.md
 grep -Fq '[examples/basics/numbers.au]' tutorials/07-strings-and-numbers.md
@@ -157,6 +173,22 @@ if rg -n 'no (integer )?floor division|integer division truncates toward zero|Re
   tutorials \
   docs/learn; then
   echo "reference still describes retired integer division behavior" >&2
+  exit 1
+fi
+
+if rg -n 'There is no `FloorDiv`|has no `FloorDiv`|no `FloorDiv` operator trait|Duration arithmetic[^.\n]*(not implemented|unavailable)|signed 128-bit milliseconds|normalized to milliseconds|DurationLiteral\(i128\)[^.\n]*milliseconds' \
+  architecture_docs \
+  docs/manual \
+  tutorials \
+  examples; then
+  echo "reference still describes the retired Duration or FloorDiv surface" >&2
+  exit 1
+fi
+
+if rg -U -n '`//`[^\n]*has no\s+operator trait|`//` is deliberately absent' \
+  docs/manual \
+  tutorials; then
+  echo "reference still rejects the FloorDiv extension point" >&2
   exit 1
 fi
 

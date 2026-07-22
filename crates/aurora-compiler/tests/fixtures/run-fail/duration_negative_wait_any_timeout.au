@@ -1,0 +1,4 @@
+def main() -> int32:
+    tasks = Vec[Task[int32]]()
+    print(wait_any(tasks, timeout=Duration.ms(-1)))
+    return 0

@@ -240,23 +240,28 @@ When builtin numeric/string operator rules do not apply, these operator spelling
 | `left - right` | `Sub.sub` |
 | `left * right` | `Mul.mul` |
 | `left / right` | `Div.div` |
+| `left // right` | `FloorDiv.floor_div` |
 | `left % right` | `Mod.mod` |
 | `-value` | `Neg.neg` |
 | `not value` | `Not.not` |
 | `<`, `<=`, `>`, `>=` | `Ord.lt`, `Ord.le`, `Ord.gt`, `Ord.ge` |
 
-There is no `FloorDiv` operator trait. `//` and `//=` are builtin numeric
-floor-division spellings only. Equal integer operands with `/` are rejected
-with the integer-division teaching diagnostic rather than dispatched to
-`Div.div`; `/` can still request `Div.div` for an applicable non-numeric user
-type. The divisor-sign rule for `%` describes builtin numeric remainder;
-`Mod.mod` on a user type has the semantics of that implementation.
+Builtin numeric `//` and the heterogeneous builtin `Duration // int64` rule
+take precedence over trait dispatch. Otherwise `//` and `//=` request an
+applicable `FloorDiv.floor_div` implementation. Equal integer operands with
+`/` are rejected with the integer-division teaching diagnostic rather than
+dispatched to `Div.div`; `/` can still request `Div.div` for an applicable
+non-numeric user type. The divisor-sign rule for `%` describes builtin numeric
+remainder; `Mod.mod` on a user type has the semantics of that implementation.
 
 The maintained generic shapes are illustrated by:
 
 ```python
 trait Add[Rhs, Out]:
     def add(borrow self, rhs: Rhs) -> Out
+
+trait FloorDiv[Rhs, Out]:
+    def floor_div(borrow self, rhs: Rhs) -> Out
 
 trait Neg[Out]:
     def neg(borrow self) -> Out
@@ -268,7 +273,9 @@ trait Ord[Rhs]:
     def ge(borrow self, rhs: Rhs) -> bool
 ```
 
-`Sub`, `Mul`, `Div`, and `Mod` follow the binary `Rhs, Out` shape; `Not` follows the unary `Out` shape. Ordering methods must return `bool`.
+`Sub`, `Mul`, `Div`, and `Mod` follow the same binary `Rhs, Out` shape as
+`Add` and `FloorDiv`; `Not` follows the unary `Out` shape. Ordering methods
+must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do not use an equality trait in Aurora 0.1. Builtin operations take precedence where their concrete scalar/string rule applies.
 

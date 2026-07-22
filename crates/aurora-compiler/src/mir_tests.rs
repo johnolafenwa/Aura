@@ -77,6 +77,180 @@ fn d3_mir_canonicalizes_int_and_defaults_unhinted_integer_values_to_int64() {
 }
 
 #[test]
+fn duration_nanoseconds_lower_to_an_exact_i128_operand() {
+    let exact = i128::MAX - 123;
+    let mut lowerer = trait_lowerer();
+
+    assert_eq!(
+        lowerer.lower_expr(&expr(ExprKind::DurationNanos(exact))),
+        Operand::Duration(exact)
+    );
+
+    let largest_millisecond_count = i128::MAX as u128 / 1_000_000;
+    let expected_nanos = i128::try_from(largest_millisecond_count * 1_000_000)
+        .expect("largest millisecond literal should fit signed i128 nanoseconds");
+    let module = crate::lower_source_to_mir(&format!(
+        "def exact() -> Duration:\n    return {largest_millisecond_count}ms\n\ndef main() -> int32:\n    return 0\n"
+    ))
+    .expect("largest millisecond literal should lower to MIR");
+    let exact = module
+        .functions
+        .iter()
+        .find(|function| function.name == "exact")
+        .expect("exact should lower");
+    assert!(exact.blocks.iter().any(|block| {
+        matches!(block.terminator, Terminator::Return(Operand::Duration(value)) if value == expected_nanos)
+    }));
+}
+
+#[test]
+fn duration_constructors_and_conversions_lower_to_canonical_call_targets() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def milliseconds(value: int64) -> float64:
+    duration = Duration.seconds(value)
+    return duration.to_ms()
+
+def main() -> int32:
+    return 0
+"#,
+    )
+    .expect("Duration constructors and conversion methods should lower to MIR");
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "milliseconds")
+        .expect("milliseconds helper should lower");
+    assert!(function
+        .blocks
+        .iter()
+        .any(
+            |block| block.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+                    ..
+                } if name == "Duration.seconds"
+            ))
+        ));
+    assert!(function
+        .blocks
+        .iter()
+        .any(
+            |block| block.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+                    ..
+                } if field == "to_ms"
+            ))
+        ));
+}
+
+#[test]
+fn duration_builtin_operator_matrix_takes_precedence_over_traits() {
+    let duration = Type::named("Duration");
+    let int64 = Type::named("int64");
+    let int32 = Type::named("int32");
+
+    for op in [
+        BinaryOp::Add,
+        BinaryOp::Sub,
+        BinaryOp::Eq,
+        BinaryOp::NotEq,
+        BinaryOp::Less,
+        BinaryOp::LessEq,
+        BinaryOp::Greater,
+        BinaryOp::GreaterEq,
+    ] {
+        assert!(is_builtin_binary_operator(op, &duration, &duration));
+    }
+    assert!(is_builtin_binary_operator(BinaryOp::Mul, &duration, &int64));
+    assert!(is_builtin_binary_operator(BinaryOp::Mul, &int64, &duration));
+    assert!(is_builtin_binary_operator(
+        BinaryOp::FloorDiv,
+        &duration,
+        &int64
+    ));
+
+    for (op, left, right) in [
+        (BinaryOp::Div, &duration, &duration),
+        (BinaryOp::Mod, &duration, &duration),
+        (BinaryOp::FloorDiv, &int64, &duration),
+        (BinaryOp::Mul, &duration, &int32),
+    ] {
+        assert!(!is_builtin_binary_operator(op, left, right));
+    }
+}
+
+#[test]
+fn duration_operators_with_integer_literals_keep_heterogeneous_builtin_types() {
+    let source = r#"
+def main() -> int32:
+    print(1ms // 0)
+    print(3 * 1ms)
+    print((3 * 1ms).to_ms())
+    return 0
+"#;
+    let program = crate::check_source(source).expect("Duration literal operators should check");
+    let module = lower(&program);
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    assert!(main.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Binary {
+                        op: BinaryOp::FloorDiv,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+    }));
+    assert!(!main.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+                    ..
+                } if field == "floor_div"
+            )
+        })
+    }));
+    assert!(main.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+                    ..
+                } if field == "to_ms"
+            )
+        })
+    }));
+}
+
+#[test]
 fn d6_mir_uses_declaration_resolved_parameter_conventions() {
     let module = crate::lower_source_to_mir(
         r#"

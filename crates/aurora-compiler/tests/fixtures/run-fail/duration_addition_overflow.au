@@ -1,0 +1,4 @@
+def main() -> int32:
+    maximum = 170141183460469231731687303715884ms + (105727ms // 1000000)
+    print(maximum + (1ms // 1000000))
+    return 0

@@ -82,6 +82,39 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_duration_api_uses_centralized_constructor_and_conversion_dispatch() {
+    let source = r#"
+def main() -> int32:
+    base = Duration.ms(125)
+    seconds = Duration.seconds(2)
+    minutes = Duration.minutes(-1)
+    combined = base + seconds
+    scaled = 3 * combined
+    reverse_scaled = combined * 3
+    print(scaled // 2)
+    print(reverse_scaled)
+    print(minutes < 0ms)
+    print(combined.to_ms())
+    print(combined.to_seconds())
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("Duration API source should lower to MIR");
+    let object = emit_host_object(&mir).expect("Duration API should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for required in [
+        "aurora_direct_duration_from_i64",
+        "aurora_direct_duration_to_float",
+        "aurora_direct_binary_value_at",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "Duration direct code should reference `{required}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",
@@ -5637,9 +5670,14 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
 
     let large_duration_module =
         module_with_main_call(Rvalue::Use(Operand::Duration((i64::MAX as i128) + 1)));
-    let duration_error = emit_host_object(&large_duration_module)
-        .expect_err("oversized duration literals should be rejected");
-    assert!(duration_error.contains("duration constants that fit in host i64"));
+    let large_duration_object = emit_host_object(&large_duration_module)
+        .expect("duration literals beyond i64 should use the two-limb runtime ABI");
+    assert!(
+        object_referenced_symbols(&large_duration_object)
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_duration_literal")),
+        "direct duration literals should remain opaque after runtime construction"
+    );
 
     let missing_place_module =
         module_with_main_call(Rvalue::Use(Operand::Place("missing".to_string())));

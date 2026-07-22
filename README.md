@@ -93,6 +93,9 @@ Current compiler workflow:
   - execute bounded dispatch across specialized generic trait impls
 - `cargo run -p aura -- run examples/basics/numbers.au`
   - execute floor division, divisor-sign remainder, and rounded integer `.to_float()` conversion
+- `cargo run -p aura -- run examples/concurrency/duration_arithmetic.au`
+  - execute signed Duration constructors, runtime scaling, floor division,
+    comparison, and floating unit conversion
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`

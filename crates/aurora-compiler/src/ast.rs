@@ -326,7 +326,10 @@ pub struct Expr {
 pub enum ExprKind {
     Name(String),
     Int(u128),
-    DurationMillis(i128),
+    DurationNanos(i128),
+    /// Compiler-generated marker for an omitted builtin default. Source syntax
+    /// never constructs this expression.
+    BuiltinOmitted,
     Float(f64),
     Bool(bool),
     String(String),

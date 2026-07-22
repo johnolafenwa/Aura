@@ -12,7 +12,8 @@ use crate::ast::{
     VariantPattern, WithStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
+    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction, BuiltinFunction,
+    BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::integer::{
@@ -165,13 +166,49 @@ pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'sta
         BinaryOp::Sub => Some(("Sub", "sub")),
         BinaryOp::Mul => Some(("Mul", "mul")),
         BinaryOp::Div => Some(("Div", "div")),
-        BinaryOp::FloorDiv => None,
+        BinaryOp::FloorDiv => Some(("FloorDiv", "floor_div")),
         BinaryOp::Mod => Some(("Mod", "mod")),
         BinaryOp::Less => Some(("Ord", "lt")),
         BinaryOp::LessEq => Some(("Ord", "le")),
         BinaryOp::Greater => Some(("Ord", "gt")),
         BinaryOp::GreaterEq => Some(("Ord", "ge")),
         BinaryOp::And | BinaryOp::Or | BinaryOp::Eq | BinaryOp::NotEq => None,
+    }
+}
+
+pub(crate) fn is_duration_type(ty: &Type) -> bool {
+    *ty == Type::named("Duration")
+}
+
+pub(crate) fn builtin_duration_binary_result(
+    op: BinaryOp,
+    left_ty: &Type,
+    right_ty: &Type,
+) -> Option<Type> {
+    let duration = Type::named("Duration");
+    let int64 = Type::named("int64");
+    match op {
+        BinaryOp::Add | BinaryOp::Sub if left_ty == &duration && right_ty == &duration => {
+            Some(duration)
+        }
+        BinaryOp::Mul
+            if (left_ty == &duration && right_ty == &int64)
+                || (left_ty == &int64 && right_ty == &duration) =>
+        {
+            Some(duration)
+        }
+        BinaryOp::FloorDiv if left_ty == &duration && right_ty == &int64 => Some(duration),
+        BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Less
+        | BinaryOp::LessEq
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEq
+            if left_ty == &duration && right_ty == &duration =>
+        {
+            Some(Type::named("bool"))
+        }
+        _ => None,
     }
 }
 
@@ -2242,7 +2279,8 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::String(_)
-        | ExprKind::DurationMillis(_) => None,
+        | ExprKind::DurationNanos(_)
+        | ExprKind::BuiltinOmitted => None,
     }
 }
 
@@ -3808,6 +3846,9 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     saw_default = true;
+                    if matches!(default.kind, ExprKind::BuiltinOmitted) {
+                        continue;
+                    }
                     if let Some(name) = default_argument_references_param(default, &param_names) {
                         return Err(Diagnostic::at(
                             default.span,
@@ -5436,7 +5477,11 @@ impl<'a> FunctionChecker<'a> {
                     Ok(target_ty)
                 }
             }
-            ExprKind::DurationMillis(_) => Ok(Type::named("Duration")),
+            ExprKind::DurationNanos(_) => Ok(Type::named("Duration")),
+            ExprKind::BuiltinOmitted => Err(Diagnostic::at(
+                expr.span,
+                "internal builtin omitted-default marker cannot be used as a source expression",
+            )),
             ExprKind::Float(_) => Ok(expected
                 .filter(|ty| is_float_type(ty))
                 .cloned()
@@ -5761,7 +5806,8 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         Ok(operator.return_type)
                     } else {
-                        Err(Diagnostic::at(
+                        Err(Diagnostic::coded_at(
+                            "AU2003",
                             expr.span,
                             format!("unary `-` expects a numeric value, found `{}`", value_ty),
                         ))
@@ -6258,6 +6304,9 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn binary_uses_builtin_value_semantics(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> bool {
+        if is_duration_type(left_ty) || is_duration_type(right_ty) {
+            return true;
+        }
         if left_ty != right_ty {
             return false;
         }
@@ -6285,6 +6334,19 @@ impl<'a> FunctionChecker<'a> {
         left_ty: Type,
         right_ty: Type,
     ) -> Result<Type> {
+        if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
+            return Ok(result);
+        }
+        if is_duration_type(&left_ty) || is_duration_type(&right_ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!(
+                    "unsupported Duration operands: `{}` and `{}`; supported forms are `Duration + Duration`, `Duration - Duration`, `Duration * int64`, `int64 * Duration`, `Duration // int64`, and comparisons between two Duration values",
+                    left_ty, right_ty
+                ),
+            ));
+        }
         if op == BinaryOp::Div && left_ty == right_ty && is_integer_type(&left_ty) {
             return Err(Diagnostic::at(
                 span,
@@ -6833,6 +6895,45 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 return Ok(Type::named("TaskGroup"));
+            }
+        }
+
+        if let ExprKind::Member { object, field } = &base_callee.kind {
+            if let ExprKind::Name(type_name) = &object.kind {
+                if let Some(constructor) = BuiltinAssociatedFunction::resolve(type_name, field) {
+                    if explicit_type_args.is_some() {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!(
+                                "`Duration.{}` does not take explicit type arguments",
+                                constructor.name()
+                            ),
+                        ));
+                    }
+                    let ordered_args = constructor.bind_args(args, span)?;
+                    let value_arg = required_ordered_arg(
+                        &ordered_args,
+                        0,
+                        span,
+                        "internal error: Duration constructor should bind one value argument",
+                    )?;
+                    let actual = self.type_of_expr_hint(
+                        &value_arg.value,
+                        locals,
+                        Some(&Type::named("int64")),
+                    )?;
+                    if actual != Type::named("int64") {
+                        return Err(Diagnostic::at(
+                            value_arg.span,
+                            format!(
+                                "`Duration.{}` expects `int64`, found `{}`",
+                                constructor.name(),
+                                actual
+                            ),
+                        ));
+                    }
+                    return Ok(Type::named("Duration"));
+                }
             }
         }
 
@@ -7721,6 +7822,16 @@ impl<'a> FunctionChecker<'a> {
                             args,
                             locals,
                         )?;
+                    }
+                }
+                if receiver_ty == Type::named("Duration") {
+                    if let Some(
+                        builtin_member @ (BuiltinMember::DurationToMilliseconds
+                        | BuiltinMember::DurationToSeconds),
+                    ) = BuiltinMember::resolve("Duration", field)
+                    {
+                        builtin_member.bind_args(args, span)?;
+                        return Ok(Type::named("float64"));
                     }
                 }
                 if let Type::Module(module_path) = &receiver_ty {
@@ -11848,7 +11959,8 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
             ExprKind::Int(_)
-            | ExprKind::DurationMillis(_)
+            | ExprKind::DurationNanos(_)
+            | ExprKind::BuiltinOmitted
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_) => {}
@@ -11905,6 +12017,13 @@ impl<'a> FunctionChecker<'a> {
                 Ok(())
             }
             ExprKind::Member { object, field } => {
+                if matches!(
+                    &object.kind,
+                    ExprKind::Name(type_name)
+                        if BuiltinAssociatedFunction::resolve(type_name, field).is_some()
+                ) {
+                    return Ok(());
+                }
                 if self.is_enum_constructor_object(object) {
                     return Ok(());
                 }
@@ -12328,6 +12447,13 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Member { object, field } => {
+                if matches!(
+                    &object.kind,
+                    ExprKind::Name(type_name)
+                        if BuiltinAssociatedFunction::resolve(type_name, field).is_some()
+                ) {
+                    return Ok(None);
+                }
                 if self.is_enum_constructor_object(object) {
                     return Ok(None);
                 }
@@ -13822,15 +13948,19 @@ impl<'a> FunctionChecker<'a> {
                         "internal error: optional parameter is missing its default expression",
                     )
                 })?;
-                match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
-                    Ok(actual) => actual,
-                    Err(error) if has_unresolved_type_params(&hinted_expected) => {
-                        match self.type_of_expr(default, locals) {
-                            Ok(actual) => actual,
-                            Err(_) => return Err(error),
+                if matches!(default.kind, ExprKind::BuiltinOmitted) {
+                    hinted_expected.clone()
+                } else {
+                    match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
+                        Ok(actual) => actual,
+                        Err(error) if has_unresolved_type_params(&hinted_expected) => {
+                            match self.type_of_expr(default, locals) {
+                                Ok(actual) => actual,
+                                Err(_) => return Err(error),
+                            }
                         }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 }
             };
             let nested_move_span = argument

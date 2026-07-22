@@ -113,8 +113,10 @@ transfer followed by a simple write; for a Map, use `get(key)` or `remove(key)`
 and explicit simple assignment. Runtime overflow/division behavior is the same
 as for the corresponding expression operator. Integer `/=` is rejected with
 the integer `/` teaching diagnostic; use integer `//=` for a floor quotient.
-Floating `/=` remains true division. `//=` is builtin-only because `//` has no
-operator trait.
+Floating `/=` remains true division. `//=` uses the builtin numeric or
+Duration rule when applicable and otherwise may dispatch through
+`FloorDiv.floor_div`; as with every compound assignment, the result must have
+the target's existing type.
 
 ### Assignment Evaluation
 

@@ -1057,6 +1057,139 @@ test("compiler bridge completes to_float for every integer type", async () => {
   }
 });
 
+test("compiler bridge exposes the complete Duration surface and operator precedence", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-duration-"));
+  const source = [
+    "trait FloorDiv[Rhs, Out]:",
+    "    def floor_div(borrow self, rhs: Rhs) -> Out",
+    "",
+    "class Counter:",
+    "    value: int64",
+    "",
+    "impl FloorDiv[Counter, Counter] for Counter:",
+    "    def floor_div(borrow self, rhs: Counter) -> Counter:",
+    "        return Counter(value=self.value + rhs.value)",
+    "",
+    "def inspect(value: int64, left: Duration, right: Duration) -> float64:",
+    "    millis: Duration = Duration.ms(value)",
+    "    seconds: Duration = Duration.seconds(value=value)",
+    "    minutes: Duration = Duration.minutes(value)",
+    "    added: Duration = left + right",
+    "    subtracted: Duration = left - right",
+    "    scaled_right: Duration = left * value",
+    "    scaled_left: Duration = value * right",
+    "    divided: Duration = left // value",
+    "    numeric: int64 = value // 2",
+    "    custom: Counter = Counter(value=1) // Counter(value=2)",
+    "    equal: bool = left == right",
+    "    unequal: bool = left != right",
+    "    less: bool = left < right",
+    "    less_equal: bool = left <= right",
+    "    greater: bool = left > right",
+    "    greater_equal: bool = left >= right",
+    "    return millis.to_ms() + seconds.to_seconds() + minutes.to_ms()",
+    "",
+    "def main() -> int32:",
+    "    return 0",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const signature of [
+      "type Duration",
+      "ms(value: int64) -> Duration",
+      "seconds(value: int64) -> Duration",
+      "minutes(value: int64) -> Duration",
+      "to_ms() -> float64",
+      "to_seconds() -> float64"
+    ]) {
+      assert.ok(
+        analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
+        `missing Duration hover: ${signature}`
+      );
+    }
+
+    const staticSource = source.replace(
+      "    return 0\n",
+      "    Duration.\n    return 0\n"
+    );
+    const staticLine = staticSource
+      .split("\n")
+      .findIndex((line) => line.trim() === "Duration.");
+    const staticCharacter = staticSource.split("\n")[staticLine].indexOf(".") + 1;
+    const staticCompletions = await completeWithCompiler(
+      mainUri,
+      staticSource,
+      staticLine,
+      staticCharacter,
+      "."
+    );
+    const staticDetails = new Map(
+      staticCompletions.map((item) => [item.name, item.detail])
+    );
+    assert.equal(staticDetails.get("ms"), "ms(value: int64) -> Duration");
+    assert.equal(staticDetails.get("seconds"), "seconds(value: int64) -> Duration");
+    assert.equal(staticDetails.get("minutes"), "minutes(value: int64) -> Duration");
+    assert.equal(staticDetails.has("to_ms"), false);
+
+    const instanceSource = source.replace(
+      "    return millis.to_ms() + seconds.to_seconds() + minutes.to_ms()\n",
+      "    left.\n    return millis.to_ms() + seconds.to_seconds() + minutes.to_ms()\n"
+    );
+    const instanceLine = instanceSource
+      .split("\n")
+      .findIndex((line) => line.trim() === "left.");
+    const instanceCharacter = instanceSource.split("\n")[instanceLine].indexOf(".") + 1;
+    const instanceCompletions = await completeWithCompiler(
+      mainUri,
+      instanceSource,
+      instanceLine,
+      instanceCharacter,
+      "."
+    );
+    const instanceDetails = new Map(
+      instanceCompletions.map((item) => [item.name, item.detail])
+    );
+    assert.equal(instanceDetails.get("to_ms"), "to_ms() -> float64");
+    assert.equal(instanceDetails.get("to_seconds"), "to_seconds() -> float64");
+    assert.equal(instanceDetails.has("seconds"), false);
+
+    const mixedAnalysis = await analyzeWithCompiler(
+      mainUri,
+      "def invalid(duration: Duration):\n    value = duration / duration\n"
+    );
+    assert.equal(mixedAnalysis.diagnostics.length, 1);
+    assert.equal(
+      mixedAnalysis.diagnostics[0].message,
+      "unsupported Duration operands: `Duration` and `Duration`; supported forms are `Duration + Duration`, `Duration - Duration`, `Duration * int64`, `int64 * Duration`, `Duration // int64`, and comparisons between two Duration values"
+    );
+    assert.equal(mixedAnalysis.diagnostics[0].code, "AU2003");
+    const lspDiagnostic = compilerDiagnosticsToLsp(mixedAnalysis, mainUri)[0];
+    assert.equal(lspDiagnostic.source, "aurora-compiler");
+    assert.equal(lspDiagnostic.code, "AU2003");
+    assert.equal(lspDiagnostic.message, mixedAnalysis.diagnostics[0].message);
+
+    const constructorAnalysis = await analyzeWithCompiler(
+      mainUri,
+      "def invalid():\n    value = Duration.seconds(true)\n"
+    );
+    assert.equal(constructorAnalysis.diagnostics.length, 1);
+    assert.equal(
+      constructorAnalysis.diagnostics[0].message,
+      "`Duration.seconds` expects `int64`, found `bool`"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge understands trait symbols and trait method completions", async () => {
   setWorkspaceRoots([repoRoot]);
   const analysis = await analyzeWithCompiler(traitUri, traitSource);

@@ -98,9 +98,9 @@ fn lexes_strings_fstrings_numbers_and_durations() {
     assert!(tokens.contains(&TokenKind::FloatLiteral(1.5)));
     assert!(tokens.contains(&TokenKind::FloatLiteral(1000.0)));
     assert!(tokens.contains(&TokenKind::FloatLiteral(0.25)));
-    assert!(tokens.contains(&TokenKind::DurationLiteral(5)));
-    assert!(tokens.contains(&TokenKind::DurationLiteral(2_000)));
-    assert!(tokens.contains(&TokenKind::DurationLiteral(60_000)));
+    assert!(tokens.contains(&TokenKind::DurationLiteral(5_000_000)));
+    assert!(tokens.contains(&TokenKind::DurationLiteral(2_000_000_000)));
+    assert!(tokens.contains(&TokenKind::DurationLiteral(60_000_000_000)));
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn lexes_nested_interpolations_and_reports_duration_overflow() {
     assert!(tokens.contains(&TokenKind::FStringLiteral(
         "value={items[0][1]} and {greet(name=\"World\")}".to_string()
     )));
-    assert!(tokens.contains(&TokenKind::DurationLiteral(2_520_000)));
+    assert!(tokens.contains(&TokenKind::DurationLiteral(2_520_000_000_000)));
 
     let overflow = lex(&format!("value = {}m\n", u128::MAX)).unwrap_err();
     assert!(overflow.message.contains("invalid duration literal"));
@@ -309,18 +309,27 @@ fn lexer_covers_successful_escape_decoding_and_signed_duration_range_failures() 
         "prefix {call(text=\"W\\\"orld\")} suffix".to_string()
     )));
     assert!(tokens.contains(&TokenKind::FStringLiteral("\n\t\"\\".to_string())));
-    assert!(tokens.contains(&TokenKind::DurationLiteral(1)));
+    assert!(tokens.contains(&TokenKind::DurationLiteral(1_000_000)));
 
-    let invalid_ms = lex(&format!("value = {}ms\n", (i128::MAX as u128) + 1))
-        .expect_err("millisecond duration outside signed range should fail");
+    let invalid_ms = lex(&format!(
+        "value = {}ms\n",
+        (i128::MAX as u128 / 1_000_000) + 1
+    ))
+    .expect_err("millisecond duration outside signed range should fail");
     assert!(invalid_ms.message.contains("invalid duration literal"));
 
-    let invalid_s = lex(&format!("value = {}s\n", (i128::MAX as u128 / 1000) + 1))
-        .expect_err("second duration outside signed range should fail");
+    let invalid_s = lex(&format!(
+        "value = {}s\n",
+        (i128::MAX as u128 / 1_000_000_000) + 1
+    ))
+    .expect_err("second duration outside signed range should fail");
     assert!(invalid_s.message.contains("invalid duration literal"));
 
-    let invalid_m = lex(&format!("value = {}m\n", (i128::MAX as u128 / 60_000) + 1))
-        .expect_err("minute duration outside signed range should fail");
+    let invalid_m = lex(&format!(
+        "value = {}m\n",
+        (i128::MAX as u128 / 60_000_000_000) + 1
+    ))
+    .expect_err("minute duration outside signed range should fail");
     assert!(invalid_m.message.contains("invalid duration literal"));
 
     let checked_mul_overflow_s =
@@ -338,6 +347,42 @@ fn lexer_covers_successful_escape_decoding_and_signed_duration_range_failures() 
     let invalid_int =
         lex(&format!("value = {}0\n", u128::MAX)).expect_err("oversized integers should fail");
     assert!(invalid_int.message.contains("invalid integer literal"));
+}
+
+#[test]
+fn duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary() {
+    const UNITS: [(&str, u128); 3] = [
+        ("ms", 1_000_000),
+        ("s", 1_000_000_000),
+        ("m", 60_000_000_000),
+    ];
+
+    for (suffix, nanos_per_unit) in UNITS {
+        let largest_count = i128::MAX as u128 / nanos_per_unit;
+        let expected_nanos = i128::try_from(largest_count * nanos_per_unit)
+            .expect("largest in-range duration should fit signed i128");
+        let tokens = lex(&format!("value = {largest_count}{suffix}\n"))
+            .expect("largest in-range duration literal should lex");
+        assert!(tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::DurationLiteral(expected_nanos)));
+
+        let error = lex(&format!("value = {}{suffix}\n", largest_count + 1))
+            .expect_err("first out-of-range duration literal should fail");
+        assert!(error.message.contains("invalid duration literal"));
+    }
+
+    let zeroes = kinds("zero_ms = 0ms\nzero_s = 0s\nzero_m = 0m\nnegative = -1ms\n");
+    assert_eq!(
+        zeroes
+            .iter()
+            .filter(|kind| **kind == TokenKind::DurationLiteral(0))
+            .count(),
+        3
+    );
+    assert!(zeroes
+        .windows(2)
+        .any(|pair| { pair == [TokenKind::Minus, TokenKind::DurationLiteral(1_000_000),] }));
 }
 
 #[test]

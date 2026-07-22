@@ -14,7 +14,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
-use crate::call::BuiltinMember;
+use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::Span;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMapEntry,
@@ -262,6 +262,8 @@ struct NativeCodegen<'a> {
     parse_int64: FuncId,
     parse_float64: FuncId,
     duration_literal: FuncId,
+    duration_from_i64: FuncId,
+    duration_to_float: FuncId,
     range_new: FuncId,
     range_current: FuncId,
     range_end: FuncId,
@@ -718,7 +720,9 @@ impl<'a> NativeCodegen<'a> {
             parse_int32 => ("aurora_direct_parse_int32", [types::I64], Some(types::I64)),
             parse_int64 => ("aurora_direct_parse_int64", [types::I64], Some(types::I64)),
             parse_float64 => ("aurora_direct_parse_float64", [types::I64], Some(types::I64)),
-            duration_literal => ("aurora_direct_duration_literal", [types::I64], Some(types::I64)),
+            duration_literal => ("aurora_direct_duration_literal", [types::I64, types::I64], Some(types::I64)),
+            duration_from_i64 => ("aurora_direct_duration_from_i64", [types::I64, types::I64], Some(types::I64)),
+            duration_to_float => ("aurora_direct_duration_to_float", [types::I64, types::I64], Some(types::F64)),
             range_new => ("aurora_direct_range_new", [types::I64, types::I64], Some(types::I64)),
             range_current => ("aurora_direct_range_current", [types::I64], Some(types::I64)),
             range_end => ("aurora_direct_range_end", [types::I64], Some(types::I64)),
@@ -1091,6 +1095,8 @@ impl<'a> NativeCodegen<'a> {
             parse_int64,
             parse_float64,
             duration_literal,
+            duration_from_i64,
+            duration_to_float,
             range_new,
             range_current,
             range_end,
@@ -1741,6 +1747,12 @@ impl<'a> NativeCodegen<'a> {
         let duration_literal = self
             .object
             .declare_func_in_func(self.duration_literal, builder.func);
+        let duration_from_i64 = self
+            .object
+            .declare_func_in_func(self.duration_from_i64, builder.func);
+        let duration_to_float = self
+            .object
+            .declare_func_in_func(self.duration_to_float, builder.func);
         let range_new = self
             .object
             .declare_func_in_func(self.range_new, builder.func);
@@ -2502,6 +2514,8 @@ impl<'a> NativeCodegen<'a> {
             parse_int64,
             parse_float64,
             duration_literal,
+            duration_from_i64,
+            duration_to_float,
             range_new,
             range_current,
             range_end,
@@ -3153,6 +3167,8 @@ struct FunctionCompiler<'a> {
     parse_int64: cranelift_codegen::ir::FuncRef,
     parse_float64: cranelift_codegen::ir::FuncRef,
     duration_literal: cranelift_codegen::ir::FuncRef,
+    duration_from_i64: cranelift_codegen::ir::FuncRef,
+    duration_to_float: cranelift_codegen::ir::FuncRef,
     range_new: cranelift_codegen::ir::FuncRef,
     range_current: cranelift_codegen::ir::FuncRef,
     range_end: cranelift_codegen::ir::FuncRef,
@@ -3697,13 +3713,23 @@ impl<'a> FunctionCompiler<'a> {
                 right,
                 span,
             } => {
-                let integer_hint = target
-                    .scalar_kind()
-                    .filter(|kind| kind.is_integer())
+                let target_integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
+                let left_integer_hint = target_integer_hint
                     .or_else(|| self.operand_integer_kind(left))
-                    .or_else(|| self.operand_integer_kind(right));
-                let left = self.load_operand_with_integer_hint(left, integer_hint)?;
-                let right = self.load_operand_with_integer_hint(right, integer_hint)?;
+                    .or_else(|| {
+                        matches!(left, Operand::Int(_))
+                            .then(|| self.operand_integer_kind(right))
+                            .flatten()
+                    });
+                let right_integer_hint = target_integer_hint
+                    .or_else(|| self.operand_integer_kind(right))
+                    .or_else(|| {
+                        matches!(right, Operand::Int(_))
+                            .then(|| self.operand_integer_kind(left))
+                            .flatten()
+                    });
+                let left = self.load_operand_with_integer_hint(left, left_integer_hint)?;
+                let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
             }
             Rvalue::Call { callee, args } => self.compile_call(callee, args, Some(target)),
@@ -4633,6 +4659,43 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(associated) = name
+            .strip_prefix("Duration.")
+            .and_then(|field| BuiltinAssociatedFunction::resolve("Duration", field))
+        {
+            let [argument] = args else {
+                return Err(format!(
+                    "direct backend expected `Duration.{}` to receive one argument",
+                    associated.name()
+                ));
+            };
+            let value =
+                self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+            let value = self.coerce_value(value, &DirectType::Scalar(ScalarKind::Int64))?;
+            let unit_nanoseconds = match associated {
+                BuiltinAssociatedFunction::DurationMilliseconds => {
+                    crate::runtime_value::NANOS_PER_MILLISECOND
+                }
+                BuiltinAssociatedFunction::DurationSeconds => {
+                    crate::runtime_value::NANOS_PER_SECOND
+                }
+                BuiltinAssociatedFunction::DurationMinutes => {
+                    crate::runtime_value::NANOS_PER_MINUTE
+                }
+            };
+            let unit_nanoseconds = self
+                .builder
+                .ins()
+                .iconst(types::I64, unit_nanoseconds as i64);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.duration_from_i64, &[value.values[0], unit_nanoseconds]);
+            return Ok(self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Duration"),
+            ));
+        }
         if name == "range" {
             return self.compile_range(args);
         }
@@ -5543,6 +5606,39 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let object = self.load_operand(object)?;
 
+        if let DirectType::Opaque(Type::Named(name, _)) = &object.ty {
+            if let Some(
+                member @ (BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds),
+            ) = BuiltinMember::resolve(name, field)
+            {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "direct backend expected `{}()` to take no arguments",
+                        member.name()
+                    ));
+                }
+                let unit_nanoseconds = match member {
+                    BuiltinMember::DurationToMilliseconds => {
+                        crate::runtime_value::NANOS_PER_MILLISECOND
+                    }
+                    BuiltinMember::DurationToSeconds => crate::runtime_value::NANOS_PER_SECOND,
+                    _ => unreachable!("Duration conversion match is exhaustive"),
+                };
+                let unit_nanoseconds = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, unit_nanoseconds as i64);
+                let inst = self.builder.ins().call(
+                    self.duration_to_float,
+                    &[object.values[0], unit_nanoseconds],
+                );
+                return Ok(ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Scalar(ScalarKind::Float64),
+                });
+            }
+        }
+
         if matches!(object.ty.scalar_kind(), Some(kind) if kind.is_float()) && field == "sqrt" {
             if !args.is_empty() {
                 return Err("direct backend expected `sqrt()` to take no arguments".to_string());
@@ -5732,14 +5828,9 @@ impl<'a> FunctionCompiler<'a> {
                 ))
             }
             Operand::Duration(value) => {
-                let narrowed = i64::try_from(*value).map_err(|_| {
-                    format!(
-                        "direct backend only supports duration constants that fit in host i64, found `{}`",
-                        value
-                    )
-                })?;
-                let narrowed = self.builder.ins().iconst(types::I64, narrowed);
-                let inst = self.builder.ins().call(self.duration_literal, &[narrowed]);
+                let low = self.builder.ins().iconst(types::I64, *value as i64);
+                let high = self.builder.ins().iconst(types::I64, (*value >> 64) as i64);
+                let inst = self.builder.ins().call(self.duration_literal, &[low, high]);
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     Type::named("Duration"),
@@ -8729,8 +8820,15 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            let millis = self.builder.ins().iconst(types::I64, 100);
-                            let inst = self.builder.ins().call(self.duration_literal, &[millis]);
+                            let milliseconds = self.builder.ins().iconst(types::I64, 100);
+                            let unit_nanoseconds = self.builder.ins().iconst(
+                                types::I64,
+                                crate::runtime_value::NANOS_PER_MILLISECOND as i64,
+                            );
+                            let inst = self
+                                .builder
+                                .ins()
+                                .call(self.duration_from_i64, &[milliseconds, unit_nanoseconds]);
                             self.owned_opaque_result(
                                 self.builder.inst_results(inst).to_vec(),
                                 Type::named("Duration"),
@@ -11473,7 +11571,9 @@ fn infer_rvalue_type(
             }
         }
         Rvalue::Cast { ty, .. } => direct_type(ty, classes),
-        Rvalue::Binary { op, left, .. } => match op {
+        Rvalue::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Eq
             | BinaryOp::NotEq
             | BinaryOp::Less
@@ -11482,6 +11582,32 @@ fn infer_rvalue_type(
             | BinaryOp::GreaterEq
             | BinaryOp::And
             | BinaryOp::Or => Some(DirectType::Scalar(ScalarKind::Bool)),
+            BinaryOp::Add | BinaryOp::Sub
+                if matches!(
+                    infer_operand_type(left, variable_types, classes),
+                    Some(DirectType::Opaque(Type::Named(ref name, _))) if name == "Duration"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::named("Duration")))
+            }
+            BinaryOp::Mul
+                if [left, right].iter().any(|operand| {
+                    matches!(
+                        infer_operand_type(operand, variable_types, classes),
+                        Some(DirectType::Opaque(Type::Named(ref name, _))) if name == "Duration"
+                    )
+                }) =>
+            {
+                Some(DirectType::Opaque(Type::named("Duration")))
+            }
+            BinaryOp::FloorDiv
+                if matches!(
+                    infer_operand_type(left, variable_types, classes),
+                    Some(DirectType::Opaque(Type::Named(ref name, _))) if name == "Duration"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::named("Duration")))
+            }
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul
@@ -11793,6 +11919,14 @@ fn infer_rvalue_type(
                     vec![Type::named("float64"), Type::named("String")],
                 )))
             }
+            CallTarget::Name(name)
+                if name
+                    .strip_prefix("Duration.")
+                    .and_then(|field| BuiltinAssociatedFunction::resolve("Duration", field))
+                    .is_some() =>
+            {
+                Some(DirectType::Opaque(Type::named("Duration")))
+            }
             CallTarget::Name(name) => function_return_types.get(name).cloned(),
             CallTarget::Member { object, field, .. } => {
                 let object_ty = infer_operand_type(object, variable_types, classes)?;
@@ -11925,6 +12059,14 @@ fn builtin_opaque_member_return_type(
     let Type::Named(name, args) = object_ty else {
         return None;
     };
+    if args.is_empty()
+        && matches!(
+            BuiltinMember::resolve(name, field),
+            Some(BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds)
+        )
+    {
+        return Some(DirectType::Scalar(ScalarKind::Float64));
+    }
     if args.is_empty()
         && field == "to_float"
         && matches!(

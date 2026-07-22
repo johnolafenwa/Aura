@@ -76,6 +76,10 @@ print(completed.stdout().trim())
 
 Two things in that call site are worth explaining. `stdout=process.pipe()` captures the subprocess's output so the parent can read it; `stderr=process.pipe()` does the same for standard error. `group=true` places the child in its own process group on Unix hosts, which makes cleanup more reliable when a child spawns descendants — termination can target the whole group rather than only the leader.
 
+Omitting `timeout` supplies no caller deadline through an internal absence
+marker. An explicit negative Duration is not that marker: invalid timeout or
+deadline values return `process.Error.Io(io.Error.InvalidInput)`.
+
 When a child writes bytes that are not valid UTF-8, use `stdout_bytes()` and `stderr_bytes()`:
 
 ```python

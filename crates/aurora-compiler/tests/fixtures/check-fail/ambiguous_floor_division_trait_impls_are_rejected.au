@@ -1,0 +1,20 @@
+trait FloorDiv[Rhs, Out]:
+    def floor_div(borrow self, rhs: Rhs) -> Out
+
+class Pair[A, B]:
+    left: A
+    right: B
+
+impl[T] FloorDiv[Pair[int32, T], Pair[int32, T]] for Pair[int32, T]:
+    def floor_div(borrow self, rhs: Pair[int32, T]) -> Pair[int32, T]:
+        return rhs
+
+impl[T] FloorDiv[Pair[T, int32], Pair[T, int32]] for Pair[T, int32]:
+    def floor_div(borrow self, rhs: Pair[T, int32]) -> Pair[T, int32]:
+        return rhs
+
+def main() -> int32:
+    left: Pair[int32, int32] = Pair(left=7, right=3)
+    right: Pair[int32, int32] = Pair(left=2, right=1)
+    result = left // right
+    return result.left

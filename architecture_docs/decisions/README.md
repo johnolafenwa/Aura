@@ -24,3 +24,4 @@ the test locations that must prove completion.
 16. [ADR-0016: Retained non-copy expression borrows](0016-retained-noncopy-expression-borrows.md)
 17. [ADR-0017: Iteration source selection](0017-iteration-source-selection.md)
 18. [ADR-0018: Fixed resource read limits](0018-fixed-resource-read-limits.md)
+19. [ADR-0019: Duration conversion and timer policy](0019-duration-conversion-and-timer-policy.md)

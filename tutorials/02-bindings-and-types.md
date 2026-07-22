@@ -74,7 +74,7 @@ Aurora has a rich set of numeric types. If you are not sure which to use, start 
 | `float32` | 32-bit floating point | When memory or precision constraints require it |
 | `bool` | `true` or `false` | Conditions and flags |
 | `String` | Owned text | Any text data |
-| `Duration` | Time span | Concurrency timeouts (`5ms`, `1s`, `2m`) |
+| `Duration` | Signed nanosecond time span | Computed backoff and concurrency timeouts (`5ms`, `1s`, `2m`) |
 | `None` | Unit type | Functions with no meaningful return |
 
 The full set of integer types covers `int8` through `int128`, `uint8` through `uint128`, plus `intsize` and `uintsize` for platform-sized integers. `int` is not an additional width: it is exactly `int64`. Use other explicit widths when you need control over memory layout, value ranges, or a fixed-width API contract.
@@ -285,7 +285,9 @@ Summary of literal type rules:
 - integer literals can adopt an expected floating type only when exactly representable
 - floating-point literals default to `float64`
 - duration literals like `5ms`, `1s`, and `2m` have type `Duration`
-- negative literals are supported: `-5`, `-3.5`
+- negative numeric literals are supported: `-5`, `-3.5`; Duration literals
+  remain non-negative, so use a constructor such as `Duration.ms(-5)` for a
+  negative Duration value
 
 ```python
 offset: int32 = -5

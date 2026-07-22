@@ -82,7 +82,7 @@ Aurora treats `#` as the start of a comment when it appears outside strings. Com
 
 ### 3. Duration literals are normalized at lex time
 
-`5ms`, `2s`, and `1m` become `DurationLiteral(i128)` values in milliseconds. That keeps later stages simpler.
+`5ms`, `2s`, and `1m` become `DurationLiteral(i128)` values in nanoseconds. That keeps later stages exact while preserving sub-millisecond results from Duration floor division.
 
 ### 4. F-strings are lexed as one token first
 

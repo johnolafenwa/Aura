@@ -14,7 +14,7 @@ import net
 import io
 ```
 
-Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior.
+Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior. An explicit timeout must be non-negative, fit the host timer range, and produce a representable deadline; otherwise the operation returns `io.Error.InvalidInput`. Deadline overflow never means no deadline. This input policy is Provisional under ADR-0019.
 
 Hostname resolution, socket binding, UDP destination resolution, and blocking TCP or Unix connect syscalls run on Aurora's bounded blocking service rather than on the lightweight-task scheduler. A connect timeout is one end-to-end budget: it includes DNS resolution and is shared by every resolved-address attempt, then by any remaining TLS, HTTP, or WebSocket handshake work. Cancellation ends the Aurora wait promptly; host work that cannot be interrupted may finish later and is discarded safely.
 
@@ -252,7 +252,7 @@ Text members accept or return `String` and enforce UTF-8. Byte members accept or
 
 ## Runtime Semantics
 
-Resolution, binding, and connect work use the bounded blocking service. One explicit connect timeout is an end-to-end budget shared across name resolution, resolved-address attempts, and remaining protocol handshake work. TCP, Unix, TLS, HTTP, and WebSocket waiting failures return typed errors as specified; UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and returns `io.Error.Cancelled` on cancellation-aware operations, while already-started host work may complete later and is discarded.
+Resolution, binding, and connect work use the bounded blocking service. One explicit connect timeout is an end-to-end budget shared across name resolution, resolved-address attempts, and remaining protocol handshake work. Before host work begins, the runtime rejects a negative, host-unrepresentable, or deadline-overflowing timeout as `io.Error.InvalidInput`; it never treats such a value as omission. TCP, Unix, TLS, HTTP, and WebSocket waiting failures return typed errors as specified; UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and returns `io.Error.Cancelled` on cancellation-aware operations, while already-started host work may complete later and is discarded.
 
 TCP is a byte stream; UDP preserves datagrams. Text reads decode strictly and remove only their documented line ending. HTTP supports content-length, chunked, and connection-close framing under the stated parser caps. WebSocket receives complete text or binary messages, with text mode enforcing UTF-8. TLS verifies the named peer using the configured CA file or, for the high-level HTTPS client, the maintained Web PKI root set.
 
@@ -266,7 +266,12 @@ Arguments are evaluated left to right. Successful constructors and accept operat
 
 Unknown network members use `AU2001`, type mismatches use `AU2002`, invalid argument binding uses `AU2004`, and remaining static rejections use `AU2999`. Use after moving a resource uses `AU3001`, borrow conflicts use `AU3002`, and a mutating network method called through an immutable place uses `AU3003`.
 
-DNS failures, connection refusal, timeout, invalid UTF-8, invalid byte counts, closed resources, cancellation, TLS verification failure, and protocol errors are documented typed `Result.Err(io.Error)` outcomes, not language diagnostics. An invariant failure escaping that typed boundary uses the general runtime registry, including `AU4005` for a resource or I/O trap.
+DNS failures, connection refusal, timeout, invalid UTF-8, invalid byte counts,
+invalid timeout values or deadlines, closed resources, cancellation, TLS
+verification failure, and protocol errors are documented typed
+`Result.Err(io.Error)` outcomes, not language diagnostics. An invariant
+failure escaping that typed boundary uses the general runtime registry,
+including `AU4005` for a resource or I/O trap.
 
 ## Backend Support
 
@@ -282,6 +287,6 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 is implemented but remains Provisional pending the Batch 2 checkpoint review; no other network semantics on this page are provisional.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 remains Provisional pending the Batch 2 checkpoint review, and the invalid host-timer policy recorded by ADR-0019 remains Provisional pending the Phase 3 checkpoint review; no other network semantics on this page are provisional.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.

@@ -21,7 +21,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - Chained comparisons are rejected with migration guidance; write an explicit boolean combination such as `a < b and b < c`.
 - `for` loop bindings cannot shadow names already visible in the same scope.
-- Duration arithmetic and ordering, such as `100ms + 50ms` or `timeout < 1s`, is not implemented.
+- Duration literals have only the integral `ms`, `s`, and `m` suffixes; there is no `ns` or fractional Duration literal and no unary `-Duration`. Associated constructors and checked Duration arithmetic provide signed and sub-millisecond results instead.
 - Task starting currently supports named functions and associated methods without `self`.
 - `TaskGroup.start(...)` and `start_soon(...)` support default/shared and `own` target parameters; `borrow mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form; use `TaskGroup`.
@@ -42,6 +42,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level map header model cannot preserve repeated equal field names losslessly.
 - WebSocket messages are capped at 64 MiB; individual frames and write buffers are capped at 16 MiB.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
+- Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification remains Provisional under ADR-0019.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
 - JSON and TOML codecs currently support the typed `Map[String, String]` boundary, not nested dynamic trees or derived class/enum schemas.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.

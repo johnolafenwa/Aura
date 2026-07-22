@@ -99,11 +99,14 @@ Built-in operator typing is:
 | Operators | Operand rule | Result |
 | --- | --- | --- |
 | `and`, `or` | both `bool` | `bool` |
-| `+` | equal integer types, equal float types, or two `String` values | operand type |
-| `-`, `*`, `//`, `%` | equal integer or equal float types | operand type |
+| `+` | equal integer types, equal float types, two `String` values, or two Duration values | operand type |
+| `-` | equal integer types, equal float types, or two Duration values | operand type |
+| `*` | equal integer types, equal float types, `Duration` and `int64` in either order | numeric operand type, or `Duration` |
+| `//` | equal integer types, equal float types, or `Duration // int64` | numeric operand type, or `Duration` |
+| `%` | equal integer or equal float types | operand type |
 | `/` | equal float types | operand type |
 | `==`, `!=` | equal operand types | `bool` |
-| `<`, `<=`, `>`, `>=` | equal integer or equal float types | `bool` |
+| `<`, `<=`, `>`, `>=` | equal integer types, equal float types, or two Duration values | `bool` |
 
 When both operands have the same integer type, `/` is rejected with this exact maintained diagnostic:
 
@@ -111,7 +114,11 @@ When both operands have the same integer type, `/` is rejected with this exact m
 integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
 ```
 
-Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `Mod`, or `Ord` trait method. `//` is builtin-only and has no `FloorDiv` trait. Builtin equality does not dispatch through an operator trait in Aurora 0.1.
+Arithmetic and ordering operators may otherwise resolve through the
+corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait
+method. Builtin numeric and Duration rules take precedence over operator-trait
+dispatch. Builtin equality does not dispatch through an operator trait in
+Aurora 0.1.
 
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 

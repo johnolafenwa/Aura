@@ -1,0 +1,11 @@
+def main() -> int32:
+    attempt: int64 = 3
+    base = Duration.ms(125)
+
+    print(attempt * base)
+    print(1ms // attempt)
+    print(Duration.seconds(2) + Duration.ms(500))
+    print(Duration.minutes(-1) < 0ms)
+    print(Duration.seconds(2).to_ms())
+    print(Duration.ms(1500).to_seconds())
+    return 0

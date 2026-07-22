@@ -53,7 +53,10 @@ struct TempDir {
 }
 
 fn wait_task_ready(task: &TaskValue) -> Result<Value, Diagnostic> {
-    match task.wait_result_with_cancellation_observed(None, None) {
+    match task
+        .wait_result_with_cancellation_observed(None, None)
+        .expect("an omitted task timeout cannot overflow")
+    {
         TaskWaitStatus::Ready(result) => result,
         TaskWaitStatus::Cancelled => Err(Diagnostic::new("task was cancelled")),
         TaskWaitStatus::TimedOut => Err(Diagnostic::new("task wait timed out")),
@@ -298,17 +301,26 @@ fn fd_is_nonblocking(fd: i32) -> bool {
 
 #[test]
 fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
-    assert!(super::deadline_from_timeout(None).is_none());
-    assert!(super::deadline_from_timeout(Some(StdDuration::from_millis(1))).is_some());
+    assert!(super::deadline_from_timeout(None)
+        .expect("an omitted timeout should be valid")
+        .is_none());
+    assert!(
+        super::deadline_from_timeout(Some(StdDuration::from_millis(1)))
+            .expect("a short timeout should fit the host deadline")
+            .is_some()
+    );
     assert_eq!(super::duration_to_poll_timeout(StdDuration::ZERO), 0);
     assert_eq!(
         super::duration_to_poll_timeout(StdDuration::from_millis(i32::MAX as u64 + 1)),
         i32::MAX
     );
-    assert!(super::tls_handshake_deadline(None).is_some());
+    assert!(super::tls_handshake_deadline(None)
+        .expect("the TLS handshake cap should fit")
+        .is_some());
     let requested_tls_deadline = Instant::now() + StdDuration::from_millis(1);
     assert_eq!(
-        super::tls_handshake_deadline(Some(requested_tls_deadline)),
+        super::tls_handshake_deadline(Some(requested_tls_deadline))
+            .expect("the TLS handshake cap should fit"),
         Some(requested_tls_deadline)
     );
 
@@ -431,6 +443,93 @@ fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
     assert_eq!(first.wait(), super::RuntimeSchedulerWakeReason::TimedOut);
     drop(second);
     scheduler.notify();
+}
+
+#[test]
+fn injected_deadline_overflow_is_invalid_input_instead_of_a_sentinel() {
+    let now = Instant::now();
+    let error = super::deadline_from_timeout_with(
+        Some(StdDuration::from_millis(1)),
+        "queue timeout",
+        now,
+        |_, _| None,
+    )
+    .expect_err("a failed host deadline addition must remain an error");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "queue timeout exceeds the host deadline range"
+    );
+
+    assert_eq!(
+        super::deadline_from_timeout_with(None, "unused", now, |_, _| {
+            panic!("omitted timeouts must not attempt deadline construction")
+        })
+        .expect("an omitted timeout remains distinct from an invalid deadline"),
+        None
+    );
+}
+
+#[test]
+fn injected_tls_handshake_cap_overflow_fails_closed() {
+    let error = super::tls_handshake_deadline_with(None, Instant::now(), |_, _| None)
+        .expect_err("the TLS handshake cap must never fail open to an unlimited deadline");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "TLS handshake timeout exceeds the host deadline range"
+    );
+}
+
+#[test]
+fn injected_supervisor_backoff_overflow_becomes_a_failed_event() {
+    let schedule = super::supervisor_restart_schedule_with(
+        "worker",
+        3,
+        Instant::now(),
+        StdDuration::from_millis(10),
+        |_, _| None,
+    );
+    let super::SupervisorRestartSchedule::Failed(Value::EnumVariant(event)) = schedule else {
+        panic!("restart deadline overflow should produce SupervisorEvent.Failed")
+    };
+    assert_eq!(event.enum_name, "SupervisorEvent");
+    assert_eq!(event.variant_name, "Failed");
+    assert_eq!(event.payloads[0], Value::String("worker".to_string()));
+    assert_eq!(
+        event.payloads[1].render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
+    assert_eq!(event.payloads[2], Value::Int(IntegerValue::from_signed(3)));
+}
+
+#[test]
+fn supervisor_wait_or_none_deadline_overflow_is_a_typed_error() {
+    let supervisor = ProcessSupervisorValue::new();
+    let error = supervisor
+        .wait_or_none(Some(StdDuration::MAX), None)
+        .expect_err("wait_or_none must not reclassify a deadline error as a successful event");
+    let Value::EnumVariant(process_error) = error else {
+        panic!("wait_or_none deadline overflow should return process.Error.Io")
+    };
+    assert_eq!(process_error.enum_name, "Error");
+    assert_eq!(process_error.variant_name, "Io");
+    assert_eq!(process_error.payloads.len(), 1);
+    assert_eq!(process_error.payloads[0].render(), "io.Error.InvalidInput");
+
+    let ProcessSupervisorWaitStatus::Event(Value::EnumVariant(event)) =
+        supervisor.wait(Some(StdDuration::MAX), None)
+    else {
+        panic!("wait deadline overflow should return SupervisorEvent.Failed")
+    };
+    assert_eq!(event.enum_name, "SupervisorEvent");
+    assert_eq!(event.variant_name, "Failed");
+    assert_eq!(event.payloads[0], Value::String("<supervisor>".to_string()));
+    assert_eq!(
+        event.payloads[1].render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
+    assert_eq!(event.payloads[2], Value::Int(IntegerValue::from_signed(0)));
 }
 
 #[cfg(unix)]
@@ -688,6 +787,135 @@ fn render_float_formats_current_surface() {
 
     assert_eq!(render_float32(3.14), "3.14");
     assert_eq!(render_float32(-0.0), "-0.0");
+}
+
+#[test]
+fn duration_helpers_preserve_nanoseconds_rendering_conversions_and_host_limits() {
+    assert_eq!(super::NANOS_PER_MILLISECOND, 1_000_000);
+    assert_eq!(super::NANOS_PER_SECOND, 1_000_000_000);
+    assert_eq!(super::NANOS_PER_MINUTE, 60_000_000_000);
+
+    for (nanoseconds, rendered) in [
+        (0, "0ms"),
+        (1, "0.000001ms"),
+        (-1, "-0.000001ms"),
+        (1_000_000, "1ms"),
+        (1_100_000, "1.1ms"),
+        (1_010_000, "1.01ms"),
+        (1_001_000, "1.001ms"),
+        (1_000_100, "1.0001ms"),
+        (1_000_010, "1.00001ms"),
+        (1_000_001, "1.000001ms"),
+        (1_500_000, "1.5ms"),
+        (-1_500_001, "-1.500001ms"),
+        (1_000_000_000, "1000ms"),
+        (i128::MIN, "-170141183460469231731687303715884.105728ms"),
+    ] {
+        assert_eq!(super::render_duration(nanoseconds), rendered);
+        assert_eq!(Value::Duration(nanoseconds).render(), rendered);
+    }
+
+    assert_eq!(super::duration_to_milliseconds(1_500_000), 1.5);
+    assert_eq!(super::duration_to_seconds(1_500_000_000), 1.5);
+    assert_eq!(
+        super::duration_to_milliseconds(0).to_bits(),
+        0.0_f64.to_bits()
+    );
+    assert_eq!(super::duration_to_seconds(0).to_bits(), 0.0_f64.to_bits());
+    for (nanoseconds, milliseconds_bits, seconds_bits) in [
+        (1, 0x3eb0_c6f7_a0b5_ed8d, 0x3e11_2e0b_e826_d695),
+        (-1, 0xbeb0_c6f7_a0b5_ed8d, 0xbe11_2e0b_e826_d695),
+    ] {
+        assert_eq!(
+            super::duration_to_milliseconds(nanoseconds).to_bits(),
+            milliseconds_bits,
+            "Duration.to_ms must round signed fractional milliseconds",
+        );
+        assert_eq!(
+            super::duration_to_seconds(nanoseconds).to_bits(),
+            seconds_bits,
+            "Duration.to_seconds must round signed fractional seconds",
+        );
+    }
+    for (nanoseconds, milliseconds_bits, seconds_bits) in [
+        (i128::MIN, 0xc6a0_c6f7_a0b5_ed8d, 0xc601_2e0b_e826_d695),
+        (i128::MAX, 0x46a0_c6f7_a0b5_ed8d, 0x4601_2e0b_e826_d695),
+    ] {
+        assert_eq!(
+            super::duration_to_milliseconds(nanoseconds).to_bits(),
+            milliseconds_bits,
+            "Duration.to_ms must support the complete signed i128 domain",
+        );
+        assert_eq!(
+            super::duration_to_seconds(nanoseconds).to_bits(),
+            seconds_bits,
+            "Duration.to_seconds must support the complete signed i128 domain",
+        );
+    }
+    assert_eq!(
+        super::duration_to_milliseconds(-159_731_949_442_795_623_374_604_248_498_268_565_729)
+            .to_bits(),
+        0xc69f_8067_0f23_34c1,
+        "Duration.to_ms must round the exact rational once, not double-round via an intermediate float",
+    );
+    assert_eq!(
+        super::duration_to_seconds(36_342_747_987_658_862_963_516_616_932_497_802_072)
+            .to_bits(),
+        0x45dd_5b81_0f07_66c1,
+        "Duration.to_seconds must round the exact rational once, not double-round via an intermediate float",
+    );
+    for (nanoseconds, expected_bits) in [
+        (140_737_488_355_328_015_625, 0x42e0_0000_0000_0000),
+        (140_737_488_355_328_046_875, 0x42e0_0000_0000_0002),
+    ] {
+        assert_eq!(
+            super::duration_to_milliseconds(nanoseconds).to_bits(),
+            expected_bits,
+            "Duration.to_ms must resolve exact binary64 midpoints toward an even significand",
+        );
+    }
+    for (nanoseconds, expected_bits) in [
+        (17_592_186_044_416_001_953_125, 0x42b0_0000_0000_0000),
+        (17_592_186_044_416_005_859_375, 0x42b0_0000_0000_0002),
+    ] {
+        assert_eq!(
+            super::duration_to_seconds(nanoseconds).to_bits(),
+            expected_bits,
+            "Duration.to_seconds must resolve exact binary64 midpoints toward an even significand",
+        );
+    }
+
+    let timer = super::duration_to_host_timer(1_500_001, "test timeout")
+        .expect("a small positive duration should fit the host timer");
+    assert_eq!(timer.as_secs(), 0);
+    assert_eq!(timer.subsec_nanos(), 1_500_001);
+
+    let negative = super::duration_to_host_timer(-1, "test timeout")
+        .expect_err("negative durations cannot become host timers");
+    assert_eq!(negative.kind(), io::ErrorKind::InvalidInput);
+    assert!(negative.to_string().contains("non-negative"));
+
+    let too_wide = super::duration_to_host_timer(i128::MAX, "test timeout")
+        .expect_err("a duration beyond u64 seconds cannot become a host timer");
+    assert_eq!(too_wide.kind(), io::ErrorKind::InvalidInput);
+    assert!(too_wide.to_string().contains("host timer range"));
+
+    let deadline_overflow =
+        super::duration_to_host_timer((u64::MAX as i128) * super::NANOS_PER_SECOND, "test timeout")
+            .expect_err(
+                "a representable host duration must not silently become an unlimited deadline",
+            );
+    assert_eq!(deadline_overflow.kind(), io::ErrorKind::InvalidInput);
+    assert!(deadline_overflow.to_string().contains("deadline range"));
+
+    assert_eq!(
+        super::deadline_from_timeout(None).expect("an omitted timeout should be accepted"),
+        None
+    );
+    let deadline_error = super::deadline_from_timeout(Some(StdDuration::MAX))
+        .expect_err("an overflowing deadline must remain an error, never become unlimited");
+    assert_eq!(deadline_error.kind(), io::ErrorKind::InvalidInput);
+    assert!(deadline_error.to_string().contains("deadline range"));
 }
 
 #[test]
@@ -1553,7 +1781,10 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
             .expect_err("closed channel should reject sends"),
         Value::Bool(true)
     );
-    assert!(channel.recv_with_cancellation(None, None).is_none());
+    assert!(channel
+        .recv_with_cancellation(None, None)
+        .expect("an omitted queue timeout cannot overflow")
+        .is_none());
 
     let bounded = ChannelValue::with_capacity(1);
     bounded
@@ -1574,6 +1805,7 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
     assert_eq!(
         bounded
             .send_with_timeout(Value::Bool(true), Some(StdDuration::ZERO), None)
+            .expect("zero fits the host deadline range")
             .expect_err("timed bounded sends should report timeout when capacity stays full"),
         super::SendValueError::TimedOut(Box::new(Value::Bool(true)))
     );
@@ -2073,7 +2305,10 @@ fn lightweight_task_cancel_boundary_marks_child_cancelled() {
         let task = spawn_lightweight_task(|| {
             cancel_current_lightweight_task_boundary();
         })?;
-        match task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+        match task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             TaskWaitStatus::Cancelled => Ok(Value::Bool(true)),
             other => panic!("expected cancelled child task, got {other:?}"),
         }
@@ -2106,7 +2341,12 @@ fn channel_and_task_helpers_tolerate_poisoned_locks() {
         TryRecvResult::Value(Value::Int(IntegerValue::from_signed(11)))
     );
     channel.close();
-    assert_eq!(channel.recv_with_cancellation(None, None), None);
+    assert_eq!(
+        channel
+            .recv_with_cancellation(None, None)
+            .expect("an omitted queue timeout cannot overflow"),
+        None
+    );
 
     let cancellation = CancellationContext::default();
     let group = TaskGroupValue::new(&cancellation);
@@ -2254,7 +2494,10 @@ fn runtime_scheduler_wakes_sleep_on_cancellation() {
     thread::sleep(StdDuration::from_millis(20));
     group.cancel();
     assert_eq!(
-        worker.join().expect("scheduler sleep worker should join"),
+        worker
+            .join()
+            .expect("scheduler sleep worker should join")
+            .expect("a short sleep should fit the host deadline range"),
         super::RuntimeSchedulerWakeReason::Cancelled
     );
     assert!(
@@ -3075,6 +3318,33 @@ fn supervisor_rejects_zero_backoff_when_restart_is_enabled() {
 }
 
 #[test]
+fn supervisor_start_preserves_spawn_failures_in_the_typed_error_carrier() {
+    let supervisor = ProcessSupervisorValue::new();
+    let error = supervisor
+        .start(
+            "missing".to_string(),
+            vec!["/definitely/missing/aurora-supervisor-child".to_string()],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Never,
+            StdDuration::ZERO,
+            None,
+            false,
+        )
+        .expect_err("a missing supervisor command should return process.Error.Spawn");
+    let Value::EnumVariant(variant) = error else {
+        panic!("process supervisor start should return a process.Error variant");
+    };
+    assert_eq!(variant.enum_name, "Error");
+    assert_eq!(variant.variant_name, "Spawn");
+    assert_eq!(variant.payloads.len(), 1);
+    assert!(matches!(&variant.payloads[0], Value::String(message) if !message.is_empty()));
+}
+
+#[test]
 fn supervisor_delays_restarts_and_reports_restart_counts() {
     let supervisor = ProcessSupervisorValue::new();
     supervisor
@@ -3470,7 +3740,10 @@ fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
             Ok(Value::Int(IntegerValue::from_signed(i128::from(value))))
         })?;
 
-        match task.wait_result_with_cancellation(Some(timeout), None) {
+        match task
+            .wait_result_with_cancellation(Some(timeout), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             super::TaskWaitStatus::Ready(result) => {
                 assert_eq!(
                     result?,
@@ -3511,7 +3784,8 @@ fn lightweight_blocking_io_observes_pre_cancelled_and_wait_cancelled_contexts() 
         let wait_cancelled_group = TaskGroupValue::new(&CancellationContext::default());
         let wait_cancelled = wait_cancelled_group.child_cancellation();
         let canceller = spawn_lightweight_task(move || {
-            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None);
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
             wait_cancelled_group.cancel();
             Ok(Value::Unit)
         })?;
@@ -3567,7 +3841,8 @@ fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
 
         let sibling_resolver_finished = resolver_finished.clone();
         let sibling = spawn_lightweight_task(move || {
-            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None);
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
             if sibling_resolver_finished.load(Ordering::SeqCst) {
                 return Err(Diagnostic::new(
                     "slow DNS resolution blocked the sibling timer",
@@ -3710,6 +3985,7 @@ fn tcp_connect_cancellation_stops_waiting_for_an_inflight_resolver() {
 
         resolver_started
             .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
             .ok_or_else(|| Diagnostic::new("resolver worker did not start"))?;
         group.cancel();
         let connect_result = wait_task_ready(&connect);
@@ -3774,6 +4050,7 @@ fn blocking_service_cancellation_drops_late_results_safely() {
 
             operation_started
                 .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
                 .ok_or_else(|| Diagnostic::new("blocking operation did not start"))?;
             group.cancel();
             wait_task_ready(&operation)?;
@@ -3872,7 +4149,8 @@ fn unix_connect_offloads_a_slow_connect_without_starving_a_sibling_timer() {
 
         let sibling_connect_finished = connect_finished.clone();
         let sibling = spawn_lightweight_task(move || {
-            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None);
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
             if sibling_connect_finished.load(Ordering::SeqCst) {
                 return Err(Diagnostic::new(
                     "slow Unix connect blocked the sibling timer",
@@ -5496,6 +5774,7 @@ fn tls_handshake_deadline_caps_requested_timeout_to_default_budget() {
             .checked_add(StdDuration::from_secs(60))
             .expect("future deadline should exist"),
     ))
+    .expect("the TLS handshake cap should fit the host deadline range")
     .expect("handshake deadline should exist");
     let remaining = deadline.saturating_duration_since(Instant::now());
     assert!(

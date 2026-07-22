@@ -30,7 +30,7 @@ Prefer the functions (`process.pipe()`, `process.null()`, `process.inherit()`) i
 
 Signature: `process.run(command: Vec[String], cwd: Option[String] = None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
 
-`process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured.
+`process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured. Omitting `timeout` uses an internal absence marker and supplies no caller deadline. No Duration value is that marker: an explicit negative timeout is invalid rather than unlimited.
 
 The `env` map augments the inherited host environment and replaces inherited values with matching names. Aurora never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
 
@@ -209,6 +209,14 @@ When restart is enabled, `backoff` must be at least `10ms`.
 | `TimedOut` | No event arrived before timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
+An invalid `Supervisor.wait` timer cannot be returned directly as
+`process.Error` because `wait` returns `process.SupervisorWait`. It maps
+exactly to
+`process.SupervisorWait.Event(process.SupervisorEvent.Failed("<supervisor>", process.Error.Io(io.Error.InvalidInput), 0))`:
+the synthetic name is `<supervisor>` and the synthetic restart count is zero.
+The `wait_or_none` return type has an error carrier, so the same invalid timer
+returns `Result.Err(process.Error.Io(io.Error.InvalidInput))` instead.
+
 ## process.Error
 
 | Variant | Meaning |
@@ -234,6 +242,11 @@ The process module adds no source-language grammar. Commands are ordinary `Vec[S
 
 An omitted parameter displayed with `= ...` selects the documented builtin default. The ellipsis is reference notation, not a source expression. Process and standard-I/O variants use ordinary qualified enum construction and pattern syntax.
 
+For `process.run`, the omitted timeout is represented internally rather than
+by a sentinel Duration. Explicit zero is a real immediate deadline, and an
+explicit negative value is invalid input. This distinction is Provisional
+under ADR-0019.
+
 ## Typing Rules
 
 The function and method signatures above are normative. Commands are `Vec[String]`, environment overlays are `Map[String, String]`, working directories are `Option[String]`, and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `Option`, and `Result` outcomes as shown in their tables.
@@ -244,7 +257,7 @@ The function and method signatures above are normative. Commands are `Vec[String
 
 `run` and `start` invoke exactly the executable and argument vector supplied, inherit the host environment, then apply `env` entries as replacements or additions. `run` waits and captures only streams configured as pipes. `start` returns immediately with a live child and any configured pipe endpoints. Repeated child pipe accessors return handles to the same underlying endpoint, so cursor state and close state are shared.
 
-`Child.wait` reports exit, timeout, cancellation, or failure without automatically terminating a still-live child. By contrast, timeout or cancellation of `process.run` terminates the child and waits for cleanup. `Completed.check` converts a non-success status into `process.Error`; invalid captured UTF-8 in `stdout()` or `stderr()` is a runtime diagnostic, while the byte accessors return the original bytes. Supervisor restarts, counts, events, defaults, and minimum backoff follow the tables above.
+`Child.wait` reports exit, timeout, cancellation, or failure without automatically terminating a still-live child. By contrast, timeout or cancellation of `process.run` terminates the child and waits for cleanup. A negative, host-unrepresentable, or deadline-overflowing timeout/backoff is `process.Error.Io(io.Error.InvalidInput)` wherever the declared process outcome can carry that error; deadline overflow never becomes an unlimited wait. `Completed.check` converts a non-success status into `process.Error`; invalid captured UTF-8 in `stdout()` or `stderr()` is a runtime diagnostic, while the byte accessors return the original bytes. Supervisor restarts, counts, events, defaults, and minimum backoff follow the tables above.
 
 ## Ownership And Evaluation Order
 
@@ -256,7 +269,14 @@ Moving a resource invalidates the source binding. `with` closes a supervisor on 
 
 Unknown process members use `AU2001`, type mismatches use `AU2002`, invalid argument binding uses `AU2004`, and remaining static rejections use `AU2999`. Use after moving a process resource uses `AU3001`, borrow conflicts use `AU3002`, and calling a mutating method through an immutable place uses `AU3003`.
 
-Empty commands, spawn failures, timeouts, cancellation, invalid byte counts, closed pipes, non-zero status checked through `check`, and ordinary host I/O failures are typed `process.Error` values. Decoding invalid captured bytes through `Completed.stdout()` or `stderr()` is deliberately a runtime trap with code `AU4005`; use `stdout_bytes()` or `stderr_bytes()` when output encoding is not guaranteed.
+Empty commands, spawn failures, timeouts, cancellation, invalid byte counts,
+invalid timeout/backoff values or deadlines, closed pipes, non-zero status
+checked through `check`, and ordinary host I/O failures are typed
+`process.Error` values. Invalid timer inputs use
+`process.Error.Io(io.Error.InvalidInput)`. Decoding invalid captured bytes
+through `Completed.stdout()` or `stderr()` is deliberately a runtime trap with
+code `AU4005`; use `stdout_bytes()` or `stderr_bytes()` when output encoding is
+not guaranteed.
 
 ## Backend Support
 
@@ -272,6 +292,6 @@ Executable discovery, path syntax, inherited environment, signal availability, n
 
 ## Status
 
-One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.1. The fixed stream-cap policy recorded by ADR-0018 is implemented but remains Provisional pending the Batch 2 checkpoint review; no other process semantics on this page are provisional.
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.1. The fixed stream-cap policy recorded by ADR-0018 remains Provisional pending the Batch 2 checkpoint review, and the omitted-timeout and invalid host-timer policy recorded by ADR-0019 remains Provisional pending the Phase 3 checkpoint review; no other process semantics on this page are provisional.
 
 Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.

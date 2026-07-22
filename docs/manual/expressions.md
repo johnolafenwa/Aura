@@ -116,12 +116,15 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 
 | Operators | Builtin result |
 | --- | --- |
-| `+` | Same numeric type, or `String` for string concatenation |
-| `-`, `*`, `//`, `%` | Same numeric type |
+| `+` | Same numeric type, `String` for string concatenation, or `Duration` for two Duration operands |
+| `-` | Same numeric type, or `Duration` for two Duration operands |
+| `*` | Same numeric type; `Duration` for `Duration * int64` or `int64 * Duration` |
+| `//` | Same numeric type, or `Duration` for `Duration // int64` |
+| `%` | Same numeric type |
 | `/` | Same floating-point type |
 | unary `-` | Same numeric type |
 | `==`, `!=` | `bool` for equal operand types |
-| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types |
+| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
 
 Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
@@ -131,7 +134,11 @@ has static type `Option[T]`, a bare `None` on the other side denotes
 Python identity tests such as `value is None`; use `value == None`,
 `value != None`, or `match`.
 
-Arithmetic and ordering may resolve through the corresponding operator trait. For non-numeric user types, `/` requests `Div.div`; `//` has no operator trait and is builtin-only. Builtin equality does not use an equality operator trait in Aurora 0.1.
+Arithmetic and ordering may resolve through the corresponding operator trait.
+For non-numeric user types, `/` requests `Div.div`; `//` requests
+`FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
+`Duration // int64` rule applies. Builtin equality does not use an equality
+operator trait in Aurora 0.1.
 
 Builtin integer `/` is a static error, as is integer `/=`. The diagnostic directs callers to `//` for a floor quotient or to `.to_float()` on both operands for floating true division. Integer `//` rounds the mathematical quotient toward negative infinity, and integer `%` is its paired remainder. Floating `//` and `%` use the corresponding CPython-compatible divmod correction. In both numeric domains, a nonzero remainder has the divisor's sign. Integer and floating `//` or `%` by zero, and floating `/` by zero, are runtime failures. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
 
@@ -147,6 +154,15 @@ rounded = left.to_float() # 9007199254740992.0
 ```
 
 Use this method when rounding into the floating domain is intentional. An explicit integer `as float32` or `as float64` cast has the stricter exactness contract below.
+
+Duration arithmetic operates on the exact signed nanosecond representation.
+Addition, subtraction, and multiplication are checked. `Duration // int64`
+rounds the signed nanosecond quotient toward negative infinity; a zero divisor
+fails with `AU4004`, and an unrepresentable result fails with `AU4002`.
+Duration equality and ordering compare that signed count. The language has no
+`Duration / int64`, `Duration % int64`, `Duration * float`, or unary
+`-Duration` rule. Use `Duration.ms(-1)` when a negative value is needed, and
+remember that negative values are not valid host waits.
 
 ## Numeric Casts
 

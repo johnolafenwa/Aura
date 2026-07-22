@@ -4182,7 +4182,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             value: expr(ExprKind::String("text/plain".to_string())),
         }]))
     };
-    let timeout_arg = || arg(expr(ExprKind::DurationMillis(1)));
+    let timeout_arg = || arg(expr(ExprKind::DurationNanos(1_000_000)));
     let mut locals = HashMap::from([
         (
             "number".to_string(),
@@ -7907,7 +7907,10 @@ fn operator_trait_helpers_map_supported_operators() {
     assert_eq!(binary_operator_trait(BinaryOp::Sub), Some(("Sub", "sub")));
     assert_eq!(binary_operator_trait(BinaryOp::Mul), Some(("Mul", "mul")));
     assert_eq!(binary_operator_trait(BinaryOp::Div), Some(("Div", "div")));
-    assert_eq!(binary_operator_trait(BinaryOp::FloorDiv), None);
+    assert_eq!(
+        binary_operator_trait(BinaryOp::FloorDiv),
+        Some(("FloorDiv", "floor_div"))
+    );
     assert_eq!(binary_operator_trait(BinaryOp::Mod), Some(("Mod", "mod")));
     assert_eq!(binary_operator_trait(BinaryOp::Less), Some(("Ord", "lt")));
     assert_eq!(binary_operator_trait(BinaryOp::LessEq), Some(("Ord", "le")));
@@ -7928,6 +7931,190 @@ fn operator_trait_helpers_map_supported_operators() {
         .to_string(),
         "Mapper[String]"
     );
+}
+
+#[test]
+fn duration_static_conversions_and_builtin_operator_surface_type_checks() {
+    crate::check_source(
+        r#"
+def duration_surface(count: int64, left: Duration, right: Duration) -> float64:
+    from_ms: Duration = Duration.ms(count)
+    from_seconds: Duration = Duration.seconds(value=count)
+    from_minutes: Duration = Duration.minutes(count)
+    added: Duration = left + right
+    subtracted: Duration = left - right
+    scaled_right: Duration = left * count
+    scaled_left: Duration = count * right
+    divided: Duration = left // count
+    equal: bool = left == right
+    unequal: bool = left != right
+    less: bool = left < right
+    less_equal: bool = left <= right
+    greater: bool = left > right
+    greater_equal: bool = left >= right
+    return from_ms.to_ms() + from_seconds.to_seconds()
+
+def main() -> int32:
+    return 0
+"#,
+    )
+    .expect("Duration constructors, conversions, and builtin operators should type-check");
+
+    let duration = Type::named("Duration");
+    let int64 = Type::named("int64");
+    assert!(FunctionChecker::binary_uses_builtin_value_semantics(
+        BinaryOp::Add,
+        &duration,
+        &duration,
+    ));
+    assert!(FunctionChecker::binary_uses_builtin_value_semantics(
+        BinaryOp::Mul,
+        &duration,
+        &int64,
+    ));
+    assert!(FunctionChecker::binary_uses_builtin_value_semantics(
+        BinaryOp::Mul,
+        &int64,
+        &duration,
+    ));
+    assert!(FunctionChecker::binary_uses_builtin_value_semantics(
+        BinaryOp::FloorDiv,
+        &duration,
+        &int64,
+    ));
+    assert!(FunctionChecker::binary_uses_builtin_value_semantics(
+        BinaryOp::FloorDiv,
+        &int64,
+        &int64,
+    ));
+}
+
+#[test]
+fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
+    let program = crate::check_source("def main() -> int32:\n    return 0\n")
+        .expect("baseline program should type-check");
+    let (type_names, type_arities) = type_maps_from_program(&program);
+    let checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    let omitted = Expr {
+        kind: ExprKind::BuiltinOmitted,
+        span: Span::new(1, 1),
+    };
+    let param = Param {
+        name: "timeout".to_string(),
+        mode: ParamMode::Default,
+        borrow_label: None,
+        ty: type_ref("Option"),
+        default: Some(omitted.clone()),
+        span: omitted.span,
+    };
+    let mut option_param = param;
+    option_param.ty.args = vec![type_ref("Duration")];
+    checker
+        .check_param_defaults(
+            &[option_param],
+            &BTreeMap::new(),
+            None,
+            true,
+            "builtin function",
+        )
+        .expect("generated omitted defaults should match their declared parameter type");
+
+    let error = checker
+        .type_of_expr(&omitted, &mut HashMap::new())
+        .expect_err("the omitted marker must not behave like a source expression");
+    assert!(error
+        .message
+        .contains("internal builtin omitted-default marker"));
+}
+
+#[test]
+fn duration_static_and_mixed_operand_errors_name_the_supported_types() {
+    for (expression, expected_types) in [
+        ("1ms + 1", "Duration` and `int64"),
+        ("1ms - 1.0", "Duration` and `float64"),
+        ("1ms * 1ms", "Duration` and `Duration"),
+        ("1.0 * 1ms", "float64` and `Duration"),
+        ("1ms // 1.0", "Duration` and `float64"),
+        ("1 // 1ms", "int64` and `Duration"),
+        ("1ms / 1ms", "Duration` and `Duration"),
+        ("1ms < 1", "Duration` and `int64"),
+    ] {
+        let source = format!(
+            "def invalid():\n    value = {expression}\n\ndef main() -> int32:\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("unsupported Duration operand combinations should fail");
+        assert_eq!(error.code, "AU2003", "unexpected code for {expression}");
+        assert!(
+            error.message.contains("unsupported Duration operands"),
+            "unexpected diagnostic for {expression}: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains(expected_types),
+            "diagnostic for {expression} should name {expected_types}: {}",
+            error.message
+        );
+    }
+
+    let constructor_error = crate::check_source(
+        "def invalid():\n    value = Duration.seconds(true)\n\ndef main() -> int32:\n    return 0\n",
+    )
+    .expect_err("Duration constructors should require int64");
+    assert!(constructor_error
+        .message
+        .contains("`Duration.seconds` expects `int64`, found `bool`"));
+
+    let specialized_constructor = crate::check_source(
+        "def invalid():\n    value = Duration.seconds[int64](1)\n\ndef main() -> int32:\n    return 0\n",
+    )
+    .expect_err("Duration constructors should reject explicit type arguments");
+    assert!(specialized_constructor
+        .message
+        .contains("`Duration.seconds` does not take explicit type arguments"));
+
+    let unresolved_constructor_argument = crate::check_source(
+        "def invalid():\n    value = Duration.seconds(missing)\n\ndef main() -> int32:\n    return 0\n",
+    )
+    .expect_err("Duration constructors should preserve argument diagnostics");
+    assert!(unresolved_constructor_argument
+        .message
+        .contains("unknown name `missing`"));
+}
+
+#[test]
+fn floor_div_operator_dispatches_to_the_floor_div_trait_after_builtins() {
+    crate::check_source(
+        r#"
+trait FloorDiv[Rhs, Out]:
+    def floor_div(borrow self, rhs: Rhs) -> Out
+
+class Counter:
+    value: int32
+
+impl FloorDiv[Counter, Counter] for Counter:
+    def floor_div(borrow self, rhs: Counter) -> Counter:
+        return Counter(value=self.value // rhs.value)
+
+def divide(left: Counter, right: Counter) -> Counter:
+    return left // right
+
+def main() -> int32:
+    return 0
+"#,
+    )
+    .expect("non-builtin floor division should dispatch through FloorDiv.floor_div");
 }
 
 #[test]
@@ -9433,7 +9620,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
         (
             "sleep",
             expr(ExprKind::Name("sleep".to_string())),
-            vec![arg(expr(ExprKind::DurationMillis(1)))],
+            vec![arg(expr(ExprKind::DurationNanos(1_000_000)))],
             Type::Unit,
             None,
         ),

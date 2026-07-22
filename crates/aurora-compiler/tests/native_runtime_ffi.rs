@@ -26,7 +26,8 @@ unsafe fn bool_value(value: bool) -> *mut OpaqueValue {
 }
 
 unsafe fn duration_value(value: i64) -> *mut OpaqueValue {
-    aurora_direct_duration_literal(value)
+    let nanoseconds = (value as i128) * 1_000_000;
+    aurora_direct_duration_literal(nanoseconds as i64, (nanoseconds >> 64) as i64)
 }
 
 unsafe fn string_value(value: &str) -> *mut OpaqueValue {
@@ -172,6 +173,24 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
 
         let floor_at = aurora_direct_binary_value_at(13, int_value(7), int_value(-3), 1, 1);
         assert_eq!(expect_i64(floor_at), -3);
+
+        let duration = aurora_direct_duration_from_i64(1_500, 1_000_000);
+        assert_eq!(cloned_value(duration), Value::Duration(1_500_000_000));
+        assert_eq!(
+            aurora_direct_duration_to_float(duration, 1_000_000),
+            1_500.0
+        );
+        assert_eq!(
+            aurora_direct_duration_to_float(duration, 1_000_000_000),
+            1.5
+        );
+        release(duration);
+
+        let zero_duration = duration_value(0);
+        let slept = aurora_direct_sleep_value(zero_duration);
+        assert_eq!(cloned_value(slept), Value::Unit);
+        release(slept);
+        release(zero_duration);
 
         let cast_target = "float64";
         let cast = aurora_direct_cast_value(int_value(5), cast_target.as_ptr(), cast_target.len());
@@ -416,7 +435,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let capacity = int_value(1);
         let channel = aurora_direct_channel_new(capacity);
         release(capacity);
-        let duration = aurora_direct_duration_literal(0);
+        let duration = duration_value(0);
         let sent = aurora_direct_channel_send_timeout_value(channel, int_value(7), duration);
         release(sent);
         release(duration);
@@ -433,12 +452,12 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aurora_direct_wait_any(task_list));
         release(task_list);
         let task_list = aurora_direct_vec_empty();
-        let timeout = aurora_direct_duration_literal(0);
+        let timeout = duration_value(0);
         release(aurora_direct_wait_all_timeout_value(task_list, timeout));
         release(timeout);
         release(task_list);
         let task_list = aurora_direct_vec_empty();
-        let timeout = aurora_direct_duration_literal(0);
+        let timeout = duration_value(0);
         release(aurora_direct_wait_any_timeout_value(task_list, timeout));
         release(timeout);
         release(task_list);

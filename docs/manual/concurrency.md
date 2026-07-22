@@ -6,15 +6,40 @@ The maintained model is structured by default: child tasks should live inside a 
 
 ## Duration Values
 
-Scheduler APIs use `Duration`. Duration literals include units such as:
+Scheduler APIs use `Duration`. This executable example covers every literal
+unit plus the computed surface:
 
 ```python
-10ms
-1s
-2m
+def main() -> int32:
+    attempt: int64 = 3
+    print(10ms)
+    print(1s)
+    print(2m)
+    print(attempt * Duration.ms(125))
+    print(1ms // attempt)
+    print(Duration.minutes(-1) < 0ms)
+    print(Duration.seconds(2).to_ms())
+    print(Duration.ms(1500).to_seconds())
+    return 0
 ```
 
-Durations are copy values.
+Durations are signed i128-nanosecond copy values. Use `Duration.ms(value)`,
+`Duration.seconds(value)`, or `Duration.minutes(value)` when the count is an
+`int64` expression rather than a literal. Checked `+`, `-`, multiplication by
+an `int64` in either order, `// int64`, and all comparisons make computed
+backoff and deadline selection expressible; for example, a runtime attempt
+count can use `attempt * 1ms`.
+
+`to_ms()` and `to_seconds()` convert the exact rational unit value to the
+nearest representable IEEE-754 binary64 value, ties-to-even, and may round.
+Printing and f-string interpolation instead render the exact decimal
+millisecond value with at most six fractional digits and an `ms` suffix.
+
+A negative Duration is representable but is not a valid sleep, timeout, or
+backoff. Scheduler APIs on this page have no `io.Error` or `process.Error`
+carrier, so a negative value, host-timer overflow, or deadline overflow traps
+with `AU4001`. Overflow never changes the operation into an unlimited wait.
+The exact host-timer classification is Provisional under ADR-0019.
 
 ## TaskGroup
 
@@ -240,7 +265,9 @@ boundary. `AU3003` reports a mutating call through an immutable place, and
 cancellation, closure, fullness, and an observed task error are typed values,
 not diagnostics. An unread child trap retains its original code. `AU4001`
 reports a general runtime trap, including zero or negative Queue capacity.
-`AU4002` reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
+`AU4001` also reports a negative, unrepresentable, or overflowing scheduler
+deadline because these APIs have no typed InvalidInput carrier. `AU4002`
+reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
 violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
 
 ## Backend Support
@@ -267,14 +294,16 @@ configuration or queue backpressure, so slow or stuck jobs can delay unrelated
 work behind them. A result holding an exclusive runtime resource is
 single-observer-only, but the checker does not yet enforce that rule.
 Cancelling a blocking-worker wait cannot retract an OS side effect already in
-progress. Duration arithmetic and detached lightweight tasks are unavailable.
+progress. Detached lightweight tasks are unavailable.
 
 ## Status
 
 Scheduler-backed lightweight tasks, structured `TaskGroup`, generic task
 handles and outcomes, bounded and unbounded queues, bare receive iteration,
 sleep, cooperative cancellation, task-result observation, and multi-task waits
-are implemented for the post-Phase 1.5 surface. Multicore Aurora task execution
+plus computed Duration arithmetic are implemented for the Phase 3 surface.
+The host-timer policy recorded by ADR-0019 remains Provisional pending the
+Phase 3 checkpoint review. Multicore Aurora task execution
 is reserved for the Batch 3 runtime work. Preemptive scheduling,
 mutable-borrow task targets, statically enforced single-observer resource
 results, and detached task syntax are unavailable. The capacity boundary is

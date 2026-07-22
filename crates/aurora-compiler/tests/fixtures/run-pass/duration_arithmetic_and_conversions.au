@@ -1,0 +1,43 @@
+def main() -> int32:
+    count: int64 = 3
+    base = Duration.ms(125)
+    one_ns = 1ms // 1000000
+
+    print(base + Duration.ms(25))
+    print(base - Duration.ms(25))
+    print(base * count)
+    print(count * base)
+    print((count * base).to_ms())
+    print(1ms // count)
+    print(Duration.ms(-1) // count)
+    mut compound = 1ms
+    compound //= count
+    print(compound)
+    print(Duration.seconds(2))
+    print(Duration.minutes(1))
+    print(Duration.ms(1500).to_ms())
+    print(Duration.ms(1500).to_seconds())
+    print(Duration.ms(1) < Duration.ms(2))
+    print(Duration.ms(2) >= Duration.ms(2))
+    print(Duration.ms(2) == Duration.ms(2))
+    print(Duration.ms(2) != Duration.ms(3))
+    print(1ms + (1ms // 10))
+    print(1ms + (1ms // 100))
+    print(1ms + (1ms // 1000))
+    print(1ms + (1ms // 10000))
+    print(1ms + (1ms // 100000))
+    print(1ms + one_ns)
+    print(f"duration={base}")
+    print(one_ns.to_ms())
+    print((0ms - one_ns).to_ms())
+    print(one_ns.to_seconds())
+    print((0ms - one_ns).to_seconds())
+    maximum = 170141183460469231731687303715884ms + (105727ms // 1000000)
+    minimum = (0ms - 170141183460469231731687303715884ms) - (105728ms // 1000000)
+    print(maximum)
+    print(minimum)
+    print(maximum.to_ms())
+    print(minimum.to_ms())
+    print(maximum.to_seconds())
+    print(minimum.to_seconds())
+    return 0

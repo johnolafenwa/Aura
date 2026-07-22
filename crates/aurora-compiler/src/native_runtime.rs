@@ -22,10 +22,10 @@ use crate::runtime_value::{
     io_read_line, nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
     process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
     register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
     result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
@@ -426,7 +426,7 @@ fn with_cancellation_scope<T>(cancellation: CancellationContext, work: impl FnOn
     work()
 }
 
-fn extract_duration_millis(value: impl Borrow<Value>) -> i128 {
+fn extract_duration_nanoseconds(value: impl Borrow<Value>) -> i128 {
     match value.borrow() {
         Value::Int(value) => match value.as_i128() {
             Some(value) => value,
@@ -440,6 +440,23 @@ fn extract_duration_millis(value: impl Borrow<Value>) -> i128 {
             value_type_name(other)
         )),
     }
+}
+
+fn duration_value_to_host_timer(value: &Value, label: &str) -> io::Result<StdDuration> {
+    let nanoseconds = extract_duration_nanoseconds(value);
+    crate::runtime_value::duration_to_host_timer(nanoseconds, label)
+}
+
+fn direct_timer_result_or_trap<T>(result: io::Result<T>) -> T {
+    result.unwrap_or_else(|error| direct_timer_error(error))
+}
+
+fn direct_timer_diagnostic(error: io::Error) -> Diagnostic {
+    Diagnostic::coded("AU4001", error.to_string())
+}
+
+fn direct_timer_error(error: io::Error) -> ! {
+    runtime_diagnostic_error(direct_timer_diagnostic(error))
 }
 
 fn boxed_value(value: Value) -> *mut OpaqueValue {
@@ -869,19 +886,16 @@ fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
     }
 }
 
-fn optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<StdDuration> {
+fn optional_timeout_result_from_ptr(
+    value: *mut OpaqueValue,
+    label: &str,
+) -> io::Result<Option<StdDuration>> {
     if value.is_null() {
-        return None;
+        return Ok(None);
     }
     match unsafe { value_ref(value) } {
-        Value::Unit => None,
-        Value::Duration(duration) => Some(
-            u64::try_from(duration)
-                .map(StdDuration::from_millis)
-                .unwrap_or_else(|_| {
-                    runtime_error(format!("`{}` duration must be non-negative", label))
-                }),
-        ),
+        Value::Unit => Ok(None),
+        value @ Value::Duration(_) => duration_value_to_host_timer(&value, label).map(Some),
         other => runtime_error(format!(
             "`{}` expects `Duration`, found `{}`",
             label,
@@ -890,20 +904,27 @@ fn optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<Std
     }
 }
 
+#[cfg(test)]
+fn optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<StdDuration> {
+    optional_timeout_result_from_ptr(value, label).unwrap_or_else(|error| direct_timer_error(error))
+}
+
+fn process_optional_timeout_result_from_ptr(
+    value: *mut OpaqueValue,
+    label: &str,
+) -> io::Result<Option<StdDuration>> {
+    optional_timeout_result_from_ptr(value, label)
+}
+
+#[cfg(test)]
 fn process_optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<StdDuration> {
-    if value.is_null() {
-        return None;
-    }
+    process_optional_timeout_result_from_ptr(value, label)
+        .unwrap_or_else(|error| direct_timer_error(error))
+}
+
+fn duration_result_from_ptr(value: *mut OpaqueValue, label: &str) -> io::Result<StdDuration> {
     match unsafe { value_ref(value) } {
-        Value::Unit => None,
-        Value::Duration(duration) if duration < 0 => None,
-        Value::Duration(duration) => Some(
-            u64::try_from(duration)
-                .map(StdDuration::from_millis)
-                .unwrap_or_else(|_| {
-                    runtime_error(format!("`{}` duration must be non-negative", label))
-                }),
-        ),
+        value @ Value::Duration(_) => duration_value_to_host_timer(&value, label),
         other => runtime_error(format!(
             "`{}` expects `Duration`, found `{}`",
             label,
@@ -913,18 +934,25 @@ fn process_optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Op
 }
 
 fn duration_from_ptr(value: *mut OpaqueValue, label: &str) -> StdDuration {
-    match unsafe { value_ref(value) } {
-        Value::Duration(duration) => u64::try_from(duration)
-            .map(StdDuration::from_millis)
-            .unwrap_or_else(|_| {
-                runtime_error(format!("`{}` duration must be non-negative", label))
-            }),
-        other => runtime_error(format!(
-            "`{}` expects `Duration`, found `{}`",
-            label,
-            value_type_name(other)
-        )),
-    }
+    duration_result_from_ptr(value, label).unwrap_or_else(|error| direct_timer_error(error))
+}
+
+macro_rules! io_timeout_or_return {
+    ($value:expr, $label:expr) => {
+        match optional_timeout_result_from_ptr($value, $label) {
+            Ok(timeout) => timeout,
+            Err(error) => return boxed_value(result_err(io_error(error))),
+        }
+    };
+}
+
+macro_rules! process_timeout_or_return {
+    ($value:expr, $label:expr) => {
+        match process_optional_timeout_result_from_ptr($value, $label) {
+            Ok(timeout) => timeout,
+            Err(error) => return boxed_value(result_err(process_error_from_io(error))),
+        }
+    };
 }
 
 fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<i32> {
@@ -999,7 +1027,9 @@ fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> Vec<u8> {
     let Some(task) = task else {
         return Vec::new();
     };
-    match task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())) {
+    match direct_timer_result_or_trap(
+        task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())),
+    ) {
         TaskWaitStatus::Ready(Ok(Value::Vec(vector)))
             if vector.element_type == Type::named("uint8") =>
         {
@@ -1321,6 +1351,18 @@ fn compare_values(
                 )))
             }
         })),
+        (Value::Duration(left), Value::Duration(right)) => Ok(Value::Bool(match op {
+            BinaryOp::Less => left < right,
+            BinaryOp::LessEq => left <= right,
+            BinaryOp::Greater => left > right,
+            BinaryOp::GreaterEq => left >= right,
+            _ => {
+                return Err(Diagnostic::new(format!(
+                    "unsupported comparison operator `{:?}` for Duration values",
+                    op
+                )))
+            }
+        })),
         (left, right) => Err(Diagnostic::new(format!(
             "unsupported comparison between `{}` and `{}`",
             value_type_name(&left),
@@ -1366,6 +1408,10 @@ fn eval_binary_value(
         | BinaryOp::Greater
         | BinaryOp::GreaterEq => compare_values(left, right, op),
         BinaryOp::Add => match (left, right) {
+            (Value::Duration(left), Value::Duration(right)) => left
+                .checked_add(right)
+                .map(Value::Duration)
+                .ok_or_else(|| Diagnostic::new("duration overflow")),
             (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
@@ -1379,6 +1425,10 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Sub => match (left, right) {
+            (Value::Duration(left), Value::Duration(right)) => left
+                .checked_sub(right)
+                .map(Value::Duration)
+                .ok_or_else(|| Diagnostic::new("duration overflow")),
             (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
@@ -1391,6 +1441,12 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Mul => match (left, right) {
+            (Value::Duration(duration), Value::Int(factor))
+            | (Value::Int(factor), Value::Duration(duration)) => factor
+                .as_i128()
+                .and_then(|factor| duration.checked_mul(factor))
+                .map(Value::Duration)
+                .ok_or_else(|| Diagnostic::new("duration overflow")),
             (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
@@ -1415,6 +1471,14 @@ fn eval_binary_value(
             (left, right) => Err(unsupported_binary_operands("/", &left, &right)),
         },
         BinaryOp::FloorDiv => match (left, right) {
+            (Value::Duration(_), Value::Int(right)) if right.is_zero() => {
+                Err(Diagnostic::new("division by zero"))
+            }
+            (Value::Duration(left), Value::Int(right)) => right
+                .as_i128()
+                .and_then(|right| checked_i128_floor_div(left, right))
+                .map(Value::Duration)
+                .ok_or_else(|| Diagnostic::new("duration overflow")),
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
@@ -1446,6 +1510,16 @@ fn eval_binary_value(
                 value_type_name(&right)
             ))),
         },
+    }
+}
+
+fn checked_i128_floor_div(left: i128, right: i128) -> Option<i128> {
+    let quotient = left.checked_div(right)?;
+    let remainder = left.checked_rem(right)?;
+    if remainder != 0 && (remainder < 0) != (right < 0) {
+        quotient.checked_sub(1)
+    } else {
+        Some(quotient)
     }
 }
 
@@ -1713,8 +1787,54 @@ pub extern "C-unwind" fn aurora_direct_stringify_value(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::Duration(value as i128)))
+pub extern "C-unwind" fn aurora_direct_duration_literal(low: i64, high: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = ((high as i128) << 64) | (low as u64 as i128);
+        boxed_value(Value::Duration(value))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_duration_from_i64(
+    value: i64,
+    unit_nanoseconds: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let unit_nanoseconds = match i128::from(unit_nanoseconds) {
+            crate::runtime_value::NANOS_PER_MILLISECOND
+            | crate::runtime_value::NANOS_PER_SECOND
+            | crate::runtime_value::NANOS_PER_MINUTE => i128::from(unit_nanoseconds),
+            other => runtime_error(format!("unknown Duration constructor unit `{other}`")),
+        };
+        let nanoseconds = i128::from(value)
+            .checked_mul(unit_nanoseconds)
+            .unwrap_or_else(|| runtime_error("duration overflow"));
+        boxed_value(Value::Duration(nanoseconds))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_duration_to_float(
+    value: *mut OpaqueValue,
+    unit_nanoseconds: i64,
+) -> f64 {
+    task_runtime_boundary(|| {
+        let Value::Duration(nanoseconds) = (unsafe { value_ref(value) }) else {
+            runtime_error(format!(
+                "expected `Duration`, found `{}`",
+                value_type_name(unsafe { value_ref(value) })
+            ));
+        };
+        match i128::from(unit_nanoseconds) {
+            crate::runtime_value::NANOS_PER_MILLISECOND => {
+                crate::runtime_value::duration_to_milliseconds(nanoseconds)
+            }
+            crate::runtime_value::NANOS_PER_SECOND => {
+                crate::runtime_value::duration_to_seconds(nanoseconds)
+            }
+            other => runtime_error(format!("unknown Duration conversion unit `{other}`")),
+        }
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -3742,17 +3862,13 @@ pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid queue timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "put(timeout=...)");
         match unsafe { value_ref(channel) } {
-            Value::Channel(channel) => match channel.send_with_timeout(
+            Value::Channel(channel) => match direct_timer_result_or_trap(channel.send_with_timeout(
                 unsafe { take_value(value) },
-                Some(StdDuration::from_millis(millis)),
+                Some(timeout),
                 Some(&current_cancellation()),
-            ) {
+            )) {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
                 Err(SendValueError::Closed(value)) => {
                     boxed_value(result_err(send_error_closed(*value)))
@@ -3805,7 +3921,9 @@ pub extern "C-unwind" fn aurora_direct_channel_try_send(
 pub extern "C-unwind" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
+            match direct_timer_result_or_trap(
+                channel.recv_result_with_cancellation(None, Some(&current_cancellation())),
+            ) {
                 RecvValueResult::Value(value) => queue_receive_item(value),
                 RecvValueResult::Closed => queue_receive_closed(),
                 RecvValueResult::TimedOut => queue_receive_timed_out(),
@@ -3874,23 +3992,21 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid queue timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "get(timeout=...)");
         match unsafe { value_ref(channel) } {
-            Value::Channel(channel) => boxed_value(
-                match channel.recv_result_with_cancellation(
-                    Some(StdDuration::from_millis(millis)),
-                    Some(&current_cancellation()),
-                ) {
-                    RecvValueResult::Value(value) => queue_receive_item(value),
-                    RecvValueResult::Closed => queue_receive_closed(),
-                    RecvValueResult::TimedOut => queue_receive_timed_out(),
-                    RecvValueResult::Cancelled => queue_receive_cancelled(),
-                },
-            ),
+            Value::Channel(channel) => {
+                boxed_value(
+                    match direct_timer_result_or_trap(channel.recv_result_with_cancellation(
+                        Some(timeout),
+                        Some(&current_cancellation()),
+                    )) {
+                        RecvValueResult::Value(value) => queue_receive_item(value),
+                        RecvValueResult::Closed => queue_receive_closed(),
+                        RecvValueResult::TimedOut => queue_receive_timed_out(),
+                        RecvValueResult::Cancelled => queue_receive_cancelled(),
+                    },
+                )
+            }
             other => runtime_error(format!(
                 "expected `Queue`, found `{}`",
                 value_type_name(other)
@@ -3938,23 +4054,21 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_none_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid queue timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "get_or_none(timeout=...)");
         match unsafe { value_ref(channel) } {
-            Value::Channel(channel) => boxed_value(
-                match channel.recv_result_with_cancellation(
-                    Some(StdDuration::from_millis(millis)),
-                    Some(&current_cancellation()),
-                ) {
-                    RecvValueResult::Value(value) => option_some(value),
-                    RecvValueResult::Closed
-                    | RecvValueResult::TimedOut
-                    | RecvValueResult::Cancelled => option_none(),
-                },
-            ),
+            Value::Channel(channel) => {
+                boxed_value(
+                    match direct_timer_result_or_trap(channel.recv_result_with_cancellation(
+                        Some(timeout),
+                        Some(&current_cancellation()),
+                    )) {
+                        RecvValueResult::Value(value) => option_some(value),
+                        RecvValueResult::Closed
+                        | RecvValueResult::TimedOut
+                        | RecvValueResult::Cancelled => option_none(),
+                    },
+                )
+            }
             other => runtime_error(format!(
                 "expected `Queue`, found `{}`",
                 value_type_name(other)
@@ -4006,23 +4120,21 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let default = unsafe { value_ref(default) }.clone();
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid queue timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "get_or(timeout=...)");
         match unsafe { value_ref(channel) } {
-            Value::Channel(channel) => boxed_value(
-                match channel.recv_result_with_cancellation(
-                    Some(StdDuration::from_millis(millis)),
-                    Some(&current_cancellation()),
-                ) {
-                    RecvValueResult::Value(value) => value,
-                    RecvValueResult::Closed
-                    | RecvValueResult::TimedOut
-                    | RecvValueResult::Cancelled => default,
-                },
-            ),
+            Value::Channel(channel) => {
+                boxed_value(
+                    match direct_timer_result_or_trap(channel.recv_result_with_cancellation(
+                        Some(timeout),
+                        Some(&current_cancellation()),
+                    )) {
+                        RecvValueResult::Value(value) => value,
+                        RecvValueResult::Closed
+                        | RecvValueResult::TimedOut
+                        | RecvValueResult::Cancelled => default,
+                    },
+                )
+            }
             other => runtime_error(format!(
                 "expected `Queue`, found `{}`",
                 value_type_name(other)
@@ -4051,7 +4163,9 @@ pub extern "C-unwind" fn aurora_direct_channel_close(
 pub extern "C-unwind" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(task) } {
         Value::Task(task) => {
-            match task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())) {
+            match direct_timer_result_or_trap(
+                task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())),
+            ) {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => boxed_value(task_result_ready(value)),
                     Err(error) => boxed_value(task_result_error(error.message)),
@@ -4073,23 +4187,21 @@ pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid task result timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "result(timeout=...)");
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match task.wait_result_with_cancellation_observed(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
-            ) {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(task_result_ready(value)),
-                    Err(error) => boxed_value(task_result_error(error.message)),
-                },
-                TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
-                TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
-            },
+            Value::Task(task) => {
+                match direct_timer_result_or_trap(task.wait_result_with_cancellation_observed(
+                    Some(timeout),
+                    Some(&current_cancellation()),
+                )) {
+                    TaskWaitStatus::Ready(result) => match result {
+                        Ok(value) => boxed_value(task_result_ready(value)),
+                        Err(error) => boxed_value(task_result_error(error.message)),
+                    },
+                    TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
+                    TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
+                }
+            }
             other => runtime_error(format!(
                 "expected `Task`, found `{}`",
                 value_type_name(other)
@@ -4139,15 +4251,13 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_none_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid task result timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "result_or_none(timeout=...)");
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match task.wait_result_with_cancellation_observed(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
+            Value::Task(task) => match direct_timer_result_or_trap(
+                task.wait_result_with_cancellation_observed(
+                    Some(timeout),
+                    Some(&current_cancellation()),
+                ),
             ) {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => boxed_value(option_some(value)),
@@ -4208,22 +4318,20 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let default = unsafe { value_ref(default) }.clone();
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid task result timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "result_or(timeout=...)");
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match task.wait_result_with_cancellation_observed(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
-            ) {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(value),
-                    Err(_) => boxed_value(default),
-                },
-                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
-            },
+            Value::Task(task) => {
+                match direct_timer_result_or_trap(task.wait_result_with_cancellation_observed(
+                    Some(timeout),
+                    Some(&current_cancellation()),
+                )) {
+                    TaskWaitStatus::Ready(result) => match result {
+                        Ok(value) => boxed_value(value),
+                        Err(_) => boxed_value(default),
+                    },
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
+                }
+            }
             other => runtime_error(format!(
                 "expected `Task`, found `{}`",
                 value_type_name(other)
@@ -4258,7 +4366,7 @@ fn wait_any_tasks(
     tasks: Vec<TaskValue>,
     timeout: Option<StdDuration>,
 ) -> Result<Value, Diagnostic> {
-    let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+    let deadline = checked_timeout_deadline_at(timeout, Instant::now(), "wait_any(timeout=...)")?;
     let cancellation = current_cancellation();
     if tasks.is_empty() {
         return if poll_cancellation(&cancellation) {
@@ -4303,7 +4411,7 @@ fn wait_all_tasks(
     tasks: Vec<TaskValue>,
     timeout: Option<StdDuration>,
 ) -> Result<Value, Diagnostic> {
-    let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+    let deadline = checked_timeout_deadline_at(timeout, Instant::now(), "wait_all(timeout=...)")?;
     let cancellation = current_cancellation();
     let mut results = Vec::with_capacity(tasks.len());
     for (index, task) in tasks.into_iter().enumerate() {
@@ -4312,7 +4420,9 @@ fn wait_all_tasks(
                 .checked_duration_since(Instant::now())
                 .or(Some(StdDuration::from_millis(0)))
         });
-        match task.wait_result_with_cancellation_observed(remaining, Some(&cancellation)) {
+        match direct_timer_result_or_trap(
+            task.wait_result_with_cancellation_observed(remaining, Some(&cancellation)),
+        ) {
             TaskWaitStatus::Ready(result) => match result {
                 Ok(value) => results.push(value),
                 Err(error) => {
@@ -4327,6 +4437,20 @@ fn wait_all_tasks(
         }
     }
     Ok(wait_all_ready(results))
+}
+
+fn checked_timeout_deadline_at(
+    timeout: Option<StdDuration>,
+    now: Instant,
+    label: &str,
+) -> Result<Option<Instant>, Diagnostic> {
+    timeout
+        .map(|timeout| {
+            now.checked_add(timeout).ok_or_else(|| {
+                Diagnostic::coded("AU4001", format!("{label} exceeds the host deadline range"))
+            })
+        })
+        .transpose()
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -4348,14 +4472,10 @@ pub extern "C-unwind" fn aurora_direct_wait_any_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid wait_any timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "wait_any(timeout=...)");
         match wait_any_tasks(
             expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
-            Some(StdDuration::from_millis(millis)),
+            Some(timeout),
         ) {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
@@ -4382,14 +4502,10 @@ pub extern "C-unwind" fn aurora_direct_wait_all_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid wait_all timeout duration"),
-        };
+        let timeout = duration_from_ptr(duration, "wait_all(timeout=...)");
         match wait_all_tasks(
             expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
-            Some(StdDuration::from_millis(millis)),
+            Some(timeout),
         ) {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
@@ -4424,7 +4540,9 @@ fn close_task_group(group: &TaskGroupValue, cancel_before: bool) {
         group.cancel();
     }
     for task in tasks {
-        match task.wait_result_with_cancellation(None, Some(&cancellation)) {
+        match direct_timer_result_or_trap(
+            task.wait_result_with_cancellation(None, Some(&cancellation)),
+        ) {
             TaskWaitStatus::Ready(_) => {
                 if let Some(error) = task.unobserved_error() {
                     runtime_diagnostic_error(error);
@@ -4952,7 +5070,7 @@ pub extern "C-unwind" fn aurora_direct_process_run(
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
         let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.run(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let timeout = process_optional_timeout_from_ptr(timeout, "process.run(...)");
+        let timeout = process_timeout_or_return!(timeout, "process.run(...)");
         let group = expect_bool_value(&unsafe { value_ref(group) }, "process.run(...)");
 
         let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group)
@@ -5085,7 +5203,10 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+        let timeout = match process_optional_timeout_result_from_ptr(timeout, "wait(timeout=...)") {
+            Ok(timeout) => timeout,
+            Err(error) => return boxed_value(process_wait_failed(process_error_from_io(error))),
+        };
         match unsafe { value_ref(child) } {
             Value::ProcessChild(child) => {
                 boxed_value(match child.wait(timeout, Some(&current_cancellation())) {
@@ -5111,7 +5232,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait_or_none(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "wait_or_none(timeout=...)");
         match unsafe { value_ref(child) } {
             Value::ProcessChild(child) => {
                 match child.wait_or_none(timeout, Some(&current_cancellation())) {
@@ -5136,7 +5257,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait_ok(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "wait_ok(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "wait_ok(timeout=...)");
         match unsafe { value_ref(child) } {
             Value::ProcessChild(child) => {
                 match child.wait_ok(timeout, Some(&current_cancellation())) {
@@ -5222,7 +5343,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_read_line(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "read_line(timeout=...)");
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.read_line(timeout, Some(&current_cancellation())) {
@@ -5250,7 +5371,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_read_bytes(
         let count = usize::try_from(count).unwrap_or_else(|_| {
             runtime_error("`read_bytes(...)` expects a non-negative `max_bytes`")
         });
-        let timeout = process_optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "read_bytes(timeout=...)");
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.read_bytes(count, timeout, Some(&current_cancellation())) {
@@ -5275,7 +5396,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_write_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-        let timeout = process_optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "write_all(timeout=...)");
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.write_all(&text, timeout, Some(&current_cancellation())) {
@@ -5299,7 +5420,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_write_bytes(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
-        let timeout = process_optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "write_bytes(timeout=...)");
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
@@ -5479,7 +5600,10 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_start(
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
         let restart = decode_process_restart_policy(&unsafe { value_ref(restart) }, "start(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let backoff = duration_from_ptr(backoff, "start(...)");
+        let backoff = match duration_result_from_ptr(backoff, "start(...)") {
+            Ok(backoff) => backoff,
+            Err(error) => return boxed_value(result_err(process_error_from_io(error))),
+        };
         let max_restarts = supervisor_max_restarts_from_ptr(max_restarts, "start(...)");
         let group = expect_bool_value(&unsafe { value_ref(group) }, "start(...)");
         match unsafe { value_ref(supervisor) } {
@@ -5513,7 +5637,18 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_wait(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+        let timeout = match process_optional_timeout_result_from_ptr(timeout, "wait(timeout=...)") {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                return boxed_value(process_supervisor_wait_event(
+                    process_supervisor_event_failed(
+                        "<supervisor>".to_string(),
+                        process_error_from_io(error),
+                        IntegerValue::from_signed(0),
+                    ),
+                ));
+            }
+        };
         match unsafe { value_ref(supervisor) } {
             Value::ProcessSupervisor(supervisor) => boxed_value(
                 match supervisor.wait(timeout, Some(&current_cancellation())) {
@@ -5538,7 +5673,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_wait_or_none(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+        let timeout = process_timeout_or_return!(timeout, "wait_or_none(timeout=...)");
         match unsafe { value_ref(supervisor) } {
             Value::ProcessSupervisor(supervisor) => {
                 match supervisor.wait_or_none(timeout, Some(&current_cancellation())) {
@@ -5622,7 +5757,7 @@ pub extern "C-unwind" fn aurora_direct_net_connect_timeout(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "net.connect_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.connect_timeout(...)");
         match unsafe { value_ref(address) } {
             Value::String(address) => {
                 match TcpStreamValue::connect(&address, timeout, Some(&current_cancellation())) {
@@ -5704,7 +5839,7 @@ pub extern "C-unwind" fn aurora_direct_net_unix_connect_timeout(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "net.unix_connect_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.unix_connect_timeout(...)");
         match unsafe { value_ref(path) } {
             Value::String(path) => {
                 match UnixStreamValue::connect(&path, timeout, Some(&current_cancellation())) {
@@ -5784,7 +5919,7 @@ pub extern "C-unwind" fn aurora_direct_net_tls_connect_timeout(
             &unsafe { value_ref(ca_pem_path) },
             "net.tls_connect_timeout(...)",
         );
-        let timeout = optional_timeout_from_ptr(timeout, "net.tls_connect_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.tls_connect_timeout(...)");
         match TlsStreamValue::connect(
             &address,
             &server_name,
@@ -5867,7 +6002,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_text_timeout(
             &unsafe { value_ref(headers) },
             "net.http_request_text_timeout(...)",
         );
-        let timeout = optional_timeout_from_ptr(timeout, "net.http_request_text_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.http_request_text_timeout(...)");
         match HttpResponseValue::request_text(
             &method,
             &url,
@@ -5937,7 +6072,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_bytes_timeout(
             &unsafe { value_ref(headers) },
             "net.http_request_bytes_timeout(...)",
         );
-        let timeout = optional_timeout_from_ptr(timeout, "net.http_request_bytes_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.http_request_bytes_timeout(...)");
         match HttpResponseValue::request_bytes(
             &method,
             &url,
@@ -5990,7 +6125,7 @@ pub extern "C-unwind" fn aurora_direct_net_websocket_connect_timeout(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "net.websocket_connect_timeout(...)");
+        let timeout = io_timeout_or_return!(timeout, "net.websocket_connect_timeout(...)");
         match unsafe { value_ref(url) } {
             Value::String(url) => match WebSocketValue::connect(&url, timeout) {
                 Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
@@ -6010,7 +6145,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_listener_accept(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "accept(timeout=...)");
         match unsafe { value_ref(listener) } {
             Value::TcpListener(listener) => {
                 match listener.accept(timeout, Some(&current_cancellation())) {
@@ -6064,7 +6199,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_all(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "read_all(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_all(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_all(timeout, Some(&current_cancellation())) {
@@ -6086,7 +6221,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_line(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_line(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
@@ -6114,7 +6249,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_bytes(
         let max_bytes = usize::try_from(max_bytes).unwrap_or_else(|_| {
             runtime_error("`read_bytes(...)` requires a non-negative max_bytes")
         });
-        let timeout = optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_bytes(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_bytes(max_bytes, timeout, Some(&current_cancellation())) {
@@ -6141,7 +6276,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_exact(
         let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
         let count = usize::try_from(count)
             .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_exact(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_exact(count, timeout, Some(&current_cancellation())) {
@@ -6171,7 +6306,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_write_all(
                 value_type_name(other)
             )),
         };
-        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "write_all(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.write_all(&text, timeout, Some(&current_cancellation())) {
@@ -6195,7 +6330,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_write_bytes(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "write_bytes(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
@@ -6333,7 +6468,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_send_text(
     task_runtime_boundary(|| {
         let address = expect_string_value(&unsafe { value_ref(address) }, "send_text(...)");
         let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "send_text(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.send_to_text(&address, &text, timeout, Some(&current_cancellation())) {
@@ -6359,7 +6494,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_send_bytes(
     task_runtime_boundary(|| {
         let address = expect_string_value(&unsafe { value_ref(address) }, "send_bytes(...)");
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "send_bytes(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.send_to_bytes(&address, &bytes, timeout, Some(&current_cancellation()))
@@ -6386,7 +6521,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_recv(
         let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv(...)");
         let max_bytes = usize::try_from(max_bytes)
             .unwrap_or_else(|_| runtime_error("`recv(...)` requires a non-negative max_bytes"));
-        let timeout = optional_timeout_from_ptr(timeout, "recv(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "recv(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.recv(max_bytes, timeout, Some(&current_cancellation())) {
@@ -6414,7 +6549,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_recv_from(
         let max_bytes = usize::try_from(max_bytes).unwrap_or_else(|_| {
             runtime_error("`recv_from(...)` requires a non-negative max_bytes")
         });
-        let timeout = optional_timeout_from_ptr(timeout, "recv_from(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "recv_from(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.recv_from(max_bytes, timeout, Some(&current_cancellation())) {
@@ -6529,7 +6664,7 @@ pub extern "C-unwind" fn aurora_direct_http_listener_accept(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "accept(timeout=...)");
         match unsafe { value_ref(listener) } {
             Value::HttpListener(listener) => {
                 match listener.accept(timeout, Some(&current_cancellation())) {
@@ -6767,7 +6902,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_listener_accept(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "accept(timeout=...)");
         match unsafe { value_ref(listener) } {
             Value::WebSocketListener(listener) => match listener.accept(timeout) {
                 Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
@@ -6805,7 +6940,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_send_text(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "send_text(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.send_text(&text, timeout) {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -6827,7 +6962,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_send_bytes(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "send_bytes(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.send_bytes(&bytes, timeout) {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -6847,7 +6982,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_recv_text(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "recv_text(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "recv_text(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.recv_text(timeout) {
                 Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
@@ -6868,7 +7003,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_recv_bytes(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "recv_bytes(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "recv_bytes(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.recv_bytes(timeout) {
                 Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
@@ -6905,7 +7040,7 @@ pub extern "C-unwind" fn aurora_direct_unix_listener_accept(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "accept(timeout=...)");
         match unsafe { value_ref(listener) } {
             Value::UnixListener(listener) => {
                 match listener.accept(timeout, Some(&current_cancellation())) {
@@ -6943,7 +7078,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_read_line(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_line(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::UnixStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
@@ -6970,7 +7105,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_read_exact(
         let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
         let count = usize::try_from(count)
             .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_exact(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::UnixStream(stream) => {
                 match stream.read_exact(count, timeout, Some(&current_cancellation())) {
@@ -6994,7 +7129,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_write_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "write_all(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::UnixStream(stream) => {
                 match stream.write_all(&text, timeout, Some(&current_cancellation())) {
@@ -7032,7 +7167,7 @@ pub extern "C-unwind" fn aurora_direct_tls_listener_accept(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "accept(timeout=...)");
         match unsafe { value_ref(listener) } {
             Value::TlsListener(listener) => {
                 match listener.accept(timeout, Some(&current_cancellation())) {
@@ -7086,7 +7221,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_read_line(
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_line(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TlsStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
@@ -7113,7 +7248,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_read_exact(
         let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
         let count = usize::try_from(count)
             .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "read_exact(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TlsStream(stream) => {
                 match stream.read_exact(count, timeout, Some(&current_cancellation())) {
@@ -7137,7 +7272,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_write_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        let timeout = io_timeout_or_return!(timeout, "write_all(timeout=...)");
         match unsafe { value_ref(stream) } {
             Value::TlsStream(stream) => {
                 match stream.write_all(&text, timeout, Some(&current_cancellation())) {
@@ -7172,31 +7307,38 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_close(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sleep_ms(duration: i64) {
     task_runtime_boundary(|| {
-        let millis = match u64::try_from(duration) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid sleep duration"),
-        };
-        let _ = sleep_with_runtime_scheduler(
-            StdDuration::from_millis(millis),
-            Some(&current_cancellation()),
-        );
+        checked_sleep_milliseconds_with(duration, |timeout| {
+            sleep_with_runtime_scheduler(timeout, Some(&current_cancellation()))
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let millis = extract_duration_millis(unsafe { value_ref(duration) });
-        let millis = match u64::try_from(millis) {
-            Ok(millis) => millis,
-            Err(_) => runtime_error("invalid sleep duration"),
-        };
-        let _ = sleep_with_runtime_scheduler(
-            StdDuration::from_millis(millis),
-            Some(&current_cancellation()),
-        );
+        let timeout = duration_from_ptr(duration, "sleep(...)");
+        checked_sleep_with_runtime_scheduler(timeout)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
         boxed_value(Value::Unit)
     })
+}
+
+fn checked_sleep_milliseconds_with<F>(duration: i64, sleep: F) -> Result<(), Diagnostic>
+where
+    F: FnOnce(StdDuration) -> io::Result<RuntimeSchedulerWakeReason>,
+{
+    let nanoseconds = i128::from(duration) * crate::runtime_value::NANOS_PER_MILLISECOND;
+    let timeout = crate::runtime_value::duration_to_host_timer(nanoseconds, "sleep duration")
+        .map_err(direct_timer_diagnostic)?;
+    sleep(timeout).map_err(direct_timer_diagnostic)?;
+    Ok(())
+}
+
+fn checked_sleep_with_runtime_scheduler(timeout: StdDuration) -> Result<(), Diagnostic> {
+    sleep_with_runtime_scheduler(timeout, Some(&current_cancellation()))
+        .map_err(direct_timer_diagnostic)?;
+    Ok(())
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

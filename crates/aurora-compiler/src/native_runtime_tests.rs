@@ -2,9 +2,10 @@
 
 use super::{
     boxed_value, compare_values, current_cancellation, decode_bytes, eval_binary_value,
-    eval_unary_value, extract_duration_millis, inferred_collection_type, int32_overflow_message,
-    normalize_vec_index, render_bool, render_float, render_float32, render_runtime_diagnostic,
-    runtime_span, value_mut, value_ref, value_type_name, with_cancellation_scope, OpaqueValue,
+    eval_unary_value, extract_duration_nanoseconds, inferred_collection_type,
+    int32_overflow_message, normalize_vec_index, render_bool, render_float, render_float32,
+    render_runtime_diagnostic, runtime_span, value_mut, value_ref, value_type_name,
+    with_cancellation_scope, OpaqueValue,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
@@ -27,7 +28,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 fn string_value(text: &str) -> *mut OpaqueValue {
     super::aurora_direct_string_literal(text.as_ptr(), text.len())
@@ -46,7 +47,12 @@ fn bool_value(value: bool) -> *mut OpaqueValue {
 }
 
 fn duration_value(value: i64) -> *mut OpaqueValue {
-    super::aurora_direct_duration_literal(value)
+    let nanoseconds = (value as i128) * crate::runtime_value::NANOS_PER_MILLISECOND;
+    duration_nanoseconds_value(nanoseconds)
+}
+
+fn duration_nanoseconds_value(value: i128) -> *mut OpaqueValue {
+    super::aurora_direct_duration_literal(value as i64, (value >> 64) as i64)
 }
 
 fn string_vec(values: &[&str]) -> *mut OpaqueValue {
@@ -81,6 +87,36 @@ fn task_vec(tasks: &[TaskValue]) -> *mut OpaqueValue {
         ));
     }
     vec
+}
+
+fn process_restart_never_value() -> *mut OpaqueValue {
+    boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "process.RestartPolicy".to_string(),
+        variant_name: "Never".to_string(),
+        payloads: Vec::new(),
+    }))
+}
+
+fn start_supervisor_diagnostic_case(
+    stdin: *mut OpaqueValue,
+    stdout: *mut OpaqueValue,
+    stderr: *mut OpaqueValue,
+    restart: *mut OpaqueValue,
+) {
+    super::aurora_direct_process_supervisor_start(
+        boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new())),
+        string_value("worker"),
+        string_vec(&["/bin/true"]),
+        boxed_value(Value::Unit),
+        super::aurora_direct_map_empty(),
+        stdin,
+        stdout,
+        stderr,
+        restart,
+        duration_value(1),
+        int_value(-1),
+        bool_value(false),
+    );
 }
 
 unsafe fn free_arg_buffer(buffer: *mut i64, count: usize) {
@@ -412,6 +448,12 @@ fn expect_result_err_payload(ptr: *mut OpaqueValue) -> Value {
     payloads.remove(0)
 }
 
+fn expect_process_invalid_input(value: Value) {
+    let mut io_payloads = expect_variant_value(value, "Error", "Io");
+    assert_eq!(io_payloads.len(), 1);
+    assert!(expect_variant_value(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
+}
+
 fn expect_option_some_payload(value: Value) -> Value {
     match value {
         Value::EnumVariant(variant)
@@ -498,6 +540,220 @@ fn render_bool_uses_aurora_boolean_strings() {
     assert_eq!(render_bool(0), "false");
     assert_eq!(render_bool(1), "true");
     assert_eq!(render_bool(99), "true");
+}
+
+#[test]
+fn direct_duration_literal_reconstructs_signed_i128_from_low_then_high_limbs() {
+    for (expected, low, high) in [
+        (0, 0, 0),
+        (-1, -1, -1),
+        ((i64::MAX as i128) + 1, i64::MIN, 0),
+        (i128::MAX, -1, i64::MAX),
+        (i128::MIN, 0, i64::MIN),
+    ] {
+        assert_eq!(
+            unsafe { take_value(super::aurora_direct_duration_literal(low, high)) },
+            Value::Duration(expected),
+            "duration limbs low={low} high={high}"
+        );
+    }
+}
+
+#[test]
+fn direct_duration_runtime_surface_is_checked_exact_and_uses_floor_division() {
+    let duration = |value| Value::Duration(value);
+    let integer = |value| Value::Int(IntegerValue::from_signed(value));
+
+    for (op, left, right, expected) in [
+        (BinaryOp::Add, duration(9), duration(4), duration(13)),
+        (BinaryOp::Sub, duration(9), duration(14), duration(-5)),
+        (BinaryOp::Mul, duration(7), integer(-3), duration(-21)),
+        (BinaryOp::Mul, integer(-3), duration(7), duration(-21)),
+        (BinaryOp::FloorDiv, duration(-5), integer(2), duration(-3)),
+        (BinaryOp::FloorDiv, duration(5), integer(-2), duration(-3)),
+        (BinaryOp::FloorDiv, duration(6), integer(3), duration(2)),
+    ] {
+        assert_eq!(
+            super::eval_binary_value(left, right, op).expect("Duration operation should succeed"),
+            expected
+        );
+    }
+
+    for (op, expected) in [
+        (BinaryOp::Eq, false),
+        (BinaryOp::NotEq, true),
+        (BinaryOp::Less, true),
+        (BinaryOp::LessEq, true),
+        (BinaryOp::Greater, false),
+        (BinaryOp::GreaterEq, false),
+    ] {
+        assert_eq!(
+            super::eval_binary_value(duration(4), duration(5), op)
+                .expect("Duration comparison should succeed"),
+            Value::Bool(expected)
+        );
+    }
+
+    for (op, left, right, expected) in [
+        (
+            BinaryOp::Add,
+            duration(i128::MAX),
+            duration(1),
+            "duration overflow",
+        ),
+        (
+            BinaryOp::Sub,
+            duration(i128::MIN),
+            duration(1),
+            "duration overflow",
+        ),
+        (
+            BinaryOp::Mul,
+            duration(i128::MAX),
+            integer(2),
+            "duration overflow",
+        ),
+        (
+            BinaryOp::FloorDiv,
+            duration(1),
+            integer(0),
+            "division by zero",
+        ),
+        (
+            BinaryOp::FloorDiv,
+            duration(i128::MIN),
+            integer(-1),
+            "duration overflow",
+        ),
+    ] {
+        assert_eq!(
+            super::eval_binary_value(left, right, op)
+                .expect_err("invalid Duration operation should fail")
+                .message,
+            expected
+        );
+    }
+
+    for (value, unit, expected) in [
+        (
+            2,
+            crate::runtime_value::NANOS_PER_MILLISECOND as i64,
+            2_000_000,
+        ),
+        (
+            -3,
+            crate::runtime_value::NANOS_PER_SECOND as i64,
+            -3_000_000_000,
+        ),
+        (
+            4,
+            crate::runtime_value::NANOS_PER_MINUTE as i64,
+            240_000_000_000,
+        ),
+    ] {
+        assert_eq!(
+            unsafe { take_value(super::aurora_direct_duration_from_i64(value, unit)) },
+            duration(expected)
+        );
+    }
+    assert_eq!(
+        super::aurora_direct_duration_to_float(
+            duration_nanoseconds_value(1_500_000),
+            crate::runtime_value::NANOS_PER_MILLISECOND as i64,
+        ),
+        1.5
+    );
+    assert_eq!(
+        super::aurora_direct_duration_to_float(
+            duration_nanoseconds_value(-1_500_000_000),
+            crate::runtime_value::NANOS_PER_SECOND as i64,
+        ),
+        -1.5
+    );
+
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_duration_from_i64(1, 7);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("unknown Duration constructor units should fail the active task");
+    assert!(error
+        .message
+        .contains("unknown Duration constructor unit `7`"));
+
+    let duration_ptr = duration_nanoseconds_value(1);
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_duration_to_float(duration_ptr, 7);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("unknown Duration conversion units should fail the active task");
+    assert!(error
+        .message
+        .contains("unknown Duration conversion unit `7`"));
+    unsafe { release_value(duration_ptr) };
+
+    let string_ptr = string_value("1ms");
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_duration_to_float(
+                string_ptr,
+                crate::runtime_value::NANOS_PER_MILLISECOND as i64,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("non-Duration conversions should fail the active task");
+    assert!(error
+        .message
+        .contains("expected `Duration`, found `String`"));
+    unsafe { release_value(string_ptr) };
+}
+
+#[test]
+fn direct_duration_task_deadlines_preserve_ready_error_and_timeout_outcomes() {
+    let ready = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::Int(IntegerValue::from_signed(11)))
+    }))));
+    assert_eq!(
+        expect_task_result_ready_int(super::aurora_direct_task_join_timeout_value(
+            ready,
+            duration_value(1_000),
+        )),
+        11
+    );
+    unsafe { release_value(ready) };
+
+    let failed = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
+        Err(Diagnostic::new("duration task failed"))
+    }))));
+    assert_eq!(
+        expect_task_result_error_message(super::aurora_direct_task_join_timeout_value(
+            failed,
+            duration_value(1_000),
+        )),
+        "duration task failed"
+    );
+    unsafe { release_value(failed) };
+
+    let delayed = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(25));
+        Ok(Value::Unit)
+    }))));
+    assert!(expect_variant_ptr(
+        super::aurora_direct_task_join_timeout_value(delayed, duration_value(0)),
+        "TaskResult",
+        "TimedOut",
+    )
+    .is_empty());
+    expect_variant_ptr(
+        super::aurora_direct_task_join_timeout_value(delayed, duration_value(1_000)),
+        "TaskResult",
+        "Ready",
+    );
+    unsafe { release_value(delayed) };
 }
 
 #[test]
@@ -783,15 +1039,15 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
 
 #[test]
 fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
-    assert_eq!(super::extract_duration_millis(Value::Duration(42)), 42);
+    assert_eq!(super::extract_duration_nanoseconds(Value::Duration(42)), 42);
     let message = capture_runtime_error_message(|| {
-        let _ = super::extract_duration_millis(Value::Int(IntegerValue::from_literal(
+        let _ = super::extract_duration_nanoseconds(Value::Int(IntegerValue::from_literal(
             (i128::MAX as u128) + 1,
         )));
     });
     assert!(message.contains("outside signed timer range"));
     let message = capture_runtime_error_message(|| {
-        let _ = super::extract_duration_millis(Value::String("soon".to_string()));
+        let _ = super::extract_duration_nanoseconds(Value::String("soon".to_string()));
     });
     assert!(message.contains("expected `Duration`"));
 
@@ -846,7 +1102,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     );
     unsafe { release_value(unit) };
 
-    let duration = boxed_value(Value::Duration(25));
+    let duration = duration_value(25);
     assert_eq!(
         super::optional_timeout_from_ptr(duration, "timeout"),
         Some(StdDuration::from_millis(25))
@@ -857,25 +1113,25 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     );
     unsafe { release_value(duration) };
 
-    let negative_timeout = boxed_value(Value::Duration(-1));
+    let negative_timeout = duration_value(-1);
     let message = capture_runtime_error_message(|| {
         let _ = super::optional_timeout_from_ptr(negative_timeout, "timeout");
     });
-    assert!(message.contains("duration must be non-negative"));
+    assert!(message.contains("must be non-negative"));
     unsafe { release_value(negative_timeout) };
 
-    let open_ended_timeout = boxed_value(Value::Duration(-1));
-    assert_eq!(
-        super::process_optional_timeout_from_ptr(open_ended_timeout, "timeout"),
-        None
-    );
+    let open_ended_timeout = duration_value(-1);
+    let message = capture_runtime_error_message(|| {
+        let _ = super::process_optional_timeout_from_ptr(open_ended_timeout, "timeout");
+    });
+    assert!(message.contains("must be non-negative"));
     unsafe { release_value(open_ended_timeout) };
 
     let huge_timeout = boxed_value(Value::Duration(i128::MAX));
     let message = capture_runtime_error_message(|| {
         let _ = super::process_optional_timeout_from_ptr(huge_timeout, "timeout");
     });
-    assert!(message.contains("duration must be non-negative"));
+    assert!(message.contains("host timer range") || message.contains("host deadline range"));
     unsafe { release_value(huge_timeout) };
 
     let wrong_timeout = boxed_value(Value::String("soon".to_string()));
@@ -961,6 +1217,161 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
         let _ = super::expect_optional_string_value(&Value::Bool(true), "stderr");
     });
     assert!(message.contains("expects `Option[String]`"));
+}
+
+#[test]
+fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
+    let io_error = expect_result_err_payload(super::aurora_direct_net_connect_timeout(
+        string_value("127.0.0.1:9"),
+        duration_value(-1),
+    ));
+    assert!(expect_variant_value(io_error, "io.Error", "InvalidInput").is_empty());
+
+    let process_error = expect_result_err_payload(super::aurora_direct_process_run(
+        string_vec(&["/bin/true"]),
+        boxed_value(Value::Unit),
+        super::aurora_direct_map_empty(),
+        super::aurora_direct_process_null(),
+        super::aurora_direct_process_null(),
+        super::aurora_direct_process_null(),
+        duration_value(-1),
+        bool_value(false),
+    ));
+    let mut io_payloads = expect_variant_value(process_error, "Error", "Io");
+    assert_eq!(io_payloads.len(), 1);
+    assert!(expect_variant_value(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
+
+    let placeholder_child = boxed_value(Value::Unit);
+    let mut wait_payloads = expect_variant_ptr(
+        super::aurora_direct_process_child_wait(placeholder_child, duration_value(-1)),
+        "Wait",
+        "Failed",
+    );
+    assert_eq!(wait_payloads.len(), 1);
+    expect_process_invalid_input(wait_payloads.remove(0));
+    unsafe { release_value(placeholder_child) };
+
+    let supervisor = boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new()));
+    let name = string_value("invalid-backoff");
+    let command = string_vec(&["/bin/true"]);
+    let cwd = boxed_value(Value::Unit);
+    let env = super::aurora_direct_map_empty();
+    let stdin = super::aurora_direct_process_null();
+    let stdout = super::aurora_direct_process_null();
+    let stderr = super::aurora_direct_process_null();
+    let restart = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "process.RestartPolicy".to_string(),
+        variant_name: "Never".to_string(),
+        payloads: Vec::new(),
+    }));
+    let backoff = duration_value(-1);
+    let max_restarts = int_value(-1);
+    let group = bool_value(false);
+    expect_process_invalid_input(expect_result_err_payload(
+        super::aurora_direct_process_supervisor_start(
+            supervisor,
+            name,
+            command,
+            cwd,
+            env,
+            stdin,
+            stdout,
+            stderr,
+            restart,
+            backoff,
+            max_restarts,
+            group,
+        ),
+    ));
+    for value in [
+        name,
+        command,
+        cwd,
+        env,
+        stdin,
+        stdout,
+        stderr,
+        restart,
+        backoff,
+        max_restarts,
+        group,
+    ] {
+        unsafe { release_value(value) };
+    }
+    let mut wait_payloads = expect_variant_ptr(
+        super::aurora_direct_process_supervisor_wait(supervisor, duration_value(-1)),
+        "SupervisorWait",
+        "Event",
+    );
+    assert_eq!(wait_payloads.len(), 1);
+    let mut failed_payloads =
+        expect_variant_value(wait_payloads.remove(0), "SupervisorEvent", "Failed");
+    assert_eq!(failed_payloads.len(), 3);
+    assert_eq!(
+        failed_payloads.remove(0),
+        Value::String("<supervisor>".to_string())
+    );
+    let mut process_io_payloads = expect_variant_value(failed_payloads.remove(0), "Error", "Io");
+    assert_eq!(process_io_payloads.len(), 1);
+    assert!(
+        expect_variant_value(process_io_payloads.remove(0), "io.Error", "InvalidInput",).is_empty()
+    );
+    assert_eq!(
+        failed_payloads.remove(0),
+        Value::Int(IntegerValue::from_signed(0))
+    );
+
+    let wait_or_none_error = expect_result_err_payload(
+        super::aurora_direct_process_supervisor_wait_or_none(supervisor, duration_value(-1)),
+    );
+    let mut process_io_payloads = expect_variant_value(wait_or_none_error, "Error", "Io");
+    assert_eq!(process_io_payloads.len(), 1);
+    assert!(
+        expect_variant_value(process_io_payloads.remove(0), "io.Error", "InvalidInput",).is_empty()
+    );
+    unsafe { release_value(supervisor) };
+}
+
+#[test]
+fn direct_wait_deadline_helper_rejects_overflow_instead_of_becoming_unlimited() {
+    let now = Instant::now();
+    assert_eq!(
+        super::checked_timeout_deadline_at(None, now, "wait_any timeout")
+            .expect("an omitted timeout should remain unlimited"),
+        None
+    );
+    assert_eq!(
+        super::checked_timeout_deadline_at(Some(StdDuration::ZERO), now, "wait_all timeout",)
+            .expect("zero should produce an immediate deadline"),
+        Some(now)
+    );
+
+    for label in ["wait_any(timeout=...)", "wait_all(timeout=...)"] {
+        let diagnostic = super::checked_timeout_deadline_at(Some(StdDuration::MAX), now, label)
+            .expect_err("an unrepresentable deadline must not become unlimited");
+        assert_eq!(
+            diagnostic.message,
+            format!("{label} exceeds the host deadline range")
+        );
+        assert_eq!(diagnostic.code, "AU4001");
+        assert_eq!(diagnostic.into_runtime_trap().code, "AU4001");
+    }
+}
+
+#[test]
+fn legacy_direct_sleep_maps_deadline_overflow_to_explicit_au4001() {
+    let diagnostic = super::checked_sleep_milliseconds_with(i64::MAX, |_| {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sleep duration exceeds the host deadline range",
+        ))
+    })
+    .expect_err("a host deadline overflow must not become an immediate wakeup");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "sleep duration exceeds the host deadline range"
+    );
 }
 
 #[test]
@@ -4930,8 +5341,10 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     }
     let negative_timeout = duration_value(-1);
     assert_eq!(
-        super::process_optional_timeout_from_ptr(negative_timeout, "timeout"),
-        None
+        super::process_optional_timeout_result_from_ptr(negative_timeout, "timeout")
+            .expect_err("negative process timeout should be rejected")
+            .kind(),
+        io::ErrorKind::InvalidInput
     );
     unsafe {
         release_value(negative_timeout);
@@ -5189,6 +5602,38 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     string_value("group"),
                 );
             }
+            "process-supervisor-start-stdin-type" => {
+                start_supervisor_diagnostic_case(
+                    bool_value(true),
+                    super::aurora_direct_process_null(),
+                    super::aurora_direct_process_null(),
+                    process_restart_never_value(),
+                );
+            }
+            "process-supervisor-start-stdout-type" => {
+                start_supervisor_diagnostic_case(
+                    super::aurora_direct_process_null(),
+                    bool_value(true),
+                    super::aurora_direct_process_null(),
+                    process_restart_never_value(),
+                );
+            }
+            "process-supervisor-start-stderr-type" => {
+                start_supervisor_diagnostic_case(
+                    super::aurora_direct_process_null(),
+                    super::aurora_direct_process_null(),
+                    bool_value(true),
+                    process_restart_never_value(),
+                );
+            }
+            "process-supervisor-start-restart-type" => {
+                start_supervisor_diagnostic_case(
+                    super::aurora_direct_process_null(),
+                    super::aurora_direct_process_null(),
+                    super::aurora_direct_process_null(),
+                    bool_value(true),
+                );
+            }
             "arg-buffer-negative-size" => {
                 super::aurora_direct_arg_buffer_new(-1);
             }
@@ -5233,6 +5678,28 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     duration_value(-1),
                 );
             }
+            "queue-recv-or-none-timeout-negative" => {
+                super::aurora_direct_channel_recv_or_none_timeout_value(
+                    super::aurora_direct_channel_new(std::ptr::null_mut()),
+                    duration_value(-1),
+                );
+            }
+            "queue-recv-or-none-type" => {
+                super::aurora_direct_channel_recv_or_none(bool_value(true));
+            }
+            "queue-recv-or-value-timeout-negative" => {
+                super::aurora_direct_channel_recv_or_value_timeout_value(
+                    super::aurora_direct_channel_new(std::ptr::null_mut()),
+                    int_value(0),
+                    duration_value(-1),
+                );
+            }
+            "queue-recv-or-value-type" => {
+                super::aurora_direct_channel_recv_or_value(bool_value(true), int_value(0));
+            }
+            "queue-close-type" => {
+                super::aurora_direct_channel_close(bool_value(true));
+            }
             "queue-recv-in-task-group-queue-type" => {
                 super::aurora_direct_channel_recv_in_task_group(
                     bool_value(true),
@@ -5257,6 +5724,34 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "wait-all-timeout-negative" => {
                 super::aurora_direct_wait_all_timeout_value(
                     super::aurora_direct_vec_empty(),
+                    duration_value(-1),
+                );
+            }
+            "wait-any-tasks-type" => {
+                super::aurora_direct_wait_any(bool_value(true));
+            }
+            "task-result-type" => {
+                super::aurora_direct_task_join(bool_value(true));
+            }
+            "task-result-timeout-negative" => {
+                super::aurora_direct_task_join_timeout_value(bool_value(true), duration_value(-1));
+            }
+            "task-result-or-none-type" => {
+                super::aurora_direct_task_join_or_none(bool_value(true));
+            }
+            "task-result-or-none-timeout-negative" => {
+                super::aurora_direct_task_join_or_none_timeout_value(
+                    bool_value(true),
+                    duration_value(-1),
+                );
+            }
+            "task-result-or-type" => {
+                super::aurora_direct_task_join_or_value(bool_value(true), int_value(0));
+            }
+            "task-result-or-timeout-negative" => {
+                super::aurora_direct_task_join_or_value_timeout_value(
+                    bool_value(true),
+                    int_value(0),
                     duration_value(-1),
                 );
             }
@@ -6154,6 +6649,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "sleep-ms-negative" => {
                 super::aurora_direct_sleep_ms(-1);
             }
+            "sleep-value-negative" => {
+                super::aurora_direct_sleep_value(duration_value(-1));
+            }
             "fail-division-no-span" => {
                 super::aurora_direct_fail_division_by_zero(0, 0);
             }
@@ -6311,10 +6809,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "optional-timeout-type",
             "`timeout` expects `Duration`, found `String`",
         ),
-        (
-            "optional-timeout-negative",
-            "`timeout` duration must be non-negative",
-        ),
+        ("optional-timeout-negative", "timeout must be non-negative"),
         (
             "process-timeout-type",
             "`timeout` expects `Duration`, found `String`",
@@ -6323,10 +6818,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "duration-type",
             "`duration` expects `Duration`, found `String`",
         ),
-        (
-            "duration-negative",
-            "`duration` duration must be non-negative",
-        ),
+        ("duration-negative", "duration must be non-negative"),
         (
             "supervisor-max-too-low",
             "`max_restarts` expects `max_restarts` to be -1 or greater",
@@ -6379,6 +6871,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "process-run-group-type",
             "`process.run(...)` expects `bool`, found `String`",
         ),
+        (
+            "process-supervisor-start-stdin-type",
+            "`start(...)` expects `process.Stdio`",
+        ),
+        (
+            "process-supervisor-start-stdout-type",
+            "`start(...)` expects `process.Stdio`",
+        ),
+        (
+            "process-supervisor-start-stderr-type",
+            "`start(...)` expects `process.Stdio`",
+        ),
+        (
+            "process-supervisor-start-restart-type",
+            "`start(...)` expects `process.RestartPolicy`",
+        ),
         ("arg-buffer-negative-size", "invalid arg buffer size"),
         ("arg-buffer-negative-index", "invalid arg index"),
         ("cleanup-negative-arg-count", "invalid cleanup arg count"),
@@ -6398,14 +6906,25 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("queue-send-type", "expected `Queue`, found `bool`"),
         (
             "queue-send-timeout-negative",
-            "invalid queue timeout duration",
+            "put(timeout=...) must be non-negative",
         ),
         ("queue-try-send-type", "expected `Queue`, found `bool`"),
         ("queue-recv-type", "expected `Queue`, found `bool`"),
         (
             "queue-recv-timeout-negative",
-            "invalid queue timeout duration",
+            "get(timeout=...) must be non-negative",
         ),
+        (
+            "queue-recv-or-none-timeout-negative",
+            "get_or_none(timeout=...) must be non-negative",
+        ),
+        ("queue-recv-or-none-type", "expected `Queue`, found `bool`"),
+        (
+            "queue-recv-or-value-timeout-negative",
+            "get_or(timeout=...) must be non-negative",
+        ),
+        ("queue-recv-or-value-type", "expected `Queue`, found `bool`"),
+        ("queue-close-type", "expected `Queue`, found `bool`"),
         (
             "queue-recv-in-task-group-queue-type",
             "expected `Queue`, found `bool`",
@@ -6420,11 +6939,30 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "wait-any-timeout-negative",
-            "invalid wait_any timeout duration",
+            "wait_any(timeout=...) must be non-negative",
         ),
         (
             "wait-all-timeout-negative",
-            "invalid wait_all timeout duration",
+            "wait_all(timeout=...) must be non-negative",
+        ),
+        (
+            "wait-any-tasks-type",
+            "expected `wait_any` to receive `Vec[Task]`, found `bool`",
+        ),
+        ("task-result-type", "expected `Task`, found `bool`"),
+        (
+            "task-result-timeout-negative",
+            "result(timeout=...) must be non-negative",
+        ),
+        ("task-result-or-none-type", "expected `Task`, found `bool`"),
+        (
+            "task-result-or-none-timeout-negative",
+            "result_or_none(timeout=...) must be non-negative",
+        ),
+        ("task-result-or-type", "expected `Task`, found `bool`"),
+        (
+            "task-result-or-timeout-negative",
+            "result_or(timeout=...) must be non-negative",
         ),
         (
             "task-group-cancel-type",
@@ -7055,7 +7593,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "tls-stream-close-type",
             "expected `net.TlsStream`, found `bool`",
         ),
-        ("sleep-ms-negative", "invalid sleep duration"),
+        ("sleep-ms-negative", "sleep duration must be non-negative"),
+        ("sleep-value-negative", "sleep(...) must be non-negative"),
         ("fail-division-no-span", "division by zero"),
         (
             "fail-int32-overflow-no-span",
@@ -7174,10 +7713,30 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             .expect("child test process should run");
 
         assert!(!output.status.success(), "helper case `{case}` should fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains(expected),
+            stderr.contains(expected),
             "helper case `{case}` stderr should mention `{expected}`"
         );
+        if matches!(
+            case,
+            "queue-send-timeout-negative"
+                | "queue-recv-timeout-negative"
+                | "queue-recv-or-none-timeout-negative"
+                | "queue-recv-or-value-timeout-negative"
+                | "wait-any-timeout-negative"
+                | "wait-all-timeout-negative"
+                | "task-result-timeout-negative"
+                | "task-result-or-none-timeout-negative"
+                | "task-result-or-timeout-negative"
+                | "sleep-ms-negative"
+                | "sleep-value-negative"
+        ) {
+            assert!(
+                stderr.contains("error[AU4001]"),
+                "helper case `{case}` should preserve the AU4001 runtime trap code"
+            );
+        }
     }
 }
 
@@ -8222,10 +8781,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert!(super::direct_primary_runtime_diagnostic().is_none());
 
     assert_eq!(
-        extract_duration_millis(&Value::Int(IntegerValue::from_signed(7))),
+        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_signed(7))),
         7
     );
-    assert_eq!(extract_duration_millis(&Value::Duration(9)), 9);
+    assert_eq!(extract_duration_nanoseconds(&Value::Duration(9)), 9);
     assert_eq!(decode_bytes(b"aurora".as_ptr(), "aurora".len()), "aurora");
 
     unsafe {
@@ -8362,6 +8921,7 @@ fn native_runtime_task_boundary_maps_task_signals_and_resumes_unrelated_panics()
         })?;
         match cancelled_task
             .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
         {
             TaskWaitStatus::Cancelled => {}
             other => panic!("expected cancelled direct-runtime task, got {other:?}"),
@@ -8376,6 +8936,7 @@ fn native_runtime_task_boundary_maps_task_signals_and_resumes_unrelated_panics()
         })?;
         match failed_task
             .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
         {
             TaskWaitStatus::Ready(Err(error)) => assert_eq!(error.message, "boundary failure"),
             other => panic!("expected failed direct-runtime task, got {other:?}"),
@@ -8426,6 +8987,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
         for _ in 0..TASK_COUNT {
             ready
                 .recv_with_cancellation(Some(StdDuration::from_secs(10)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
                 .ok_or_else(|| Diagnostic::new("timed out waiting for suspended direct tasks"))?;
         }
         release.close();
@@ -8433,6 +8995,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
         for (index, task) in tasks.iter().enumerate() {
             match task
                 .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(10)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
             {
                 TaskWaitStatus::Ready(Ok(Value::Unit)) => {}
                 other => {
@@ -8497,11 +9060,15 @@ fn native_runtime_error_capture_is_isolated_across_suspended_tasks() {
         for _ in 0..2 {
             ready
                 .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
                 .ok_or_else(|| Diagnostic::new("timed out waiting for capture test tasks"))?;
         }
 
         release_first.close();
-        match first.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+        match first
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             TaskWaitStatus::Ready(Ok(Value::Unit)) => {}
             other => {
                 return Err(Diagnostic::new(format!(
@@ -8511,7 +9078,10 @@ fn native_runtime_error_capture_is_isolated_across_suspended_tasks() {
         }
 
         release_second.close();
-        match second.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+        match second
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             TaskWaitStatus::Ready(Ok(Value::Unit)) => Ok(Value::Unit),
             other => Err(Diagnostic::new(format!(
                 "second capture test task did not preserve its state: {other:?}"
@@ -8551,6 +9121,7 @@ fn native_runtime_cleanup_diagnostic_state_is_isolated_across_tasks() {
 
         ready
             .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
             .ok_or_else(|| Diagnostic::new("timed out waiting for cleanup-state task"))?;
 
         let second = spawn_lightweight_task(|| {
@@ -8566,11 +9137,13 @@ fn native_runtime_cleanup_diagnostic_state_is_isolated_across_tasks() {
             })
         })?;
 
-        let second_status =
-            second.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+        let second_status = second
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
         release.close();
-        let first_status =
-            first.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+        let first_status = first
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
 
         match (first_status, second_status) {
             (TaskWaitStatus::Ready(Ok(Value::Unit)), TaskWaitStatus::Ready(Ok(Value::Unit))) => {
@@ -8610,7 +9183,10 @@ fn native_runtime_task_exit_unwinds_live_drop_values() {
             Ok(Value::Unit)
         })?;
 
-        match task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+        match task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             TaskWaitStatus::Cancelled => Ok(Value::Unit),
             other => Err(Diagnostic::new(format!(
                 "expected cancelled task, got {other:?}"
@@ -8661,8 +9237,9 @@ fn native_runtime_direct_forced_exit_runs_external_cleanup() {
             )?
         };
 
-        let status =
-            task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+        let status = task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
         let stale_child_state =
             super::DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow().contains_key(&2));
         if stale_child_state {
@@ -8715,7 +9292,10 @@ fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
             })
         })?;
 
-        match task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+        match task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
             TaskWaitStatus::Ready(Err(error)) if error.message == "body failed" => Ok(Value::Unit),
             other => Err(Diagnostic::new(format!(
                 "expected primary body failure, got {other:?}"
@@ -8956,7 +9536,7 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
 #[test]
 fn duration_integer_outside_signed_range_helper_exits_with_error() {
     if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-int-out-of-range") {
-        extract_duration_millis(&Value::Int(IntegerValue::from_literal(u128::MAX)));
+        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_literal(u128::MAX)));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -8981,7 +9561,7 @@ fn duration_integer_outside_signed_range_helper_exits_with_error() {
 #[test]
 fn duration_type_mismatch_helper_exits_with_error() {
     if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-type") {
-        extract_duration_millis(&Value::String("oops".to_string()));
+        extract_duration_nanoseconds(&Value::String("oops".to_string()));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))

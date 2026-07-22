@@ -161,7 +161,14 @@ A duration literal is a non-negative integral count followed immediately by `ms`
 DURATION = INTEGER, ("ms" | "s" | "m") ;
 ```
 
-`10ms`, `2s`, and `1m` represent 10, 2,000, and 60,000 milliseconds respectively and have type `Duration`. Scaling must fit signed 128-bit milliseconds. Fractional durations and duration arithmetic syntax are not supported.
+`10ms`, `2s`, and `1m` represent 10, 2,000, and 60,000 milliseconds
+respectively and have type `Duration`. The lexer stores the exact value as
+signed 128-bit nanoseconds, so suffix scaling must fit that range. A duration
+literal itself is always non-negative and integral in its written unit. There
+is no `ns` suffix, fractional literal such as `1.5ms`, or unary
+`-Duration`; use the signed constructors and checked binary Duration operators
+described in [Expressions](/manual/expressions#arithmetic-and-comparison) for
+computed or negative values.
 
 ## Boolean And `None`
 
@@ -252,7 +259,7 @@ coercion.
 ## Runtime Semantics
 
 Tokenization has no runtime side effects. Decoded string scalars, literal
-numbers, duration milliseconds, and f-string text segments become constants or
+numbers, duration nanoseconds, and f-string text segments become constants or
 MIR inputs only after the complete module has parsed and checked. A lexical
 failure prevents execution.
 

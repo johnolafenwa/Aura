@@ -7,12 +7,15 @@ use crate::ast::{
     AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
     Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
 };
-use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
+use crate::call::{
+    BuiltinAssociatedFunction, BuiltinFunction, BuiltinMember, ALL_BUILTIN_ASSOCIATED_FUNCTIONS,
+    ALL_BUILTIN_FUNCTIONS,
+};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::parser;
 use crate::sema::{
-    substitute_trait_bound, ClassInfo, EnumInfo, FunctionInfo, MethodInfo, Program, TraitBound,
-    Type,
+    builtin_duration_binary_result, substitute_trait_bound, ClassInfo, EnumInfo, FunctionInfo,
+    MethodInfo, Program, TraitBound, Type,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -272,6 +275,9 @@ impl<'a> AnalysisBuilder<'a> {
                     if !binding.trait_bounds.is_empty() {
                         return Ok(self.trait_bound_member_completions(&binding.trait_bounds));
                     }
+                }
+                if name == "Duration" && !scope.contains_key(name) {
+                    return Ok(builtin_associated_function_completions(name));
                 }
             }
             let Some(receiver_type) = self.infer_expr_type(&receiver_expr, &scope) else {
@@ -1335,7 +1341,8 @@ impl<'a> AnalysisBuilder<'a> {
                 }
             }
             ExprKind::Int(_)
-            | ExprKind::DurationMillis(_)
+            | ExprKind::DurationNanos(_)
+            | ExprKind::BuiltinOmitted
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_) => {}
@@ -1390,6 +1397,13 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match name {
+            "Duration" => Some(ResolvedSymbol {
+                hover: builtin_type_hover(
+                    "Duration",
+                    "A signed nanosecond-precision duration value.",
+                ),
+                definition: None,
+            }),
             "Option" => Some(ResolvedSymbol {
                 hover: builtin_enum_hover(
                     "Option[T]",
@@ -1421,6 +1435,17 @@ impl<'a> AnalysisBuilder<'a> {
         field: &str,
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<ResolvedMember> {
+        if let ExprKind::Name(type_name) = &object.kind {
+            if type_name == "Duration" && !scope.contains_key(type_name) {
+                return BuiltinAssociatedFunction::resolve(type_name, field).map(|associated| {
+                    ResolvedMember {
+                        hover: builtin_function_hover(associated.detail(), associated.docs()),
+                        definition: None,
+                        ty: Some(Type::named("Duration")),
+                    }
+                });
+            }
+        }
         let receiver_type = self.infer_expr_type(object, scope)?;
         self.resolve_member_type(&receiver_type, field)
     }
@@ -1567,9 +1592,10 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
             let ty = match builtin_member {
-                BuiltinMember::FloatSqrt | BuiltinMember::IntegerToFloat => {
-                    Some(Type::named("float64"))
-                }
+                BuiltinMember::FloatSqrt
+                | BuiltinMember::IntegerToFloat
+                | BuiltinMember::DurationToMilliseconds
+                | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
                     Some(Type::named("int32"))
                 }
@@ -2226,7 +2252,8 @@ impl<'a> AnalysisBuilder<'a> {
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
             ExprKind::Int(_) => Some(Type::named("int64")),
-            ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
+            ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
+            ExprKind::BuiltinOmitted => None,
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
@@ -2346,6 +2373,9 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.infer_expr_type(left, scope)?;
                 let right_ty = self.infer_expr_type(right, scope)?;
+                if let Some(result) = builtin_duration_binary_result(*op, &left_ty, &right_ty) {
+                    return Some(result);
+                }
                 match op {
                     BinaryOp::And | BinaryOp::Or => Some(Type::named("bool")),
                     BinaryOp::Eq
@@ -2443,6 +2473,16 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
+                    if let Some(associated) = BuiltinAssociatedFunction::resolve(enum_name, field) {
+                        return Some(match associated {
+                            BuiltinAssociatedFunction::DurationMilliseconds
+                            | BuiltinAssociatedFunction::DurationSeconds
+                            | BuiltinAssociatedFunction::DurationMinutes => Type::named("Duration"),
+                        });
+                    }
+                    if enum_name == "Duration" {
+                        return None;
+                    }
                     if matches!(enum_name.as_str(), "Option" | "Result" | "SendError") {
                         return infer_builtin_variant_call(enum_name, field, args, |expr| {
                             self.infer_expr_type(expr, scope)
@@ -3004,6 +3044,10 @@ fn builtin_enum_hover(detail: &str, docs: &str) -> String {
     format!("```aurora\nenum {}\n```\n{}", detail, docs)
 }
 
+fn builtin_type_hover(detail: &str, docs: &str) -> String {
+    format!("```aurora\ntype {}\n```\n{}", detail, docs)
+}
+
 fn builtin_function_hover(detail: &str, docs: &str) -> String {
     format!("```aurora\n{}\n```\n{}", detail, docs)
 }
@@ -3468,6 +3512,8 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ProcessCompletedCheck,
         BuiltinMember::FloatSqrt,
         BuiltinMember::IntegerToFloat,
+        BuiltinMember::DurationToMilliseconds,
+        BuiltinMember::DurationToSeconds,
         BuiltinMember::StringLen,
         BuiltinMember::StringByteLen,
         BuiltinMember::StringContains,
@@ -3528,6 +3574,21 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     }
 
     completions
+}
+
+fn builtin_associated_function_completions(type_name: &str) -> Vec<AnalysisCompletion> {
+    ALL_BUILTIN_ASSOCIATED_FUNCTIONS
+        .iter()
+        .copied()
+        .filter(|function| {
+            BuiltinAssociatedFunction::resolve(type_name, function.name()) == Some(*function)
+        })
+        .map(|function| AnalysisCompletion {
+            name: function.name().to_string(),
+            kind: "function".to_string(),
+            detail: function.detail().to_string(),
+        })
+        .collect()
 }
 
 fn builtin_function_return_type(name: &str) -> Option<Type> {

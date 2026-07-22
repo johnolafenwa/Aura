@@ -71,6 +71,18 @@ fn assert_result_err(value: Value) {
     assert_eq!(payloads.len(), 1);
 }
 
+fn assert_process_invalid_input(value: Value) {
+    let mut io_payloads = enum_payloads(value, "Error", "Io");
+    assert_eq!(io_payloads.len(), 1);
+    assert!(enum_payloads(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
+}
+
+fn assert_process_invalid_input_result(value: Value) {
+    let mut payloads = enum_payloads(value, "Result", "Err");
+    assert_eq!(payloads.len(), 1);
+    assert_process_invalid_input(payloads.remove(0));
+}
+
 fn call_name(
     runtime: &mut MirRuntime,
     name: &str,
@@ -504,47 +516,51 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
             .expect("unit process timeout should decode as absent"),
         None
     );
-    assert_eq!(
+    let negative_process_timeout =
         super::expect_process_optional_timeout(&Value::Duration(-1), "timeout")
-            .expect("negative process timeout should decode as absent"),
-        None
+            .expect_err("an explicit negative process timeout must not mean omitted");
+    assert_eq!(
+        negative_process_timeout.render(),
+        "Error.Io(io.Error.InvalidInput)"
     );
     assert_eq!(
-        super::expect_process_optional_timeout(&Value::Duration(10), "timeout")
+        super::expect_process_optional_timeout(&Value::Duration(10_000_000), "timeout")
             .expect("positive process timeout should decode"),
         Some(StdDuration::from_millis(10))
     );
-    let process_timeout_range_error = super::expect_process_optional_timeout(
-        &Value::Duration(i128::from(u64::MAX) + 1),
-        "timeout",
-    )
-    .expect_err("process timeout helper should reject oversized durations");
-    assert!(process_timeout_range_error
-        .message
-        .contains("duration must be non-negative"));
+    let process_timeout_range_error =
+        super::expect_process_optional_timeout(&Value::Duration(i128::MAX), "timeout")
+            .expect_err("process timeout helper should reject oversized durations");
+    assert_eq!(
+        process_timeout_range_error.render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
     let process_timeout_type_error =
         super::expect_process_optional_timeout(&Value::String("soon".to_string()), "timeout")
             .expect_err("process timeout helper should reject strings");
-    assert!(process_timeout_type_error
-        .message
-        .contains("`timeout` expects `Duration`"));
+    assert_eq!(
+        process_timeout_type_error.render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
 
     assert_eq!(
-        super::expect_duration_value(&Value::Duration(4), "timeout")
+        super::expect_duration_value(&Value::Duration(4_000_000), "timeout")
             .expect("positive duration should decode"),
         StdDuration::from_millis(4)
     );
     let negative_duration_error = super::expect_duration_value(&Value::Duration(-4), "timeout")
         .expect_err("negative durations should be rejected");
-    assert!(negative_duration_error
-        .message
-        .contains("duration must be non-negative"));
+    assert_eq!(
+        negative_duration_error.render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
     let duration_type_error =
         super::expect_duration_value(&Value::String("soon".to_string()), "timeout")
             .expect_err("duration helper should reject strings");
-    assert!(duration_type_error
-        .message
-        .contains("`timeout` expects `Duration`"));
+    assert_eq!(
+        duration_type_error.render(),
+        "Error.Io(io.Error.InvalidInput)"
+    );
 
     assert_eq!(
         super::expect_supervisor_max_restarts(&Value::Int(IntegerValue::from_signed(-1)), "max")
@@ -572,7 +588,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
         None
     );
     assert_eq!(
-        super::expect_optional_timeout(Some(&Value::Duration(8)), "timeout")
+        super::expect_optional_timeout(Some(&Value::Duration(8_000_000)), "timeout")
             .expect("duration optional timeout should decode"),
         Some(StdDuration::from_millis(8))
     );
@@ -581,7 +597,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
             .expect_err("negative optional timeout should be rejected");
     assert!(optional_timeout_negative
         .message
-        .contains("duration must be non-negative"));
+        .contains("must be non-negative"));
     let optional_timeout_type_error =
         super::expect_optional_timeout(Some(&Value::String("soon".to_string())), "timeout")
             .expect_err("optional timeout should reject strings");
@@ -992,7 +1008,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     .evaluate_tls_listener_method(
                         listener,
                         "accept",
-                        &[mir_arg(Some("timeout"), Operand::Duration(2_000))],
+                        &[mir_arg(Some("timeout"), Operand::Duration(2_000_000_000))],
                         &server_env,
                     )
                     .expect("tls accept should succeed"),
@@ -1009,7 +1025,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     .evaluate_tls_stream_method(
                         stream.clone(),
                         "read_line",
-                        &[mir_arg(Some("timeout"), Operand::Duration(2_000))],
+                        &[mir_arg(Some("timeout"), Operand::Duration(2_000_000_000))],
                         &server_env,
                     )
                     .expect("tls server read_line should succeed"),
@@ -1026,7 +1042,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                             "write_all",
                             &[
                                 mir_arg(Some("text"), Operand::String("ok".to_string())),
-                                mir_arg(Some("timeout"), Operand::Duration(2_000)),
+                                mir_arg(Some("timeout"), Operand::Duration(2_000_000_000),),
                             ],
                             &server_env,
                         )
@@ -1062,7 +1078,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     "write_all",
                     &[
                         mir_arg(Some("text"), Operand::String("secure\n".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(2_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
                     ],
                     &tls_env,
                 )
@@ -1078,7 +1094,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     "read_exact",
                     &[
                         mir_arg(Some("count"), Operand::Int(2)),
-                        mir_arg(Some("timeout"), Operand::Duration(2_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
                     ],
                     &tls_env,
                 )
@@ -1415,7 +1431,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     "write_bytes",
                     &[
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
                     &env,
                 )
@@ -1437,7 +1453,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 "read_bytes",
                 &[
                     mir_arg(Some("max_bytes"), Operand::Int(6)),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -1502,7 +1518,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             .evaluate_tcp_listener_method(
                 tcp_listener.clone(),
                 "accept",
-                &[mir_arg(Some("timeout"), Operand::Duration(1))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000))],
                 &env,
             )
             .expect("tcp listener accept should return a Result"),
@@ -1536,7 +1552,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     &[
                         mir_arg(Some("address"), Operand::String(udp_address.clone())),
                         mir_arg(Some("text"), Operand::String("ping".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(1_000),),
+                        mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
                     &env,
                 )
@@ -1553,7 +1569,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     &[
                         mir_arg(Some("address"), Operand::String(udp_address.clone())),
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
                     &env,
                 )
@@ -1568,7 +1584,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 "recv",
                 &[
                     mir_arg(Some("max_bytes"), Operand::Int(16)),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -1582,7 +1598,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 "recv_from",
                 &[
                     mir_arg(Some("max_bytes"), Operand::Int(16)),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -1663,7 +1679,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             .evaluate_http_listener_method(
                 http_listener.clone(),
                 "accept",
-                &[mir_arg(Some("timeout"), Operand::Duration(1))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000))],
                 &env,
             )
             .expect("http listener accept should return a Result"),
@@ -2047,7 +2063,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     "write_all",
                     &[
                         mir_arg(Some("text"), Operand::String("ping\n".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
                     &env,
                 )
@@ -2092,7 +2108,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             .evaluate_tcp_stream_method(
                 tcp_client.clone(),
                 "read_line",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("tcp read_line should succeed"),
@@ -2107,7 +2123,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     "read_exact",
                     &[
                         mir_arg(Some("count"), Operand::Int(5)),
-                        mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
                     &env,
                 )
@@ -2122,7 +2138,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 "read_bytes",
                 &[
                     mir_arg(Some("max_bytes"), Operand::Int(4)),
-                    mir_arg(Some("timeout"), Operand::Duration(50)),
+                    mir_arg(Some("timeout"), Operand::Duration(50_000_000)),
                 ],
                 &env,
             )
@@ -2191,7 +2207,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         "read_exact",
                         &[
                             mir_arg(Some("count"), Operand::Int(5)),
-                            mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                            mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                         ],
                         &env,
                     )
@@ -2237,7 +2253,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     .evaluate_websocket_method(
                         socket.clone(),
                         "recv_text",
-                        &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                        &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                         &server_env,
                     )
                     .expect("websocket recv_text should succeed"),
@@ -2254,7 +2270,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                             "send_bytes",
                             &[
                                 mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                                mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                                mir_arg(Some("timeout"), Operand::Duration(5_000_000_000),),
                             ],
                             &server_env,
                         )
@@ -2267,7 +2283,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     .evaluate_websocket_method(
                         socket.clone(),
                         "recv_bytes",
-                        &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                        &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                         &server_env,
                     )
                     .expect("websocket recv_bytes should succeed"),
@@ -2284,7 +2300,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                             "send_text",
                             &[
                                 mir_arg(Some("text"), Operand::String("server-done".to_string())),
-                                mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                                mir_arg(Some("timeout"), Operand::Duration(5_000_000_000),),
                             ],
                             &server_env,
                         )
@@ -2317,7 +2333,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     "send_text",
                     &[
                         mir_arg(Some("text"), Operand::String("hello websocket".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
                     &env,
                 )
@@ -2330,7 +2346,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             .evaluate_websocket_method(
                 websocket_client.clone(),
                 "recv_bytes",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("websocket client recv_bytes should succeed"),
@@ -2347,7 +2363,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     "send_bytes",
                     &[
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                        mir_arg(Some("timeout"), Operand::Duration(5_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
                     &env,
                 )
@@ -2360,7 +2376,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             .evaluate_websocket_method(
                 websocket_client.clone(),
                 "recv_text",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("websocket client recv_text should succeed"),
@@ -3542,7 +3558,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
         .expect_err("negative sleep durations should fail");
     assert!(sleep_error
         .message
-        .contains("does not fit in the MIR runtime timer range"));
+        .contains("sleep(...) must be non-negative"));
 
     assert_eq!(
         runtime
@@ -3754,6 +3770,40 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
         false,
     )
     .expect("sleeper should spawn");
+    let mut failed_wait = enum_payloads(
+        runtime
+            .evaluate_process_child_method(
+                sleeper.clone(),
+                "wait",
+                &[mir_arg(Some("timeout"), Operand::Duration(-1))],
+                &env,
+            )
+            .expect("invalid wait timers should use the Wait.Failed carrier"),
+        "Wait",
+        "Failed",
+    );
+    assert_eq!(failed_wait.len(), 1);
+    assert_process_invalid_input(failed_wait.remove(0));
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_child_method(
+                sleeper.clone(),
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(-1))],
+                &env,
+            )
+            .expect("invalid wait_or_none timers should use Result.Err"),
+    );
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_child_method(
+                sleeper.clone(),
+                "wait_ok",
+                &[mir_arg(Some("timeout"), Operand::Duration(-1))],
+                &env,
+            )
+            .expect("invalid wait_ok timers should use Result.Err"),
+    );
     enum_payloads(
         runtime
             .evaluate_process_child_method(
@@ -3793,7 +3843,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
             .evaluate_process_child_method(
                 sleeper.clone(),
                 "wait",
-                &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
                 &env,
             )
             .expect("killed child should become waitable"),
@@ -3826,7 +3876,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
             .evaluate_process_child_method(
                 failing,
                 "wait_ok",
-                &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
                 &env,
             )
             .expect("wait_ok should return a Result"),
@@ -3859,7 +3909,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     let _ = runtime.evaluate_process_child_method(
         terminable.clone(),
         "wait",
-        &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+        &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
         &env,
     );
     let _ = runtime.evaluate_process_child_method(terminable, "close", &[], &env);
@@ -3897,7 +3947,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
             .evaluate_process_child_method(
                 cancelled_child.clone(),
                 "wait",
-                &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
                 &env,
             )
             .expect("wait should observe cancellation"),
@@ -3970,7 +4020,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 .evaluate_process_pipe_method(
                     eof_stdout.clone(),
                     "read_line",
-                    &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+                    &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
                     &env,
                 )
                 .expect("eof read_line should succeed"),
@@ -3986,7 +4036,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     "read_bytes",
                     &[
                         mir_arg(Some("max_bytes"), Operand::Int(8)),
-                        mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                        mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
                     &env,
                 )
@@ -4014,6 +4064,29 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     let closed_reader = reader_child
         .stdout()
         .expect("reader stdout should be piped");
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_pipe_method(
+                closed_reader.clone(),
+                "read_line",
+                &[mir_arg(Some("timeout"), Operand::Duration(-1))],
+                &env,
+            )
+            .expect("invalid read_line timers should use Result.Err"),
+    );
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_pipe_method(
+                closed_reader.clone(),
+                "read_bytes",
+                &[
+                    mir_arg(Some("max_bytes"), Operand::Int(8)),
+                    mir_arg(Some("timeout"), Operand::Duration(-1)),
+                ],
+                &env,
+            )
+            .expect("invalid read_bytes timers should use Result.Err"),
+    );
     assert_eq!(
         runtime
             .evaluate_process_pipe_method(closed_reader.clone(), "close", &[], &env)
@@ -4030,7 +4103,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
             .evaluate_process_pipe_method(
                 closed_reader.clone(),
                 "read_line",
-                &[mir_arg(Some("timeout"), Operand::Duration(1_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
                 &env,
             )
             .expect("closed read_line should return Result.Err"),
@@ -4042,7 +4115,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 "read_bytes",
                 &[
                     mir_arg(Some("max_bytes"), Operand::Int(8)),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -4054,7 +4127,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
             "read_bytes",
             &[
                 mir_arg(Some("max_bytes"), Operand::Place("negative".to_string())),
-                mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
             ],
             &env,
         )
@@ -4074,6 +4147,32 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     )
     .expect("writer process should spawn");
     let closed_writer = writer_child.stdin().expect("writer stdin should be piped");
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_pipe_method(
+                closed_writer.clone(),
+                "write_all",
+                &[
+                    mir_arg(Some("text"), Operand::String("payload".to_string())),
+                    mir_arg(Some("timeout"), Operand::Duration(-1)),
+                ],
+                &env,
+            )
+            .expect("invalid write_all timers should use Result.Err"),
+    );
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_pipe_method(
+                closed_writer.clone(),
+                "write_bytes",
+                &[
+                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
+                    mir_arg(Some("timeout"), Operand::Duration(-1)),
+                ],
+                &env,
+            )
+            .expect("invalid write_bytes timers should use Result.Err"),
+    );
     assert_eq!(
         runtime
             .evaluate_process_pipe_method(closed_writer.clone(), "close", &[], &env)
@@ -4087,7 +4186,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 "write_all",
                 &[
                     mir_arg(Some("text"), Operand::String("closed".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -4100,7 +4199,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 "write_bytes",
                 &[
                     mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &env,
             )
@@ -4181,6 +4280,20 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     );
 
     let supervisor = ProcessSupervisorValue::new();
+    assert_process_invalid_input_result(
+        runtime
+            .evaluate_process_supervisor_method(
+                supervisor.clone(),
+                "start",
+                &[
+                    mir_arg(Some("name"), Operand::String("invalid-backoff".to_string())),
+                    mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
+                    mir_arg(Some("backoff"), Operand::Duration(-1)),
+                ],
+                &env,
+            )
+            .expect("invalid supervisor backoff should use Result.Err"),
+    );
     let missing_command = runtime
         .evaluate_process_supervisor_method(
             supervisor.clone(),
@@ -4216,7 +4329,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             .evaluate_process_supervisor_method(
                 supervisor.clone(),
                 "wait",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("supervisor wait should surface an event"),
@@ -4252,7 +4365,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("stdout"), Operand::Place("stdio_pipe".to_string())),
                         mir_arg(Some("stderr"), Operand::Place("stdio_inherit".to_string())),
                         mir_arg(Some("restart"), Operand::Place("restart_never".to_string())),
-                        mir_arg(Some("backoff"), Operand::Duration(1)),
+                        mir_arg(Some("backoff"), Operand::Duration(1_000_000)),
                         mir_arg(Some("max_restarts"), Operand::Int(1)),
                         mir_arg(Some("group"), Operand::Bool(false)),
                     ],
@@ -4268,7 +4381,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 .evaluate_process_supervisor_method(
                     supervisor.clone(),
                     "wait_or_none",
-                    &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                    &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                     &env,
                 )
                 .expect("supervisor wait_or_none should surface ready events"),
@@ -4359,7 +4472,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             .evaluate_process_supervisor_method(
                 cancelled_supervisor.clone(),
                 "wait",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("supervisor wait should observe cancellation"),
@@ -4371,7 +4484,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             .evaluate_process_supervisor_method(
                 cancelled_supervisor.clone(),
                 "wait_or_none",
-                &[mir_arg(Some("timeout"), Operand::Duration(5_000))],
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
                 &env,
             )
             .expect("cancelled supervisor wait_or_none should return Result.Err"),
@@ -4784,7 +4897,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         } else {
             vec![
                 mir_arg(Some("address"), Operand::Place("tcp_address".to_string())),
-                mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
             ]
         };
         match result_ok_payload(
@@ -4864,7 +4977,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
             } else {
                 vec![
                     mir_arg(Some("path"), Operand::String(socket_text.clone())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ]
             };
             match result_ok_payload(
@@ -4955,7 +5068,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
                     mir_arg(Some("url"), Operand::Place("http_url".to_string())),
                     mir_arg(Some("body"), Operand::String("body".to_string())),
                     mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &mut env,
             )
@@ -4990,7 +5103,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
                     mir_arg(Some("url"), Operand::Place("http_url".to_string())),
                     mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                     mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
                 &mut env,
             )
@@ -5041,7 +5154,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
                     Some("ca_pem_path"),
                     Operand::String("missing-ca.pem".to_string()),
                 ),
-                mir_arg(Some("timeout"), Operand::Duration(1)),
+                mir_arg(Some("timeout"), Operand::Duration(1_000_000)),
             ]
         };
         enum_payloads(
@@ -5079,7 +5192,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
                     Some("url"),
                     Operand::String("not a websocket url".to_string()),
                 ),
-                mir_arg(Some("timeout"), Operand::Duration(1)),
+                mir_arg(Some("timeout"), Operand::Duration(1_000_000)),
             ]
         };
         enum_payloads(
@@ -5201,7 +5314,7 @@ fn mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges() {
             Operand::String("not a socket address".to_string()),
         )];
         if builtin == "net::connect_timeout" {
-            args.push(mir_arg(Some("timeout"), Operand::Duration(1)));
+            args.push(mir_arg(Some("timeout"), Operand::Duration(1_000_000)));
         }
         expect_result_err(&mut runtime, &mut env, builtin, args);
     }
@@ -5238,7 +5351,7 @@ fn mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges() {
             "net::unix_connect_timeout",
             vec![
                 mir_arg(Some("path"), Operand::String(missing_path.clone())),
-                mir_arg(Some("timeout"), Operand::Duration(1)),
+                mir_arg(Some("timeout"), Operand::Duration(1_000_000)),
             ],
         );
     }
@@ -5281,7 +5394,7 @@ fn mir_runtime_process_run_builtin_captures_stdio_under_scheduler() {
                 mir_arg(Some("stdin"), Operand::Place("stdio_null".to_string())),
                 mir_arg(Some("stdout"), Operand::Place("stdout_pipe".to_string())),
                 mir_arg(Some("stderr"), Operand::Place("stderr_pipe".to_string())),
-                mir_arg(Some("timeout"), Operand::Duration(2_000)),
+                mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
                 mir_arg(Some("group"), Operand::Bool(false)),
             ],
             &mut env,
@@ -5361,7 +5474,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
         call_name(
             &mut runtime,
             "process::run",
-            &process_args(Some(1_000)),
+            &process_args(Some(1_000_000_000)),
             &mut env,
         )
         .expect("process.run spawn failures should return Result.Err"),
@@ -5410,7 +5523,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
         call_name(
             &mut cancelled_runtime,
             "process::run",
-            &process_args(Some(1_000)),
+            &process_args(Some(1_000_000_000)),
             &mut cancelled_env,
         )
         .expect("process.run cancellations should return Result.Err"),
@@ -5790,7 +5903,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("sleep() should reject negative durations");
     assert!(sleep_range
         .message
-        .contains("does not fit in the MIR runtime timer range"));
+        .contains("sleep(...) must be non-negative"));
 
     let sleep_unsigned_range = runtime
         .evaluate_call(
@@ -5801,18 +5914,18 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("sleep() should reject unsigned values outside signed timer range");
     assert!(sleep_unsigned_range
         .message
-        .contains("duration must fit in signed timer range"));
+        .contains("`sleep(...)` expects a duration value"));
 
-    assert_eq!(
-        runtime
-            .evaluate_call(
-                &crate::mir::CallTarget::Name("sleep".to_string()),
-                &[mir_arg(None, Operand::Int(0))],
-                &mut env,
-            )
-            .expect("sleep() should accept integer millisecond durations"),
-        Value::Unit
-    );
+    let sleep_integer = runtime
+        .evaluate_call(
+            &crate::mir::CallTarget::Name("sleep".to_string()),
+            &[mir_arg(None, Operand::Int(0))],
+            &mut env,
+        )
+        .expect_err("sleep() should reject untyped integer durations");
+    assert!(sleep_integer
+        .message
+        .contains("`sleep(...)` expects a duration value"));
 
     let sleep_type = runtime
         .evaluate_call(
@@ -6653,7 +6766,9 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         Value::Bool(false),
     )
     .expect_err("non-numeric ordering should fail");
-    assert!(ordering_error.message.contains("matching numeric operands"));
+    assert!(ordering_error
+        .message
+        .contains("matching numeric or Duration operands"));
 }
 
 #[test]
@@ -9481,12 +9596,146 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
 }
 
 #[test]
+fn mir_runtime_duration_arithmetic_is_checked_exact_and_ordered() {
+    let runtime = test_runtime();
+    let int = |value| Value::Int(IntegerValue::from_signed(value));
+
+    for (op, left, right, expected) in [
+        (
+            crate::ast::BinaryOp::Add,
+            Value::Duration(7),
+            Value::Duration(5),
+            Value::Duration(12),
+        ),
+        (
+            crate::ast::BinaryOp::Sub,
+            Value::Duration(7),
+            Value::Duration(9),
+            Value::Duration(-2),
+        ),
+        (
+            crate::ast::BinaryOp::Mul,
+            Value::Duration(7),
+            int(-3),
+            Value::Duration(-21),
+        ),
+        (
+            crate::ast::BinaryOp::Mul,
+            int(-3),
+            Value::Duration(7),
+            Value::Duration(-21),
+        ),
+        (
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Duration(7),
+            int(-3),
+            Value::Duration(-3),
+        ),
+        (
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Duration(-7),
+            int(3),
+            Value::Duration(-3),
+        ),
+    ] {
+        assert_eq!(
+            runtime
+                .eval_binary(op, left, right, None)
+                .expect("supported Duration arithmetic should evaluate"),
+            expected
+        );
+    }
+
+    for (op, expected) in [
+        (crate::ast::BinaryOp::Less, true),
+        (crate::ast::BinaryOp::LessEq, true),
+        (crate::ast::BinaryOp::Greater, false),
+        (crate::ast::BinaryOp::GreaterEq, false),
+    ] {
+        assert_eq!(
+            runtime
+                .eval_binary(op, Value::Duration(-1), Value::Duration(1), None)
+                .expect("Duration ordering should evaluate"),
+            Value::Bool(expected)
+        );
+    }
+    assert_eq!(
+        runtime
+            .eval_binary(
+                crate::ast::BinaryOp::Eq,
+                Value::Duration(1),
+                Value::Duration(1),
+                None,
+            )
+            .expect("Duration equality should evaluate"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        runtime
+            .eval_binary(
+                crate::ast::BinaryOp::NotEq,
+                Value::Duration(1),
+                Value::Duration(2),
+                None,
+            )
+            .expect("Duration inequality should evaluate"),
+        Value::Bool(true)
+    );
+
+    for (op, left, right, message) in [
+        (
+            crate::ast::BinaryOp::Add,
+            Value::Duration(i128::MAX),
+            Value::Duration(1),
+            "duration overflow",
+        ),
+        (
+            crate::ast::BinaryOp::Sub,
+            Value::Duration(i128::MIN),
+            Value::Duration(1),
+            "duration overflow",
+        ),
+        (
+            crate::ast::BinaryOp::Mul,
+            Value::Duration(i128::MAX),
+            int(2),
+            "duration overflow",
+        ),
+        (
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Duration(1),
+            int(0),
+            "division by zero",
+        ),
+        (
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Duration(i128::MIN),
+            int(-1),
+            "duration overflow",
+        ),
+    ] {
+        let error = runtime
+            .eval_binary(op, left, right, Some(Span::new(7, 9)))
+            .expect_err("invalid Duration arithmetic should trap");
+        assert!(
+            error.message.contains(message),
+            "expected `{message}`, got `{}`",
+            error.message
+        );
+        assert_eq!(error.span, Some(Span::new(7, 9)));
+    }
+}
+
+#[test]
 fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     let mut runtime = test_runtime();
     let env = Env::default();
 
     let ready_task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
-    match ready_task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+    match ready_task
+        .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+        .expect("one-second task deadline should fit")
+    {
         crate::runtime_value::TaskWaitStatus::Ready(Ok(Value::Bool(true))) => {}
         other => panic!("expected ready bool task, got {other:?}"),
     }
@@ -9517,6 +9766,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
             })?;
         match cancelled_task
             .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .expect("one-second task deadline should fit")
         {
             crate::runtime_value::TaskWaitStatus::Cancelled => {}
             other => panic!("expected cancelled lightweight task, got {other:?}"),

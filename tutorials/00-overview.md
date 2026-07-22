@@ -15,7 +15,7 @@ These tutorials teach the language as it exists in this repository today, not th
 - ownership, borrowing, move semantics, copy types, and cloning
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing, and iteration
 - enums, exhaustive `match`, built-in `Result[T, E]`, `Option[T]`, and `SendError[T]`
-- strings, string parsing/formatting, numbers, duration literals, and the current builtin methods
+- strings, string parsing/formatting, numbers, signed computed Duration values, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
 - statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
 - `with`, `try expr`, queues, structured task groups, task waiting helpers, and task timeouts
@@ -42,7 +42,7 @@ Today's working subset includes:
 - user-defined generic classes, enums, and functions
 - builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
 - class methods with shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self`
-- arithmetic, comparisons, strings, booleans, and duration literals
+- arithmetic, comparisons, strings, booleans, and Duration literals, constructors, conversions, and checked operators
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`
 - `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`
 - machine-readable compiler output for AST, analysis, and completions

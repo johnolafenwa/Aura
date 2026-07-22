@@ -13,4 +13,8 @@ def main() -> int32:
     right = Counter(value=3)
     result = left // right
     print(result.value)
+
+    mut accumulated = Counter(value=20)
+    accumulated //= Counter(value=5)
+    print(accumulated.value)
     return 0

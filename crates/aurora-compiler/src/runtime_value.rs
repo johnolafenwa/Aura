@@ -54,6 +54,127 @@ type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
 
 pub(crate) const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aurora:runtime-type";
 pub(crate) const DIRECT_RUNTIME_TYPE_SEPARATOR: char = '\0';
+pub(crate) const NANOS_PER_MILLISECOND: i128 = 1_000_000;
+pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
+pub(crate) const NANOS_PER_MINUTE: i128 = 60 * NANOS_PER_SECOND;
+
+pub(crate) fn render_duration(nanoseconds: i128) -> String {
+    let negative = nanoseconds.is_negative();
+    let magnitude = nanoseconds.unsigned_abs();
+    let whole_milliseconds = magnitude / NANOS_PER_MILLISECOND as u128;
+    let fractional_nanoseconds = magnitude % NANOS_PER_MILLISECOND as u128;
+    let sign = if negative { "-" } else { "" };
+
+    if fractional_nanoseconds == 0 {
+        return format!("{sign}{whole_milliseconds}ms");
+    }
+
+    let fractional = format!("{fractional_nanoseconds:06}");
+    format!(
+        "{sign}{whole_milliseconds}.{}ms",
+        fractional.trim_end_matches('0')
+    )
+}
+
+pub(crate) fn duration_to_milliseconds(nanoseconds: i128) -> f64 {
+    exact_i128_ratio_to_f64(nanoseconds, NANOS_PER_MILLISECOND as u128)
+}
+
+pub(crate) fn duration_to_seconds(nanoseconds: i128) -> f64 {
+    exact_i128_ratio_to_f64(nanoseconds, NANOS_PER_SECOND as u128)
+}
+
+fn exact_i128_ratio_to_f64(numerator: i128, denominator: u128) -> f64 {
+    debug_assert!(denominator > 0);
+    if numerator == 0 {
+        return 0.0;
+    }
+
+    let negative = numerator.is_negative();
+    let numerator = numerator.unsigned_abs();
+    let numerator_log2 = 127_i32 - numerator.leading_zeros() as i32;
+    let denominator_log2 = 127_i32 - denominator.leading_zeros() as i32;
+    let mut exponent = numerator_log2 - denominator_log2;
+    let ratio_is_below_exponent = if exponent >= 0 {
+        numerator < denominator << (exponent as u32)
+    } else {
+        numerator << ((-exponent) as u32) < denominator
+    };
+    if ratio_is_below_exponent {
+        exponent -= 1;
+    }
+
+    let significand_shift = 52 - exponent;
+    let (scaled_numerator, scaled_denominator) = if significand_shift >= 0 {
+        (numerator << (significand_shift as u32), denominator)
+    } else {
+        (numerator, denominator << ((-significand_shift) as u32))
+    };
+    let mut significand = scaled_numerator / scaled_denominator;
+    let remainder = scaled_numerator % scaled_denominator;
+    let twice_remainder = remainder * 2;
+    if twice_remainder > scaled_denominator
+        || (twice_remainder == scaled_denominator && significand & 1 == 1)
+    {
+        significand += 1;
+    }
+    if significand == 1_u128 << 53 {
+        significand >>= 1;
+        exponent += 1;
+    }
+
+    debug_assert!((1_u128 << 52..1_u128 << 53).contains(&significand));
+    let biased_exponent = u64::try_from(exponent + 1023)
+        .expect("an i128 Duration ratio always has a normal f64 exponent");
+    let fraction = u64::try_from(significand - (1_u128 << 52))
+        .expect("a binary64 significand always fits its fraction field");
+    let sign = if negative { 1_u64 << 63 } else { 0 };
+    f64::from_bits(sign | (biased_exponent << 52) | fraction)
+}
+
+pub(crate) fn duration_to_host_timer(nanoseconds: i128, label: &str) -> io::Result<StdDuration> {
+    if nanoseconds < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} must be non-negative"),
+        ));
+    }
+
+    let seconds = nanoseconds / NANOS_PER_SECOND;
+    let seconds = u64::try_from(seconds).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} exceeds the host timer range"),
+        )
+    })?;
+    let subsecond_nanoseconds = (nanoseconds % NANOS_PER_SECOND) as u32;
+    let duration = StdDuration::new(seconds, subsecond_nanoseconds);
+    checked_deadline_after(duration, label)?;
+    Ok(duration)
+}
+
+fn checked_deadline_after_with<F>(
+    now: Instant,
+    duration: StdDuration,
+    label: &str,
+    checked_add: F,
+) -> io::Result<Instant>
+where
+    F: FnOnce(Instant, StdDuration) -> Option<Instant>,
+{
+    checked_add(now, duration).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} exceeds the host deadline range"),
+        )
+    })
+}
+
+fn checked_deadline_after(duration: StdDuration, label: &str) -> io::Result<Instant> {
+    checked_deadline_after_with(Instant::now(), duration, label, |now, duration| {
+        now.checked_add(duration)
+    })
+}
 
 pub(crate) fn nominal_runtime_base_name(name: &str) -> &str {
     name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
@@ -429,6 +550,11 @@ pub(crate) enum ProcessSupervisorWaitStatus {
     Event(Value),
     TimedOut,
     Cancelled,
+}
+
+enum SupervisorRestartSchedule {
+    Deadline(Instant),
+    Failed(Value),
 }
 
 #[derive(Clone, Copy)]
@@ -1320,16 +1446,16 @@ pub(crate) fn wait_for_runtime_scheduler(
 pub(crate) fn sleep_with_runtime_scheduler(
     duration: StdDuration,
     cancellation: Option<&CancellationContext>,
-) -> RuntimeSchedulerWakeReason {
-    let deadline = Instant::now().checked_add(duration);
-    wait_for_runtime_scheduler(
+) -> io::Result<RuntimeSchedulerWakeReason> {
+    let deadline = deadline_from_timeout_labeled(Some(duration), "sleep duration")?;
+    Ok(wait_for_runtime_scheduler(
         Vec::new(),
         false,
         Vec::new(),
         Vec::new(),
         deadline,
         cancellation,
-    )
+    ))
 }
 
 thread_local! {
@@ -2077,7 +2203,7 @@ impl Value {
                 rendered.push('}');
                 rendered
             }
-            Value::Duration(value) => format!("{}ms", value),
+            Value::Duration(value) => render_duration(*value),
             Value::Range(range) => format!("range({}, {})", range.start, range.end),
             Value::ModuleNamespace(namespace) => format!("<module {}>", namespace.path),
             Value::Unit => String::new(),
@@ -2417,8 +2543,9 @@ impl ChannelValue {
         value: Value,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
-    ) -> std::result::Result<(), SendValueError> {
-        self.send_with_deadline(value, deadline_from_timeout(timeout), cancellation, false)
+    ) -> io::Result<std::result::Result<(), SendValueError>> {
+        let deadline = deadline_from_timeout_labeled(timeout, "queue timeout")?;
+        Ok(self.send_with_deadline(value, deadline, cancellation, false))
     }
 
     fn send_with_deadline(
@@ -2464,21 +2591,24 @@ impl ChannelValue {
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
-    ) -> Option<Value> {
-        match self.recv_result_with_cancellation(timeout, cancellation) {
-            RecvValueResult::Value(value) => Some(value),
-            RecvValueResult::Closed | RecvValueResult::TimedOut | RecvValueResult::Cancelled => {
-                None
-            }
-        }
+    ) -> io::Result<Option<Value>> {
+        Ok(
+            match self.recv_result_with_cancellation(timeout, cancellation)? {
+                RecvValueResult::Value(value) => Some(value),
+                RecvValueResult::Closed
+                | RecvValueResult::TimedOut
+                | RecvValueResult::Cancelled => None,
+            },
+        )
     }
 
     pub(crate) fn recv_result_with_cancellation(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
-    ) -> RecvValueResult {
-        self.recv_result_with_deadline(deadline_from_timeout(timeout), cancellation)
+    ) -> io::Result<RecvValueResult> {
+        let deadline = deadline_from_timeout_labeled(timeout, "queue timeout")?;
+        Ok(self.recv_result_with_deadline(deadline, cancellation))
     }
 
     fn recv_result_with_deadline(
@@ -2582,8 +2712,32 @@ pub(crate) fn remove_file_checked(path: impl AsRef<Path>) -> io::Result<()> {
     std::fs::remove_file(path)
 }
 
-fn deadline_from_timeout(timeout: Option<StdDuration>) -> Option<Instant> {
-    timeout.and_then(|duration| Instant::now().checked_add(duration))
+fn deadline_from_timeout_with<F>(
+    timeout: Option<StdDuration>,
+    label: &str,
+    now: Instant,
+    checked_add: F,
+) -> io::Result<Option<Instant>>
+where
+    F: FnOnce(Instant, StdDuration) -> Option<Instant>,
+{
+    match timeout {
+        Some(duration) => checked_deadline_after_with(now, duration, label, checked_add).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn deadline_from_timeout_labeled(
+    timeout: Option<StdDuration>,
+    label: &str,
+) -> io::Result<Option<Instant>> {
+    deadline_from_timeout_with(timeout, label, Instant::now(), |now, duration| {
+        now.checked_add(duration)
+    })
+}
+
+fn deadline_from_timeout(timeout: Option<StdDuration>) -> io::Result<Option<Instant>> {
+    deadline_from_timeout_labeled(timeout, "timeout")
 }
 
 fn check_deadline_and_cancellation(
@@ -2599,13 +2753,29 @@ fn check_deadline_and_cancellation(
     Ok(())
 }
 
-fn tls_handshake_deadline(deadline: Option<Instant>) -> Option<Instant> {
-    let cap = Instant::now().checked_add(DEFAULT_TLS_HANDSHAKE_TIMEOUT);
-    match (deadline, cap) {
-        (Some(deadline), Some(cap)) => Some(std::cmp::min(deadline, cap)),
-        (Some(deadline), None) => Some(deadline),
-        (None, cap) => cap,
-    }
+fn tls_handshake_deadline_with<F>(
+    deadline: Option<Instant>,
+    now: Instant,
+    checked_add: F,
+) -> io::Result<Option<Instant>>
+where
+    F: FnOnce(Instant, StdDuration) -> Option<Instant>,
+{
+    let cap = checked_deadline_after_with(
+        now,
+        DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        "TLS handshake timeout",
+        checked_add,
+    )?;
+    Ok(Some(
+        deadline.map_or(cap, |deadline| std::cmp::min(deadline, cap)),
+    ))
+}
+
+fn tls_handshake_deadline(deadline: Option<Instant>) -> io::Result<Option<Instant>> {
+    tls_handshake_deadline_with(deadline, Instant::now(), |now, duration| {
+        now.checked_add(duration)
+    })
 }
 
 fn duration_to_poll_timeout(duration: StdDuration) -> libc::c_int {
@@ -2676,8 +2846,8 @@ fn set_process_pipe_nonblocking<P: AsRawFd>(pipe: &P, enabled: bool) -> io::Resu
     set_fd_nonblocking(pipe.as_raw_fd(), enabled)
 }
 
-fn timeout_deadline(timeout: Option<StdDuration>) -> Option<Instant> {
-    timeout.and_then(|timeout| Instant::now().checked_add(timeout))
+fn timeout_deadline(timeout: Option<StdDuration>) -> io::Result<Option<Instant>> {
+    deadline_from_timeout(timeout)
 }
 
 fn ensure_rustls_crypto_provider() {
@@ -4210,7 +4380,7 @@ fn websocket_read_message(
     socket: &mut WebSocketStateKind,
     timeout: Option<StdDuration>,
 ) -> io::Result<Option<Message>> {
-    let deadline = deadline_from_timeout(timeout);
+    let deadline = deadline_from_timeout(timeout)?;
     loop {
         let result = match socket {
             WebSocketStateKind::Plain(socket) => socket.read(),
@@ -4462,7 +4632,7 @@ impl ProcessPipeValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<String>> {
-        let deadline = timeout_deadline(timeout);
+        let deadline = timeout_deadline(timeout)?;
         let mut pipe = lock_mutex(&self.inner.pipe);
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
@@ -4499,7 +4669,7 @@ impl ProcessPipeValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<Vec<u8>>> {
-        let deadline = timeout_deadline(timeout);
+        let deadline = timeout_deadline(timeout)?;
         let mut pipe = lock_mutex(&self.inner.pipe);
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
@@ -4546,7 +4716,7 @@ impl ProcessPipeValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<()> {
-        let deadline = timeout_deadline(timeout);
+        let deadline = timeout_deadline(timeout)?;
         let mut pipe = lock_mutex(&self.inner.pipe);
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
@@ -4648,6 +4818,37 @@ impl ProcessCompletedValue {
     }
 }
 
+fn supervisor_restart_schedule_with<F>(
+    name: &str,
+    restart_count: i32,
+    now: Instant,
+    backoff: StdDuration,
+    checked_add: F,
+) -> SupervisorRestartSchedule
+where
+    F: FnOnce(Instant, StdDuration) -> Option<Instant>,
+{
+    match checked_deadline_after_with(now, backoff, "supervisor restart backoff", checked_add) {
+        Ok(deadline) => SupervisorRestartSchedule::Deadline(deadline),
+        Err(error) => SupervisorRestartSchedule::Failed(process_supervisor_event_failed(
+            name.to_string(),
+            process_error_io(error),
+            IntegerValue::from_signed(i128::from(restart_count)),
+        )),
+    }
+}
+
+fn supervisor_restart_schedule(
+    name: &str,
+    restart_count: i32,
+    now: Instant,
+    backoff: StdDuration,
+) -> SupervisorRestartSchedule {
+    supervisor_restart_schedule_with(name, restart_count, now, backoff, |now, duration| {
+        now.checked_add(duration)
+    })
+}
+
 impl ProcessSupervisorValue {
     pub(crate) fn new() -> Self {
         Self {
@@ -4745,31 +4946,44 @@ impl ProcessSupervisorValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> ProcessSupervisorWaitStatus {
-        let deadline = timeout_deadline(timeout);
+        self.wait_result(timeout, cancellation)
+            .unwrap_or_else(|error| {
+                ProcessSupervisorWaitStatus::Event(process_supervisor_event_failed(
+                    "<supervisor>".to_string(),
+                    error,
+                    IntegerValue::from_signed(0),
+                ))
+            })
+    }
+
+    fn wait_result(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<ProcessSupervisorWaitStatus, Value> {
+        let deadline = timeout_deadline(timeout).map_err(process_error_io)?;
         loop {
             match self.try_collect_event() {
-                Ok(Some(event)) => return ProcessSupervisorWaitStatus::Event(event),
+                Ok(Some(event)) => return Ok(ProcessSupervisorWaitStatus::Event(event)),
                 Ok(None) => {}
-                Err(error) => {
-                    return ProcessSupervisorWaitStatus::Event(process_supervisor_event_failed(
-                        "<supervisor>".to_string(),
-                        error,
-                        IntegerValue::from_signed(0),
-                    ))
-                }
+                Err(error) => return Err(error),
             }
 
             if self.is_empty() {
-                return ProcessSupervisorWaitStatus::TimedOut;
+                return Ok(ProcessSupervisorWaitStatus::TimedOut);
             }
             if cancellation.is_some_and(CancellationContext::is_cancelled) {
-                return ProcessSupervisorWaitStatus::Cancelled;
+                return Ok(ProcessSupervisorWaitStatus::Cancelled);
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                return ProcessSupervisorWaitStatus::TimedOut;
+                return Ok(ProcessSupervisorWaitStatus::TimedOut);
             }
 
-            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+            if let Err(error) =
+                sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation)
+            {
+                return Err(process_error_io(error));
+            }
         }
     }
 
@@ -4778,7 +4992,7 @@ impl ProcessSupervisorValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> std::result::Result<Option<Value>, Value> {
-        match self.wait(timeout, cancellation) {
+        match self.wait_result(timeout, cancellation)? {
             ProcessSupervisorWaitStatus::Event(event) => Ok(Some(event)),
             ProcessSupervisorWaitStatus::TimedOut => Ok(None),
             ProcessSupervisorWaitStatus::Cancelled => Err(process_error_cancelled()),
@@ -4837,11 +5051,22 @@ impl ProcessSupervisorValue {
                                 entry.spec.max_restarts,
                             ) {
                                 entry.restart_count += 1;
-                                entry.child = None;
-                                entry.pending_restart_status = Some(status);
-                                entry.next_restart_at =
-                                    now.checked_add(entry.spec.backoff).or(Some(now));
-                                Action::None
+                                match supervisor_restart_schedule(
+                                    &name,
+                                    entry.restart_count,
+                                    now,
+                                    entry.spec.backoff,
+                                ) {
+                                    SupervisorRestartSchedule::Deadline(deadline) => {
+                                        entry.child = None;
+                                        entry.pending_restart_status = Some(status);
+                                        entry.next_restart_at = Some(deadline);
+                                        Action::None
+                                    }
+                                    SupervisorRestartSchedule::Failed(event) => {
+                                        Action::RemoveAndEmit(event)
+                                    }
+                                }
                             } else {
                                 Action::RemoveAndEmit(process_supervisor_event_exited(
                                     name.clone(),
@@ -5006,7 +5231,10 @@ impl ProcessChildValue {
         if let Some(status) = *lock_mutex(&self.inner.waited) {
             return ProcessChildWaitStatus::Exited(status);
         }
-        let deadline = timeout_deadline(timeout);
+        let deadline = match timeout_deadline(timeout) {
+            Ok(deadline) => deadline,
+            Err(error) => return ProcessChildWaitStatus::Failed(error),
+        };
         loop {
             match self.try_wait_once() {
                 Ok(Some(status)) => return ProcessChildWaitStatus::Exited(status),
@@ -5019,7 +5247,11 @@ impl ProcessChildValue {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return ProcessChildWaitStatus::TimedOut;
             }
-            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+            if let Err(error) =
+                sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation)
+            {
+                return ProcessChildWaitStatus::Failed(error);
+            }
         }
     }
 
@@ -5150,7 +5382,11 @@ impl ProcessChildValue {
         let Some(process_group_id) = self.inner.process_group_id else {
             return true;
         };
-        let deadline = timeout_deadline(timeout);
+        let deadline = match deadline_from_timeout_labeled(timeout, "process group cleanup timeout")
+        {
+            Ok(deadline) => deadline,
+            Err(_) => return false,
+        };
         loop {
             if !process_group_alive(process_group_id) {
                 return true;
@@ -5161,7 +5397,9 @@ impl ProcessChildValue {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return false;
             }
-            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+            if sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation).is_err() {
+                return false;
+            }
         }
     }
 }
@@ -5246,7 +5484,7 @@ impl TcpListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         loop {
             match listener.accept() {
                 Ok((stream, _)) => return TcpStreamValue::from_std(stream),
@@ -5352,7 +5590,7 @@ impl TcpStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        Self::connect_before(address, deadline_from_timeout(timeout), cancellation)
+        Self::connect_before(address, deadline_from_timeout(timeout)?, cancellation)
     }
 
     fn connect_before(
@@ -5390,7 +5628,7 @@ impl TcpStreamValue {
     {
         Self::connect_with_deadline_and_operations(
             address,
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
             resolve,
             connect,
@@ -5445,12 +5683,12 @@ impl TcpStreamValue {
         };
         #[cfg(unix)]
         {
-            read_all_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
+            read_all_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
         }
         #[cfg(not(unix))]
         {
             let mut contents = Vec::new();
-            let deadline = deadline_from_timeout(timeout);
+            let deadline = deadline_from_timeout(timeout)?;
             loop {
                 stream.set_read_timeout(next_wait_slice(deadline, cancellation)?)?;
                 let mut chunk = [0u8; 4096];
@@ -5488,7 +5726,7 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_line_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
+        read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
     }
 
     pub(crate) fn read_bytes(
@@ -5504,7 +5742,7 @@ impl TcpStreamValue {
         read_some_with_deadline(
             stream,
             max_bytes,
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
         )
     }
@@ -5519,7 +5757,7 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout), cancellation)
+        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
     }
 
     pub(crate) fn write_all(
@@ -5543,12 +5781,12 @@ impl TcpStreamValue {
         };
         #[cfg(unix)]
         {
-            write_all_with_deadline(stream, bytes, deadline_from_timeout(timeout), cancellation)
+            write_all_with_deadline(stream, bytes, deadline_from_timeout(timeout)?, cancellation)
         }
         #[cfg(not(unix))]
         {
             stream.set_write_timeout(next_wait_slice(
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             )?)?;
             stream.write_all(bytes)
@@ -5663,7 +5901,7 @@ impl UdpSocketValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<()> {
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         let addresses = resolve_socket_addresses_before(address, deadline, cancellation)?;
         let target = addresses.into_iter().next().ok_or_else(|| {
             io::Error::new(
@@ -5714,7 +5952,7 @@ impl UdpSocketValue {
         };
         #[cfg(unix)]
         {
-            let deadline = deadline_from_timeout(timeout);
+            let deadline = deadline_from_timeout(timeout)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             loop {
                 match socket.recv(&mut buffer) {
@@ -5744,7 +5982,7 @@ impl UdpSocketValue {
         #[cfg(not(unix))]
         {
             socket.set_read_timeout(next_wait_slice(
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             )?)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
@@ -5779,7 +6017,7 @@ impl UdpSocketValue {
         };
         #[cfg(unix)]
         {
-            let deadline = deadline_from_timeout(timeout);
+            let deadline = deadline_from_timeout(timeout)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             loop {
                 match socket.recv_from(&mut buffer) {
@@ -5811,7 +6049,7 @@ impl UdpSocketValue {
         #[cfg(not(unix))]
         {
             socket.set_read_timeout(next_wait_slice(
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             )?)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
@@ -5900,7 +6138,7 @@ impl UnixListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         loop {
             match listener.accept() {
                 Ok((stream, _)) => return UnixStreamValue::from_std(stream),
@@ -5951,7 +6189,7 @@ impl UnixStreamValue {
     ) -> io::Result<Self> {
         Self::connect_with_deadline_and_operation(
             path,
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
             StdUnixStream::connect,
         )
@@ -5969,7 +6207,7 @@ impl UnixStreamValue {
     {
         Self::connect_with_deadline_and_operation(
             path,
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
             connect,
         )
@@ -5998,7 +6236,7 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_line_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
+        read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
     }
 
     pub(crate) fn read_exact(
@@ -6011,7 +6249,7 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout), cancellation)
+        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
     }
 
     pub(crate) fn write_all(
@@ -6027,7 +6265,7 @@ impl UnixStreamValue {
         write_all_with_deadline(
             stream,
             text.as_bytes(),
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
         )
     }
@@ -6081,7 +6319,7 @@ impl TlsListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<TlsStreamValue> {
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         let mut pending = VecDeque::new();
         loop {
             #[cfg(unix)]
@@ -6099,7 +6337,7 @@ impl TlsListenerValue {
                                 .map_err(io::Error::other)?;
                             pending.push_back(PendingTlsServerHandshake {
                                 stream: rustls::StreamOwned::new(connection, stream),
-                                deadline: tls_handshake_deadline(deadline),
+                                deadline: tls_handshake_deadline(deadline)?,
                             });
                         }
                         Err(error)
@@ -6130,7 +6368,7 @@ impl TlsListenerValue {
                                 .map_err(io::Error::other)?;
                             pending.push_back(PendingTlsServerHandshake {
                                 stream: rustls::StreamOwned::new(connection, stream),
-                                deadline: tls_handshake_deadline(deadline),
+                                deadline: tls_handshake_deadline(deadline)?,
                             });
                         }
                         Err(error)
@@ -6267,7 +6505,7 @@ impl TlsStreamValue {
             address,
             server_name,
             ca_pem_path,
-            deadline_from_timeout(timeout),
+            deadline_from_timeout(timeout)?,
             cancellation,
         )
     }
@@ -6293,7 +6531,11 @@ impl TlsStreamValue {
         let connection =
             ClientConnection::new(Arc::new(config), server_name).map_err(io::Error::other)?;
         let mut stream = rustls::StreamOwned::new(connection, stream);
-        complete_tls_client_handshake(&mut stream, tls_handshake_deadline(deadline), cancellation)?;
+        complete_tls_client_handshake(
+            &mut stream,
+            tls_handshake_deadline(deadline)?,
+            cancellation,
+        )?;
         Ok(Self {
             inner: Arc::new(TlsStreamState {
                 stream: Mutex::new(Some(TlsStreamKind::Client(stream))),
@@ -6315,14 +6557,14 @@ impl TlsStreamValue {
                 stream,
                 stream.sock.as_raw_fd(),
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
             TlsStreamKind::Server(stream) => read_line_with_fd_deadline(
                 stream,
                 stream.sock.as_raw_fd(),
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
         }
@@ -6344,7 +6586,7 @@ impl TlsStreamValue {
                 stream.sock.as_raw_fd(),
                 count,
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
             TlsStreamKind::Server(stream) => read_exact_with_fd_deadline(
@@ -6352,7 +6594,7 @@ impl TlsStreamValue {
                 stream.sock.as_raw_fd(),
                 count,
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
         }
@@ -6374,7 +6616,7 @@ impl TlsStreamValue {
                 stream.sock.as_raw_fd(),
                 text.as_bytes(),
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
             TlsStreamKind::Server(stream) => write_all_with_fd_deadline(
@@ -6382,7 +6624,7 @@ impl TlsStreamValue {
                 stream.sock.as_raw_fd(),
                 text.as_bytes(),
                 libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout),
+                deadline_from_timeout(timeout)?,
                 cancellation,
             ),
         }
@@ -6429,7 +6671,7 @@ impl HttpListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<HttpExchangeValue> {
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         loop {
             #[cfg(unix)]
             let stream = {
@@ -6680,7 +6922,7 @@ impl HttpResponseValue {
             }
         };
         let request = build_http_request_bytes(method, &url, body, headers)?;
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         if url.scheme() == "http" {
             let stream = TcpStreamValue::connect_before(&host, deadline, cancellation)?;
             let response = {
@@ -6778,7 +7020,7 @@ impl WebSocketListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         let cancellation = current_lightweight_task_cancellation();
         loop {
             match listener.accept() {
@@ -6858,7 +7100,7 @@ impl WebSocketValue {
             } else {
                 format!("{host}:{port}")
             };
-            let deadline = deadline_from_timeout(timeout);
+            let deadline = deadline_from_timeout(timeout)?;
             let cancellation = current_lightweight_task_cancellation();
             let tcp = TcpStreamValue::connect_before(&address, deadline, cancellation.as_ref())?;
             let mut guard = lock_mutex(&tcp.inner.stream);
@@ -6881,7 +7123,7 @@ impl WebSocketValue {
         #[cfg(not(unix))]
         {
             let url = url.to_string();
-            let deadline = deadline_from_timeout(timeout);
+            let deadline = deadline_from_timeout(timeout)?;
             let cancellation = current_lightweight_task_cancellation();
             let (socket, _) = run_blocking_io_with_deadline(
                 move || tungstenite::connect(url).map_err(websocket_error_to_io),
@@ -6899,7 +7141,7 @@ impl WebSocketValue {
 
     pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         let mut message = Message::Text(text.to_string());
         match socket.as_mut() {
             Some(socket) => loop {
@@ -6944,7 +7186,7 @@ impl WebSocketValue {
 
     pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
-        let deadline = deadline_from_timeout(timeout);
+        let deadline = deadline_from_timeout(timeout)?;
         let mut message = Message::Binary(bytes.to_vec());
         match socket.as_mut() {
             Some(socket) => loop {
@@ -7232,14 +7474,14 @@ impl TaskValue {
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
-    ) -> TaskWaitStatus {
-        let deadline = deadline_from_timeout(timeout);
+    ) -> io::Result<TaskWaitStatus> {
+        let deadline = deadline_from_timeout_labeled(timeout, "task result timeout")?;
         loop {
             if let Some(result) = self.completed_result() {
-                return match result {
+                return Ok(match result {
                     TaskExecutionResult::Ready(result) => TaskWaitStatus::Ready(result),
                     TaskExecutionResult::Cancelled => TaskWaitStatus::Cancelled,
-                };
+                });
             }
 
             match wait_for_runtime_scheduler(
@@ -7251,8 +7493,8 @@ impl TaskValue {
                 cancellation,
             ) {
                 RuntimeSchedulerWakeReason::Ready => {}
-                RuntimeSchedulerWakeReason::TimedOut => return TaskWaitStatus::TimedOut,
-                RuntimeSchedulerWakeReason::Cancelled => return TaskWaitStatus::Cancelled,
+                RuntimeSchedulerWakeReason::TimedOut => return Ok(TaskWaitStatus::TimedOut),
+                RuntimeSchedulerWakeReason::Cancelled => return Ok(TaskWaitStatus::Cancelled),
             }
         }
     }
@@ -7261,12 +7503,12 @@ impl TaskValue {
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
-    ) -> TaskWaitStatus {
-        let status = self.wait_result_with_cancellation(timeout, cancellation);
+    ) -> io::Result<TaskWaitStatus> {
+        let status = self.wait_result_with_cancellation(timeout, cancellation)?;
         if let TaskWaitStatus::Ready(result) = &status {
             self.observe_result(&TaskExecutionResult::Ready(result.clone()));
         }
-        status
+        Ok(status)
     }
 
     pub(crate) fn unobserved_error(&self) -> Option<Diagnostic> {
@@ -7393,8 +7635,8 @@ pub(crate) fn task_group_cleanup_should_cancel(
                 Some(TASK_GROUP_CLEANUP_PROBE_TIMEOUT),
                 Some(cancellation),
             ) {
-                TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
-                TaskWaitStatus::TimedOut => {
+                Ok(TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled) => {}
+                Ok(TaskWaitStatus::TimedOut) => {
                     if task.waits_without_deadline() {
                         return true;
                     }
@@ -7402,6 +7644,7 @@ pub(crate) fn task_group_cleanup_should_cancel(
                         saw_incomplete_task = true;
                     }
                 }
+                Err(_) => return true,
             }
         }
 

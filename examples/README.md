@@ -539,6 +539,10 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 - `minute_duration.au`
   - duration literals with the `m` suffix
   - prints `120000ms`
+- `duration_arithmetic.au`
+  - signed Duration constructors, runtime `int64` scaling, floor division,
+    comparison, and floating unit conversion
+  - prints `375ms`, `0.333333ms`, `2500ms`, `true`, `2000.0`, and `1.5`
 
 ### `numbers/`
 
@@ -699,6 +703,7 @@ cargo run -p aura -- run examples/concurrency/queue_get_timeout.au
 cargo run -p aura -- run examples/concurrency/queue_get_timeout_named.au
 cargo run -p aura -- run examples/concurrency/sleep_builtin.au
 cargo run -p aura -- run examples/concurrency/minute_duration.au
+cargo run -p aura -- run examples/concurrency/duration_arithmetic.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
 cargo run -p aura -- run examples/numbers/numeric_builtins.au

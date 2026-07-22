@@ -192,9 +192,10 @@ The current compiler supports these expression forms:
   - `//` is builtin floor division for matching integer or floating types
   - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
   - builtin `%` follows the divisor's sign for matching integer or floating types
+  - Duration supports checked `+`, `-`, `* int64` in either order, `// int64`, and full comparison
 - unary prefix operators `-` and `not`
-- operator-trait dispatch for `+`, binary `-`, `*`, `/`, `%`, unary `-`, and `not`
-  - `//` has no `FloorDiv` trait
+- operator-trait dispatch for `+`, binary `-`, `*`, `/`, `//`, `%`, unary `-`, and `not`
+  - `//` uses `FloorDiv.floor_div` when no builtin numeric or Duration rule applies
 - explicit numeric casts with `expr as Type`
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - integer `.to_float() -> float64`, which uses nearest-even conversion and may round
@@ -533,7 +534,8 @@ The current bootstrap concurrency surface includes:
 - `wait_any(...)`
 - `wait_all(...)`
 - cooperative cancellation
-- duration literals with `ms`, `s`, and `m`
+- signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
+  integer constructors, checked arithmetic, conversions, and comparisons
 
 Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without a scheduler boundary can starve siblings, each task reserves a fixed 1 MiB coroutine stack, and readiness checks are linear in the waiting-task set. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
 

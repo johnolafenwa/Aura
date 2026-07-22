@@ -368,6 +368,63 @@ fn compiler_member_completion_for_string_exposes_string_methods() {
 }
 
 #[test]
+fn compiler_duration_tooling_exposes_static_constructors_and_instance_conversions() {
+    let static_source = "def main() -> int32:\n    Duration.\n    return 0\n";
+    let static_names = completion_names_after_marker(static_source, "Duration.");
+    assert!(static_names.contains(&"ms".to_string()));
+    assert!(static_names.contains(&"seconds".to_string()));
+    assert!(static_names.contains(&"minutes".to_string()));
+    assert!(!static_names.contains(&"to_ms".to_string()));
+
+    let instance_source =
+        "def inspect(duration: Duration):\n    duration.\n\ndef main() -> int32:\n    return 0\n";
+    let instance_names = completion_names_after_marker(instance_source, "duration.");
+    assert!(instance_names.contains(&"to_ms".to_string()));
+    assert!(instance_names.contains(&"to_seconds".to_string()));
+    assert!(!instance_names.contains(&"seconds".to_string()));
+
+    let analysis = analyze_source(
+        r#"
+def convert(value: int64, duration: Duration) -> float64:
+    built = Duration.ms(value)
+    scaled = duration * value
+    return built.to_ms() + scaled.to_seconds()
+
+def main() -> int32:
+    return 0
+"#,
+    );
+    assert!(analysis.diagnostics.is_empty());
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("type Duration")));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("ms(value: int64) -> Duration")));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("to_ms() -> float64")));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("to_seconds() -> float64")));
+}
+
+#[test]
+fn analysis_ignores_builtin_omitted_defaults_outside_source_inference() {
+    let program = checked_program("def main() -> int32:\n    return 0\n");
+    let marker = expr(ExprKind::BuiltinOmitted);
+    let mut builder = AnalysisBuilder::new("", &program, Vec::new());
+
+    assert_eq!(builder.infer_expr_type(&marker, &BTreeMap::new()), None);
+    builder.visit_expr(&marker, &BTreeMap::new());
+    assert!(builder.output.occurrences.is_empty());
+}
+
+#[test]
 fn compiler_member_completion_for_map_exposes_map_methods() {
     let source =
         "def main() -> int32:\n    mut counts = Map[String, int32]()\n    counts.\n    return 0\n";

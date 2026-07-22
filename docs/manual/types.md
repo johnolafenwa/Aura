@@ -20,7 +20,7 @@ The type system is designed to keep three facts visible:
 | `String` | Owned UTF-8 string; `len()` counts Unicode scalar values and `byte_len()` counts encoded bytes. |
 | `str` | Compatibility spelling that canonicalizes to `String` in Aurora 0.1; it is not a distinct runtime view type. |
 | `None` | Unit type and unit value. |
-| `Duration` | Runtime duration used by sleeps, timeouts, and scheduling APIs. |
+| `Duration` | Signed 128-bit nanosecond duration used by arithmetic, sleeps, timeouts, and scheduling APIs. |
 | `Range` | Integer range returned by `range(...)`. |
 
 Integer bounds are exact:
@@ -46,7 +46,22 @@ Integer bounds are exact:
 
 The default does not widen explicitly typed APIs. Existing fixed `int32` contracts remain `int32`, including `main()` exit statuses, `range(...)` bounds and yielded values, collection lengths, Vec indexes, queue capacities, and byte-count parameters. A literal passed to one of those positions adopts the expected `int32` type and must fit it.
 
-`Duration` stores a non-negative integral count of milliseconds representable by signed 128-bit storage. Literal units are normalized to milliseconds. `Range` contains `int32` start/end values and iterates from the start inclusive to the end exclusive.
+`Duration` stores a signed 128-bit count of nanoseconds. Literal units are
+normalized exactly to nanoseconds; literals are non-negative, while associated
+constructors and arithmetic can produce negative values. Representability as a
+language value is separate from validity as a host wait or deadline. `Range`
+contains `int32` start/end values and iterates from the start inclusive to the
+end exclusive.
+
+The associated constructors `Duration.ms(int64)`, `Duration.seconds(int64)`,
+and `Duration.minutes(int64)` accept signed counts. Duration values support
+checked addition and subtraction with another Duration, multiplication by
+`int64` in either operand order, floor division by `int64`, and full
+value-based comparison. `to_ms()` and `to_seconds()` convert the exact rational
+unit value to the nearest representable IEEE-754 binary64 value, ties-to-even;
+they may round. Their rounding, Duration rendering, and invalid host-timer
+policy are Provisional under ADR-0019; the signed nanosecond representation and
+operators are accepted under ADR-0007.
 
 Numeric literals are checked against the target type. Integer literals must fit an annotated integer target, and a float-context integer literal must be exactly representable in its `float32` or `float64` target. An inexact literal must make rounding explicit with a floating spelling or `.to_float()`. Integer-to-float casts also reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 

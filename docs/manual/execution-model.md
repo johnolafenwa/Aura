@@ -13,6 +13,12 @@ Aurora 0.1 maintains one checked source language and two runtime representations
 
 Both runtime representations MUST agree on maintained observable behavior. Backend parity tests compare the eligible runtime fixture corpus.
 
+Duration values remain signed 128-bit nanosecond counts across both paths.
+Direct code passes a Duration literal as its exact low and high 64-bit
+two's-complement limbs, and the native runtime reconstructs the same i128
+value. This ABI transport never narrows through milliseconds or a host timer
+type.
+
 ## Entry Module Execution
 
 After successful checking, an entry module runs in one of two modes:
@@ -89,9 +95,15 @@ Arithmetic is checked under the selected concrete numeric type.
 - floating `//` and `%` by either signed zero are runtime failures
 - ordinary floating operations otherwise use host IEEE-754 `float32`/`float64` behavior, including possible runtime NaN results from operations such as square root of a negative value
 - integer `.to_float()` converts to `float64` with IEEE-754 round-to-nearest, ties-to-even and may round; integer `as float32` or `as float64` retains its exactness check and fails instead of rounding
+- Duration addition, subtraction, and multiplication operate on signed 128-bit nanoseconds and reject overflow with `AU4002`
+- `Duration // int64` returns a Duration whose signed nanosecond count is the mathematical quotient rounded toward negative infinity; a zero divisor is `AU4004` and the signed-minimum divided by `-1` is `AU4002`
 - string `+` creates a new concatenated `String`
 
-Trait-backed operators invoke the selected trait implementation method with ordinary receiver, argument, move, borrow, and runtime-error behavior. `/` may invoke `Div.div` for an applicable non-numeric user type. `//` and `//=` are builtin-only and never dispatch through a `FloorDiv` trait.
+Trait-backed operators invoke the selected trait implementation method with
+ordinary receiver, argument, move, borrow, and runtime-error behavior. `/` may
+invoke `Div.div` for an applicable non-numeric user type. `//` and `//=` invoke
+`FloorDiv.floor_div` when no builtin numeric or `Duration // int64` rule
+applies.
 
 `==` and `!=` perform structural equality for maintained plain values and collections. Resource/handle identity is not a portable substitute for an application identifier; programs should use documented resource data rather than depend on equality of runtime handles.
 
@@ -107,7 +119,7 @@ Equality is defined only after static typing has established compatible operand 
 
 ## Value Rendering
 
-`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A duration renders in normalized milliseconds, for example `2s` renders as `2000ms`.
+`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is Provisional under ADR-0019.
 
 Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
 
@@ -230,6 +242,15 @@ Cancellation is cooperative. Pure CPU code observes cancellation at maintained t
 ## Host I/O And Cancellation
 
 Socket-backed network resources use nonblocking descriptors and scheduler/poll integration. Their timeout and cancellation outcomes are documented per operation.
+
+Converting a Duration to a host wait is a checked boundary. Negative values,
+values outside the host timer range, and durations whose addition to the
+current instant would overflow are invalid inputs. Deadline overflow never
+silently becomes an unlimited wait. An API with an `io.Error` carrier reports
+`InvalidInput`; a process-error carrier reports
+`process.Error.Io(io.Error.InvalidInput)`; an API without either typed carrier
+traps with `AU4001`. This host-boundary classification is Provisional under
+ADR-0019.
 
 Filesystem operations and some host operations run on a bounded blocking worker pool. Cancelling the Aurora task cancels its wait for the worker result; it cannot forcibly stop an operating-system call already executing on a worker. A cancelled write or other side-effecting operation may therefore complete in the host after Aurora has stopped waiting. Programs requiring transactional cancellation must write to a temporary artifact and commit it explicitly.
 

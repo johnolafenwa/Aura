@@ -1,0 +1,5 @@
+omitted: completed
+zero: expired
+Error.TimedOut
+negative: invalid
+Error.Io(io.Error.InvalidInput)

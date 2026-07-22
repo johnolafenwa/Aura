@@ -3,7 +3,7 @@
 ## Session
 
 - Started: 2026-07-22 16:10:25 BST.
-- Current elapsed: 2h 45m 25s as of 2026-07-22 18:55:50 BST.
+- Current elapsed: 5h 13m 31s as of 2026-07-22 21:23:56 BST.
 - Hard stop: 2026-07-23 04:10:25 BST after 12 continuous hours.
 - Target: resume the preserved Batch 2 checkout, full-gate and commit the
   Phase 3 builtin-metadata foundation and fixed resource caps, then continue
@@ -38,6 +38,22 @@
 - Corrected the cap reference status sections so every normative page identifies
   ADR-0018 as Provisional pending the Batch 2 checkpoint review, and added
   integrity guards for that status.
+- Committed the full-gated fixed-resource-cap ticket as `97d0c7c` and began
+  the Phase 3 Duration ticket: signed `i128` nanoseconds, exact literal and
+  two-limb direct ABI propagation, constructors, conversions, arithmetic,
+  `FloorDiv` dispatch, comparison semantics, and finite timer validation are
+  now under integrated compiler, runtime, LSP, fixture, and reference testing.
+- Added MIR/direct-parity fixtures for Duration arithmetic, negative floor
+  division, conversion rendering, overflow, division by zero, and explicit
+  negative process timeouts. A sink audit then found downstream checked-deadline
+  and error-carrier gaps beyond the first conversion boundary; the affected
+  shared, MIR, and direct slices now use checked deadlines and the declared
+  typed result or diagnostic carrier.
+- Fixed the final supervisor carrier defect found during the sign-off review:
+  `Supervisor.wait_or_none` no longer reclassifies a deadline-construction
+  failure as `Ok(Some(SupervisorEvent.Failed(...)))`; its shared wait core now
+  returns `Err(Error.Io(io.Error.InvalidInput))`, while `Supervisor.wait`
+  intentionally retains its documented synthetic failed-event carrier.
 
 ## Verification
 
@@ -91,8 +107,24 @@
   3,353/3,463 functions (96.823563384%), and 78,182/83,037 regions
   (94.153208811%). The one-line/one-region variance from the standalone run is
   in scheduler-sensitive runtime coverage and remains above every frozen floor.
+- The Duration compiler library suite passed all 580 tests before the final
+  supervisor regression. The focused shared-runtime regression, direct invalid
+  timer-carrier test, and all three MIR timer-carrier integration tests pass
+  after that correction; formatting and diff hygiene are clean.
+- An unrestricted Duration backend-parity sweep passed all fixtures in 279.88s
+  before the final shared supervisor correction. Because the runtime tree then
+  changed, this result is retained only as interim evidence and will be rerun
+  before sign-off.
+- The final authoritative instrumented Duration run passes all 583 compiler
+  unit tests and every integration suite. Coverage is 54,489/56,713 lines
+  (96.08%), 3,425/3,538 functions (96.81%), and 79,311/84,154 regions
+  (94.25%), above all frozen floors. The gap was closed exclusively with
+  observable Duration/FloorDiv/timer semantics, typed carriers, exact
+  diagnostics, and direct ABI boundary tests; no synthetic coverage test,
+  exclusion, or defensive-branch probe was added.
 
 ## Follow-up
 
-- Commit the full-gated fixed-resource-cap ticket with ADR-0018 kept
-  Provisional, then begin the Duration nanosecond ticket.
+- Pass the exact full `npm run ci` gate and commit the completed Duration ticket
+  with its Provisional policy ADR before proceeding to the next Phase 3
+  control-plane ticket.

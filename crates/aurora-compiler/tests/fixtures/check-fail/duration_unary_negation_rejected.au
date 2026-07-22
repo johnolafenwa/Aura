@@ -1,0 +1,4 @@
+def main() -> int32:
+    duration = Duration.ms(1)
+    print(-duration)
+    return 0

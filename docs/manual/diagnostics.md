@@ -218,7 +218,12 @@ this temporary difference is recorded in Current Limits.
 Checked overflow, zero division, bounds failure, recursion-depth failure, and
 an explicitly trapping invalid runtime state are diagnostics. File, process,
 network, timeout, cancellation, and protocol operations normally return typed
-values instead; the feature page for an API states any trapping exception.
+values instead; the feature page for an API states any trapping exception. A
+negative, host-unrepresentable, or deadline-overflowing Duration returns the
+documented `InvalidInput`/process error when that API has a compatible typed
+carrier. A timer API without one traps with `AU4001`; deadline overflow never
+means an unlimited wait. This classification remains Provisional under
+ADR-0019.
 
 ## CLI Exit Status
 

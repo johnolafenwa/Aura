@@ -2,8 +2,9 @@ use crate::ast::{Argument, Expr, ExprKind, Param, ParamMode, ReceiverKind, TypeR
 use crate::diag::Span;
 
 use super::{
-    bind_call_arguments, callable_params_from_decl, format_argument_count, BuiltinFunction,
-    BuiltinMember, CallConvention, CallableParam, ALL_BUILTIN_FUNCTIONS,
+    bind_call_arguments, callable_params_from_decl, format_argument_count,
+    BuiltinAssociatedFunction, BuiltinFunction, BuiltinMember, CallConvention, CallableParam,
+    ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
 };
 
 fn dummy_arg(name: Option<&str>) -> Argument {
@@ -325,6 +326,76 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
     assert!(BuiltinMember::TaskResultOrNone
         .docs()
         .contains("Option.None"));
+}
+
+#[test]
+fn duration_call_metadata_covers_constructors_and_exact_unit_conversions() {
+    assert_eq!(
+        ALL_BUILTIN_ASSOCIATED_FUNCTIONS,
+        &[
+            BuiltinAssociatedFunction::DurationMilliseconds,
+            BuiltinAssociatedFunction::DurationSeconds,
+            BuiltinAssociatedFunction::DurationMinutes,
+        ]
+    );
+    for (name, constructor) in [
+        ("ms", BuiltinAssociatedFunction::DurationMilliseconds),
+        ("seconds", BuiltinAssociatedFunction::DurationSeconds),
+        ("minutes", BuiltinAssociatedFunction::DurationMinutes),
+    ] {
+        assert_eq!(
+            BuiltinAssociatedFunction::resolve("Duration", name),
+            Some(constructor)
+        );
+        assert_eq!(constructor.name(), name);
+        assert!(constructor.detail().contains("value: int64"));
+        assert!(constructor.detail().ends_with("-> Duration"));
+        assert!(constructor.docs().contains("Duration"));
+
+        let positional = [dummy_arg(None)];
+        let bound = constructor
+            .bind_args(&positional, Span::new(1, 1))
+            .expect("Duration constructors accept one positional argument");
+        assert_eq!(bound.len(), 1);
+        assert!(bound[0].is_some());
+
+        let named = [dummy_arg(Some("value"))];
+        constructor
+            .bind_args(&named, Span::new(1, 1))
+            .expect("Duration constructors accept value=...");
+
+        let missing = constructor.bind_args(&[], Span::new(2, 3)).unwrap_err();
+        assert!(missing
+            .message
+            .contains("missing required argument `value`"));
+    }
+
+    assert_eq!(
+        BuiltinAssociatedFunction::resolve("Duration", "milliseconds"),
+        None
+    );
+    assert_eq!(
+        BuiltinMember::resolve("Duration", "to_ms"),
+        Some(BuiltinMember::DurationToMilliseconds)
+    );
+    assert_eq!(
+        BuiltinMember::resolve("Duration", "to_seconds"),
+        Some(BuiltinMember::DurationToSeconds)
+    );
+    assert_eq!(
+        BuiltinMember::DurationToMilliseconds.detail(),
+        "to_ms() -> float64"
+    );
+    assert_eq!(
+        BuiltinMember::DurationToSeconds.detail(),
+        "to_seconds() -> float64"
+    );
+    assert!(BuiltinMember::DurationToMilliseconds
+        .docs()
+        .contains("nearest representable"));
+    assert!(BuiltinMember::DurationToSeconds
+        .docs()
+        .contains("nearest representable"));
 }
 
 #[test]

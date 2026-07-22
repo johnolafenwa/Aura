@@ -2,7 +2,10 @@ use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, IfStmt, LiteralPatternKind,
     MatchStmt, Param, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
 };
-use crate::call::{bind_call_arguments, callable_params_from_decl, BuiltinMember, CallConvention};
+use crate::call::{
+    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction, BuiltinMember,
+    CallConvention,
+};
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::sema::{
@@ -46,6 +49,25 @@ fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
 }
 
 fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> bool {
+    let duration = Type::named("Duration");
+    let int64 = Type::named("int64");
+    if match op {
+        BinaryOp::Add | BinaryOp::Sub => left_ty == &duration && right_ty == &duration,
+        BinaryOp::Mul => {
+            (left_ty == &duration && right_ty == &int64)
+                || (left_ty == &int64 && right_ty == &duration)
+        }
+        BinaryOp::FloorDiv => left_ty == &duration && right_ty == &int64,
+        BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Less
+        | BinaryOp::LessEq
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEq => left_ty == &duration && right_ty == &duration,
+        BinaryOp::And | BinaryOp::Or | BinaryOp::Div | BinaryOp::Mod => false,
+    } {
+        return true;
+    }
     if left_ty != right_ty {
         return false;
     }
@@ -122,6 +144,14 @@ fn adjusted_binary_operand_types(
     right_expr: &Expr,
     mut right_ty: Type,
 ) -> (Type, Type) {
+    let duration = Type::named("Duration");
+    if left_ty == duration || right_ty == duration {
+        // Duration's scalar operators are deliberately heterogeneous. An
+        // integer literal beside a Duration remains the default `int64`;
+        // contextualizing it as Duration would incorrectly route `*` and
+        // `//` through trait dispatch.
+        return (left_ty, right_ty);
+    }
     if left_ty != right_ty {
         if is_integer_literal_expr(left_expr) && is_float_type(&right_ty) {
             left_ty = right_ty.clone();
@@ -2324,9 +2354,10 @@ impl<'a> Lowerer<'a> {
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => Operand::Unit,
+            ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
             ExprKind::Int(value) => Operand::Int(*value),
-            ExprKind::DurationMillis(value) => Operand::Duration(*value),
+            ExprKind::DurationNanos(value) => Operand::Duration(*value),
             ExprKind::Float(value) => Operand::Float(*value),
             ExprKind::Bool(value) => Operand::Bool(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
@@ -3218,6 +3249,35 @@ impl<'a> Lowerer<'a> {
                     ExprKind::Specialize { expr, .. } => &**expr,
                     _ => object,
                 };
+                if let ExprKind::Name(type_name) = &base_object.kind {
+                    if let Some(associated) = BuiltinAssociatedFunction::resolve(type_name, field) {
+                        let ordered_args = associated.bind_args(args, callee.span).expect(
+                            "checked builtin associated call should bind during MIR lowering",
+                        );
+                        let argument = ordered_args[0]
+                            .expect("Duration constructors require a value argument");
+                        let value = self.lower_expr_at_sequence_point(
+                            &argument.value,
+                            Some(&Type::named("int64")),
+                        );
+                        self.emit(Instruction::Assign {
+                            target: temp.clone(),
+                            value: Rvalue::Call {
+                                callee: CallTarget::Name(format!(
+                                    "{}.{}",
+                                    type_name,
+                                    associated.name()
+                                )),
+                                args: vec![MirArg {
+                                    name: argument.name.clone(),
+                                    value,
+                                    writeback_place: None,
+                                }],
+                            },
+                        });
+                        return Operand::Place(temp);
+                    }
+                }
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class) = namespace.classes.get(&item_name).cloned() {
@@ -3994,7 +4054,8 @@ impl<'a> Lowerer<'a> {
                 }
                 _ => self.infer_expr_type(expr),
             },
-            ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
+            ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
+            ExprKind::BuiltinOmitted => None,
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),
                 UnaryOp::Neg => match &expr.kind {
@@ -4374,7 +4435,12 @@ impl<'a> Lowerer<'a> {
                 let (left_ty, right_ty) =
                     adjusted_binary_operand_types(left, left_ty, right, right_ty);
                 if is_builtin_binary_operator(*op, &left_ty, &right_ty) {
-                    Some(left_ty)
+                    let duration = Type::named("Duration");
+                    if left_ty == duration || right_ty == duration {
+                        Some(duration)
+                    } else {
+                        Some(left_ty)
+                    }
                 } else {
                     self.operator_return_type_for_binary(&left_ty, &right_ty, *op)
                 }

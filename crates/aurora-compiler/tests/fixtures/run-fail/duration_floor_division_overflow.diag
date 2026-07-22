@@ -1,0 +1,5 @@
+error[AU4002]: duration overflow
+ --> crates/aurora-compiler/tests/fixtures/run-fail/duration_floor_division_overflow.au:3:11
+  |
+3 |     print(minimum // -1)
+  |           ^

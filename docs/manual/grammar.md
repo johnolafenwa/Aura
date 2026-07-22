@@ -35,7 +35,7 @@ DURATION = INTEGER, ("ms" | "s" | "m") ;
 BOOLEAN  = "true" | "false" ;
 ```
 
-Identifiers are ASCII and case-sensitive. Unicode is allowed in string contents. Integers are decimal and must fit the lexer’s unsigned 128-bit literal representation before contextual typing. Floats must be finite `f64` values at lexing time. Duration literals represent non-negative integral milliseconds, seconds, or minutes and must fit signed 128-bit milliseconds after scaling.
+Identifiers are ASCII and case-sensitive. Unicode is allowed in string contents. Integers are decimal and must fit the lexer’s unsigned 128-bit literal representation before contextual typing. Floats must be finite `f64` values at lexing time. Duration literals represent non-negative integral milliseconds, seconds, or minutes and must fit signed 128-bit nanoseconds after scaling.
 
 There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-dot numeric forms. A negative number is unary `-` applied to a positive literal, not one lexical token.
 

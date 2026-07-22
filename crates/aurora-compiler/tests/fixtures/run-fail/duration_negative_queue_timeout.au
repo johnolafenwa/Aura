@@ -1,0 +1,4 @@
+def main() -> int32:
+    jobs = Queue[int32]()
+    print(jobs.get(timeout=Duration.ms(-1)))
+    return 0

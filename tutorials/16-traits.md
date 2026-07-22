@@ -195,6 +195,7 @@ Aurora supports operator overloading through traits. When you implement the righ
 | `a - b` | `Sub[Rhs, Out]` | `sub(borrow self, rhs: Rhs) -> Out` |
 | `a * b` | `Mul[Rhs, Out]` | `mul(borrow self, rhs: Rhs) -> Out` |
 | `a / b` | `Div[Rhs, Out]` | `div(borrow self, rhs: Rhs) -> Out` |
+| `a // b` | `FloorDiv[Rhs, Out]` | `floor_div(borrow self, rhs: Rhs) -> Out` |
 | `a % b` | `Mod[Rhs, Out]` | `mod(borrow self, rhs: Rhs) -> Out` |
 | `a < b` | `Ord[Rhs]` | `lt(borrow self, rhs: Rhs) -> bool` |
 | `a <= b` | `Ord[Rhs]` | `le(borrow self, rhs: Rhs) -> bool` |
@@ -203,10 +204,11 @@ Aurora supports operator overloading through traits. When you implement the righ
 | `-a` | `Neg[Out]` | `neg(borrow self) -> Out` |
 | `not a` | `Not[Out]` | `not(borrow self) -> Out` |
 
-`//` is deliberately absent. Floor division and `//=` are builtin numeric
-operations; Aurora has no `FloorDiv` trait. Equal integer operands with `/`
-are rejected rather than sent to `Div`, while `/` on an applicable non-numeric
-user type still resolves through `Div.div`.
+Builtin numeric floor division and `Duration // int64` take precedence. When
+neither rule applies, `//` and `//=` resolve through
+`FloorDiv.floor_div`. Equal integer operands with `/` are rejected rather than
+sent to `Div`, while `/` on an applicable non-numeric user type still resolves
+through `Div.div`.
 
 Example:
 

@@ -67,7 +67,8 @@ print(-10.5 % 3.0)  # 1.5
 
 The matching compound assignments are `+=`, `-=`, `*=`, `/=`, `%=`, and
 `//=`. Integer `/=` is rejected for the same reason as integer `/`; floating
-`/=` remains true division. There is no `FloorDiv` operator trait for `//`.
+`/=` remains true division. `//` can also use the `FloorDiv` operator trait
+when no builtin numeric or Duration rule applies.
 
 Unary minus works on integers and floats:
 
@@ -329,7 +330,7 @@ if score >= 90 and not failed:
     print("passed")
 ```
 
-## Duration Literals
+## Duration Values
 
 Duration literals are used with the concurrency surface (see [13-concurrency.md](13-concurrency.md)):
 
@@ -339,4 +340,30 @@ normal_wait: Duration = 1s
 long_wait: Duration = 2m
 ```
 
-When printed, a `Duration` renders in milliseconds with an `ms` suffix.
+The stored value is an exact signed i128 count of nanoseconds. Literals are
+non-negative integral counts with `ms`, `s`, or `m`; there is no `ns` suffix,
+fractional literal, or unary minus for Duration. Use the signed associated
+constructors when the count is computed:
+
+```python
+attempt: int64 = 3
+base = Duration.ms(125)
+backoff = attempt * base
+split = 1ms // attempt
+
+print(backoff)                         # 375ms
+print(split)                           # 0.333333ms
+print(Duration.seconds(2) + 500ms)     # 2500ms
+print(Duration.minutes(-1) < 0ms)      # true
+print(Duration.ms(1500).to_seconds())  # 1.5
+```
+
+Duration supports checked `+` and `-` with another Duration, `* int64` in
+either operand order, `// int64`, and all comparisons. `to_ms()` and
+`to_seconds()` return the nearest representable IEEE-754 binary64 value using
+ties-to-even and may round. Printing uses exact decimal milliseconds with at
+most six fractional digits and trimmed zeros.
+Negative values are useful in calculations but are rejected as sleeps,
+timeouts, deadlines, and restart backoffs.
+
+See [examples/concurrency/duration_arithmetic.au](../examples/concurrency/duration_arithmetic.au).

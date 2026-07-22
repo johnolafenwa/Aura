@@ -27,6 +27,11 @@ This page indexes every maintained public builtin function, method, module type,
 | `float64.sqrt` | `sqrt() -> float64` | Square root of the receiver. |
 | integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
 | scalar `.to_string` | `to_string() -> String` | Supported on `bool`, integer types, `float32`, and `float64`. |
+| `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Exact signed millisecond constructor. |
+| `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Exact signed second constructor. |
+| `Duration.minutes` | `Duration.minutes(value: int64) -> Duration` | Exact signed minute constructor. |
+| `Duration.to_ms` | `to_ms() -> float64` | Converts exact nanoseconds to nearest-representable binary64 milliseconds, ties-to-even; may round; Provisional under ADR-0019. |
+| `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; Provisional under ADR-0019. |
 | `String.len` | `len() -> int32` | Counts Unicode scalar values in O(n). |
 | `String.byte_len` | `byte_len() -> int32` | Returns the UTF-8 byte count in O(1). |
 | `String.contains` | `contains(text: String) -> bool` | `true` when the receiver contains `text`. |
@@ -41,6 +46,11 @@ This page indexes every maintained public builtin function, method, module type,
 | `String.trim` | `trim() -> String` | Removes surrounding Unicode whitespace. |
 | `String.join` | `join(parts: Vec[String]) -> String` | Joins `parts` using the receiver as separator. |
 | `String.clone` | `clone() -> String` | Returns a new owned string. |
+
+Duration operators are `Duration + Duration`, `Duration - Duration`,
+`Duration * int64`, `int64 * Duration`, and `Duration // int64`, all returning
+`Duration`, plus equality and all four ordering comparisons between Duration
+values. Arithmetic is checked on signed i128 nanoseconds.
 
 ## Collections
 

@@ -1,0 +1,4 @@
+def main() -> int32:
+    maximum: int64 = 9223372036854775807
+    print(Duration.minutes(maximum) * maximum)
+    return 0

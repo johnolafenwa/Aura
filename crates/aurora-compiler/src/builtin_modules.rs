@@ -63,9 +63,9 @@ fn name_expr(name: &str) -> Expr {
     }
 }
 
-fn duration_expr(millis: i128) -> Expr {
+fn builtin_omitted_expr() -> Expr {
     Expr {
-        kind: ExprKind::DurationMillis(millis),
+        kind: ExprKind::BuiltinOmitted,
         span: builtin_span(),
     }
 }
@@ -1299,7 +1299,7 @@ fn process_namespace() -> ModuleNamespace {
                 value_param_with_default(
                     "timeout",
                     type_ref("Duration", Vec::new()),
-                    duration_expr(-1),
+                    builtin_omitted_expr(),
                 ),
                 value_param_with_default("group", type_ref("bool", Vec::new()), bool_expr(false)),
             ],

@@ -1,0 +1,35 @@
+import net
+import process
+
+def main() -> int32:
+    match net.connect_timeout("127.0.0.1:9", Duration.ms(-1)):
+        case Result.Ok(stream):
+            stream.close()
+            print("network negative: unexpected")
+            return 1
+        case Result.Err(error):
+            print("network negative")
+            print(error)
+
+    match net.connect_timeout("127.0.0.1:9", Duration.seconds(9223372036854775807)):
+        case Result.Ok(stream):
+            stream.close()
+            print("network deadline: unexpected")
+            return 1
+        case Result.Err(error):
+            print("network deadline")
+            print(error)
+
+    with supervisor = process.supervisor():
+        print("supervisor wait")
+        print(supervisor.wait(timeout=Duration.ms(-1)))
+
+        print("supervisor wait_or_none")
+        match supervisor.wait_or_none(timeout=Duration.ms(-1)):
+            case Result.Ok(event):
+                print(event)
+                return 1
+            case Result.Err(error):
+                print(error)
+
+    return 0

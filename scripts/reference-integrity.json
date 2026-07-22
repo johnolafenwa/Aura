@@ -258,9 +258,9 @@
       "stderr": ""
     },
     "docs/manual/concurrency.md#aurora-1": {
-      "sha256": "eb78dec80f9bac43dc4189ce09c5437a048eb3121d6536eeb30314415d1497b4",
-      "mode": "check",
-      "stdout": "ok\n",
+      "sha256": "66754a9388d9c97d46136bcb963227649eb24738ba5187b4e87eda1ad47026b9",
+      "mode": "run",
+      "stdout": "10ms\n1000ms\n120000ms\n375ms\n0.333333ms\ntrue\n2000.0\n1.5\n",
       "stderr": ""
     },
     "docs/manual/concurrency.md#aurora-2": {
@@ -685,7 +685,7 @@
       "reason": "Supertrait fragment: Named is declared in a preceding block."
     },
     "docs/manual/generics-and-traits.md#aurora-19": {
-      "sha256": "98a8e58c24777a214dd46d76823e1de328664862cb4adc11333bd69906b30a55",
+      "sha256": "ae03f19e4cf7236fda7983716ae5c6088b83e5ae8bfbf41ff287f99e6ad0b47d",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
