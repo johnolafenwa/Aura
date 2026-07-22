@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
+use crate::builtin_modules::host_builtin_metadata;
 use crate::call::BuiltinMember;
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
@@ -2258,33 +2259,17 @@ impl MirRuntime {
                     };
                 }
 
-                let host_arg_names: Option<&[&str]> = match name.as_str() {
-                    "sys::args"
-                    | "sys::current_dir"
-                    | "sys::unix_time_ms"
-                    | "sys::monotonic_time_ms"
-                    | "metrics::reset" => Some(&[]),
-                    "sys::env" | "metrics::get" => Some(&["name"]),
-                    "path::parent" | "path::file_name" | "path::extension"
-                    | "path::is_absolute" => Some(&["path"]),
-                    "json::is_valid"
-                    | "json::parse_string_map"
-                    | "toml::is_valid"
-                    | "toml::parse_string_map" => Some(&["text"]),
-                    "json::stringify_map" | "toml::stringify_map" => Some(&["value"]),
-                    "path::join" => Some(&["base", "child"]),
-                    "metrics::increment" => Some(&["name", "value"]),
-                    "log::debug" | "log::info" | "log::warn" | "log::error" => {
-                        Some(&["message", "fields"])
-                    }
-                    "trace::event" => Some(&["name", "fields"]),
-                    _ => None,
-                };
-                if let Some(arg_names) = host_arg_names {
+                if let Some(metadata) = host_builtin_metadata(name) {
+                    debug_assert!(metadata.params.iter().all(|param| param.required));
+                    let arg_names = metadata
+                        .params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .collect::<Vec<_>>();
                     let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(arg_names, values)?;
+                    let bound = bind_builtin_args(&arg_names, values)?;
                     return evaluate_host_builtin_with_program_args(
-                        name,
+                        &metadata.qualified_name,
                         bound.into_iter().map(|argument| argument.value).collect(),
                         self.program_args.as_slice(),
                     );

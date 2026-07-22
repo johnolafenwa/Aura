@@ -13,6 +13,7 @@ use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, L
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, UnaryOp};
+use crate::builtin_modules::host_builtin_metadata;
 use crate::call::BuiltinMember;
 use crate::diag::Span;
 use crate::mir::{
@@ -4828,33 +4829,7 @@ impl<'a> FunctionCompiler<'a> {
         ) {
             return self.compile_builtin_io_named_call(name, args);
         }
-        if matches!(
-            name,
-            "sys::args"
-                | "sys::env"
-                | "sys::current_dir"
-                | "sys::unix_time_ms"
-                | "sys::monotonic_time_ms"
-                | "path::join"
-                | "path::parent"
-                | "path::file_name"
-                | "path::extension"
-                | "path::is_absolute"
-                | "json::is_valid"
-                | "json::stringify_map"
-                | "json::parse_string_map"
-                | "toml::is_valid"
-                | "toml::stringify_map"
-                | "toml::parse_string_map"
-                | "metrics::increment"
-                | "metrics::get"
-                | "metrics::reset"
-                | "log::debug"
-                | "log::info"
-                | "log::warn"
-                | "log::error"
-                | "trace::event"
-        ) {
+        if host_builtin_metadata(name).is_some() {
             return self.compile_host_builtin_named_call(name, args);
         }
         if name == "abs" {
@@ -5050,28 +5025,15 @@ impl<'a> FunctionCompiler<'a> {
         name: &str,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        let expected_names: &[&str] = match name {
-            "sys::args"
-            | "sys::current_dir"
-            | "sys::unix_time_ms"
-            | "sys::monotonic_time_ms"
-            | "metrics::reset" => &[],
-            "sys::env" | "metrics::get" => &["name"],
-            "path::parent" | "path::file_name" | "path::extension" | "path::is_absolute" => {
-                &["path"]
-            }
-            "json::is_valid"
-            | "json::parse_string_map"
-            | "toml::is_valid"
-            | "toml::parse_string_map" => &["text"],
-            "json::stringify_map" | "toml::stringify_map" => &["value"],
-            "path::join" => &["base", "child"],
-            "metrics::increment" => &["name", "value"],
-            "log::debug" | "log::info" | "log::warn" | "log::error" => &["message", "fields"],
-            "trace::event" => &["name", "fields"],
-            _ => return Err(format!("unknown host builtin `{name}`")),
-        };
-        let bound = ordered_optional_named_args(expected_names, args)?;
+        let metadata = host_builtin_metadata(name)
+            .expect("host builtin codegen is only called for registered host builtins");
+        debug_assert!(metadata.params.iter().all(|param| param.required));
+        let expected_names = metadata
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>();
+        let bound = ordered_optional_named_args(&expected_names, args)?;
         let count = self
             .builder
             .ins()
@@ -5093,45 +5055,13 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .call(self.arg_buffer_store, &[buffer, index, loaded.values[0]]);
         }
-        let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+        let (name_ptr, name_len) = self.string_constant(metadata.qualified_name.as_bytes())?;
         let call = self
             .builder
             .ins()
             .call(self.host_builtin, &[name_ptr, name_len, buffer, count]);
 
-        let string = Type::named("String");
-        let string_map = Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("String")],
-        );
-        let string_result = Type::Named(
-            "Result".to_string(),
-            vec![Type::named("String"), Type::named("String")],
-        );
-        let semantic_type = match name {
-            "sys::args" => Type::Named("Vec".to_string(), vec![string.clone()]),
-            "sys::env" | "path::parent" | "path::file_name" | "path::extension" => {
-                Type::Named("Option".to_string(), vec![string.clone()])
-            }
-            "sys::current_dir" => Type::Named(
-                "Result".to_string(),
-                vec![
-                    string.clone(),
-                    Type::Named("io.Error".to_string(), Vec::new()),
-                ],
-            ),
-            "sys::unix_time_ms" | "sys::monotonic_time_ms" | "metrics::get" => Type::named("int64"),
-            "path::join" => string,
-            "path::is_absolute" | "json::is_valid" | "toml::is_valid" => Type::named("bool"),
-            "json::stringify_map" | "toml::stringify_map" => string_result,
-            "json::parse_string_map" | "toml::parse_string_map" => Type::Named(
-                "Result".to_string(),
-                vec![string_map, Type::named("String")],
-            ),
-            "metrics::increment" | "metrics::reset" | "log::debug" | "log::info" | "log::warn"
-            | "log::error" | "trace::event" => Type::Unit,
-            _ => unreachable!(),
-        };
+        let semantic_type = metadata.return_type.clone();
         let result = self.owned_opaque_result(
             self.builder.inst_results(call).to_vec(),
             semantic_type.clone(),
@@ -11519,43 +11449,8 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
 }
 
 fn host_builtin_return_type(name: &str) -> Option<Type> {
-    let string = Type::named("String");
-    let string_map = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("String")],
-    );
-    let string_result = Type::Named(
-        "Result".to_string(),
-        vec![Type::named("String"), Type::named("String")],
-    );
-    match name {
-        "sys::args" => Some(Type::Named("Vec".to_string(), vec![string.clone()])),
-        "sys::env" | "path::parent" | "path::file_name" | "path::extension" => {
-            Some(Type::Named("Option".to_string(), vec![string.clone()]))
-        }
-        "sys::current_dir" => Some(Type::Named(
-            "Result".to_string(),
-            vec![
-                string.clone(),
-                Type::Named("io.Error".to_string(), Vec::new()),
-            ],
-        )),
-        "sys::unix_time_ms" | "sys::monotonic_time_ms" | "metrics::get" => {
-            Some(Type::named("int64"))
-        }
-        "path::join" => Some(string),
-        "path::is_absolute" | "json::is_valid" | "toml::is_valid" => Some(Type::named("bool")),
-        "json::stringify_map" | "toml::stringify_map" => Some(string_result),
-        "json::parse_string_map" | "toml::parse_string_map" => Some(Type::Named(
-            "Result".to_string(),
-            vec![string_map, Type::named("String")],
-        )),
-        "metrics::increment" | "metrics::reset" | "log::debug" | "log::info" | "log::warn"
-        | "log::error" | "trace::event" => Some(Type::Unit),
-        _ => None,
-    }
+    host_builtin_metadata(name).map(|metadata| metadata.return_type.clone())
 }
-
 fn infer_rvalue_type(
     rvalue: &Rvalue,
     variable_types: &HashMap<String, DirectType>,

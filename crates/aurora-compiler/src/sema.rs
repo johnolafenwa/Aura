@@ -13,7 +13,6 @@ use crate::ast::{
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
-    ParamOwnership,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::integer::{
@@ -284,7 +283,7 @@ fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
     }
 }
 
-fn resolve_param_passing(
+pub(crate) fn resolve_param_passing(
     mode: ParamMode,
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
@@ -3017,17 +3016,22 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn apply_builtin_argument_ownership(
+    fn apply_builtin_argument_passing(
         &self,
         member: BuiltinMember,
         index: usize,
         argument: &Argument,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        if member.argument_ownership(index) == ParamOwnership::Own {
-            self.consume_value_expr(&argument.value, locals)?;
-        }
-        Ok(())
+        let passing = member
+            .argument_passing(index)
+            .expect("type-checked builtin argument must have passing metadata");
+        self.apply_operator_operand_passing(
+            &argument.value,
+            passing,
+            &format!("builtin method `{}` argument", member.name()),
+            locals,
+        )
     }
 
     fn apply_operator_operand_passing(
@@ -7897,7 +7901,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         push_arg,
@@ -7962,7 +7966,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         1,
                                         value_arg,
@@ -8062,7 +8066,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         other_arg,
@@ -8103,7 +8107,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         1,
                                         value_arg,
@@ -8351,13 +8355,13 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         key_arg,
                                         locals,
                                     )?;
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         1,
                                         value_arg,
@@ -8464,7 +8468,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         other_arg,
@@ -8529,7 +8533,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         value_arg,
@@ -8567,7 +8571,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         send_arg,
@@ -8654,7 +8658,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         default_arg,
@@ -8738,7 +8742,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         0,
                                         default_arg,
@@ -9237,7 +9241,7 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                     for (index, argument) in ordered_args.iter().enumerate() {
                                         if let Some(argument) = *argument {
-                                            self.apply_builtin_argument_ownership(
+                                            self.apply_builtin_argument_passing(
                                                 builtin_member,
                                                 index,
                                                 argument,
@@ -9765,13 +9769,13 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "respond_text",
                                     )?;
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         1,
                                         text_arg,
                                         locals,
                                     )?;
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         2,
                                         headers_arg,
@@ -9819,13 +9823,13 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "respond_bytes",
                                     )?;
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         1,
                                         bytes_arg,
                                         locals,
                                     )?;
-                                    self.apply_builtin_argument_ownership(
+                                    self.apply_builtin_argument_passing(
                                         builtin_member,
                                         2,
                                         headers_arg,
@@ -12093,11 +12097,7 @@ impl<'a> FunctionChecker<'a> {
             .retained_place_access(
                 object,
                 receiver_ty,
-                if builtin_member.requires_mutable_receiver() {
-                    ReceiverKind::BorrowMut
-                } else {
-                    ReceiverKind::Borrow
-                },
+                builtin_member.receiver_passing(),
                 "method receiver",
             )
             .into_iter()
@@ -12110,13 +12110,13 @@ impl<'a> FunctionChecker<'a> {
             self.collect_expr_borrowed_places(&argument.value, locals, &mut argument_accesses)?;
             self.collect_expr_consumed_places(&argument.value, locals, &mut argument_accesses)?;
         }
-        if builtin_member.variadic_argument_ownership().is_none() {
+        if builtin_member.variadic_argument_passing().is_none() {
             let ordered_args = builtin_member.bind_args(args, object.span)?;
             for (index, argument) in ordered_args.into_iter().enumerate() {
                 let Some(argument) = argument else {
                     continue;
                 };
-                if builtin_member.argument_ownership(index) != ParamOwnership::Own {
+                if builtin_member.argument_passing(index) != Some(ReceiverKind::Value) {
                     continue;
                 }
                 let Some(path) = self.borrow_call_place(&argument.value) else {
@@ -12137,7 +12137,7 @@ impl<'a> FunctionChecker<'a> {
                     origin_span: argument.value.span,
                 });
             }
-        } else if builtin_member.variadic_argument_ownership() == Some(ParamOwnership::Own) {
+        } else if builtin_member.variadic_argument_passing() == Some(ReceiverKind::Value) {
             for argument in args.iter().skip(1) {
                 let Some(path) = self.borrow_call_place(&argument.value) else {
                     continue;

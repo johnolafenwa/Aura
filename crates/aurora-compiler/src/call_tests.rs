@@ -1,9 +1,9 @@
-use crate::ast::{Argument, Expr, ExprKind, Param, ParamMode, TypeRef};
+use crate::ast::{Argument, Expr, ExprKind, Param, ParamMode, ReceiverKind, TypeRef};
 use crate::diag::Span;
 
 use super::{
     bind_call_arguments, callable_params_from_decl, format_argument_count, BuiltinFunction,
-    BuiltinMember, CallConvention, CallableParam, ParamOwnership, ALL_BUILTIN_FUNCTIONS,
+    BuiltinMember, CallConvention, CallableParam, ALL_BUILTIN_FUNCTIONS,
 };
 
 fn dummy_arg(name: Option<&str>) -> Argument {
@@ -328,7 +328,7 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
 }
 
 #[test]
-fn retaining_builtin_arguments_declare_owned_transfer_metadata() {
+fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
     let owned = [
         (BuiltinMember::VecPush, 0),
         (BuiltinMember::VecSet, 1),
@@ -360,8 +360,8 @@ fn retaining_builtin_arguments_declare_owned_transfer_metadata() {
     ];
     for (member, index) in owned {
         assert_eq!(
-            member.argument_ownership(index),
-            ParamOwnership::Own,
+            member.argument_passing(index),
+            Some(ReceiverKind::Value),
             "{} argument {index} must retain owned metadata",
             member.name()
         );
@@ -377,24 +377,66 @@ fn retaining_builtin_arguments_declare_owned_transfer_metadata() {
         (BuiltinMember::ProcessPipeWriteAll, 0),
     ] {
         assert_eq!(
-            member.argument_ownership(index),
-            ParamOwnership::Shared,
+            member.argument_passing(index),
+            Some(ReceiverKind::Borrow),
             "{} argument {index} must remain a one-shot shared input",
             member.name()
         );
     }
 
     assert_eq!(
-        BuiltinMember::TaskGroupStart.variadic_argument_ownership(),
-        Some(ParamOwnership::Own)
+        BuiltinMember::TaskGroupStart.argument_passing(0),
+        Some(ReceiverKind::Borrow)
     );
     assert_eq!(
-        BuiltinMember::TaskGroupStartSoon.variadic_argument_ownership(),
-        Some(ParamOwnership::Own)
+        BuiltinMember::TaskGroupStart.variadic_argument_passing(),
+        Some(ReceiverKind::Value)
     );
+    assert_eq!(
+        BuiltinMember::VecPush.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::VecLen.receiver_passing(),
+        ReceiverKind::Borrow
+    );
+    assert_eq!(
+        BuiltinMember::VecGet.argument_passing(0),
+        Some(ReceiverKind::Borrow),
+        "copy-only slots must preserve the non-consuming diagnostic path"
+    );
+    assert_eq!(BuiltinMember::VecPush.argument_passing(1), None);
     assert!(BuiltinMember::VecPush.detail().contains("own T"));
     assert!(BuiltinMember::MapSet.detail().contains("own K"));
     assert!(BuiltinMember::QueuePut.detail().contains("own T"));
+}
+
+#[test]
+fn variadic_task_group_binding_preserves_order_and_rejects_keyword_arguments() {
+    let positional = [dummy_arg(None), dummy_arg(None), dummy_arg(None)];
+    let bound = BuiltinMember::TaskGroupStartSoon
+        .bind_args(&positional, Span::new(1, 1))
+        .expect("task-group variadic arguments should bind positionally");
+    assert_eq!(bound.len(), positional.len());
+    assert!(bound.iter().all(Option::is_some));
+
+    let missing_function = BuiltinMember::TaskGroupStartSoon
+        .bind_args(&[], Span::new(4, 9))
+        .unwrap_err();
+    assert_eq!(
+        missing_function.message,
+        "`start_soon` is missing required argument `function`"
+    );
+
+    let keyword = [dummy_arg(None), dummy_arg(Some("value"))];
+    let keyword_error = BuiltinMember::TaskGroupStartSoon
+        .bind_args(&keyword, Span::new(1, 1))
+        .unwrap_err();
+    assert_eq!(
+        keyword_error.message,
+        "`start_soon` does not take keyword arguments"
+    );
+    assert_eq!(keyword_error.span, Some(Span::new(1, 1)));
 }
 
 #[test]

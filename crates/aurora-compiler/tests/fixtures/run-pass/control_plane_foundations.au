@@ -6,7 +6,7 @@ import toml
 import trace
 
 def main() -> int32:
-    print(path.join("alpha", "beta"))
+    print(path.join(child="beta", base="alpha"))
     match path.file_name("alpha/beta.au"):
         case Option.Some(name):
             print(name)
@@ -56,9 +56,9 @@ def main() -> int32:
             return 1
 
     metrics.reset()
-    metrics.increment("jobs", 2)
+    metrics.increment(value=2, name="jobs")
     metrics.increment("jobs", 3)
-    print(metrics.get("jobs"))
+    print(metrics.get(name="jobs"))
     log.info("ready", labels.clone())
     trace.event("boot", labels)
     return 0

@@ -350,6 +350,23 @@ def keep_after_write(file: borrow mut fs.File, text: String):
 "#,
     )
     .expect("non-retaining remove and I/O write arguments should stay reusable");
+
+    let immutable_receiver = crate::check_source(
+        "def main() -> int32:\n    values = Vec[int32]()\n    values.push(1)\n    return 0\n",
+    )
+    .expect_err("borrow-mut builtin receivers should require mutable places");
+    assert_eq!(immutable_receiver.code, "AU3003");
+    assert!(immutable_receiver
+        .message
+        .contains("method `push` requires a mutable receiver"));
+
+    let invalid_copy_slot = crate::check_source(
+        "def main() -> int32:\n    values = Vec[int32]()\n    values.get(index=values)\n    return 0\n",
+    )
+    .expect_err("ill-typed copy slots should be diagnosed before overlap analysis");
+    assert!(invalid_copy_slot
+        .message
+        .contains("vector indices must have type `int32`, found `Vec[int32]`"));
 }
 
 #[test]

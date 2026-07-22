@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use crate::ast::{
     Argument, ClassDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
@@ -6,8 +7,8 @@ use crate::ast::{
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::sema::{
-    ClassInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo, FunctionInfo, FunctionSignature,
-    ImportedBinding, ModuleNamespace, Type,
+    resolve_param_passing, ClassInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
+    FunctionInfo, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
 };
 
 fn builtin_span() -> Span {
@@ -109,20 +110,22 @@ fn function_info(
         .iter()
         .map(|param| lower_type_ref(&param.ty))
         .collect::<Vec<_>>();
+    let empty_classes = BTreeMap::new();
+    let empty_enums = BTreeMap::new();
+    let empty_imported_modules = BTreeMap::new();
+    let empty_module_registry = BTreeMap::new();
     let param_passings = params
         .iter()
         .zip(&lowered_params)
-        .map(|(param, ty)| match param.mode {
-            ParamMode::Default => {
-                if ty.is_copy() {
-                    ReceiverKind::Value
-                } else {
-                    ReceiverKind::Borrow
-                }
-            }
-            ParamMode::Own => ReceiverKind::Value,
-            ParamMode::Borrow => ReceiverKind::Borrow,
-            ParamMode::BorrowMut => ReceiverKind::BorrowMut,
+        .map(|(param, ty)| {
+            resolve_param_passing(
+                param.mode,
+                ty,
+                &empty_classes,
+                &empty_enums,
+                &empty_imported_modules,
+                &empty_module_registry,
+            )
         })
         .collect();
     FunctionInfo {
@@ -148,6 +151,53 @@ fn function_info(
             return_borrow_source: None,
         },
         type_param_bounds: BTreeMap::new(),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HostBuiltinParamMetadata {
+    pub name: String,
+    pub ty: Type,
+    pub passing: ReceiverKind,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HostBuiltinMetadata {
+    pub qualified_name: String,
+    pub params: Vec<HostBuiltinParamMetadata>,
+    pub return_type: Type,
+}
+
+impl HostBuiltinMetadata {
+    fn from_function_info(function: &FunctionInfo) -> Self {
+        assert_eq!(
+            function.decl.params.len(),
+            function.signature.params.len(),
+            "builtin function parameter declarations and types must stay aligned"
+        );
+        assert_eq!(
+            function.decl.params.len(),
+            function.signature.param_passings.len(),
+            "builtin function parameter declarations and passing modes must stay aligned"
+        );
+        Self {
+            qualified_name: format!("{}::{}", function.module_name, function.decl.name),
+            params: function
+                .decl
+                .params
+                .iter()
+                .zip(function.signature.params.iter())
+                .zip(function.signature.param_passings.iter().copied())
+                .map(|((param, ty), passing)| HostBuiltinParamMetadata {
+                    name: param.name.clone(),
+                    ty: ty.clone(),
+                    passing,
+                    required: param.default.is_none(),
+                })
+                .collect(),
+            return_type: function.signature.return_type.clone(),
+        }
     }
 }
 
@@ -1482,6 +1532,29 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
     }
+}
+
+const HOST_BUILTIN_MODULES: &[&str] = &["sys", "path", "json", "toml", "metrics", "log", "trace"];
+
+fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
+    HOST_BUILTIN_MODULES
+        .iter()
+        .flat_map(|module_name| {
+            builtin_root_namespace(module_name)
+                .expect("host builtin module must have a namespace")
+                .functions
+                .into_values()
+        })
+        .map(|function| {
+            let metadata = HostBuiltinMetadata::from_function_info(&function);
+            (metadata.qualified_name.clone(), metadata)
+        })
+        .collect()
+}
+
+pub(crate) fn host_builtin_metadata(name: &str) -> Option<&'static HostBuiltinMetadata> {
+    static METADATA: OnceLock<BTreeMap<String, HostBuiltinMetadata>> = OnceLock::new();
+    METADATA.get_or_init(build_host_builtin_metadata).get(name)
 }
 
 pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespace> {

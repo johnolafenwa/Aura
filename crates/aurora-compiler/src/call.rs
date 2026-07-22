@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{Argument, Param, ParamMode};
+use crate::ast::{Argument, Param, ReceiverKind};
 use crate::diag::{Diagnostic, Result, Span};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -11,16 +11,9 @@ pub enum CallConvention {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ParamOwnership {
-    Shared,
-    Own,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CallableParam<'a> {
     pub name: &'a str,
     pub required: bool,
-    pub ownership: ParamOwnership,
 }
 
 impl<'a> CallableParam<'a> {
@@ -28,7 +21,6 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: true,
-            ownership: ParamOwnership::Shared,
         }
     }
 
@@ -36,23 +28,6 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: false,
-            ownership: ParamOwnership::Shared,
-        }
-    }
-
-    pub const fn required_own(name: &'a str) -> Self {
-        Self {
-            name,
-            required: true,
-            ownership: ParamOwnership::Own,
-        }
-    }
-
-    pub const fn optional_own(name: &'a str) -> Self {
-        Self {
-            name,
-            required: false,
-            ownership: ParamOwnership::Own,
         }
     }
 }
@@ -60,13 +35,96 @@ impl<'a> CallableParam<'a> {
 pub fn callable_params_from_decl<'a>(params: &'a [Param]) -> Vec<CallableParam<'a>> {
     params
         .iter()
-        .map(|param| match (param.default.is_some(), param.mode) {
-            (true, ParamMode::Own) => CallableParam::optional_own(&param.name),
-            (false, ParamMode::Own) => CallableParam::required_own(&param.name),
-            (true, _) => CallableParam::optional(&param.name),
-            (false, _) => CallableParam::required(&param.name),
+        .map(|param| match param.default.is_some() {
+            true => CallableParam::optional(&param.name),
+            false => CallableParam::required(&param.name),
         })
         .collect()
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BuiltinParam {
+    binding: CallableParam<'static>,
+    passing: ReceiverKind,
+}
+
+macro_rules! builtin_param {
+    (required, $name:literal, $passing:expr) => {
+        BuiltinParam {
+            binding: CallableParam {
+                name: $name,
+                required: true,
+            },
+            passing: $passing,
+        }
+    };
+    (optional, $name:literal, $passing:expr) => {
+        BuiltinParam {
+            binding: CallableParam {
+                name: $name,
+                required: false,
+            },
+            passing: $passing,
+        }
+    };
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BuiltinCallShape {
+    params: &'static [BuiltinParam],
+    convention: CallConvention,
+    variadic_passing: Option<ReceiverKind>,
+}
+
+impl BuiltinCallShape {
+    const fn fixed(params: &'static [BuiltinParam], convention: CallConvention) -> Self {
+        Self {
+            params,
+            convention,
+            variadic_passing: None,
+        }
+    }
+
+    const fn variadic(params: &'static [BuiltinParam], variadic_passing: ReceiverKind) -> Self {
+        Self {
+            params,
+            convention: CallConvention::PositionalOnly,
+            variadic_passing: Some(variadic_passing),
+        }
+    }
+
+    fn bind_args<'arg>(
+        self,
+        callee_name: &str,
+        args: &'arg [Argument],
+        span: Span,
+    ) -> Result<Vec<Option<&'arg Argument>>> {
+        let bindings = self
+            .params
+            .iter()
+            .map(|param| param.binding)
+            .collect::<Vec<_>>();
+        let Some(_) = self.variadic_passing else {
+            return bind_call_arguments(callee_name, &bindings, args, span, self.convention);
+        };
+
+        if let Some(argument) = args.iter().find(|argument| argument.name.is_some()) {
+            return Err(Diagnostic::at(
+                argument.span,
+                format!("{} does not take keyword arguments", callee_name),
+            ));
+        }
+        let fixed_len = self.params.len().min(args.len());
+        let mut ordered = bind_call_arguments(
+            callee_name,
+            &bindings,
+            &args[..fixed_len],
+            span,
+            self.convention,
+        )?;
+        ordered.extend(args[fixed_len..].iter().map(Some));
+        Ok(ordered)
+    }
 }
 
 fn format_argument_count(count: usize) -> String {
@@ -182,101 +240,115 @@ const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
 const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
-const FILE_WRITE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
-const FILE_WRITE_BYTES_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("bytes")];
 const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("tasks"),
     CallableParam::optional("timeout"),
 ];
-const VALUE_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required_own("value"),
-    CallableParam::optional("timeout"),
+const NO_BUILTIN_PARAMS: [BuiltinParam; 0] = [];
+const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "text", ReceiverKind::Borrow)];
+const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "bytes", ReceiverKind::Borrow)];
+const VALUE_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "value", ReceiverKind::Value),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const DEFAULT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required_own("default"),
-    CallableParam::optional("timeout"),
+const DEFAULT_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "default", ReceiverKind::Value),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
-const TIMEOUT_ONLY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
-const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
-const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("value")];
-const VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
-const VEC_SET_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("index"),
-    CallableParam::required_own("value"),
+const QUEUE_GET_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(optional, "timeout", ReceiverKind::Borrow)];
+const TIMEOUT_ONLY_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(optional, "timeout", ReceiverKind::Borrow)];
+const VEC_INDEX_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "index", ReceiverKind::Borrow)];
+const VEC_PUSH_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Value)];
+const VALUE_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const VEC_SET_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "index", ReceiverKind::Borrow),
+    builtin_param!(required, "value", ReceiverKind::Value),
 ];
-const VEC_SWAP_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("first"),
-    CallableParam::required("second"),
+const VEC_SWAP_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "first", ReceiverKind::Borrow),
+    builtin_param!(required, "second", ReceiverKind::Borrow),
 ];
-const VEC_INSERT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("index"),
-    CallableParam::required_own("value"),
+const VEC_INSERT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "index", ReceiverKind::Borrow),
+    builtin_param!(required, "value", ReceiverKind::Value),
 ];
-const VEC_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("other")];
-const STRING_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
-const STRING_REPLACE_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("from"),
-    CallableParam::required("to"),
+const VEC_EXTEND_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "other", ReceiverKind::Value)];
+const STRING_TEXT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "text", ReceiverKind::Borrow)];
+const STRING_REPLACE_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "from", ReceiverKind::Borrow),
+    builtin_param!(required, "to", ReceiverKind::Borrow),
 ];
-const STRING_JOIN_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("parts")];
-const MAP_KEY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("key")];
-const MAP_SET_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required_own("key"),
-    CallableParam::required_own("value"),
+const STRING_JOIN_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "parts", ReceiverKind::Borrow)];
+const MAP_KEY_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "key", ReceiverKind::Borrow)];
+const MAP_SET_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "key", ReceiverKind::Value),
+    builtin_param!(required, "value", ReceiverKind::Value),
 ];
-const MAP_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("other")];
-const SET_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
-const SET_INSERT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required_own("value")];
-const COUNT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("count"),
-    CallableParam::optional("timeout"),
+const MAP_EXTEND_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "other", ReceiverKind::Value)];
+const SET_VALUE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const SET_INSERT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "value", ReceiverKind::Value)];
+const COUNT_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "count", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const MAX_BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("max_bytes"),
-    CallableParam::optional("timeout"),
+const MAX_BYTES_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "max_bytes", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("text"),
-    CallableParam::optional("timeout"),
+const TEXT_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "text", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("bytes"),
-    CallableParam::optional("timeout"),
+const BYTES_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "bytes", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const PROCESS_SUPERVISOR_START_PARAMS: [CallableParam<'static>; 11] = [
-    CallableParam::required_own("name"),
-    CallableParam::required_own("command"),
-    CallableParam::optional_own("cwd"),
-    CallableParam::optional_own("env"),
-    CallableParam::optional_own("stdin"),
-    CallableParam::optional_own("stdout"),
-    CallableParam::optional_own("stderr"),
-    CallableParam::optional_own("restart"),
-    CallableParam::optional_own("backoff"),
-    CallableParam::optional_own("max_restarts"),
-    CallableParam::optional_own("group"),
+const PROCESS_SUPERVISOR_START_PARAMS: [BuiltinParam; 11] = [
+    builtin_param!(required, "name", ReceiverKind::Value),
+    builtin_param!(required, "command", ReceiverKind::Value),
+    builtin_param!(optional, "cwd", ReceiverKind::Value),
+    builtin_param!(optional, "env", ReceiverKind::Value),
+    builtin_param!(optional, "stdin", ReceiverKind::Value),
+    builtin_param!(optional, "stdout", ReceiverKind::Value),
+    builtin_param!(optional, "stderr", ReceiverKind::Value),
+    builtin_param!(optional, "restart", ReceiverKind::Value),
+    builtin_param!(optional, "backoff", ReceiverKind::Value),
+    builtin_param!(optional, "max_restarts", ReceiverKind::Value),
+    builtin_param!(optional, "group", ReceiverKind::Value),
 ];
-const ADDRESS_TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
-    CallableParam::required("address"),
-    CallableParam::required("text"),
-    CallableParam::optional("timeout"),
+const ADDRESS_TEXT_TIMEOUT_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "address", ReceiverKind::Borrow),
+    builtin_param!(required, "text", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const ADDRESS_BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
-    CallableParam::required("address"),
-    CallableParam::required("bytes"),
-    CallableParam::optional("timeout"),
+const ADDRESS_BYTES_TIMEOUT_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "address", ReceiverKind::Borrow),
+    builtin_param!(required, "bytes", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
-const STATUS_TEXT_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
-    CallableParam::required("status"),
-    CallableParam::required_own("text"),
-    CallableParam::required_own("headers"),
+const STATUS_TEXT_HEADERS_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "status", ReceiverKind::Borrow),
+    builtin_param!(required, "text", ReceiverKind::Value),
+    builtin_param!(required, "headers", ReceiverKind::Value),
 ];
-const STATUS_BYTES_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
-    CallableParam::required("status"),
-    CallableParam::required_own("bytes"),
-    CallableParam::required_own("headers"),
+const STATUS_BYTES_HEADERS_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "status", ReceiverKind::Borrow),
+    builtin_param!(required, "bytes", ReceiverKind::Value),
+    builtin_param!(required, "headers", ReceiverKind::Value),
 ];
+const TASK_GROUP_START_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "function", ReceiverKind::Borrow)];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinFunction {
@@ -1408,7 +1480,7 @@ impl BuiltinMember {
         }
     }
 
-    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
+    const fn call_shape(self) -> BuiltinCallShape {
         match self {
             Self::FloatSqrt
             | Self::IntegerToFloat
@@ -1451,312 +1523,7 @@ impl BuiltinMember {
             | Self::TcpStreamShutdownWrite
             | Self::TcpStreamShutdownBoth
             | Self::TcpStreamClose
-            | Self::ProcessChildStdin
-            | Self::ProcessChildStdout
-            | Self::ProcessChildStderr
-            | Self::ProcessPipeReadAll => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &[],
-                args,
-                span,
-                CallConvention::PositionalOnly,
-            ),
-            Self::TcpListenerAccept
-            | Self::TcpStreamReadAll
-            | Self::TcpStreamReadLine
-            | Self::WebSocketRecvText
-            | Self::WebSocketRecvBytes
-            | Self::WebSocketListenerAccept
-            | Self::HttpListenerAccept
-            | Self::UnixListenerAccept
-            | Self::UnixStreamReadLine
-            | Self::TlsListenerAccept
-            | Self::TlsStreamReadLine
-            | Self::ProcessChildWait
-            | Self::ProcessChildWaitOrNone
-            | Self::ProcessChildWaitOk
-            | Self::ProcessPipeReadLine
-            | Self::ProcessSupervisorWait
-            | Self::ProcessSupervisorWaitOrNone => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &TIMEOUT_ONLY_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::QueueGet => bind_call_arguments(
-                "`get`",
-                &QUEUE_GET_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::QueueGetOrNone => bind_call_arguments(
-                "`get_or_none`",
-                &TIMEOUT_ONLY_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::QueueGetOr => bind_call_arguments(
-                "`get_or`",
-                &DEFAULT_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::TaskResult => bind_call_arguments(
-                "`result`",
-                &TIMEOUT_ONLY_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::TaskResultOrNone => bind_call_arguments(
-                "`result_or_none`",
-                &TIMEOUT_ONLY_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::TaskResultOr => bind_call_arguments(
-                "`result_or`",
-                &DEFAULT_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecGet | Self::VecRemove => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &VEC_INDEX_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecPush => bind_call_arguments(
-                "`push`",
-                &VEC_PUSH_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecSet => bind_call_arguments(
-                "`set`",
-                &VEC_SET_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecSwap => bind_call_arguments(
-                "`swap`",
-                &VEC_SWAP_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecContains => bind_call_arguments(
-                "`contains`",
-                &VALUE_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecExtend => bind_call_arguments(
-                "`extend`",
-                &VEC_EXTEND_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::VecInsert => bind_call_arguments(
-                "`insert`",
-                &VEC_INSERT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::StringContains | Self::StringStartsWith | Self::StringEndsWith => {
-                bind_call_arguments(
-                    &format!("`{}`", self.name()),
-                    &STRING_TEXT_PARAMS,
-                    args,
-                    span,
-                    CallConvention::PositionalOrNamed,
-                )
-            }
-            Self::StringSplit | Self::StringStripPrefix | Self::StringStripSuffix => {
-                bind_call_arguments(
-                    &format!("`{}`", self.name()),
-                    &STRING_TEXT_PARAMS,
-                    args,
-                    span,
-                    CallConvention::PositionalOrNamed,
-                )
-            }
-            Self::StringReplace => bind_call_arguments(
-                "`replace`",
-                &STRING_REPLACE_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::StringJoin => bind_call_arguments(
-                "`join`",
-                &STRING_JOIN_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::MapGet | Self::MapRemove | Self::MapContainsKey => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &MAP_KEY_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::MapSet => bind_call_arguments(
-                "`set`",
-                &MAP_SET_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::MapExtend => bind_call_arguments(
-                "`extend`",
-                &MAP_EXTEND_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::SetContains | Self::SetRemove => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &SET_VALUE_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::SetInsert => bind_call_arguments(
-                "`insert`",
-                &SET_INSERT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::QueuePut => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &VALUE_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::QueueTryPut => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &[CallableParam::required_own("value")],
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::FileWriteAll => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &FILE_WRITE_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::FileWriteBytes => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &FILE_WRITE_BYTES_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::TcpStreamWriteAll
-            | Self::UnixStreamWriteAll
-            | Self::TlsStreamWriteAll
-            | Self::ProcessPipeWriteAll => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &TEXT_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::TcpStreamWriteBytes | Self::WebSocketSendBytes | Self::ProcessPipeWriteBytes => {
-                bind_call_arguments(
-                    &format!("`{}`", self.name()),
-                    &BYTES_TIMEOUT_PARAMS,
-                    args,
-                    span,
-                    CallConvention::PositionalOrNamed,
-                )
-            }
-            Self::TcpStreamReadBytes | Self::UdpSocketRecv | Self::UdpSocketRecvFrom => {
-                bind_call_arguments(
-                    &format!("`{}`", self.name()),
-                    &MAX_BYTES_TIMEOUT_PARAMS,
-                    args,
-                    span,
-                    CallConvention::PositionalOrNamed,
-                )
-            }
-            Self::TcpStreamReadExact | Self::UnixStreamReadExact | Self::TlsStreamReadExact => {
-                bind_call_arguments(
-                    &format!("`{}`", self.name()),
-                    &COUNT_TIMEOUT_PARAMS,
-                    args,
-                    span,
-                    CallConvention::PositionalOrNamed,
-                )
-            }
-            Self::ProcessPipeReadBytes => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &MAX_BYTES_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::ProcessSupervisorStart => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &PROCESS_SUPERVISOR_START_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::UdpSocketSendText => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &ADDRESS_TEXT_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::UdpSocketSendBytes => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &ADDRESS_BYTES_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::HttpExchangeRespondText => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &STATUS_TEXT_HEADERS_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::HttpExchangeRespondBytes => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &STATUS_BYTES_HEADERS_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::WebSocketSendText => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &TEXT_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::UdpSocketLocalAddr
+            | Self::UdpSocketLocalAddr
             | Self::UdpSocketPeerAddr
             | Self::UdpSocketClose
             | Self::UdpDatagramAddress
@@ -1781,9 +1548,13 @@ impl BuiltinMember {
             | Self::TlsListenerLocalAddr
             | Self::TlsListenerClose
             | Self::TlsStreamClose
+            | Self::ProcessChildStdin
+            | Self::ProcessChildStdout
+            | Self::ProcessChildStderr
             | Self::ProcessChildKill
             | Self::ProcessChildTerminate
             | Self::ProcessChildClose
+            | Self::ProcessPipeReadAll
             | Self::ProcessPipeFlush
             | Self::ProcessPipeClose
             | Self::ProcessCompletedStatus
@@ -1795,53 +1566,162 @@ impl BuiltinMember {
             | Self::ProcessCompletedCheck
             | Self::ProcessSupervisorStop
             | Self::ProcessSupervisorIsEmpty
-            | Self::ProcessSupervisorClose => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &[],
-                args,
-                span,
-                CallConvention::PositionalOnly,
-            ),
-            Self::TaskGroupStart | Self::TaskGroupStartSoon => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &[CallableParam::required("function")],
-                args,
-                span,
-                CallConvention::PositionalOnly,
-            ),
-        }
-    }
-
-    pub const fn argument_ownership(self, index: usize) -> ParamOwnership {
-        match self {
-            Self::VecPush if index == 0 => ParamOwnership::Own,
-            Self::VecSet | Self::VecInsert if index == 1 => ParamOwnership::Own,
-            Self::VecExtend if index == 0 => ParamOwnership::Own,
-            Self::MapSet if index < 2 => ParamOwnership::Own,
-            Self::MapExtend if index == 0 => ParamOwnership::Own,
-            Self::SetInsert if index == 0 => ParamOwnership::Own,
-            Self::QueuePut if index == 0 => ParamOwnership::Own,
-            Self::QueueTryPut if index == 0 => ParamOwnership::Own,
-            Self::QueueGetOr | Self::TaskResultOr if index == 0 => ParamOwnership::Own,
-            Self::ProcessSupervisorStart if index < 11 => ParamOwnership::Own,
-            Self::HttpExchangeRespondText | Self::HttpExchangeRespondBytes
-                if index == 1 || index == 2 =>
-            {
-                ParamOwnership::Own
+            | Self::ProcessSupervisorClose => {
+                BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
             }
-            _ => ParamOwnership::Shared,
+            Self::TcpListenerAccept
+            | Self::TcpStreamReadAll
+            | Self::TcpStreamReadLine
+            | Self::WebSocketRecvText
+            | Self::WebSocketRecvBytes
+            | Self::WebSocketListenerAccept
+            | Self::HttpListenerAccept
+            | Self::UnixListenerAccept
+            | Self::UnixStreamReadLine
+            | Self::TlsListenerAccept
+            | Self::TlsStreamReadLine
+            | Self::ProcessChildWait
+            | Self::ProcessChildWaitOrNone
+            | Self::ProcessChildWaitOk
+            | Self::ProcessPipeReadLine
+            | Self::ProcessSupervisorWait
+            | Self::ProcessSupervisorWaitOrNone
+            | Self::QueueGetOrNone
+            | Self::TaskResult
+            | Self::TaskResultOrNone => {
+                BuiltinCallShape::fixed(&TIMEOUT_ONLY_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::QueueGet => {
+                BuiltinCallShape::fixed(&QUEUE_GET_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::QueueGetOr | Self::TaskResultOr => {
+                BuiltinCallShape::fixed(&DEFAULT_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecGet | Self::VecRemove => {
+                BuiltinCallShape::fixed(&VEC_INDEX_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecPush | Self::QueueTryPut => {
+                BuiltinCallShape::fixed(&VEC_PUSH_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecSet => {
+                BuiltinCallShape::fixed(&VEC_SET_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecSwap => {
+                BuiltinCallShape::fixed(&VEC_SWAP_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecContains => {
+                BuiltinCallShape::fixed(&VALUE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecExtend => {
+                BuiltinCallShape::fixed(&VEC_EXTEND_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecInsert => {
+                BuiltinCallShape::fixed(&VEC_INSERT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringContains
+            | Self::StringStartsWith
+            | Self::StringEndsWith
+            | Self::StringSplit
+            | Self::StringStripPrefix
+            | Self::StringStripSuffix => {
+                BuiltinCallShape::fixed(&STRING_TEXT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringReplace => {
+                BuiltinCallShape::fixed(&STRING_REPLACE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringJoin => {
+                BuiltinCallShape::fixed(&STRING_JOIN_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::MapGet | Self::MapRemove | Self::MapContainsKey => {
+                BuiltinCallShape::fixed(&MAP_KEY_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::MapSet => {
+                BuiltinCallShape::fixed(&MAP_SET_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::MapExtend => {
+                BuiltinCallShape::fixed(&MAP_EXTEND_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SetContains | Self::SetRemove => {
+                BuiltinCallShape::fixed(&SET_VALUE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SetInsert => {
+                BuiltinCallShape::fixed(&SET_INSERT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::QueuePut => {
+                BuiltinCallShape::fixed(&VALUE_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::FileWriteAll => {
+                BuiltinCallShape::fixed(&FILE_WRITE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::FileWriteBytes => {
+                BuiltinCallShape::fixed(&FILE_WRITE_BYTES_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::TcpStreamWriteAll
+            | Self::UnixStreamWriteAll
+            | Self::TlsStreamWriteAll
+            | Self::ProcessPipeWriteAll
+            | Self::WebSocketSendText => {
+                BuiltinCallShape::fixed(&TEXT_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::TcpStreamWriteBytes | Self::WebSocketSendBytes | Self::ProcessPipeWriteBytes => {
+                BuiltinCallShape::fixed(&BYTES_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::TcpStreamReadBytes
+            | Self::UdpSocketRecv
+            | Self::UdpSocketRecvFrom
+            | Self::ProcessPipeReadBytes => BuiltinCallShape::fixed(
+                &MAX_BYTES_TIMEOUT_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TcpStreamReadExact | Self::UnixStreamReadExact | Self::TlsStreamReadExact => {
+                BuiltinCallShape::fixed(&COUNT_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ProcessSupervisorStart => BuiltinCallShape::fixed(
+                &PROCESS_SUPERVISOR_START_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::UdpSocketSendText => BuiltinCallShape::fixed(
+                &ADDRESS_TEXT_TIMEOUT_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::UdpSocketSendBytes => BuiltinCallShape::fixed(
+                &ADDRESS_BYTES_TIMEOUT_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::HttpExchangeRespondText => BuiltinCallShape::fixed(
+                &STATUS_TEXT_HEADERS_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::HttpExchangeRespondBytes => BuiltinCallShape::fixed(
+                &STATUS_BYTES_HEADERS_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TaskGroupStart | Self::TaskGroupStartSoon => {
+                BuiltinCallShape::variadic(&TASK_GROUP_START_PARAMS, ReceiverKind::Value)
+            }
         }
     }
 
-    pub const fn variadic_argument_ownership(self) -> Option<ParamOwnership> {
-        match self {
-            Self::TaskGroupStart | Self::TaskGroupStartSoon => Some(ParamOwnership::Own),
-            _ => None,
+    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
+        self.call_shape()
+            .bind_args(&format!("`{}`", self.name()), args, span)
+    }
+
+    pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].passing)
+        } else {
+            shape.variadic_passing
         }
     }
 
-    pub const fn requires_mutable_receiver(self) -> bool {
-        matches!(
+    pub const fn variadic_argument_passing(self) -> Option<ReceiverKind> {
+        self.call_shape().variadic_passing
+    }
+
+    pub const fn receiver_passing(self) -> ReceiverKind {
+        if matches!(
             self,
             Self::VecPush
                 | Self::VecPop
@@ -1898,7 +1778,11 @@ impl BuiltinMember {
                 | Self::ProcessSupervisorStart
                 | Self::ProcessSupervisorStop
                 | Self::ProcessSupervisorClose
-        )
+        ) {
+            ReceiverKind::BorrowMut
+        } else {
+            ReceiverKind::Borrow
+        }
     }
 }
 

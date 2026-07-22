@@ -5242,7 +5242,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
-                return builtin_member.requires_mutable_receiver();
+                return builtin_member.receiver_passing() == ReceiverKind::BorrowMut;
             }
         }
         self.trait_method_for_receiver(&receiver_type, field)

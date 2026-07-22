@@ -546,10 +546,22 @@ def main() -> int32:
     let mir_output = run_mir(&mir).expect("escape and writeback MIR should run");
     assert_eq!(mir_output.stdout, output.stdout);
 
-    assert!(BuiltinMember::VecPush.requires_mutable_receiver());
-    assert!(BuiltinMember::MapSet.requires_mutable_receiver());
-    assert!(!BuiltinMember::VecLen.requires_mutable_receiver());
-    assert!(!BuiltinMember::StringContains.requires_mutable_receiver());
+    assert_eq!(
+        BuiltinMember::VecPush.receiver_passing(),
+        aurora_compiler::ast::ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::MapSet.receiver_passing(),
+        aurora_compiler::ast::ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::VecLen.receiver_passing(),
+        aurora_compiler::ast::ReceiverKind::Borrow
+    );
+    assert_eq!(
+        BuiltinMember::StringContains.receiver_passing(),
+        aurora_compiler::ast::ReceiverKind::Borrow
+    );
 
     let invalid_escape_cases = [
         (

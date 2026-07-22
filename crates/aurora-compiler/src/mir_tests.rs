@@ -1738,6 +1738,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "push"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("label".to_string()), "len"));
+    assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "contains"));
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("user".to_string()), "reset"));
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("counter".to_string()), "bump"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("missing".to_string()), "push"));
