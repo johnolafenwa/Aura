@@ -23,3 +23,4 @@ the test locations that must prove completion.
 15. [ADR-0015: Explicit and default argument evaluation order](0015-explicit-and-default-argument-order.md)
 16. [ADR-0016: Retained non-copy expression borrows](0016-retained-noncopy-expression-borrows.md)
 17. [ADR-0017: Iteration source selection](0017-iteration-source-selection.md)
+18. [ADR-0018: Fixed resource read limits](0018-fixed-resource-read-limits.md)

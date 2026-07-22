@@ -36,6 +36,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | Accepted ADR-0017 one-time Vec/Set own-iteration selection and Queue handle capture without source-binding retargeting | `own_iteration_captures_collection`, `queue_iteration_captures_handle`, and the MIR/native parity matrix |
 | Queue receive-item ownership and rejected explicit iteration modifiers | `queue_bare_iteration_ownership`, `queue_own_iteration_rejected`, `queue_borrow_iteration_rejected`, and `queue_borrow_mut_iteration_rejected` fixtures |
 | Builtin handle trait-method no-shadowing, inherited-default containment, and direct builtin precedence | `builtin_queue_trait_method_collision`, `builtin_task_inherited_trait_method_collision`, and `builtin_task_group_trait_method_collision` fixtures plus `direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir` |
+| Fixed 256 MiB filesystem, 64 MiB stream/TLS-configuration, and 16 MiB incoming HTTP limits | injectable-limit and sparse-file tests in `src/runtime_value_tests.rs` plus MIR/forced-direct filesystem and HTTP tests in `crates/aura/tests/cli.rs` |
 | module and package resolution | `crates/aurora-compiler/tests/modules.rs`, `tests/packages.rs`, `src/package_tests.rs` |
 | MIR semantics and runtime behavior | `src/mir_tests.rs`, `src/mir_runtime_tests.rs`, `tests/fixtures/run-pass`, `tests/fixtures/run-fail` |
 | native semantics and resource ABI | `src/native_codegen_tests.rs`, `src/native_runtime_tests.rs`, `tests/native_runtime_ffi.rs` |

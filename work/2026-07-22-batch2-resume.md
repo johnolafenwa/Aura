@@ -3,7 +3,7 @@
 ## Session
 
 - Started: 2026-07-22 16:10:25 BST.
-- Current elapsed: 2h 12m 57s as of 2026-07-22 18:23:22 BST.
+- Current elapsed: 2h 45m 25s as of 2026-07-22 18:55:50 BST.
 - Hard stop: 2026-07-23 04:10:25 BST after 12 continuous hours.
 - Target: resume the preserved Batch 2 checkout, full-gate and commit the
   Phase 3 builtin-metadata foundation and fixed resource caps, then continue
@@ -30,6 +30,14 @@
 - Removed unreachable instrumented branches by construction or by reusing the
   canonical parameter-passing resolver. No synthetic coverage test or coverage
   exclusion was added.
+- Committed that metadata foundation as `e95799c` after its uninterrupted full
+  gate, leaving only the fixed-resource-cap ticket dirty.
+- Split whole-resource ceilings into a 256 MiB filesystem limit, retained
+  64 MiB stream and TLS-configuration limits, and a 16 MiB incoming HTTP wire
+  limit while preserving typed errors and MIR/direct parity.
+- Corrected the cap reference status sections so every normative page identifies
+  ADR-0018 as Provisional pending the Batch 2 checkpoint review, and added
+  integrity guards for that status.
 
 ## Verification
 
@@ -66,8 +74,25 @@
   53,665/55,863 lines (96.065374219%), 3,346/3,456 functions (96.817129630%),
   and 78,117/82,964 regions (94.157706957%). No synthetic-coverage test or
   coverage exclusion was added.
+- For the cap ticket, the focused exact-limit and HTTP overflow tests pass. The
+  first instrumented cap report was green on behavior but just below the frozen
+  region floor; an observable append-at-limit/limit-plus-one test closed that
+  branch without synthetic line execution. `npm run coverage:compiler:check`
+  now passes at 53,718/55,918 lines (96.065667585%), 3,353/3,463 functions
+  (96.823563384%), and 78,183/83,037 regions (94.154413093%).
+- `npm run check:reference` passes all nine integrity tests across the 29-page
+  manual after the Provisional-status correction. No coverage exclusion was
+  added.
+- The exact cap-ticket `npm run ci` passes end to end: format; 244 CLI tests;
+  556 compiler tests and every supporting Rust suite; exhaustive MIR/direct
+  parity in 253.98s; 54 LSP and 8 extension tests; 100% LSP coverage; the
+  29-page reference gate; docs; npm and cargo audit; strict Clippy; and hygiene.
+  Its authoritative compiler report is 53,717/55,918 lines (96.063879252%),
+  3,353/3,463 functions (96.823563384%), and 78,182/83,037 regions
+  (94.153208811%). The one-line/one-region variance from the standalone run is
+  in scheduler-sensitive runtime coverage and remains above every frozen floor.
 
 ## Follow-up
 
-- Revalidate and commit the metadata foundation first, then gate and commit
-  the fixed-resource-cap ticket with ADR-0018 kept Provisional.
+- Commit the full-gated fixed-resource-cap ticket with ADR-0018 kept
+  Provisional, then begin the Duration nanosecond ticket.

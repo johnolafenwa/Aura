@@ -21,7 +21,7 @@ match fs.read_to_string(path):
         print(error)
 ```
 
-One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 64 MiB. The cap is deliberate: an accidental "read the whole file" against a log that turned out to be gigabytes should fail loudly, not allocate gigabytes of memory. When a program genuinely needs to read larger files, open a handle.
+One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same cap applies to the remaining contents read by `fs.File.read_all()` and `fs.File.read_bytes()`: an accidental "read the whole file" against a log that turned out to be gigabytes should fail loudly rather than allocate without bound. Larger files need a host helper or pre-splitting because Aurora 0.1 has no incremental file-read member.
 
 ```python
 import fs

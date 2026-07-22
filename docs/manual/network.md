@@ -129,7 +129,7 @@ UDP preserves datagram boundaries. `max_bytes` must be in `1..=65535`; zero or a
 | `respond_text` | `respond_text(status: int32, text: own String, headers: own Map[String, String]) -> Result[None, io.Error]` | Consumes and sends a text response. |
 | `respond_bytes` | `respond_bytes(status: int32, bytes: own Vec[uint8], headers: own Map[String, String]) -> Result[None, io.Error]` | Consumes and sends a byte response. |
 
-Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. A parsed HTTP message is limited to 1 MiB and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
+Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
 
 Headers are exposed as `Map[String, String]`. This boundary cannot faithfully represent repeated fields such as multiple `Set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `Map` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.1 high-level HTTP surface.
 
@@ -152,7 +152,7 @@ Headers are exposed as `Map[String, String]`. This boundary cannot faithfully re
 | `text` | `text() -> Result[String, io.Error]` | Decodes the body as UTF-8. |
 | `bytes` | `bytes() -> Vec[uint8]` | Returns the raw response body. |
 
-Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 1 MiB message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.1.
+Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 16 MiB incoming-message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.1.
 
 ## WebSocket
 
@@ -276,12 +276,12 @@ Address selection, DNS answers, socket options chosen by the host libraries, and
 
 ## Limits And Implementation-Defined Behavior
 
-Whole TCP text reads, TCP line reads, and individual byte-count reads are capped at 64 MiB; TCP/Unix/TLS exact counts must be `1..=67108864`. UDP receive counts must be `1..=65535`, and truncation with a smaller receive buffer follows the host. HTTP messages are capped at 1 MiB and 64 headers. The string-map header boundary is not lossless for repeated fields and can currently expose duplicate equal keys internally.
+Whole TCP text reads, TCP line reads, and individual byte-count reads are capped at 64 MiB; TCP/Unix/TLS exact counts must be `1..=67108864`. UDP receive counts must be `1..=65535`, and truncation with a smaller receive buffer follows the host. Incoming parsed HTTP messages are capped at 16 MiB of wire data and 64 headers. The parser cap includes the start line, headers, transfer framing, trailers, and body; outbound HTTP writers have no separate size cap. The string-map header boundary is not lossless for repeated fields and can currently expose duplicate equal keys internally.
 
 WebSocket messages are capped at 64 MiB; frames and the write buffer are capped at 16 MiB. WebSocket listener close is unavailable, WebSocket cancellation coverage is incomplete, and WebSocket close currently discards host close errors. TLS handshakes have a hard 10-second cap in addition to any shorter caller deadline. Unix sockets are unavailable on non-Unix hosts, and `unix_listen` will not replace a non-socket path. Redirects, pooling, HTTP/2, proxies, decompression, high-level custom-CA arguments, and lossless repeated-header APIs are absent.
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. No network semantics on this page are provisional.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 is implemented but remains Provisional pending the Batch 2 checkpoint review; no other network semantics on this page are provisional.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.

@@ -14,8 +14,8 @@ Filesystem APIs return `Result[..., io.Error]` except `fs.exists(...)`, which re
 | API | Signature | Contract |
 | --- | --- | --- |
 | `fs.exists` | `exists(path: String) -> bool` | Returns `true` when `path` exists. Errors are collapsed to `false`. |
-| `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads a UTF-8 file into a `String`. Reads are capped at 64 MiB. |
-| `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads a file into raw bytes. Reads are capped at 64 MiB. |
+| `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads a UTF-8 file into a `String`. Reads are capped at 256 MiB. |
+| `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads a file into raw bytes. Reads are capped at 256 MiB. |
 | `fs.write_string` | `write_string(path: String, text: String) -> Result[None, io.Error]` | Creates or replaces `path` with `text`. |
 | `fs.write_bytes` | `write_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Creates or replaces `path` with raw bytes. Empty byte vectors are allowed. |
 | `fs.append_string` | `append_string(path: String, text: String) -> Result[None, io.Error]` | Creates or opens `path` and appends `text`. |
@@ -45,8 +45,8 @@ def show_file() -> Result[None, io.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file contents as strict UTF-8 text, capped at 64 MiB. |
-| `read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file contents as raw bytes, capped at 64 MiB. |
+| `read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file contents as strict UTF-8 text, capped at 256 MiB. |
+| `read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file contents as raw bytes, capped at 256 MiB. |
 | `write_all` | `write_all(text: String) -> Result[None, io.Error]` | Writes all of `text` to the file. |
 | `write_bytes` | `write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]` | Writes all raw bytes to the file. |
 | `flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes to the operating system. |
@@ -72,7 +72,7 @@ def read_image_size() -> Result[int32, io.Error]:
 
 The same distinction exists on `fs.File`.
 
-All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid input. A read that exceeds 64 MiB also returns `InvalidData`. File writes are not transactional: after cancellation or a host failure, the caller must not assume that no bytes were written.
+All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid input. A read that exceeds 256 MiB also returns `InvalidData`. File writes are not transactional: after cancellation or a host failure, the caller must not assume that no bytes were written.
 
 ## Example: Append A Line
 
@@ -118,7 +118,7 @@ The signatures in the one-shot and `fs.File` tables are normative. All operation
 
 One-shot operations perform the host filesystem action named in the table. `write_string` and `write_bytes` create or replace a file; append operations create when absent and otherwise append. `create_dir` creates only one directory. `read_dir` returns sorted immediate entry names. `fs.exists` deliberately collapses metadata errors to `false`.
 
-Text is strict UTF-8. Invalid text and reads over 64 MiB return `io.Error.InvalidData`; byte reads preserve bytes. A file handle maintains an operating-system cursor, so successive reads observe and advance the same underlying position. Writes and appends are observable as they occur and are not transactional. Normal host failures return the closest documented `io.Error` variant.
+Text is strict UTF-8. Invalid text and reads over 256 MiB return `io.Error.InvalidData`; byte reads preserve bytes. A file handle maintains an operating-system cursor, so successive reads observe and advance the same underlying position. Writes and appends are observable as they occur and are not transactional. Normal host failures return the closest documented `io.Error` variant.
 
 ## Ownership And Evaluation Order
 
@@ -130,7 +130,7 @@ Call arguments are evaluated left to right. Path, text, and byte-vector argument
 
 Unknown filesystem members use `AU2001`, wrong types use `AU2002`, and invalid argument binding uses `AU2004`. Use after moving a file handle uses `AU3001`; conflicting borrows use `AU3002`; invoking a mutating file method through an immutable place uses `AU3003`; remaining static rejections use `AU2999`.
 
-Documented filesystem failures are typed outcomes, not language traps: they return `Result.Err(io.Error)`. In particular, missing files, permission failures, invalid UTF-8, closed handles, and the 64 MiB cap must be handled through `Result`. A compiler or runtime invariant failure outside that typed boundary uses the general diagnostic categories in [Diagnostics](/manual/diagnostics), including `AU4005` for an uncaught resource/I/O trap.
+Documented filesystem failures are typed outcomes, not language traps: they return `Result.Err(io.Error)`. In particular, missing files, permission failures, invalid UTF-8, closed handles, and the 256 MiB cap must be handled through `Result`. A compiler or runtime invariant failure outside that typed boundary uses the general diagnostic categories in [Diagnostics](/manual/diagnostics), including `AU4005` for an uncaught resource/I/O trap.
 
 ## Backend Support
 
@@ -140,12 +140,12 @@ Host filesystem results can differ by operating system and environment. Such dif
 
 ## Limits And Implementation-Defined Behavior
 
-Each one-shot read and each `fs.File` whole-file read is capped at 64 MiB. Aurora 0.1 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
+Each one-shot read and each `fs.File` whole-file read is capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
 
 After opening a directory, an individual entry that fails during enumeration is currently skipped; only failure to open the directory is returned. Non-Unicode entry names are converted lossily. Partial writes and externally visible side effects may remain after a host failure or task cancellation.
 
 ## Status
 
-The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aurora 0.1. No filesystem semantics on this page are provisional.
+The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aurora 0.1. The fixed 256 MiB whole-read policy is implemented but remains Provisional under ADR-0018 pending the Batch 2 checkpoint review; no other filesystem semantics on this page are provisional.
 
 The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Chunked and asynchronous file access, transactional operations, richer metadata, and cross-platform path abstractions are unavailable future work and are non-normative.

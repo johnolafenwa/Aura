@@ -23,7 +23,8 @@ use super::{
     ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
     RangeValue, RecvValueResult, SetValue, TaskCancelledSignal, TaskExecutionResult,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, MAX_READ_ALL_BYTES,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -31,7 +32,7 @@ use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -81,11 +82,11 @@ fn bounded_read_helpers_reject_zero_and_oversized_requests_without_allocation() 
         .expect_err("zero-byte bounded reads should be rejected before reading");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 
-    let error = validate_requested_read_size("read_exact(...)", MAX_READ_ALL_BYTES + 1)
+    let error = validate_requested_read_size("read_exact(...)", MAX_STREAM_READ_BYTES + 1)
         .expect_err("oversized read_exact requests should fail before allocation");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 
-    let error = validate_read_line_capacity(MAX_READ_ALL_BYTES)
+    let error = validate_read_line_capacity(MAX_STREAM_READ_BYTES)
         .expect_err("line reads should enforce the shared read limit");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 
@@ -111,7 +112,7 @@ fn fd_reads_check_deadline_and_size_before_ready_reads() {
     let error = read_exact_with_fd_deadline(
         &mut exact_reader,
         0,
-        MAX_READ_ALL_BYTES + 1,
+        MAX_STREAM_READ_BYTES + 1,
         libc::POLLIN,
         None,
         None,
@@ -123,7 +124,7 @@ fn fd_reads_check_deadline_and_size_before_ready_reads() {
     let error = read_some_with_fd_deadline(
         &mut some_reader,
         0,
-        MAX_READ_ALL_BYTES + 1,
+        MAX_STREAM_READ_BYTES + 1,
         libc::POLLIN,
         None,
         None,
@@ -3892,67 +3893,85 @@ fn unix_connect_offloads_a_slow_connect_without_starving_a_sibling_timer() {
 }
 
 #[test]
-fn read_all_surfaces_size_limits_for_unbounded_resources() {
-    // This test intentionally transfers the full 64 MiB limit. Keep a deadlock
-    // guard without turning compiler-coverage instrumentation into a throughput test.
-    const NETWORK_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+fn fixed_resource_caps_are_distinct_and_enforced_without_large_allocations() {
+    assert_eq!(MAX_FILESYSTEM_READ_BYTES, 256 * 1024 * 1024);
+    assert_eq!(MAX_STREAM_READ_BYTES, 64 * 1024 * 1024);
+    assert_eq!(super::MAX_HTTP_MESSAGE_BYTES, 16 * 1024 * 1024);
+
+    let mut at_limit = io::Cursor::new(b"abc".to_vec());
+    assert_eq!(
+        super::read_all_from_reader_with_limit(&mut at_limit, "test stream", 3)
+            .expect("a read exactly at an injected limit should succeed"),
+        b"abc"
+    );
+    let mut over_limit = io::Cursor::new(b"abcd".to_vec());
+    let error = super::read_all_from_reader_with_limit(&mut over_limit, "test stream", 3)
+        .expect_err("an injected read limit should reject one extra byte");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("3 bytes"));
+
+    let mut pushed = b"ab".to_vec();
+    super::push_limited_bytes_with_limit(&mut pushed, b"c", "test stream", 3)
+        .expect("appending exactly to an injected stream limit should succeed");
+    assert_eq!(pushed, b"abc");
+    let error = super::push_limited_bytes_with_limit(&mut pushed, b"d", "test stream", 3)
+        .expect_err("appending one byte beyond an injected stream limit should fail");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("3 bytes"));
 
     let temp = TempDir::new("aurora-read-all-limit");
-    let file_path = temp.path().join("large.txt");
+    let remaining_path = temp.path().join("remaining.txt");
+    fs::write(&remaining_path, b"abcd").expect("remaining-content test file should be written");
+    let mut remaining_file = fs::File::open(&remaining_path).expect("test file should open");
+    let error = super::validate_regular_file_remaining_size(&mut remaining_file, "file read", 3)
+        .expect_err("four remaining bytes should exceed an injected three-byte limit");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    remaining_file
+        .seek(SeekFrom::Start(1))
+        .expect("test cursor should seek");
+    super::validate_regular_file_remaining_size(&mut remaining_file, "file read", 3)
+        .expect("three remaining bytes should meet an injected three-byte limit");
+
+    let raised_cap_path = temp.path().join("above-stream-cap.txt");
+    fs::File::create(&raised_cap_path)
+        .expect("raised-cap test file should be created")
+        .set_len((MAX_STREAM_READ_BYTES + 1) as u64)
+        .expect("raised-cap test file should be extended");
+    let mut raised_cap_file = fs::File::open(&raised_cap_path).expect("test file should open");
+    super::validate_regular_file_remaining_size(
+        &mut raised_cap_file,
+        "filesystem read",
+        MAX_FILESYSTEM_READ_BYTES,
+    )
+    .expect("filesystem reads above 64 MiB but below 256 MiB should pass preflight");
+
+    let file_path = temp.path().join("above-filesystem-cap.txt");
     fs::File::create(&file_path)
-        .expect("large test file should be created")
-        .set_len((super::MAX_READ_ALL_BYTES + 1) as u64)
-        .expect("large test file should be extended");
+        .expect("oversized test file should be created")
+        .set_len((MAX_FILESYSTEM_READ_BYTES + 1) as u64)
+        .expect("oversized test file should be extended");
 
     let file = FileValue::open(file_path.to_str().expect("utf-8 path")).expect("file should open");
     let error = file.read_all().expect_err("oversized read_all should fail");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error
+        .to_string()
+        .contains(&MAX_FILESYSTEM_READ_BYTES.to_string()));
 
-    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
-    let address = listener
-        .local_addr()
-        .expect("listener local addr should succeed");
-    let server = listener.clone();
-    let server_thread = thread::spawn(move || {
-        const CHUNK_SIZE: usize = 64 * 1024;
-        let chunk = vec![b'x'; CHUNK_SIZE];
-        let mut bytes_remaining = super::MAX_READ_ALL_BYTES + 1;
-        let stream = server
-            .accept(Some(NETWORK_TIMEOUT), Some(&CancellationContext::default()))
-            .expect("accept should succeed");
-        while bytes_remaining > 0 {
-            let chunk_len = chunk.len().min(bytes_remaining);
-            if stream
-                .write_bytes(
-                    &chunk[..chunk_len],
-                    Some(NETWORK_TIMEOUT),
-                    Some(&CancellationContext::default()),
-                )
-                .is_err()
-            {
-                break;
-            }
-            bytes_remaining -= chunk_len;
-        }
-        stream.close();
-    });
-
-    let client = TcpStreamValue::connect(
-        &address,
-        Some(NETWORK_TIMEOUT),
-        Some(&CancellationContext::default()),
+    let tls_path = temp.path().join("above-tls-config-cap.pem");
+    fs::File::create(&tls_path)
+        .expect("oversized TLS test file should be created")
+        .set_len((MAX_STREAM_READ_BYTES + 1) as u64)
+        .expect("oversized TLS test file should be extended");
+    let error = super::read_tls_config_file(
+        tls_path.to_str().expect("TLS test path should be UTF-8"),
+        "TLS test PEM",
     )
-    .expect("client should connect");
-    let error = match client.read_all(Some(NETWORK_TIMEOUT), Some(&CancellationContext::default()))
-    {
-        Ok(contents) => panic!(
-            "oversized tcp read_all should fail, but returned {} bytes",
-            contents.len()
-        ),
-        Err(error) => error,
-    };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-    server_thread.join().expect("server thread should join");
+    .expect_err("TLS configuration files must retain the 64 MiB cap");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error
+        .to_string()
+        .contains(&MAX_STREAM_READ_BYTES.to_string()));
 }
 
 #[test]
@@ -4128,8 +4147,8 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
         Some(2)
     );
 
-    let mut oversized = vec![0; super::MAX_HTTP_MESSAGE_BYTES];
-    let error = super::push_http_chunk(&mut oversized, &[1])
+    let mut oversized = vec![0; 8];
+    let error = super::push_http_chunk_with_limit(&mut oversized, &[1], 8)
         .expect_err("oversized HTTP buffers should be rejected before extending");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
@@ -4137,6 +4156,8 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
 #[test]
 fn chunked_http_framing_rejects_ambiguous_malformed_and_oversized_inputs() {
     use super::HttpBodyFraming;
+
+    const TEST_HTTP_LIMIT: usize = 32;
 
     assert_eq!(super::find_http_crlf(b"aa\r\nbb", 0), Some(2));
     assert_eq!(super::find_http_crlf(b"aa\r\nbb", 4), None);
@@ -4222,11 +4243,15 @@ fn chunked_http_framing_rejects_ambiguous_malformed_and_oversized_inputs() {
             .expect("extensions and trailers should decode"),
         Some(b"test".to_vec())
     );
-    let oversized_size = format!("{:x}\r\n", super::MAX_HTTP_MESSAGE_BYTES + 1);
+    let oversized_size = format!("{:x}\r\n", TEST_HTTP_LIMIT + 1);
     assert_eq!(
-        super::try_decode_chunked_http_body(oversized_size.as_bytes(), 0)
-            .expect_err("oversized chunk declarations should fail")
-            .kind(),
+        super::try_decode_chunked_http_body_with_limit(
+            oversized_size.as_bytes(),
+            0,
+            TEST_HTTP_LIMIT,
+        )
+        .expect_err("oversized chunk declarations should fail")
+        .kind(),
         io::ErrorKind::InvalidData
     );
     assert!(super::try_decode_chunked_http_body(b"4\r\nabc", 0)
@@ -4239,10 +4264,10 @@ fn chunked_http_framing_rejects_ambiguous_malformed_and_oversized_inputs() {
         io::ErrorKind::InvalidData
     );
     let mut oversized_trailer = b"0\r\n".to_vec();
-    oversized_trailer.extend(std::iter::repeat_n(b'a', super::MAX_HTTP_MESSAGE_BYTES + 1));
+    oversized_trailer.extend(std::iter::repeat_n(b'a', TEST_HTTP_LIMIT + 1));
     oversized_trailer.extend_from_slice(b"\r\n\r\n");
     assert_eq!(
-        super::try_decode_chunked_http_body(&oversized_trailer, 0)
+        super::try_decode_chunked_http_body_with_limit(&oversized_trailer, 0, TEST_HTTP_LIMIT,)
             .expect_err("oversized trailers should fail")
             .kind(),
         io::ErrorKind::InvalidData
@@ -4381,6 +4406,44 @@ fn http_stream_helpers_cover_response_without_content_length_and_custom_headers(
     assert!(response.contains("Content-Length: 2\r\n"));
     assert!(response.contains("Connection: close\r\n"));
     assert!(response.ends_with("\r\n\r\nok"));
+}
+
+#[test]
+fn http_response_limit_rejects_declared_and_close_delimited_overflow_early() {
+    const TEST_HTTP_LIMIT: usize = 64;
+
+    fn response_error(response: Vec<u8>) -> io::Error {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+        let address = listener.local_addr().expect("server address should exist");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("server should accept");
+            stream
+                .write_all(&response)
+                .expect("test response should write");
+        });
+        let mut client = std::net::TcpStream::connect(address).expect("client should connect");
+        let error = super::read_http_response_from_stream_with_limit(
+            &mut client,
+            Some(Instant::now() + StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+            TEST_HTTP_LIMIT,
+        )
+        .expect_err("response above the injected HTTP limit should fail");
+        server.join().expect("server thread should join");
+        error
+    }
+
+    let declared = response_error(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 65\r\nConnection: close\r\n\r\n".to_vec(),
+    );
+    assert_eq!(declared.kind(), io::ErrorKind::InvalidData);
+    assert!(declared.to_string().contains("64 bytes"));
+
+    let mut close_delimited = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+    close_delimited.extend(std::iter::repeat_n(b'x', TEST_HTTP_LIMIT));
+    let close_delimited = response_error(close_delimited);
+    assert_eq!(close_delimited.kind(), io::ErrorKind::InvalidData);
+    assert!(close_delimited.to_string().contains("64 bytes"));
 }
 
 #[test]

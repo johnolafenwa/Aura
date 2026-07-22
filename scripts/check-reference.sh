@@ -118,6 +118,34 @@ grep -Fq 'def process_file(handle: own FileHandle)' tutorials/12-error-propagati
 grep -Fq 'Queue and task handles are cheap copy-like values' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'declaration-stable' docs/aurora_language_proposal.html
 grep -Fq 'Queue iteration receives each item already owned' docs/aurora_language_proposal.html
+grep -Fq 'const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
+grep -Fq 'const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
+grep -Fq 'const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
+grep -Fq 'capped at 256 MiB of remaining content' docs/manual/filesystem.md
+grep -Fq 'Incoming parsed HTTP messages are capped at 16 MiB of wire data and 64 headers.' docs/manual/network.md
+grep -Fq 'This stream ceiling is independent of the larger filesystem whole-read limit.' docs/manual/process.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0018-fixed-resource-read-limits.md
+grep -Fq 'remains Provisional under ADR-0018 pending the Batch 2 checkpoint review' docs/manual/filesystem.md
+grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/network.md
+grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/control-plane.md
+grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/process.md
+
+if rg -n '64 MiB' \
+  docs/manual/filesystem.md \
+  tutorials/19-io-and-networking.md \
+  tutorials/14-current-language-surface.md \
+  docs/learn/io-process-networking.md; then
+  echo "filesystem reference still describes the retired 64 MiB whole-read limit" >&2
+  exit 1
+fi
+
+if rg -ni '(http|parser|message)[^\n]*1 MiB|1 MiB[^\n]*(http|parser|message)' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes the retired 1 MiB HTTP parser limit" >&2
+  exit 1
+fi
 
 if grep -Fq -- '- `Queue[T]`, `Task[T]`, `TaskGroup`' tutorials/06-ownership-and-borrowing.md; then
   echo "ownership tutorial still classifies Queue and Task copy handles as move types" >&2

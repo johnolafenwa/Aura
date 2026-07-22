@@ -130,8 +130,8 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
 | `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads strict UTF-8 without trailing LF/CRLF; `Ok(None)` on EOF. |
 | `fs.exists` | `exists(path: String) -> bool` | Path existence check. |
-| `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads UTF-8 text, capped at 64 MiB. |
-| `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads bytes, capped at 64 MiB. |
+| `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads UTF-8 text, capped at 256 MiB. |
+| `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads bytes, capped at 256 MiB. |
 | `fs.write_string` | `write_string(path: String, text: String) -> Result[None, io.Error]` | Creates or replaces a text file. |
 | `fs.write_bytes` | `write_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Creates or replaces a byte file. |
 | `fs.append_string` | `append_string(path: String, text: String) -> Result[None, io.Error]` | Appends text. |
@@ -142,8 +142,8 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | `fs.open` | `open(path: String) -> Result[fs.File, io.Error]` | Opens for reading. |
 | `fs.create` | `create(path: String) -> Result[fs.File, io.Error]` | Creates or truncates for writing. |
 | `fs.append` | `append(path: String) -> Result[fs.File, io.Error]` | Opens for append, creating if needed. |
-| `fs.File.read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining strict UTF-8 text, capped at 64 MiB. |
-| `fs.File.read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining bytes, capped at 64 MiB. |
+| `fs.File.read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining strict UTF-8 text, capped at 256 MiB. |
+| `fs.File.read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining bytes, capped at 256 MiB. |
 | `fs.File.write_all` | `write_all(text: String) -> Result[None, io.Error]` | Writes all text. |
 | `fs.File.write_bytes` | `write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]` | Writes all bytes. |
 | `fs.File.flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes. |
@@ -203,7 +203,7 @@ See [Network Module](/manual/network) for behavior and examples.
 
 ## Network Resource Methods
 
-Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535`. HTTP accepts at most 64 headers and 1 MiB messages; WebSocket limits are 64 MiB per message and 16 MiB per frame/write buffer. See [Network Module](/manual/network) for timeout, EOF, UTF-8, cancellation, and repeated-header contracts.
+Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535`. Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message; WebSocket limits are 64 MiB per message and 16 MiB per frame/write buffer. See [Network Module](/manual/network) for timeout, EOF, UTF-8, cancellation, and repeated-header contracts.
 
 | Type | API | Signature |
 | --- | --- | --- |

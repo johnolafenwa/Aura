@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Read, Seek, Write};
 use std::net::{
     Shutdown, SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream, ToSocketAddrs,
     UdpSocket as StdUdpSocket,
@@ -556,7 +556,9 @@ struct LightweightTaskScheduler {
 // (URL parsing, rustls handshakes, websocket framing). 256 KiB is too small
 // and was causing reproducible EXC_BAD_ACCESS faults on maintained examples.
 const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 1024 * 1024;
-const MAX_READ_ALL_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TLS_CONFIG_BYTES: usize = MAX_STREAM_READ_BYTES;
 const MAX_UDP_DATAGRAM_BYTES: usize = 65_535;
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
 const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
@@ -2864,22 +2866,22 @@ fn trim_line_endings(text: String) -> String {
         .to_string()
 }
 
-pub(crate) fn read_all_limit_error(label: &str) -> io::Error {
+pub(crate) fn read_all_limit_error(label: &str, limit: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
             "{} exceeded the supported read_all limit of {} bytes",
-            label, MAX_READ_ALL_BYTES
+            label, limit
         ),
     )
 }
 
-fn requested_read_limit_error(label: &str) -> io::Error {
+fn requested_read_limit_error(label: &str, limit: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
             "{} exceeds the supported read limit of {} bytes",
-            label, MAX_READ_ALL_BYTES
+            label, limit
         ),
     )
 }
@@ -2891,40 +2893,88 @@ fn validate_requested_read_size(label: &str, count: usize) -> io::Result<usize> 
             format!("{} requires a byte count greater than zero", label),
         ));
     }
-    if count > MAX_READ_ALL_BYTES {
-        return Err(requested_read_limit_error(label));
+    if count > MAX_STREAM_READ_BYTES {
+        return Err(requested_read_limit_error(label, MAX_STREAM_READ_BYTES));
     }
     Ok(count)
 }
 
 fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
-    if buffer_len >= MAX_READ_ALL_BYTES {
-        return Err(read_all_limit_error("network read_line"));
+    if buffer_len >= MAX_STREAM_READ_BYTES {
+        return Err(read_all_limit_error(
+            "network read_line",
+            MAX_STREAM_READ_BYTES,
+        ));
     }
     Ok(())
 }
 
-fn push_limited_bytes(contents: &mut Vec<u8>, chunk: &[u8], label: &str) -> io::Result<()> {
-    if contents.len().saturating_add(chunk.len()) > MAX_READ_ALL_BYTES {
-        return Err(read_all_limit_error(label));
+fn push_limited_bytes_with_limit(
+    contents: &mut Vec<u8>,
+    chunk: &[u8],
+    label: &str,
+    limit: usize,
+) -> io::Result<()> {
+    if contents.len().saturating_add(chunk.len()) > limit {
+        return Err(read_all_limit_error(label, limit));
     }
     contents.extend_from_slice(chunk);
     Ok(())
 }
 
-pub(crate) fn read_all_from_reader<R: Read>(reader: &mut R, label: &str) -> io::Result<Vec<u8>> {
-    let mut limited = reader.take((MAX_READ_ALL_BYTES as u64) + 1);
+fn push_limited_bytes(contents: &mut Vec<u8>, chunk: &[u8], label: &str) -> io::Result<()> {
+    push_limited_bytes_with_limit(contents, chunk, label, MAX_STREAM_READ_BYTES)
+}
+
+fn read_all_from_reader_with_limit<R: Read>(
+    reader: &mut R,
+    label: &str,
+    limit: usize,
+) -> io::Result<Vec<u8>> {
+    let mut limited = reader.take((limit as u64).saturating_add(1));
     let mut contents = Vec::new();
     limited.read_to_end(&mut contents)?;
-    if contents.len() > MAX_READ_ALL_BYTES {
-        return Err(read_all_limit_error(label));
+    if contents.len() > limit {
+        return Err(read_all_limit_error(label, limit));
     }
     Ok(contents)
 }
 
+#[cfg(not(unix))]
+pub(crate) fn read_all_from_reader<R: Read>(reader: &mut R, label: &str) -> io::Result<Vec<u8>> {
+    read_all_from_reader_with_limit(reader, label, MAX_STREAM_READ_BYTES)
+}
+
+fn validate_regular_file_remaining_size(
+    file: &mut StdFile,
+    label: &str,
+    limit: usize,
+) -> io::Result<()> {
+    let Some(metadata) = file.metadata().ok().filter(|metadata| metadata.is_file()) else {
+        return Ok(());
+    };
+    let Ok(position) = file.stream_position() else {
+        return Ok(());
+    };
+    if metadata.len().saturating_sub(position) > limit as u64 {
+        return Err(read_all_limit_error(label, limit));
+    }
+    Ok(())
+}
+
+fn read_std_file_with_limit(file: &mut StdFile, label: &str, limit: usize) -> io::Result<Vec<u8>> {
+    validate_regular_file_remaining_size(file, label, limit)?;
+    read_all_from_reader_with_limit(file, label, limit)
+}
+
 pub(crate) fn read_file_limited(path: &str, label: &str) -> io::Result<Vec<u8>> {
     let mut file = StdFile::open(path)?;
-    read_all_from_reader(&mut file, label)
+    read_std_file_with_limit(&mut file, label, MAX_FILESYSTEM_READ_BYTES)
+}
+
+fn read_tls_config_file(path: &str, label: &str) -> io::Result<Vec<u8>> {
+    let mut file = StdFile::open(path)?;
+    read_std_file_with_limit(&mut file, label, MAX_TLS_CONFIG_BYTES)
 }
 
 fn validate_http_header_name(name: &str) -> io::Result<()> {
@@ -3317,11 +3367,11 @@ fn load_tls_server_config(
     key_pem_path: &str,
 ) -> io::Result<Arc<ServerConfig>> {
     ensure_rustls_crypto_provider();
-    let cert_pem = read_file_limited(cert_pem_path, "TLS certificate PEM")?;
+    let cert_pem = read_tls_config_file(cert_pem_path, "TLS certificate PEM")?;
     let cert_chain = CertificateDer::pem_slice_iter(&cert_pem)
         .collect::<std::result::Result<Vec<CertificateDer<'static>>, _>>()
         .map_err(io::Error::other)?;
-    let key_pem = read_file_limited(key_pem_path, "TLS private key PEM")?;
+    let key_pem = read_tls_config_file(key_pem_path, "TLS private key PEM")?;
     let Some(private_key) = PrivateKeyDer::pem_slice_iter(&key_pem).next() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -3341,7 +3391,7 @@ fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(ca_pem_path) = ca_pem_path.filter(|path| !path.is_empty()) {
-        let pem = read_file_limited(ca_pem_path, "TLS CA PEM")?;
+        let pem = read_tls_config_file(ca_pem_path, "TLS CA PEM")?;
         for certificate in CertificateDer::pem_slice_iter(&pem) {
             let certificate = certificate.map_err(io::Error::other)?;
             roots.add(certificate).map_err(io::Error::other)?;
@@ -3365,18 +3415,20 @@ fn parse_http_response(
 }
 
 const MAX_HTTP_HEADERS: usize = 64;
-const MAX_HTTP_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const HTTP_MESSAGE_TOO_LARGE_PREFIX: &str = "HTTP message exceeds the supported size limit";
 const HTTP_HEADERS_TOO_LARGE_PREFIX: &str = "HTTP request exceeded the supported header count";
 
-fn http_message_too_large_error() -> io::Error {
+fn http_message_too_large_error_with_limit(limit: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!(
-            "{} of {} bytes",
-            HTTP_MESSAGE_TOO_LARGE_PREFIX, MAX_HTTP_MESSAGE_BYTES
-        ),
+        format!("{} of {} bytes", HTTP_MESSAGE_TOO_LARGE_PREFIX, limit),
     )
+}
+
+#[cfg(test)]
+fn http_message_too_large_error() -> io::Error {
+    http_message_too_large_error_with_limit(MAX_HTTP_MESSAGE_BYTES)
 }
 
 fn is_http_message_too_large_error(error: &io::Error) -> bool {
@@ -3544,9 +3596,9 @@ fn parse_http_body_framing(
     ))
 }
 
-fn push_http_chunk(buffer: &mut Vec<u8>, chunk: &[u8]) -> io::Result<()> {
-    if buffer.len().saturating_add(chunk.len()) > MAX_HTTP_MESSAGE_BYTES {
-        return Err(http_message_too_large_error());
+fn push_http_chunk_with_limit(buffer: &mut Vec<u8>, chunk: &[u8], limit: usize) -> io::Result<()> {
+    if buffer.len().saturating_add(chunk.len()) > limit {
+        return Err(http_message_too_large_error_with_limit(limit));
     }
     buffer.extend_from_slice(chunk);
     Ok(())
@@ -3560,7 +3612,11 @@ fn find_http_crlf(bytes: &[u8], start: usize) -> Option<usize> {
         .map(|offset| start + offset)
 }
 
-fn try_decode_chunked_http_body(buffer: &[u8], start: usize) -> io::Result<Option<Vec<u8>>> {
+fn try_decode_chunked_http_body_with_limit(
+    buffer: &[u8],
+    start: usize,
+    limit: usize,
+) -> io::Result<Option<Vec<u8>>> {
     let mut cursor = start;
     let mut body = Vec::new();
     loop {
@@ -3592,16 +3648,16 @@ fn try_decode_chunked_http_body(buffer: &[u8], start: usize) -> io::Result<Optio
                 return Ok(None);
             };
             let trailer_bytes = &buffer[cursor..cursor + trailer_end];
-            if trailer_bytes.len() > MAX_HTTP_MESSAGE_BYTES {
-                return Err(http_message_too_large_error());
+            if trailer_bytes.len() > limit {
+                return Err(http_message_too_large_error_with_limit(limit));
             }
             return Ok(Some(body));
         }
-        if body.len().saturating_add(size) > MAX_HTTP_MESSAGE_BYTES {
-            return Err(http_message_too_large_error());
+        if body.len().saturating_add(size) > limit {
+            return Err(http_message_too_large_error_with_limit(limit));
         }
         let Some(chunk_end) = cursor.checked_add(size) else {
-            return Err(http_message_too_large_error());
+            return Err(http_message_too_large_error_with_limit(limit));
         };
         if buffer.len() < chunk_end.saturating_add(2) {
             return Ok(None);
@@ -3615,6 +3671,11 @@ fn try_decode_chunked_http_body(buffer: &[u8], start: usize) -> io::Result<Optio
         body.extend_from_slice(&buffer[cursor..chunk_end]);
         cursor = chunk_end + 2;
     }
+}
+
+#[cfg(test)]
+fn try_decode_chunked_http_body(buffer: &[u8], start: usize) -> io::Result<Option<Vec<u8>>> {
+    try_decode_chunked_http_body_with_limit(buffer, start, MAX_HTTP_MESSAGE_BYTES)
 }
 
 fn parse_http_request_head(buffer: &[u8]) -> io::Result<Option<HttpRequestHead>> {
@@ -3676,10 +3737,11 @@ fn parse_http_response_head(buffer: &[u8]) -> io::Result<Option<HttpResponseHead
     }
 }
 
-fn read_http_request_from_stream(
+fn read_http_request_from_stream_with_limit(
     stream: &mut StdTcpStream,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
+    message_limit: usize,
 ) -> io::Result<HttpRequestParts> {
     let mut buffer = Vec::new();
     let (header_len, method, path, headers, framing) = loop {
@@ -3692,13 +3754,13 @@ fn read_http_request_from_stream(
                 "stream closed before a complete HTTP request was received",
             ));
         };
-        push_http_chunk(&mut buffer, &chunk)?;
+        push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
     };
 
     let body = match framing {
         HttpBodyFraming::ContentLength(content_length) => {
-            if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
-                return Err(http_message_too_large_error());
+            if header_len.saturating_add(content_length) > message_limit {
+                return Err(http_message_too_large_error_with_limit(message_limit));
             }
             while buffer.len() < header_len.saturating_add(content_length) {
                 let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)?
@@ -3708,12 +3770,14 @@ fn read_http_request_from_stream(
                         "stream closed before the HTTP request body was fully received",
                     ));
                 };
-                push_http_chunk(&mut buffer, &chunk)?;
+                push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
             }
             buffer[header_len..header_len.saturating_add(content_length)].to_vec()
         }
         HttpBodyFraming::Chunked => loop {
-            if let Some(body) = try_decode_chunked_http_body(&buffer, header_len)? {
+            if let Some(body) =
+                try_decode_chunked_http_body_with_limit(&buffer, header_len, message_limit)?
+            {
                 break body;
             }
             let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
@@ -3722,11 +3786,19 @@ fn read_http_request_from_stream(
                     "stream closed before the chunked HTTP request body was fully received",
                 ));
             };
-            push_http_chunk(&mut buffer, &chunk)?;
+            push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
         },
         HttpBodyFraming::UntilClose => unreachable!("requests always have explicit body framing"),
     };
     Ok((method, path, headers, body))
+}
+
+fn read_http_request_from_stream(
+    stream: &mut StdTcpStream,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<HttpRequestParts> {
+    read_http_request_from_stream_with_limit(stream, deadline, cancellation, MAX_HTTP_MESSAGE_BYTES)
 }
 
 trait HttpDeadlineReader: Read {
@@ -3736,12 +3808,6 @@ trait HttpDeadlineReader: Read {
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<Vec<u8>>>;
-
-    fn read_http_all(
-        &mut self,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Vec<u8>>;
 }
 
 impl HttpDeadlineReader for StdTcpStream {
@@ -3752,14 +3818,6 @@ impl HttpDeadlineReader for StdTcpStream {
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<Vec<u8>>> {
         read_some_with_deadline(self, max_bytes, deadline, cancellation)
-    }
-
-    fn read_http_all(
-        &mut self,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Vec<u8>> {
-        read_all_with_deadline(self, deadline, cancellation)
     }
 }
 
@@ -3780,26 +3838,13 @@ impl HttpDeadlineReader for rustls::StreamOwned<ClientConnection, StdTcpStream> 
             cancellation,
         )
     }
-
-    fn read_http_all(
-        &mut self,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Vec<u8>> {
-        read_all_with_fd_deadline(
-            self,
-            self.sock.as_raw_fd(),
-            libc::POLLIN | libc::POLLOUT,
-            deadline,
-            cancellation,
-        )
-    }
 }
 
-fn read_http_response_from_stream<R: HttpDeadlineReader>(
+fn read_http_response_from_stream_with_limit<R: HttpDeadlineReader>(
     stream: &mut R,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
+    message_limit: usize,
 ) -> io::Result<HttpResponseValue> {
     let mut buffer = Vec::new();
     let (header_len, status, reason, headers, framing) = loop {
@@ -3812,11 +3857,14 @@ fn read_http_response_from_stream<R: HttpDeadlineReader>(
                 "stream closed before a complete HTTP response was received",
             ));
         };
-        push_http_chunk(&mut buffer, &chunk)?;
+        push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
     };
 
     let body = match framing {
         HttpBodyFraming::ContentLength(content_length) => {
+            if header_len.saturating_add(content_length) > message_limit {
+                return Err(http_message_too_large_error_with_limit(message_limit));
+            }
             while buffer.len() < header_len.saturating_add(content_length) {
                 let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
                     return Err(io::Error::new(
@@ -3824,12 +3872,14 @@ fn read_http_response_from_stream<R: HttpDeadlineReader>(
                         "stream closed before the HTTP response body was fully received",
                     ));
                 };
-                push_http_chunk(&mut buffer, &chunk)?;
+                push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
             }
             buffer[header_len..header_len.saturating_add(content_length)].to_vec()
         }
         HttpBodyFraming::Chunked => loop {
-            if let Some(body) = try_decode_chunked_http_body(&buffer, header_len)? {
+            if let Some(body) =
+                try_decode_chunked_http_body_with_limit(&buffer, header_len, message_limit)?
+            {
                 break body;
             }
             let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
@@ -3838,17 +3888,30 @@ fn read_http_response_from_stream<R: HttpDeadlineReader>(
                     "stream closed before the chunked HTTP response body was fully received",
                 ));
             };
-            push_http_chunk(&mut buffer, &chunk)?;
+            push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
         },
         HttpBodyFraming::UntilClose => {
-            let mut body = buffer[header_len..].to_vec();
-            let rest = stream.read_http_all(deadline, cancellation)?;
-            push_http_chunk(&mut body, &rest)?;
-            body
+            while let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? {
+                push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
+            }
+            buffer[header_len..].to_vec()
         }
     };
 
     Ok(parse_http_response(status, reason, headers, body))
+}
+
+fn read_http_response_from_stream<R: HttpDeadlineReader>(
+    stream: &mut R,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<HttpResponseValue> {
+    read_http_response_from_stream_with_limit(
+        stream,
+        deadline,
+        cancellation,
+        MAX_HTTP_MESSAGE_BYTES,
+    )
 }
 
 fn build_http_request_bytes(
@@ -4228,7 +4291,11 @@ impl FileValue {
                 let Some(file) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                io_decode_utf8(&read_all_from_reader(file, "file read_all")?)
+                io_decode_utf8(&read_std_file_with_limit(
+                    file,
+                    "file read_all",
+                    MAX_FILESYSTEM_READ_BYTES,
+                )?)
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -4242,7 +4309,7 @@ impl FileValue {
                 let Some(file) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                read_all_from_reader(file, "file read_bytes")
+                read_std_file_with_limit(file, "file read_bytes", MAX_FILESYSTEM_READ_BYTES)
             },
             current_lightweight_task_cancellation().as_ref(),
         )

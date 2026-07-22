@@ -320,7 +320,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
-- one-shot and `fs.File` whole-file reads are capped at 64 MiB in both `aura run` and built binaries; Aurora 0.1 has no chunked file-read API
+- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aurora 0.1 has no chunked file-read API
 - `net.connect(...)`
 - `net.connect_timeout(...)`
 - `net.listen(...)`

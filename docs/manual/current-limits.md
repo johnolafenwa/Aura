@@ -36,9 +36,10 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Scheduling is cooperative, not preemptive. A task that runs CPU code without reaching `cancelled()` or another scheduler-aware operation can starve every other Aurora task.
 - Every lightweight task reserves a fixed 1 MiB coroutine stack. The MIR/direct runtime entry thread reserves 64 MiB, and maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
 - The bootstrap scheduler scans waiting tasks for readiness and rebuilds a host `poll` descriptor list. Readiness work is linear in the number of waiting tasks/descriptors; no high-scale task-count claim is made for 0.1.
-- File, process-pipe, TCP, Unix, and TLS whole/bounded reads are capped at 64 MiB. Aurora 0.1 has no chunked file-read API. A bounded byte count of zero is invalid.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-read API.
+- Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
-- HTTP parsing accepts at most 64 headers and 1 MiB per message. The high-level map header model cannot preserve repeated equal field names losslessly.
+- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level map header model cannot preserve repeated equal field names losslessly.
 - WebSocket messages are capped at 64 MiB; individual frames and write buffers are capped at 16 MiB.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.

@@ -52,7 +52,7 @@ JSON output is compact and object keys are sorted. `json.is_valid` accepts any v
 
 ## Network Boundary
 
-The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.1 parser keeps a 1 MiB message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `Map[String, String]` header boundary cannot represent repeated equal header names losslessly.
+The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.1 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `Map[String, String]` header boundary cannot represent repeated equal header names losslessly.
 
 For custom certificate authorities and TLS servers, use the lower-level `net.tls_connect*` and `net.tls_listen` APIs documented in [Network Module](/manual/network).
 
@@ -108,10 +108,10 @@ The HTTP client summarized here has the same MIR/direct support as the full [Net
 
 Host argument and path bytes that are not Unicode are handled with the lossy or absent-value policies stated above. Path separators, roots, case sensitivity, and absolute-path rules follow the host. Unix time reflects the host clock and may move; monotonic time is process-local, millisecond-granularity elapsed time whose zero is the first call in that process.
 
-Serialization supports only the documented string-map boundary. Telemetry has no exporter, batching, delivery guarantee beyond the standard-error write, scoped spans, or metric labels. Concurrent standard-error records are individually emitted but ordering between tasks follows scheduling. HTTP limits are the 1 MiB message cap, 64-header cap, framing checks, and repeated-header loss described above and in [Current Limits](/manual/current-limits).
+Serialization supports only the documented string-map boundary. Telemetry has no exporter, batching, delivery guarantee beyond the standard-error write, scoped spans, or metric labels. Concurrent standard-error records are individually emitted but ordering between tasks follows scheduling. HTTP limits are the 16 MiB incoming wire-message cap, 64-header cap, framing checks, and repeated-header loss described above and in [Current Limits](/manual/current-limits).
 
 ## Status
 
-The system, path, JSON, TOML, logging, trace-event, metrics, and summarized HTTP contracts on this page are implemented and maintained in Aurora 0.1. No semantics on this page are provisional.
+The system, path, JSON, TOML, logging, trace-event, metrics, and summarized HTTP contracts on this page are implemented and maintained in Aurora 0.1. The summarized fixed HTTP cap recorded by ADR-0018 is implemented but remains Provisional pending the Batch 2 checkpoint review; no other semantics on this page are provisional.
 
 Dynamic JSON trees, nested TOML data models, derived codecs, telemetry exporters, metric labels, scoped tracing spans, and richer HTTP header representations are unavailable. Mentions of those facilities are future, non-normative direction rather than accepted language behavior.

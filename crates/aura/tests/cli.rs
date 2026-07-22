@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use rcgen::generate_simple_self_signed;
 
-const READ_ALL_CAP_BYTES: usize = 64 * 1024 * 1024;
+const FILESYSTEM_READ_CAP_BYTES: usize = 256 * 1024 * 1024;
+const RETIRED_FILESYSTEM_READ_CAP_BYTES: usize = 64 * 1024 * 1024;
 
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
@@ -892,7 +893,7 @@ def main() -> int32:
 fn large_http_responses_complete_without_timing_out() {
     let temp = TempDir::new("aurora-http-large-response");
     let body_path = temp.path().join("body.txt");
-    fs::write(&body_path, "x".repeat(50_000)).expect("failed to write HTTP response body");
+    fs::write(&body_path, "x".repeat(2_000_000)).expect("failed to write HTTP response body");
     let source = format!(
         r#"import fs
 import io
@@ -900,7 +901,7 @@ import net
 
 def serve(listener: own net.HttpListener, path: String) -> Result[None, io.Error]:
     server = listener
-    req = try server.accept(timeout=2s)
+    req = try server.accept(timeout=5s)
     body = try fs.read_to_string(path)
     try req.respond_text(200, body, {{}})
     return Result.Ok(None)
@@ -910,7 +911,7 @@ def run() -> Result[None, io.Error]:
         listener = try net.http_listen("127.0.0.1:0")
         address = try listener.local_addr()
         group.start_soon(serve, listener, "{body_path}")
-        resp = try net.http_request_text_timeout("GET", "http://" + address + "/big", "x", {{}}, 2s)
+        resp = try net.http_request_text_timeout("GET", "http://" + address + "/big", "x", {{}}, 5s)
         with r = resp:
             print(r.status())
             text = try r.text()
@@ -927,21 +928,52 @@ def main() -> int32:
 "#,
         body_path = body_path.display()
     );
-    let source_path = temp.path().join("main.au");
-    fs::write(&source_path, source).expect("failed to write HTTP regression source");
-
-    let output = Command::new(aura_bin())
-        .arg("run")
-        .arg(&source_path)
-        .output()
-        .expect("failed to run large HTTP response source");
-
-    assert!(
-        output.status.success(),
-        "large HTTP response source should succeed, stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_run_and_direct_source_stdout(
+        "aurora-http-raised-response-cap",
+        &source,
+        "200\n2000000\n",
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "200\n50000\n");
+}
+
+#[test]
+fn http_declared_response_above_fixed_cap_is_typed_on_both_backends() {
+    let source = r#"import io
+import net
+
+def serve(listener: own net.HttpListener) -> Result[None, io.Error]:
+    request = try listener.accept(timeout=5s)
+    try request.respond_text(200, "", {"Content-Length": "16777217"})
+    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        listener = try net.http_listen("127.0.0.1:0")
+        address = try listener.local_addr()
+        group.start_soon(serve, listener)
+        response = net.http_request_text_timeout("GET", "http://" + address + "/oversized", "", {}, 5s)
+        match response:
+            case Result.Err(io.Error.InvalidData):
+                print("http-too-large")
+            case Result.Err(error):
+                print(error)
+            case Result.Ok(_):
+                print("unexpected-success")
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-http-fixed-response-cap",
+        source,
+        "http-too-large\n",
+    );
 }
 
 #[test]
@@ -2362,7 +2394,7 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
     let temp = TempDir::new("aurora-direct-file-read-cap");
     let file_path = temp.path().join("huge.txt");
     let file = fs::File::create(&file_path).expect("create oversized file");
-    file.set_len((READ_ALL_CAP_BYTES + 1) as u64)
+    file.set_len((FILESYSTEM_READ_CAP_BYTES + 1) as u64)
         .expect("size oversized file");
     let source_path = temp.path().join("main.au");
     let source = format!(
@@ -2406,7 +2438,7 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
     let temp = TempDir::new("aurora-run-file-read-cap");
     let file_path = temp.path().join("huge.txt");
     let file = fs::File::create(&file_path).expect("create oversized file");
-    file.set_len((READ_ALL_CAP_BYTES + 1) as u64)
+    file.set_len((FILESYSTEM_READ_CAP_BYTES + 1) as u64)
         .expect("size oversized file");
     let source_path = temp.path().join("main.au");
     let source = format!(
@@ -2430,6 +2462,21 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
         String::from_utf8_lossy(&run.stdout),
         "io.Error.InvalidData\nio.Error.InvalidData\n"
     );
+}
+
+#[test]
+fn run_and_direct_filesystem_read_to_string_accepts_above_retired_cap() {
+    let temp = TempDir::new("aurora-raised-file-read-cap");
+    let file_path = temp.path().join("above-retired-cap.txt");
+    let file = fs::File::create(&file_path).expect("create sparse file above retired cap");
+    file.set_len((RETIRED_FILESYSTEM_READ_CAP_BYTES + 1) as u64)
+        .expect("size sparse file above retired cap");
+    let source = format!(
+        "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(text):\n            print(text.byte_len())\n            return 0\n        case Result.Err(error):\n            print(error)\n            return 1\n",
+        path = file_path.display()
+    );
+
+    assert_run_and_direct_source_stdout("aurora-raised-file-read-cap", &source, "67108865\n");
 }
 
 #[test]
