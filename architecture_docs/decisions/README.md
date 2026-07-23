@@ -1,10 +1,11 @@
 # Aurora Architecture Decision Records
 
-These ADRs record accepted language and runtime decisions plus any contained
-provisional decisions awaiting the named checkpoint review. `Accepted` means
-the design is binding; it does not by itself claim that the implementation is
-complete. A provisional status is not binding until ratified. Each ADR names
-the test locations that must prove completion.
+These ADRs record accepted language and runtime decisions, contained
+provisional decisions awaiting a named checkpoint, and proposed designs that
+are not yet scheduled or ratified. `Accepted` means the design is binding; it
+does not by itself claim that the implementation is complete. `Provisional`
+and `Proposed` decisions are not binding until ratified. Each ADR names the
+test locations that must prove completion.
 
 1. [ADR-0001: Contextual `None` and `Option` equality](0001-contextual-none-and-option-equality.md)
 2. [ADR-0002: Integer division and modulo](0002-integer-division-and-modulo.md)
@@ -27,3 +28,4 @@ the test locations that must prove completion.
 19. [ADR-0019: Duration conversion and timer policy](0019-duration-conversion-and-timer-policy.md)
 20. [ADR-0020: Randomness algorithm and security boundary](0020-randomness-algorithm-and-security-boundary.md)
 21. [ADR-0021: JSON value model and codec policy](0021-json-value-model-and-codec-policy.md)
+22. [ADR-0022: Implicit shared, `mut`, and `own` capability syntax](0022-implicit-shared-mut-own-capability-syntax.md) — proposed; not yet ratified or implemented
