@@ -249,6 +249,16 @@ negative `secure_bytes` count. `AU4005` reports secure operating-system entropy
 or allocation failure. A secure operation never recovers by substituting bytes
 from the deterministic generator.
 
+JSON input-data failures are typed `json.Error` values rather than diagnostics.
+Parse allocation failure or exceeding the shared 262,144-value
+materialization limit uses `AU4005` instead. `json.dumps` uses `AU4003` for an
+indent outside `0..=16` or a value deeper than 128 containers, `AU4001` for a
+NaN or infinite `json.Value.Float`, and `AU4005` when conversion exceeds the
+same node limit, encoded output would exceed 67,108,864 bytes, or a controlled
+conversion/output allocation fails. No failed dump returns a partial String.
+Unrecoverable host or dependency-internal out-of-memory termination remains
+outside the catchable diagnostic contract.
+
 ## CLI Exit Status
 
 | Status | Meaning |

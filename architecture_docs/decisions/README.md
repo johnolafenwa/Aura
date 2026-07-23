@@ -26,3 +26,4 @@ the test locations that must prove completion.
 18. [ADR-0018: Fixed resource read limits](0018-fixed-resource-read-limits.md)
 19. [ADR-0019: Duration conversion and timer policy](0019-duration-conversion-and-timer-policy.md)
 20. [ADR-0020: Randomness algorithm and security boundary](0020-randomness-algorithm-and-security-boundary.md)
+21. [ADR-0021: JSON value model and codec policy](0021-json-value-model-and-codec-policy.md)

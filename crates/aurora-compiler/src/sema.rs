@@ -6602,15 +6602,11 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Named("Map".to_string(), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
-                        let class = self.resolve_class_info(name).ok_or_else(|| {
-                            Diagnostic::at(
-                                expr.span,
-                                format!(
-                                    "internal error: class `{}` disappeared during explicit type argument checking",
-                                    name
-                                ),
-                            )
-                        })?;
+                        let Some(class) = self.resolve_class_info(name) else {
+                            unreachable!(
+                                "class lookup is stable during explicit type argument checking"
+                            );
+                        };
                         if lowered.len() != class.decl.type_params.len() {
                             return Err(Diagnostic::at(
                                 expr.span,
@@ -6630,15 +6626,11 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Named(self.canonical_class_name(name, class), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_enum_info(name).is_some() => {
-                        let enum_info = self.resolve_enum_info(name).ok_or_else(|| {
-                            Diagnostic::at(
-                                expr.span,
-                                format!(
-                                    "internal error: enum `{}` disappeared during explicit type argument checking",
-                                    name
-                                ),
-                            )
-                        })?;
+                        let Some(enum_info) = self.resolve_enum_info(name) else {
+                            unreachable!(
+                                "enum lookup is stable during explicit type argument checking"
+                            );
+                        };
                         if lowered.len() != enum_info.decl.type_params.len() {
                             return Err(Diagnostic::at(
                                 expr.span,
@@ -8276,15 +8268,9 @@ impl<'a> FunctionChecker<'a> {
 
         match &base_callee.kind {
             ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
-                let builtin = BuiltinFunction::from_name(name).ok_or_else(|| {
-                    Diagnostic::at(
-                        span,
-                        format!(
-                            "internal error: builtin function `{}` disappeared during call checking",
-                            name
-                        ),
-                    )
-                })?;
+                let Some(builtin) = BuiltinFunction::from_name(name) else {
+                    unreachable!("builtin lookup is stable during call checking");
+                };
                 let ordered_args = builtin.bind_args(args, span)?;
                 match builtin {
                     BuiltinFunction::Print => {
@@ -8577,15 +8563,9 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
             ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
-                let function = self.resolve_function_info(name).ok_or_else(|| {
-                    Diagnostic::at(
-                        span,
-                        format!(
-                            "internal error: function `{}` disappeared during call checking",
-                            name
-                        ),
-                    )
-                })?;
+                let Some(function) = self.resolve_function_info(name) else {
+                    unreachable!("function lookup is stable during call checking");
+                };
                 let seed_substitutions = if let Some(type_args) = explicit_type_args {
                     self.explicit_type_substitutions(
                         &function.decl.type_params,

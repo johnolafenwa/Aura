@@ -72,6 +72,9 @@
     "docs/manual/io.md": {
       "kind": "feature"
     },
+    "docs/manual/json.md": {
+      "kind": "feature"
+    },
     "docs/manual/language-specification.md": {
       "kind": "structural",
       "reason": "Manual-wide normative terminology, authority, and organization."
@@ -113,6 +116,12 @@
     }
   },
   "blocks": {
+    "docs/manual/json.md#aurora-1": {
+      "sha256": "88718c7111b387f13524595c0f743a63752adc3a3007c5c632b8d0b885fc3863",
+      "mode": "run",
+      "stdout": "{\"tags\":[\"compiler\",\"service\"],\"workers\":3}\nOption.Some(7)\n{\"ready\":true,\"tags\":[\"compiler\",\"service\"],\"workers\":3}\n{\n  \"ready\": true,\n  \"tags\": [\n    \"compiler\",\n    \"service\"\n  ],\n  \"workers\": 3\n}\n",
+      "stderr": ""
+    },
     "docs/manual/classes.md#aurora-1": {
       "sha256": "32ac11124d29931b8362fd65be4372ef60a9ad0e90315ed54d8cd7274e7ba00a",
       "mode": "check",

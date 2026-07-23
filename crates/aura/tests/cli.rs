@@ -2381,6 +2381,102 @@ fn build_with_direct_backend_supports_file_io_example() {
 }
 
 #[test]
+fn run_and_direct_backends_preserve_false_fs_exists_results() {
+    let missing_name = format!(
+        "aurora-fs-exists-false-{}-{}.missing",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    );
+    let missing_path = PathBuf::from(&missing_name);
+    assert!(
+        !missing_path.exists(),
+        "the fs.exists false-result probe must start absent"
+    );
+    let source = format!(
+        "import fs\n\ndef main() -> int32:\n    print(fs.exists(\"{}\"))\n    return 0\n",
+        missing_name
+    );
+
+    assert_run_and_direct_source_stdout("aurora-fs-exists-false", &source, "false\n");
+}
+
+#[test]
+fn run_and_direct_backends_preserve_the_dynamic_json_surface() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/json_dynamic_values.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/json_dynamic_values.stdout");
+
+    assert_run_and_direct_source_stdout("aurora-dynamic-json-parity", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_clone_json_task_results_and_clean_up_unobserved_values() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.stdout"
+    );
+
+    assert_run_and_direct_source_stdout("aurora-json-task-result-parity", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_move_deep_fields_without_consuming_siblings() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.stdout"
+    );
+
+    assert_run_and_direct_source_stdout("aurora-deep-projected-move-parity", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_backtrack_before_moving_match_expression_payloads() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.stdout"
+    );
+
+    assert_run_and_direct_source_stdout(
+        "aurora-consuming-match-expression-parity",
+        source,
+        expected,
+    );
+}
+
+#[test]
+fn run_and_direct_backends_discover_queues_nested_in_task_arguments() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.stdout"
+    );
+
+    assert_run_and_direct_source_stdout("aurora-nested-task-queue-parity", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_move_noncopy_try_errors_through_from_conversion() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.stdout"
+    );
+
+    assert_run_and_direct_source_stdout("aurora-noncopy-try-from-parity", source, expected);
+}
+
+#[test]
 fn build_with_direct_backend_supports_bytes_file_io_example() {
     assert_direct_backend_example_runs(
         "examples/io/bytes_file_io.au",

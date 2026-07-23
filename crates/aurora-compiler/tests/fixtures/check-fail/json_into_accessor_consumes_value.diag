@@ -1,0 +1,7 @@
+error[AU3001]: use of moved value `value`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/json_into_accessor_consumes_value.au:6:11
+  |
+6 |     print(value)
+  |           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/json_into_accessor_consumes_value.au:5:34: value moved here
+  = help: pass a shared borrow when ownership is not needed, or transfer this non-cloneable value only once

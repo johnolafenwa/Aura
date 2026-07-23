@@ -1,0 +1,6 @@
+import json
+
+def main():
+    value = json.Value.String("aurora")
+    extracted = json.into_string(value)
+    print(value)

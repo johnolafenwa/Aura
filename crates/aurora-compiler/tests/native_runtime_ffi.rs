@@ -122,7 +122,6 @@ unsafe fn string_vec(values: &[&str]) -> *mut OpaqueValue {
     for value in values {
         let item = unsafe { string_value(value) };
         release(aurora_direct_vec_push_in_place(vec, item));
-        release(item);
     }
     vec
 }
@@ -134,7 +133,6 @@ unsafe fn byte_vec(values: &[u8]) -> *mut OpaqueValue {
         let runtime_type = "uint8";
         aurora_direct_tag_value_type(item, runtime_type.as_ptr(), runtime_type.len());
         release(aurora_direct_vec_push_in_place(vec, item));
-        release(item);
     }
     vec
 }
@@ -330,8 +328,6 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aurora_direct_map_set_index_in_place(
             map, map_key, map_value, 1, 1,
         ));
-        release(map_key);
-        release(map_value);
         let lookup_key = string_value("answer");
         assert_eq!(
             expect_i64(aurora_direct_map_index(map, lookup_key, 1, 1)),

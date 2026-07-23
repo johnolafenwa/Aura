@@ -704,13 +704,13 @@ def main() -> int32:
         analysis
             .occurrences
             .iter()
-            .any(|occurrence| occurrence.hover == "```aurora\nenum Outcome\n```"),
+            .any(|occurrence| occurrence.hover == "```aurora\nenum pkg.user.Outcome\n```"),
         "qualified enum references should expose the imported enum hover"
     );
     assert!(
         analysis.occurrences.iter().any(|occurrence| {
             occurrence.hover
-                == "```aurora\nvariant Ready(code: own int32, reason: own String) -> Outcome\n```"
+                == "```aurora\nvariant Ready(code: own int32, reason: own String) -> pkg.user.Outcome\n```"
         }),
         "qualified enum constructors should expose every named payload as owned"
     );
@@ -754,7 +754,7 @@ def main() -> int32:
             .iter()
             .find(|completion| completion.name == "Ready")
             .map(|completion| completion.detail.as_str()),
-        Some("Ready(code: own int32, reason: own String) -> Outcome")
+        Some("Ready(code: own int32, reason: own String) -> pkg.user.Outcome")
     );
 
     let output = run_path(&main_path).expect("package program should run");
@@ -806,4 +806,182 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
             emit_host_native_object(&mir).expect("maintained example should emit a native object");
         assert!(!object.is_empty(), "{}", path.display());
     }
+}
+
+#[test]
+fn json_semantics_public_analysis_exposes_canonical_enum_identity_and_variant_payloads() {
+    let source = r#"
+import json
+
+def describe(value: own json.Value) -> String:
+    match value:
+        case json.Value.String(text):
+            return text
+        case json.Value.Object(entries):
+            return entries.len().to_string()
+        case json.Value.Null:
+            return "null"
+        case _:
+            return "other"
+
+def main() -> int32:
+    print(describe(json.Value.String("aurora")))
+    return 0
+"#;
+
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "valid JSON source should analyze cleanly: {:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .occurrences
+            .iter()
+            .any(|occurrence| occurrence.hover == "```aurora\nenum json.Value\n```"),
+        "json.Value occurrences should expose their canonical module-qualified identity"
+    );
+    assert!(
+        analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover == "```aurora\nvariant String(own String) -> json.Value\n```"
+        }),
+        "json.Value.String occurrences should expose their owned payload and canonical result type"
+    );
+    assert!(
+        analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover
+                == "```aurora\nvariant Object(own Map[String, json.Value]) -> json.Value\n```"
+        }),
+        "json.Value.Object occurrences should retain the recursive canonical payload type"
+    );
+
+    let completion_source = r#"
+import json
+
+def main() -> int32:
+    value = json.Value.
+    return 0
+"#;
+    let (line, character) = line_and_character(completion_source, "json.Value.");
+    let completions = complete_source(completion_source, line, character, Some('.'))
+        .expect("qualified JSON enum completion should recover after a dangling dot");
+    assert_eq!(
+        completions
+            .iter()
+            .find(|completion| completion.name == "String")
+            .map(|completion| completion.detail.as_str()),
+        Some("String(own String) -> json.Value")
+    );
+    assert_eq!(
+        completions
+            .iter()
+            .find(|completion| completion.name == "Object")
+            .map(|completion| completion.detail.as_str()),
+        Some("Object(own Map[String, json.Value]) -> json.Value")
+    );
+
+    let method_completion_source = r#"
+class Document:
+    content: String
+
+    def render(borrow self) -> String:
+        self.
+
+def main() -> int32:
+    return 0
+"#;
+    let (line, character) = line_and_character(method_completion_source, "self.");
+    let method_completions = complete_source(method_completion_source, line, character, Some('.'))
+        .expect("member completion should recover the enclosing method and self binding");
+    assert!(
+        method_completions
+            .iter()
+            .any(|completion| completion.name == "content" && completion.kind == "field"),
+        "self completion inside a method should include the receiver's fields"
+    );
+    assert!(
+        method_completions
+            .iter()
+            .any(|completion| completion.name == "render" && completion.kind == "method"),
+        "self completion inside a method should include the receiver's methods"
+    );
+
+    let output = run_source(source).expect("canonical JSON analysis source should execute");
+    assert_eq!(output.stdout, "aurora\n");
+    let mir = lower_source_to_mir(source).expect("canonical JSON analysis source should lower");
+    let mir_output = run_mir(&mir).expect("canonical JSON analysis MIR should execute");
+    assert_eq!(mir_output.stdout, output.stdout);
+    assert!(!emit_host_native_object(&mir)
+        .expect("canonical JSON analysis source should emit a native object")
+        .is_empty());
+}
+
+#[test]
+fn json_semantics_public_entrypoints_preserve_nested_noncopy_moves_across_value_contexts() {
+    let source = r#"
+import json
+
+class Holder:
+    value: json.Value
+    sibling: String
+
+enum Inner:
+    Text(json.Value)
+
+enum Outer:
+    Wrapped(Inner)
+    Empty
+
+def take_string_value(value: own json.Value) -> String:
+    match value:
+        case json.Value.String(text):
+            return text
+        case _:
+            return "not-string"
+
+def extract(value: own Outer) -> String:
+    return match value:
+        case Outer.Wrapped(Inner.Text(json.Value.String(text))): text
+        case Outer.Wrapped(Inner.Text(_)): "not-string"
+        case Outer.Empty: "empty"
+
+def main() -> int32:
+    labels = {"json", "ownership", "parity"}
+    empty: Set[String] = {}
+    print(labels.len())
+    print(empty.is_empty())
+
+    holder = Holder(value=json.Value.String("moved"), sibling="preserved")
+    print(take_string_value(holder.value))
+    print(holder.sibling)
+
+    print(extract(Outer.Wrapped(Inner.Text(json.Value.String("nested")))))
+
+    array = json.Value.Array([json.Value.Int(1), json.Value.Bool(true)])
+    print(json.dumps(array))
+    object = json.Value.Object({"z": json.Value.Null, "a": json.Value.String("first")})
+    print(json.dumps(object))
+    return 0
+"#;
+    let expected = concat!(
+        "3\n",
+        "true\n",
+        "moved\n",
+        "preserved\n",
+        "nested\n",
+        "[1,true]\n",
+        "{\"a\":\"first\",\"z\":null}\n",
+    );
+
+    check_source(source).expect("nested non-copy JSON source should type-check");
+    let output = run_source(source).expect("nested non-copy JSON source should execute");
+    assert_eq!(output.stdout, expected);
+
+    let mir = lower_source_to_mir(source).expect("nested non-copy JSON source should lower");
+    let mir_output = run_mir(&mir).expect("nested non-copy JSON MIR should execute");
+    assert_eq!(mir_output.stdout, expected);
+    assert!(!emit_host_native_object(&mir)
+        .expect("nested non-copy JSON source should emit a native object")
+        .is_empty());
 }

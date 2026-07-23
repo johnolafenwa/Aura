@@ -39,6 +39,30 @@ fn type_ref(name: &str) -> TypeRef {
     }
 }
 
+#[test]
+fn json_runtime_enums_keep_their_module_qualified_identity() {
+    let program = checked_program("def main():\n    pass\n");
+    for enum_name in ["Value", "Error"] {
+        let enum_info = crate::sema::EnumInfo {
+            module_name: "json".to_string(),
+            decl: crate::ast::EnumDecl {
+                public: true,
+                name: enum_name.to_string(),
+                type_params: Vec::new(),
+                type_param_bounds: std::collections::BTreeMap::new(),
+                variants: Vec::new(),
+                span: Span::new(1, 1),
+            },
+            type_param_bounds: std::collections::BTreeMap::new(),
+            variants: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(
+            mir_runtime_enum_name(&program, &enum_info),
+            format!("json.{enum_name}")
+        );
+    }
+}
+
 fn arg(value: Expr) -> Argument {
     Argument {
         name: None,
@@ -151,6 +175,727 @@ def main() -> int32:
                 } if field == "to_ms"
             ))
         ));
+}
+
+#[test]
+fn json_dumps_omitted_indent_materializes_option_none_in_checked_mir() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def render(value: json.Value) -> String:
+    return json.dumps(value)
+"#,
+    )
+    .expect("json.dumps should lower with its omitted indent default");
+    let render = module
+        .functions
+        .iter()
+        .find(|function| function.name == "render")
+        .expect("render should lower");
+
+    assert!(render.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::EnumVariant { enum_name, variant_name, .. },
+                    ..
+                } if enum_name == "Option" && variant_name == "None"
+            )
+        })
+    }));
+    assert!(render.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                    ..
+                } if name == "json::dumps" && args.len() == 2
+            )
+        })
+    }));
+}
+
+#[test]
+fn json_parse_dump_and_accessors_execute_through_the_mir_runtime() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def main():
+    match json.parse("{\"z\":1.0,\"f\":1.5,\"items\":[true,null,\"x\"]}"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+            print(json.dumps(value, indent=Option.Some(2)))
+            print(json.as_int(json.Value.Int(7)))
+            print(json.as_float(json.Value.Int(7)))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("1e400"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.NumberOutOfRange(line, column)):
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+"#,
+    )
+    .expect("dynamic JSON should lower to MIR");
+    let output = crate::run_mir(&module).expect("dynamic JSON should execute through MIR");
+    assert_eq!(
+        output.stdout,
+        "{\"f\":1.5,\"items\":[true,null,\"x\"],\"z\":1}\n{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}\nOption.Some(7)\nOption.None\n1\n1\n"
+    );
+}
+
+#[test]
+fn json_named_and_default_arguments_preserve_source_evaluation_order() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def value_arg() -> json.Value:
+    print("value")
+    return json.Value.Null
+
+def indent_arg() -> Option[int64]:
+    print("indent")
+    return Option.None
+
+def main():
+    indent = Option.Some(2)
+    print(json.dumps(indent=indent_arg(), value=value_arg()))
+    print(json.dumps(json.Value.Null, indent=indent))
+    print(indent)
+"#,
+    )
+    .expect("named JSON arguments should lower");
+    let output = crate::run_mir(&module).expect("named JSON arguments should execute");
+    assert_eq!(output.stdout, "indent\nvalue\nnull\nnull\nOption.Some(2)\n");
+}
+
+#[test]
+fn json_owned_accessors_accept_rvalue_temporaries() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def main():
+    print(json.into_string(json.Value.String("temporary")))
+    print(json.into_array(json.Value.Array([json.Value.Null])))
+    print(json.into_object(json.Value.Object({"k": json.Value.Bool(true)})))
+"#,
+    )
+    .expect("owned JSON accessors should accept rvalue temporaries");
+    let output = crate::run_mir(&module).expect("owned JSON temporaries should execute");
+    assert_eq!(
+        output.stdout,
+        "Option.Some(temporary)\nOption.Some([json.Value.Null])\nOption.Some({k: json.Value.Bool(true)})\n"
+    );
+}
+
+#[test]
+fn json_owned_accessors_lower_noncopy_places_without_snapshot_clones() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def extract(value: own json.Value) -> Option[String]:
+    return json.into_string(value)
+"#,
+    )
+    .expect("owned JSON accessors should lower");
+    let extract = module
+        .functions
+        .iter()
+        .find(|function| function.name == "extract")
+        .expect("extract should lower");
+
+    let argument = extract
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                ..
+            } if name == "json::into_string" => args.first(),
+            _ => None,
+        })
+        .expect("json.into_string call should be present");
+    assert_eq!(
+        argument.value,
+        Operand::MovePlace("value".to_string()),
+        "an own non-copy place must reach the consuming adapter as an explicit move"
+    );
+    assert!(
+        extract.blocks.iter().all(|block| {
+            block.instructions.iter().all(|instruction| {
+                !matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Use(Operand::Place(place)),
+                        ..
+                    } if place == "value"
+                )
+            })
+        }),
+        "MIR must not snapshot-clone an own json.Value before extraction"
+    );
+}
+
+#[test]
+fn noncopy_value_flow_lowers_to_explicit_moves_while_copy_payloads_stay_reads() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+class Holder:
+    value: json.Value
+
+def relay(value: own json.Value) -> json.Value:
+    assigned = value
+    return assigned
+
+def main():
+    text = "payload"
+    encoded = json.Value.String(text)
+    holder = Holder(encoded)
+    relayed = relay(holder.value)
+    values = [relayed]
+    timeout = 2s
+    wrapped = Option.Some(timeout)
+    print(timeout)
+    print(wrapped)
+    print(values)
+"#,
+    )
+    .expect("owned and copy value flow should lower");
+
+    let relay = module
+        .functions
+        .iter()
+        .find(|function| function.name == "relay")
+        .expect("relay should lower");
+    assert!(relay.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::Use(Operand::MovePlace(place)),
+                } if target == "assigned" && place == "value"
+            )
+        })
+    }));
+    assert!(relay.blocks.iter().any(|block| {
+        matches!(
+            &block.terminator,
+            Terminator::Return(Operand::MovePlace(place)) if place == "assigned"
+        )
+    }));
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let rvalues = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(rvalues.iter().any(|rvalue| {
+        matches!(
+            rvalue,
+            Rvalue::EnumVariant {
+                enum_name,
+                variant_name,
+                payloads,
+            } if enum_name == "json.Value"
+                && variant_name == "String"
+                && payloads == &vec![Operand::MovePlace("text".to_string())]
+        )
+    }));
+    assert!(rvalues.iter().any(|rvalue| {
+        matches!(
+            rvalue,
+            Rvalue::Construct { class_name, fields }
+                if class_name == "Holder"
+                    && fields.iter().any(|field| {
+                        field.name == "value"
+                            && field.value == Operand::MovePlace("encoded".to_string())
+                    })
+        )
+    }));
+    assert!(rvalues.iter().any(|rvalue| {
+        matches!(
+            rvalue,
+            Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            } if name == "relay"
+                && args.first().is_some_and(|argument| {
+                    argument.value == Operand::MovePlace("holder.value".to_string())
+                })
+        )
+    }));
+    assert!(rvalues.iter().any(|rvalue| {
+        matches!(
+            rvalue,
+            Rvalue::VecLiteral { elements, .. }
+                if elements == &vec![Operand::MovePlace("relayed".to_string())]
+        )
+    }));
+    assert!(rvalues.iter().any(|rvalue| {
+        matches!(
+            rvalue,
+            Rvalue::EnumVariant {
+                enum_name,
+                variant_name,
+                payloads,
+            } if enum_name == "Option"
+                && variant_name == "Some"
+                && payloads
+                    .first()
+                    .is_some_and(|payload| matches!(payload, Operand::Place(_)))
+                && payloads
+                    .iter()
+                    .all(|payload| !matches!(payload, Operand::MovePlace(_)))
+        )
+    }));
+}
+
+#[test]
+fn consuming_match_uses_a_private_owner_and_destructive_payload_operands() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Packet:
+    Text(String)
+
+def unwrap(packet: own Packet) -> String:
+    match packet:
+        case Packet.Text(text):
+            return text
+"#,
+    )
+    .expect("consuming match should lower");
+    let unwrap = module
+        .functions
+        .iter()
+        .find(|function| function.name == "unwrap")
+        .expect("unwrap should lower");
+
+    assert!(unwrap.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Use(Operand::MovePlace(place)),
+                    ..
+                } if place == "packet"
+            )
+        })
+    }));
+    assert!(unwrap.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::MovePlace(_),
+                        index: 0,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+    }));
+}
+
+#[test]
+fn own_user_and_trait_receivers_lower_as_explicit_moves() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class DirectBox:
+    value: String
+
+    def take(own self) -> String:
+        return self.value
+
+trait Take:
+    def take(own self) -> String
+
+class TraitBox:
+    value: String
+
+impl Take for TraitBox:
+    def take(own self) -> String:
+        return self.value
+
+def main():
+    direct = DirectBox("direct")
+    print(direct.take())
+    trait_value = TraitBox("trait")
+    print(trait_value.take())
+"#,
+    )
+    .expect("own receiver calls should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let moved_receivers = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Member {
+                                object: Operand::MovePlace(place),
+                                field,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } if field == "take" => Some(place.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(moved_receivers, vec!["direct", "trait_value"]);
+}
+
+#[test]
+fn queue_and_owned_collection_iteration_lower_destructive_yields() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def consume_vector(values: own Vec[String]):
+    for value in own values:
+        print(value)
+
+def consume_set(values: own Set[String]):
+    for value in own values:
+        print(value)
+
+def consume_queue(values: Queue[String]):
+    for value in values:
+        print(value)
+"#,
+    )
+    .expect("owned collection and queue iteration should lower");
+
+    for function_name in ["consume_vector", "consume_set"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == function_name)
+            .unwrap_or_else(|| panic!("{function_name} should lower"));
+        assert!(
+            function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value:
+                                Rvalue::Call {
+                                    callee:
+                                        CallTarget::Member {
+                                            object: Operand::MovePlace(_),
+                                            field,
+                                            receiver_place: Some(_),
+                                        },
+                                    ..
+                                },
+                            ..
+                        } if field == "__take_index_option"
+                    )
+                })
+            }),
+            "{function_name} must destructively take from its private collection owner"
+        );
+        assert!(function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::VariantPayload {
+                            scrutinee: Operand::MovePlace(_),
+                            index: 0,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        }));
+    }
+
+    let queue = module
+        .functions
+        .iter()
+        .find(|function| function.name == "consume_queue")
+        .expect("consume_queue should lower");
+    assert!(queue.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::MovePlace(_),
+                        index: 0,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+    }));
+}
+
+#[test]
+fn task_group_captures_use_owned_operands_for_bare_and_own_target_params() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def shared_worker(value: String):
+    print(value)
+
+def own_worker(value: own String):
+    print(value)
+
+def main():
+    shared_value = "shared-capture"
+    own_value = "own-capture"
+    with TaskGroup() as group:
+        group.start_soon(shared_worker, shared_value)
+        group.start_soon(own_worker, own_value)
+"#,
+    )
+    .expect("TaskGroup captures should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let captures = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::StartTask { args, .. },
+                ..
+            } => Some(args),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(captures.len(), 2);
+    assert_eq!(
+        captures[0][0].value,
+        Operand::MovePlace("shared_value".to_string())
+    );
+    assert_eq!(
+        captures[1][0].value,
+        Operand::MovePlace("own_value".to_string())
+    );
+    assert!(captures.iter().all(|args| args.len() == 1
+        && args[0].name.is_none()
+        && args[0].writeback_place.is_none()));
+}
+
+#[test]
+fn task_group_start_records_copyability_of_the_result_type() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def duration_worker() -> Duration:
+    return Duration.ms(1)
+
+def queue_worker() -> Queue[int32]:
+    return Queue[int32]()
+
+def string_worker() -> String:
+    return "value"
+
+def vector_worker() -> Vec[int32]:
+    return [1]
+
+def main():
+    with TaskGroup() as group:
+        group.start(duration_worker)
+        group.start(queue_worker)
+        group.start(string_worker)
+        group.start(vector_worker)
+"#,
+    )
+    .expect("task result copyability should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let starts = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::StartTask {
+                        function,
+                        result_is_copy,
+                        ..
+                    },
+                ..
+            } => Some((function.as_str(), *result_is_copy)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts,
+        vec![
+            ("duration_worker", true),
+            ("queue_worker", true),
+            ("string_worker", false),
+            ("vector_worker", false),
+        ]
+    );
+}
+
+#[test]
+fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import process
+import net
+
+def supervise(supervisor: process.Supervisor, name: own String, command: own Vec[String], cwd: own Option[String], environment: own Map[String, String], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
+    supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
+
+def respond_text(exchange: net.HttpExchange, status: int32, text: own String, headers: own Map[String, String]):
+    exchange.respond_text(status=status, text=text, headers=headers)
+
+def respond_bytes(exchange: net.HttpExchange, status: int32, bytes: own Vec[uint8], headers: own Map[String, String]):
+    exchange.respond_bytes(status=status, bytes=bytes, headers=headers)
+"#,
+    )
+    .expect("retained process and HTTP builtin arguments should lower");
+
+    let member_args = |function_name: &str, member_name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == function_name)
+            .unwrap_or_else(|| panic!("{function_name} should lower"))
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Member { field, .. },
+                            args,
+                        },
+                    ..
+                } if field == member_name => Some(args),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{function_name} should call {member_name}"))
+    };
+
+    let supervisor_args = member_args("supervise", "start");
+    for (name, place) in [
+        ("name", "name"),
+        ("command", "command"),
+        ("cwd", "cwd"),
+        ("env", "environment"),
+    ] {
+        let argument = supervisor_args
+            .iter()
+            .find(|argument| argument.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("process.Supervisor.start should retain {name}"));
+        assert_eq!(
+            argument.value,
+            Operand::MovePlace(place.to_string()),
+            "non-copy process.Supervisor.start argument {name} must be transferred"
+        );
+    }
+    for name in [
+        "stdin",
+        "stdout",
+        "stderr",
+        "restart",
+        "backoff",
+        "max_restarts",
+        "group",
+    ] {
+        let argument = supervisor_args
+            .iter()
+            .find(|argument| argument.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("process.Supervisor.start should retain {name}"));
+        assert!(
+            matches!(argument.value, Operand::Place(_)),
+            "copy process.Supervisor.start argument {name} must use a value snapshot"
+        );
+    }
+
+    for (function_name, member_name, owned) in [
+        ("respond_text", "respond_text", ["text", "headers"]),
+        ("respond_bytes", "respond_bytes", ["bytes", "headers"]),
+    ] {
+        let args = member_args(function_name, member_name);
+        for place in owned {
+            let argument = args
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some(place))
+                .unwrap_or_else(|| panic!("{member_name} should bind {place}"));
+            assert_eq!(argument.value, Operand::MovePlace(place.to_string()));
+        }
+        assert!(matches!(
+            args.iter()
+                .find(|argument| argument.name.as_deref() == Some("status"))
+                .expect("status should bind")
+                .value,
+            Operand::Place(_)
+        ));
+    }
+}
+
+#[test]
+fn json_dump_failures_keep_their_documented_mir_trap_codes() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import json
+
+def main():
+    print(json.dumps(json.Value.Null, indent=Option.Some(17)))
+"#,
+    )
+    .expect("invalid runtime indent should still lower");
+    let error = crate::run_mir(&module).expect_err("invalid JSON indent should trap");
+    assert_eq!(error.code, "AU4003");
+    assert!(error.message.contains("between 0 and 16"));
 }
 
 #[test]
@@ -1084,14 +1829,14 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     let local_static_target = lowerer
         .resolve_task_start_target(&member_expr(name_expr("Thing"), "zero"))
         .expect("unqualified imported class static methods should resolve");
-    assert_eq!(local_static_target.0, "pkg.helpers::Thing.zero");
+    assert_eq!(local_static_target.function, "pkg.helpers::Thing.zero");
     let module_static_target = lowerer
         .resolve_task_start_target(&member_expr(
             member_expr(member_expr(name_expr("pkg"), "helpers"), "Thing"),
             "zero",
         ))
         .expect("module-qualified imported class static methods should resolve");
-    assert_eq!(module_static_target.0, "pkg.helpers::Thing.zero");
+    assert_eq!(module_static_target.function, "pkg.helpers::Thing.zero");
     assert!(
         lowerer
             .resolve_task_start_target(&member_expr(
@@ -1107,14 +1852,14 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             "helper",
         ))
         .expect("module-qualified imported functions should resolve");
-    assert_eq!(module_function_target.0, "pkg.helpers::helper");
+    assert_eq!(module_function_target.function, "pkg.helpers::helper");
     let reexport_function_target = lowerer
         .resolve_task_start_target(&member_expr(
             member_expr(name_expr("pkg"), "reexport"),
             "helper",
         ))
         .expect("all-functions-only imported functions should resolve");
-    assert_eq!(reexport_function_target.0, "pkg.reexport::helper");
+    assert_eq!(reexport_function_target.function, "pkg.reexport::helper");
     let specialized_local_function = expr(ExprKind::Specialize {
         expr: Box::new(name_expr("local_helper")),
         type_args: Vec::new(),
@@ -1123,7 +1868,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&specialized_local_function)
             .expect("specialized local functions should resolve as task targets")
-            .0,
+            .function,
         "local_helper"
     );
     let specialized_static_target = expr(ExprKind::Specialize {
@@ -1134,7 +1879,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&specialized_static_target)
             .expect("specialized static methods should resolve as task targets")
-            .0,
+            .function,
         "pkg.helpers::Thing.zero"
     );
     let specialized_class_object = expr(ExprKind::Specialize {
@@ -1145,7 +1890,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&member_expr(specialized_class_object, "zero"))
             .expect("static methods on specialized class objects should resolve")
-            .0,
+            .function,
         "pkg.helpers::Thing.zero"
     );
 
@@ -2395,8 +3140,8 @@ def main() -> int32:
                 instruction,
                 Instruction::Assign {
                     target,
-                    value: Rvalue::Use(Operand::Place(place)),
-                } if target == &parent_return_place && place == "item"
+                    value: Rvalue::Use(Operand::Place(_)),
+                } if target == &parent_return_place
             )
         })
     }));
@@ -2554,7 +3299,10 @@ def main() -> int32:
         None,
         binding_success,
         binding_failure,
-        true,
+        PatternLoweringOptions {
+            collect_writeback: true,
+            consume_payloads: false,
+        },
     );
     let PatternWriteback::Use(Operand::Place(binding_place)) =
         binding_writeback.expect("binding patterns should produce writeback")
@@ -2583,7 +3331,10 @@ def main() -> int32:
         Some(&Type::named("Maybe")),
         mismatch_success,
         mismatch_failure,
-        true,
+        PatternLoweringOptions {
+            collect_writeback: true,
+            consume_payloads: false,
+        },
     );
     assert!(mismatched.is_none());
     assert!(matches!(
@@ -2601,7 +3352,10 @@ def main() -> int32:
         None,
         unknown_success,
         unknown_failure,
-        true,
+        PatternLoweringOptions {
+            collect_writeback: true,
+            consume_payloads: false,
+        },
     );
     let PatternWriteback::Variant { ty, payloads, .. } =
         unknown_writeback.expect("unknown variant lowering should produce a writeback")
@@ -2624,7 +3378,10 @@ def main() -> int32:
         None,
         unit_variant_success,
         unit_variant_failure,
-        true,
+        PatternLoweringOptions {
+            collect_writeback: true,
+            consume_payloads: false,
+        },
     );
     let PatternWriteback::Variant { ty, payloads, .. } =
         unit_variant_writeback.expect("unit variant pattern should produce a writeback")
@@ -2667,7 +3424,10 @@ def main() -> int32:
         Some(&Type::named("int32")),
         literal_success,
         literal_failure,
-        true,
+        PatternLoweringOptions {
+            collect_writeback: true,
+            consume_payloads: false,
+        },
     );
     assert!(matches!(
         literal_writeback,

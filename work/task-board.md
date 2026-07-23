@@ -1,12 +1,15 @@
 # Task Board
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ## Active Work Session
 
 - Started: 2026-07-22 16:10:25 BST.
 - Current elapsed: 11h 28m 51s as of 2026-07-23 03:39:16 BST.
-- Target: Complete authorized Batch 2 of 5; Phase 3 Randomness is full-gated and ready to commit, after which the active ticket becomes Phase 3 JSON across its recursive value model, typed parse errors, exact number policy, bounded deterministic codec, ownership-aware accessors, MIR/direct parity, LSP, reference, examples, tutorials, and behavioral fixtures.
+- Target: Phase 3 JSON is complete and exact-tree full-gated with its recursive value model, exact resource-bounded codec, ownership-aware accessors, MIR/direct parity, LSP, normative reference, example, tutorial, Provisional ADR-0021, and the required non-copy ownership/runtime closure ready for one isolated logical commit.
+- Current verification: the authoritative `npm run ci` gate passes all 251 CLI tests, 747 compiler library tests and supporting Rust suites, complete forced MIR/direct parity, all 57 LSP and 9 extension tests, compiler and 100% LSP coverage, the 31-page executable reference, docs, audit policy, strict Clippy, and hygiene. Exact compiler coverage is 59,818/62,248 lines (96.096260121%), 3,870/3,988 functions (97.041123370%), and 87,178/92,489 regions (94.257695510%); no synthetic test or exclusion was added.
+- Remaining work: commit JSON alone, then continue Bytes, `assert`, and the retry-worker example before Phase 3.5, Phase 4, and V6.
+- Blocking status: none. The temporary macOS signing failure is contained outside the repo; deterministic Queue signaling replaced the timing-based wait-any fixture; and the PostCSS security patch is committed at `ff00d9b`.
 - Stop rule: complete Batch 2 and report its checkpoint, encounter a genuine stop under the provisional-decision protocol, or reach 12 continuous hours at 2026-07-23 04:10:25 BST. Do not begin Phase 5.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
 - Coverage rule: floors stay frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only and one downward-truncated re-ratchet at sign-off.

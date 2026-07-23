@@ -1,0 +1,4 @@
+import json
+
+def main():
+    print(json.dumps(json.Value.Null, indent=Option.Some(17)))

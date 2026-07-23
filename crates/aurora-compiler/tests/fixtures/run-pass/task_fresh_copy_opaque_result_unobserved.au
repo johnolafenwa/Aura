@@ -1,0 +1,7 @@
+def make_value() -> Duration:
+    return Duration.ms(125)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _task = group.start(make_value)
+    return 0

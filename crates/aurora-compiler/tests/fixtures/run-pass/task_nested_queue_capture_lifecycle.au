@@ -1,0 +1,48 @@
+class QueueBundle:
+    vector: Vec[Queue[int32]]
+    unique: Set[Queue[int32]]
+    mapping: Map[String, Queue[int32]]
+
+enum NestedQueues:
+    Bundle(QueueBundle)
+
+def produce(queues: own NestedQueues) -> int32:
+    match queues:
+        case NestedQueues.Bundle(bundle):
+            bundle.vector[0].put(1)
+            for queue in bundle.unique:
+                queue.put(2)
+            bundle.mapping["queue"].put(3)
+    return 7
+
+def main() -> int32:
+    vector_queue = Queue[int32]()
+    set_queue = Queue[int32]()
+    map_queue = Queue[int32]()
+    vector = [vector_queue]
+    unique: Set[Queue[int32]] = {set_queue}
+    mapping = {"queue": map_queue}
+    nested = NestedQueues.Bundle(QueueBundle(vector=vector, unique=unique, mapping=mapping))
+
+    with TaskGroup() as group:
+        task = group.start(produce, nested)
+
+        for value in vector_queue:
+            print(value)
+        for value in set_queue:
+            print(value)
+        for value in map_queue:
+            print(value)
+
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message)
+                return 2
+            case TaskResult.Cancelled:
+                return 3
+            case TaskResult.TimedOut:
+                return 4
+
+    return 0

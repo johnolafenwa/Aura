@@ -1,0 +1,207 @@
+import json
+
+def kind(value: own json.Value) -> String:
+    match value:
+        case json.Value.Null:
+            return "null"
+        case json.Value.Bool(_):
+            return "bool"
+        case json.Value.Int(_):
+            return "int"
+        case json.Value.Float(_):
+            return "float"
+        case json.Value.String(_):
+            return "string"
+        case json.Value.Array(_):
+            return "array"
+        case json.Value.Object(_):
+            return "object"
+
+def main():
+    source = "{\"n\":1.0,\"f\":1.5,\"items\":[true,null,\"x\"]}"
+    match json.parse(source):
+        case Result.Ok(value):
+            print(json.dumps(value))
+            print(json.dumps(value, indent=Option.Some(2)))
+            print(source)
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    boolean = json.Value.Bool(true)
+    print(json.as_bool(boolean))
+    print(json.as_int(boolean))
+    print(json.dumps(boolean))
+    indent = Option.Some(0)
+    print(json.dumps(boolean, indent=indent))
+    print(indent)
+
+    integer = json.Value.Int(7)
+    print(json.as_int(integer))
+    print(json.as_float(integer))
+    print(json.is_null(integer))
+    print(json.is_null(json.Value.Null))
+
+    floating = json.Value.Float(1.5)
+    print(json.as_float(floating))
+    print(json.as_int(floating))
+
+    match json.into_string(json.Value.String("aurora")):
+        case Option.Some(text):
+            print(text)
+        case Option.None:
+            print("not a string")
+
+    print(json.into_string(json.Value.Int(1)))
+    print(json.into_array(json.Value.Null))
+    print(json.into_object(json.Value.Bool(false)))
+
+    match json.into_array(json.Value.Array([json.Value.Int(1), json.Value.Int(2)])):
+        case Option.Some(items):
+            print(items.len())
+        case Option.None:
+            print("not an array")
+
+    match json.into_object(json.Value.Object({"b": json.Value.Int(2), "a": json.Value.Int(1)})):
+        case Option.Some(object):
+            print(object.len())
+            print(json.dumps(json.Value.Object(object)))
+        case Option.None:
+            print("not an object")
+
+    print(kind(json.Value.Null))
+    print(kind(json.Value.Bool(false)))
+    print(kind(json.Value.Int(0)))
+    print(kind(json.Value.Float(0.5)))
+    print(kind(json.Value.String("value")))
+    print(kind(json.Value.Array([json.Value.Null])))
+    print(kind(json.Value.Object({"key": json.Value.Null})))
+
+    match json.parse("-9223372036854775808"):
+        case Result.Ok(value):
+            print(json.as_int(value))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("9223372036854775807"):
+        case Result.Ok(value):
+            print(json.as_int(value))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{\"b\":1,\"a\":2,\"b\":3}"):
+        case Result.Ok(value):
+            match json.into_object(value):
+                case Option.Some(object):
+                    keys = object.keys()
+                    for key in keys:
+                        print(key)
+                    print(json.dumps(json.Value.Object(object)))
+                case Option.None:
+                    print("not an object")
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("1e400"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.NumberOutOfRange(line, column)):
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{\"x\":"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.Syntax(message, line, column)):
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+
+    print(json.dumps(json.Value.Float(-0.0)))
+    print(json.dumps(json.Value.String("\x08\x0c\x0d\t\0\x1f/é")))
+
+    match json.parse("{\"é\": ]}"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.Syntax(_message, line, column)):
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{\"é\":1e400}"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.NumberOutOfRange(line, column)):
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{\"b\":1,\"a\":2,\"\\u0062\":3}"):
+        case Result.Ok(value):
+            match json.into_object(value):
+                case Option.Some(object):
+                    print(object.len())
+                    for key in object.keys():
+                        print(key)
+                    print(object.get("b"))
+                    print(json.dumps(json.Value.Object(object)))
+                case Option.None:
+                    print("not an object")
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{\"z\":{\"b\":1,\"a\":2},\"a\":0}"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("[]"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("{}"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    match json.parse("1e-999999999999999999999999"):
+        case Result.Ok(value):
+            print(json.as_float(value))
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    print(json.dumps(json.Value.Array([json.Value.Null]), indent=Option.Some(0)))
+    print(json.dumps(json.Value.Object({"a": json.Value.Null}), indent=Option.Some(16)))
+
+    mut depth_128 = "null"
+    mut depth: int32 = 0
+    while depth < 128:
+        depth_128 = "[" + depth_128 + "]"
+        depth += 1
+    match json.parse(depth_128):
+        case Result.Ok(value):
+            print(json.dumps(value).len())
+        case Result.Err(error):
+            print(error)
+
+    depth_129 = "[" + depth_128 + "]"
+    match json.parse(depth_129):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.NestingTooDeep(limit, line, column)):
+            print(limit)
+            print(line)
+            print(column)
+            print(depth_129.len())
+        case Result.Err(error):
+            print(error)

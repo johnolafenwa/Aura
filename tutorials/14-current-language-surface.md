@@ -76,6 +76,8 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `process.SupervisorEvent`
 - `process.SupervisorWait`
 - `random.Rng`
+- `json.Value`
+- `json.Error`
 
 Builtin generic or runtime-facing types currently accepted:
 
@@ -293,12 +295,23 @@ Current builtin module namespaces:
 - `fs`
 - `net`
 - `process`
+- `json`
 
 Current builtin `range(...)` notes:
 
 - supports `range(stop)` and `range(start, stop)`
 - supports the matching named-argument forms
 - currently requires bounds that fit the bootstrap compiler's signed index space
+
+Current dynamic JSON surface:
+
+- `json.parse(...) -> Result[json.Value, json.Error]`
+- `json.dumps(..., indent=Option.None) -> String`
+- exact inspecting accessors `is_null`, `as_bool`, `as_int`, and `as_float`
+- consuming accessors `into_string`, `into_array`, and `into_object`
+- recursive Null, Boolean, Int, Float, String, Array, and Object variants
+- deterministic sorted-key compact or pretty output
+- typed parse failures plus fixed depth and byte limits
 
 Current builtin I/O, networking, and process surface:
 

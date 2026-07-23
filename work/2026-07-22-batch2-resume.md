@@ -247,11 +247,163 @@
   56,424/58,729 lines (96.08%), 3,567/3,685 functions (96.80%), and
   82,044/87,016 regions (94.29%). No synthetic-coverage test or coverage
   exclusion was added.
+- Committed the complete Randomness ticket as `c3df960` after that exact full
+  gate, then began Phase 3 JSON test-first in parallel, without mixing any JSON
+  work into the Randomness commit.
+- Added the JSON language metadata contract for recursive `json.Value`, typed
+  `json.Error`, borrowed `parse`/`dumps`, seven ownership-aware module
+  accessors, the optional indentation default, and all three retained legacy
+  string-map helpers. Qualified JSON enum identities now survive MIR lowering,
+  canonical registry-based analysis, and the checked-MIR `Option.None` default
+  path for `json.dumps`.
+- Added the isolated JSON codec core and behavior tests for exact mathematical
+  number classification, `int64` boundaries, finite float fallback,
+  Unicode-scalar error columns, input/depth/error precedence, duplicate decoded
+  keys, deterministic sorted compact and indented output, string escaping,
+  signed float spelling, independent 64 MiB limits, depth 128, indentation
+  0 through 16, exact accessors, and fallible primary output growth. The global
+  serde configuration intentionally does not enable `preserve_order`.
+- Added Provisional ADR-0021, the full eight-section Manual JSON chapter,
+  Manual/VitePress navigation, and tutorial 21. They explicitly mark runtime
+  integration as in progress and do not install a false executable-reference
+  contract.
+- Enabling arbitrary-precision number tokens initially changed the legacy
+  validator so `json.is_valid("1e400")` returned true. A failing compatibility
+  regression now pins the historical finite-number rule, and the legacy helper
+  rejects that overflow spelling again.
+- The JSON slice remains intentionally uncommitted. Two codec-integrity defects
+  still require closure before runtime wiring: eliminate the serde
+  arbitrary-precision reserved-key ambiguity for a real object whose first key
+  is `$serde_json::private::Number`, and remove or make fallible the remaining
+  intermediate dump allocations so every host allocation failure can map to
+  `AU4005`.
+- Closed those codec-integrity gaps and integrated JSON end to end: recursive
+  runtime values, exact parse/dump conversion, typed accessors, MIR and direct
+  host dispatch, diagnostics, fixtures, forced-backend behavior, compiler-owned
+  editor metadata, the maintained example, executable reference fence, and
+  tutorial/reference propagation now agree.
+- Added exact metadata validators so malformed host-side `json.Value.Int`,
+  `.Array`, and `.Object` wrappers cannot bypass their declared `int64`,
+  `Vec[json.Value]`, and `Map[String, json.Value]` contracts. Added real
+  entry-point tests at exactly 64 MiB and one byte above for both parse input
+  and dumped output; the encoder now writes unescaped string runs in bounded
+  chunks instead of allocating a second full-size intermediate string.
+- A final hidden-clone audit found that owned MIR/direct contexts inherited a
+  broader pre-existing defect: ordinary assignment, return, owned calls,
+  aggregates, class fields, variants, `try`, and consuming matches could clone
+  non-copy runtime values instead of transferring them. Test-first correction
+  is in progress with an explicit `MovePlace` operand, destructive nested-field
+  and variant-payload operations, and pointer-identity regressions. JSON will
+  not be committed on top of a false ownership contract.
+- Completed the explicit-move and backend-adapter closure across MIR and direct
+  execution, including destructive aggregate/field/payload transfer, consuming
+  match backtracking, owned collection and queue paths, task captures, and
+  retained process/HTTP arguments. A direct-child forced-exit audit exposed a
+  pre-existing abnormal-exit leak, so direct execution now tracks frame-owned
+  opaque references per lightweight task, reclaims them on trap or
+  cancellation, preserves cleanup snapshots across trapping cleanup thunks,
+  and enforces an empty ledger on normal completion in release builds.
+- The post-closure JSON audit found two remaining P1 resource defects:
+  duplicate-key insertion scanned every earlier key, making large unique
+  objects quadratic, and dense valid input could reach infallible allocations
+  while expanding the parsed and runtime trees. Deterministic structural and
+  injected-allocation regressions are being added before either finding is
+  corrected; JSON remains intentionally uncommitted.
+- Replaced the quadratic object-key scan with a randomized hash index while
+  preserving first-slot/last-value duplicate semantics, made every
+  Aurora-controlled parser-tree allocation fallible, and added a shared
+  provisional limit of 262,144 JSON value nodes. The root, scalars, arrays,
+  objects, and member values count; object keys do not. The exact boundary is
+  accepted and the next node traps with `AU4005`; host-wide allocator failure
+  inside third-party parsing remains an explicit external condition rather
+  than an impossible recovery promise.
+- The subsequent direct-task audit found two additional P1 abnormal/normal
+  handoff defects before the ledger could be accepted: opaque child results
+  can remain in the child's ledger or destructively empty an external copy
+  alias, and the force-reset entry closure captures an `Arc` whose destructor
+  is skipped when the coroutine stack is discarded. Dedicated regressions and
+  an explicit result-copy contract plus no-destructor external claim state are
+  being implemented before the JSON gate.
+- Closed both direct-task findings with an explicit copy/non-copy result
+  handoff contract, child-ledger transfer, and raw externally owned claim state
+  that can be reclaimed when a discarded coroutine stack cannot run
+  destructors. Normal completion, traps, cancellation, spawn failure,
+  late-scope unwind, unobserved results, and copy aliases are pinned
+  independently.
+- An expanded exact-depth regression then exposed a direct-backend `SIGBUS` at
+  JSON depth 117. The failure was stack exhaustion in the recursive
+  runtime-value materializer on the one-MiB lightweight-task stack, not a codec
+  limit error. The materializer now uses an explicit iterative frame stack,
+  accepts the documented depth-128 boundary on both backends, rejects the next
+  level deterministically, and checks the shared node budget before fallible
+  container allocation so an allocation failure cannot mask the resource
+  limit.
+- The coverage recovery remains behavior-first: malformed JSON runtime values
+  and direct ABI buffers, borrowed-source preservation, owned consumption,
+  root-node accounting, exact metrics/EOF behavior, failed nested field and
+  variant moves, canonical JSON analysis/completion, and MIR/direct ownership
+  parity are all pinned through observable outcomes. Duplicate opaque-trait
+  dispatch and closure-only invariant lookups were restructured instead of
+  manufacturing line-execution tests. The serde visitor cleanup removed only
+  callbacks unreachable under the selected arbitrary-precision pipeline. No
+  synthetic coverage test or coverage exclusion was added.
+
+## Current JSON verification
+
+- Before the explicit-move correction began, the focused JSON compiler tests
+  and fixtures passed across the shared runtime, MIR, and direct adapters. All
+  57 LSP tests and 100% LSP coverage passed; the JSON Manual page is classified
+  and has a real verified executable fence; `npm run check:reference`,
+  `npm run docs:build`, formatting, and diff hygiene passed.
+- After the ownership closure, focused JSON tests pass 38/38, focused ownership
+  tests pass 22/22, the native runtime/codegen module suites pass, the
+  release-mode ledger invariant passes, compiler checking is clean, and the
+  complete maintained run-pass fixture suite passes with its required
+  loopback permission. Formatting and diff hygiene are clean.
+- Those results precede the final object-index and allocation-safety
+  corrections. They remain focused evidence, not a full JSON gate or
+  completion claim.
+- After the final ownership/resource corrections, all 19 codec tests, 18
+  focused dynamic-JSON library tests, the direct JSON suite, both new MIR
+  diagnostic suites, projected direct-instance ownership tests, both public
+  analysis/parity tests, all 57 LSP tests, all 9 extension tests, reference
+  integrity, and the documentation build pass.
+- The aggregate compiler library run reached more than 700 green tests before
+  the deep-parser limit test overflowed the default Rust test-thread stack;
+  this confirmed why the maintained gate sets `RUST_MIN_STACK=33554432`. A
+  transient macOS Code Signing subsystem failure then stalled newly launched
+  developer binaries in `_dyld_start`; the gate was resumed without changing
+  repository binaries by using temporary ad-hoc-signed copies of the toolchain
+  plus an output-signing linker wrapper under `/tmp`.
+- The first authoritative coverage rerun passed every behavior, fixture,
+  package, network, native-FFI, and compiler test but measured 96.017741% lines,
+  narrowly below the frozen 96.06% floor. Per the standing rule, a single
+  behavior-focused regression was added for malformed MIR JSON host values. It
+  pins exact diagnostics, borrowed-source preservation, owned-argument
+  consumption, malformed `Option[int64]` values, and missing argument/place
+  failures; it is not a line-execution test.
+- A full-gate retry exposed that `task_group_wait_helpers.au` used sleep timing
+  to expect task 1 to win `wait_any`, even though the reference correctly
+  leaves ordering unspecified when multiple tasks are already ready. The
+  fixture now blocks task 0 on an explicit Queue release, observes task 1,
+  releases task 0, and then waits for both. Twenty-five MIR and twenty-five
+  direct repetitions matched the unchanged oracle, and the complete forced
+  parity matrix passes.
+- The security gate found the PostCSS advisory affecting the transitive
+  8.5.10 resolution. The lockfile-only update selects PostCSS 8.5.22 and
+  Nanoid 3.3.16 without changing package manifests; `npm audit` reports zero
+  vulnerabilities. Cargo audit reports no vulnerability and only the
+  repository's allowed unmaintained `rustls-pemfile` warning.
+- The authoritative exact-tree `npm run ci` gate is green: formatting; all
+  251 CLI tests, 747 compiler library tests, and supporting Rust suites; the
+  complete forced MIR/direct parity matrix; all 57 LSP and 9 extension tests;
+  compiler coverage; 100% LSP coverage; the 31-page executable reference
+  gate; documentation; audit policy; strict Clippy; and hygiene all pass.
+- Final JSON-decision coverage is 59,818/62,248 lines (96.096260121%),
+  3,870/3,988 functions (97.041123370%), and 87,178/92,489 regions
+  (94.257695510%). No synthetic-coverage test or coverage exclusion was added.
 
 ## Follow-up
 
-- Begin the Phase 3 JSON ticket test-first: establish the recursive
-  `json.Value` and structured `json.Error` metadata contract, then implement
-  exact numeric classification, bounded parsing and dumping, ownership-aware
-  accessors, MIR/direct parity, LSP, the normative reference, maintained
-  examples and tutorial, and Provisional ADR-0021 before its logical commit.
+- Commit the exact full-gated JSON ticket alone. Then continue Bytes, `assert`,
+  and the retry-worker example in the required Phase 3 order.

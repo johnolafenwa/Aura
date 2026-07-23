@@ -176,6 +176,13 @@ The examples are organized by topic so they can serve both as quick references a
   - typed JSON/TOML metadata, path operations, process-local counters, and structured log/trace events
   - prints the artifact path, deterministic JSON, TOML validity, and counter value
 
+### `json/`
+
+- `dynamic_values.au`
+  - parses a recursive `json.Value`, uses an exact scalar accessor, constructs
+    a mixed Object/Array tree, and dumps sorted compact and two-space-indented
+    JSON
+
 ### `control_flow/`
 
 - `boolean_logic.au`

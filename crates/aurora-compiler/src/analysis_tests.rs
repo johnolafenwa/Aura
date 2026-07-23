@@ -4,7 +4,7 @@ use super::{
     builtin_function_return_type, builtin_member_completions, callable_contains_line,
     complete_path_source, complete_source, enclosing_function_return_placeholder,
     extract_receiver_before_dot, extract_receiver_ending_before, find_identifier_in_line,
-    find_receiver_start, format_class_hover, format_enum_hover, format_function_detail,
+    find_receiver_start, format_class_hover, format_enum_hover_named, format_function_detail,
     format_function_hover, format_method_hover, format_value_hover, format_variant_hover,
     infer_builtin_variant_call, lower_type_ref, placeholder_stmt_for_return_type, range_from_span,
     range_from_span_with_path, recover_checked_program_after_member_errors,
@@ -30,6 +30,61 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempDir {
     path: PathBuf,
+}
+
+#[test]
+fn analysis_resolves_canonical_enums_from_the_module_registry() {
+    let mut program = checked_program("def main():\n    pass\n");
+    let remote = checked_program("enum Value:\n    Null\n    Int(int64)\n");
+    let remote_value = remote
+        .enums
+        .get("Value")
+        .expect("remote Value enum should exist")
+        .clone();
+    program.module_registry.insert(
+        "json".to_string(),
+        crate::sema::ModuleNamespace {
+            name: "json".to_string(),
+            path: "json".to_string(),
+            source_path: None,
+            modules: Default::default(),
+            functions: Default::default(),
+            classes: Default::default(),
+            enums: remote.enums.clone(),
+            traits: Default::default(),
+            trait_impls: Vec::new(),
+            all_functions: Default::default(),
+            all_classes: Default::default(),
+            all_enums: remote.enums,
+            all_traits: Default::default(),
+            imported_modules: Default::default(),
+        },
+    );
+    program
+        .enums
+        .insert("Value".to_string(), remote_value.clone());
+    program
+        .canonical_type_names
+        .insert("Value".to_string(), "json.Value".to_string());
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+
+    assert!(builder.resolve_named_enum_info("json.Value").is_some());
+    assert_eq!(
+        builder.canonical_enum_identity("Value", &remote_value),
+        "json.Value"
+    );
+    for surface_name in ["json.Value", "Value"] {
+        let details = builder
+            .member_completions(&Type::named(surface_name))
+            .into_iter()
+            .map(|item| (item.name, item.detail))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(details.get("Null"), Some(&"Null -> json.Value".to_string()));
+        assert_eq!(
+            details.get("Int"),
+            Some(&"Int(own int64) -> json.Value".to_string())
+        );
+    }
 }
 
 impl TempDir {
@@ -1341,7 +1396,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .expect("qualified imported enum variants should resolve in match patterns");
     assert!(imported_variant
         .hover
-        .contains("variant Failed(code: own int32, reason: own String) -> RemoteStatus"));
+        .contains("variant Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus"));
     assert!(imported_variant.definition.is_some());
     assert_eq!(
         builder
@@ -1349,17 +1404,17 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             .into_iter()
             .find(|completion| completion.name == "Failed")
             .map(|completion| completion.detail),
-        Some("Failed(code: own int32, reason: own String) -> RemoteStatus".to_string())
+        Some("Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus".to_string())
     );
     assert!(builder
         .resolve_member_type(&Type::named("pkg.tools.RemoteStatus"), "Failed")
         .expect("qualified imported enum variants should resolve as static members")
         .hover
-        .contains("variant Failed(code: own int32, reason: own String) -> RemoteStatus"));
+        .contains("variant Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus"));
     let remote_status = builder
         .resolve_match_variant_enum("pkg.tools.RemoteStatus")
         .expect("qualified imported enum should resolve as a match variant enum");
-    assert!(remote_status.hover.contains("enum RemoteStatus"));
+    assert!(remote_status.hover.contains("enum pkg.tools.RemoteStatus"));
     assert!(remote_status.definition.is_some());
     assert!(builder
         .resolve_match_variant_enum("SendError")
@@ -2761,7 +2816,7 @@ fn path_aware_analysis_tracks_definitions_for_namespace_imported_symbols() {
                 == Some(types_path.as_str())
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
-        occurrence.hover.contains("enum Status")
+        occurrence.hover.contains("enum pkg.types.Status")
             && occurrence
                 .definition
                 .as_ref()
@@ -3168,7 +3223,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         )]),
     };
     assert!(format_class_hover(&class_info).contains("value: int32"));
-    assert!(format_enum_hover(&enum_info).contains("enum Status"));
+    assert!(format_enum_hover_named(&enum_info.decl.name).contains("enum Status"));
     assert!(builtin_enum_hover("Option[T]", "docs").contains("docs"));
     assert!(builtin_function_hover("print(value)", "docs").contains("print(value)"));
     assert!(

@@ -44,7 +44,14 @@ This page documents known current limits of the Aurora compiler and runtime.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification remains Provisional under ADR-0019.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
-- JSON and TOML codecs currently support the typed `Map[String, String]` boundary, not nested dynamic trees or derived class/enum schemas.
+- JSON supports the recursive `json.Value` tree, typed `json.Error` parse
+  failures, deterministic dumps, a 128-container depth limit, a shared
+  root-inclusive 262,144-value materialization limit, and independent 64 MiB
+  parse-input and dump-output caps. Exceeding the node limit or encountering a
+  controlled parse/conversion allocation failure traps with `AU4005`; it is not
+  a `json.Error` variant. It has no arbitrary-precision number, streaming
+  codec, or derived class/enum schemas. TOML and the legacy JSON compatibility
+  helpers remain restricted to typed `Map[String, String]`.
 - `random.Rng` provides one fixed deterministic stream with integer, floating,
   and mutable-Vec shuffle operations. There is no global generator, state
   serialization, reseeding, jump/substream operation, distribution library,

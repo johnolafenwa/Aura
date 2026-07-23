@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `text`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/json_value_constructor_consumes_payload.au:7:11
+  |
+7 |     print(text)
+  |           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/json_value_constructor_consumes_payload.au:5:31: value moved here
+  = help: pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/json_value_constructor_consumes_payload.au:5:35-5:35 with `.clone()`

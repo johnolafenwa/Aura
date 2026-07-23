@@ -10,6 +10,7 @@ required_pages=(
   names-and-scopes
   static-semantics
   execution-model
+  json
   randomness
   diagnostics
   conformance
@@ -80,6 +81,16 @@ grep -Fq 'unsafe concrete specialization' docs/manual/diagnostics.md
 grep -Fq 'code: "AU3007"' crates/aurora-compiler/src/diag.rs
 grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
 grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
+grep -Fq '| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
+grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` |' docs/manual/api-index.md
+grep -Fq '`json.Value` is a move type' docs/manual/types.md
+grep -Fq 'JSON input-data failures are typed `json.Error` values' docs/manual/diagnostics.md
+grep -Fq 'recursive JSON parse/dump semantics' docs/manual/conformance.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0021-json-value-model-and-codec-policy.md
+grep -Fq '0021-json-value-model-and-codec-policy.md' architecture_docs/decisions/README.md
+test -s examples/json/dynamic_values.au
+grep -Fq '`dynamic_values.au`' examples/README.md
+grep -Fq '[21-json.md]' tutorials/README.md
 test -s examples/randomness/deterministic_rng.au
 grep -Fq 'shuffle_rng.shuffle(values)' examples/randomness/deterministic_rng.au
 grep -Fq '`deterministic_rng.au`' examples/README.md
@@ -217,6 +228,15 @@ if rg -n 'secure_float' \
   tutorials \
   examples; then
   echo "reference exposes the unapproved secure_float API" >&2
+  exit 1
+fi
+
+if rg -n 'not a dynamic JSON tree|Dynamic JSON trees[^.\n]*unavailable|runtime integration[^.\n]*in progress|executable-reference integration[^.\n]*in progress|target contract rather than claiming' \
+  architecture_docs/decisions/0021-json-value-model-and-codec-policy.md \
+  docs/manual/json.md \
+  docs/manual/control-plane.md \
+  tutorials/21-json.md; then
+  echo "reference still describes the implemented recursive JSON surface as unavailable or integration-only" >&2
   exit 1
 fi
 

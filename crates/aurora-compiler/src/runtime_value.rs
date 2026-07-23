@@ -45,6 +45,7 @@ use std::os::unix::process::CommandExt;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
+use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
 use crate::sema::Type;
 
@@ -2395,7 +2396,7 @@ impl ChannelValue {
     }
 }
 
-fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
+pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
         Value::Channel(channel) => queues.push(channel.clone()),
         Value::Vec(vector) => {
@@ -2428,6 +2429,7 @@ fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn register_task_as_queue_producer_for_values<'a>(
     values: impl IntoIterator<Item = &'a Value>,
     task: &TaskValue,
@@ -7727,9 +7729,9 @@ pub(crate) fn result_err(value: Value) -> Value {
 static HOST_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
 static HOST_METRICS: OnceLock<Mutex<BTreeMap<String, i64>>> = OnceLock::new();
 
-fn host_string_arg(args: &[Value], index: usize, call: &str) -> Result<String> {
+fn host_string_ref_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Result<&'a str> {
     match args.get(index) {
-        Some(Value::String(value)) => Ok(value.clone()),
+        Some(Value::String(value)) => Ok(value),
         Some(other) => Err(Diagnostic::new(format!(
             "`{call}` expects argument {} to be `String`, found `{}`",
             index + 1,
@@ -7740,6 +7742,10 @@ fn host_string_arg(args: &[Value], index: usize, call: &str) -> Result<String> {
             index + 1
         ))),
     }
+}
+
+fn host_string_arg(args: &[Value], index: usize, call: &str) -> Result<String> {
+    Ok(host_string_ref_arg(args, index, call)?.to_owned())
 }
 
 fn host_string_map_arg(
@@ -7803,6 +7809,729 @@ fn host_millis_value(millis: u128, clock: &str) -> Result<Value> {
         }
     };
     Ok(Value::Int(IntegerValue::from_signed(i128::from(millis))))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static JSON_RUNTIME_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+    static JSON_RUNTIME_NODE_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
+    static JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+struct JsonRuntimeAllocationBudgetGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for JsonRuntimeAllocationBudgetGuard {
+    fn drop(&mut self) {
+        JSON_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
+    }
+}
+
+#[cfg(test)]
+struct JsonRuntimeNodeLimitGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for JsonRuntimeNodeLimitGuard {
+    fn drop(&mut self) {
+        JSON_RUNTIME_NODE_LIMIT.with(|limit| limit.set(self.0));
+    }
+}
+
+#[cfg(test)]
+struct JsonRuntimeConversionAllocationBudgetGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for JsonRuntimeConversionAllocationBudgetGuard {
+    fn drop(&mut self) {
+        JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_json_runtime_allocation_budget<T>(
+    successful_allocations: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous =
+        JSON_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.replace(Some(successful_allocations)));
+    let _guard = JsonRuntimeAllocationBudgetGuard(previous);
+    operation()
+}
+
+#[cfg(test)]
+pub(crate) fn with_json_runtime_node_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
+    let previous = JSON_RUNTIME_NODE_LIMIT.with(|current| current.replace(Some(limit)));
+    let _guard = JsonRuntimeNodeLimitGuard(previous);
+    operation()
+}
+
+#[cfg(test)]
+pub(crate) fn with_json_runtime_conversion_allocation_budget<T>(
+    successful_allocations: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous = JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET
+        .with(|budget| budget.replace(Some(successful_allocations)));
+    let _guard = JsonRuntimeConversionAllocationBudgetGuard(previous);
+    operation()
+}
+
+fn json_runtime_node_limit() -> usize {
+    #[cfg(test)]
+    if let Some(limit) = JSON_RUNTIME_NODE_LIMIT.with(Cell::get) {
+        return limit;
+    }
+    json_codec::MAX_JSON_VALUE_NODES
+}
+
+fn json_runtime_node_limit_error(limit: usize) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        JsonCodecError::MaterializationTooLarge { limit }.to_string(),
+    )
+}
+
+fn consume_json_runtime_node(remaining: &mut usize, limit: usize) -> Result<()> {
+    if *remaining == 0 {
+        return Err(json_runtime_node_limit_error(limit));
+    }
+    *remaining -= 1;
+    Ok(())
+}
+
+fn json_runtime_container_capacity(
+    child_count: usize,
+    remaining: usize,
+    limit: usize,
+) -> Result<usize> {
+    if child_count <= remaining {
+        Ok(child_count)
+    } else {
+        Err(json_runtime_node_limit_error(limit))
+    }
+}
+
+fn json_parse_allocation_error() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        "memory allocation failed while materializing parsed JSON",
+    )
+}
+
+fn json_runtime_conversion_allocation_checkpoint() -> Result<()> {
+    #[cfg(test)]
+    {
+        let injected_failure =
+            JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET.with(|budget| match budget.get() {
+                Some(0) => true,
+                Some(remaining) => {
+                    budget.set(Some(remaining - 1));
+                    false
+                }
+                None => false,
+            });
+        if injected_failure {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                "memory allocation failed while preparing JSON output",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn json_parse_allocation_checkpoint() -> Result<()> {
+    #[cfg(test)]
+    {
+        let injected_failure = JSON_RUNTIME_ALLOCATION_BUDGET.with(|budget| match budget.get() {
+            Some(0) => true,
+            Some(remaining) => {
+                budget.set(Some(remaining - 1));
+                false
+            }
+            None => false,
+        });
+        if injected_failure {
+            return Err(json_parse_allocation_error());
+        }
+    }
+    Ok(())
+}
+
+fn json_parse_try_reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<()> {
+    if additional == 0 {
+        return Ok(());
+    }
+    json_parse_allocation_checkpoint()?;
+    values
+        .try_reserve(additional)
+        .map_err(|_| json_parse_allocation_error())
+}
+
+fn json_parse_owned_string(value: &str) -> Result<String> {
+    let mut owned = String::new();
+    if !value.is_empty() {
+        json_parse_allocation_checkpoint()?;
+        owned
+            .try_reserve(value.len())
+            .map_err(|_| json_parse_allocation_error())?;
+        owned.push_str(value);
+    }
+    Ok(owned)
+}
+
+fn json_runtime_type(name: &str) -> Result<Type> {
+    Ok(Type::Named(json_parse_owned_string(name)?, Vec::new()))
+}
+
+fn json_runtime_single_payload(value: Value) -> Result<Vec<Value>> {
+    let mut payloads = Vec::new();
+    json_parse_try_reserve(&mut payloads, 1)?;
+    payloads.push(value);
+    Ok(payloads)
+}
+
+fn json_runtime_enum_value(
+    enum_name: &str,
+    variant_name: &str,
+    payloads: Vec<Value>,
+) -> Result<Value> {
+    Ok(Value::EnumVariant(EnumVariantValue {
+        enum_name: json_parse_owned_string(enum_name)?,
+        variant_name: json_parse_owned_string(variant_name)?,
+        payloads,
+    }))
+}
+
+pub(crate) fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
+    enum MaterializationFrame {
+        Array {
+            remaining: std::vec::IntoIter<JsonValue>,
+            elements: Vec<Value>,
+        },
+        Object {
+            remaining: std::vec::IntoIter<(String, JsonValue)>,
+            entries: Vec<(Value, Value)>,
+            pending_key: Option<String>,
+        },
+    }
+
+    let limit = json_runtime_node_limit();
+    let mut remaining = limit;
+    let mut frames = Vec::new();
+    let mut next = Some(value);
+    let mut completed = None;
+
+    loop {
+        if let Some(value) = next.take() {
+            consume_json_runtime_node(&mut remaining, limit)?;
+            completed = match value {
+                JsonValue::Null => Some(json_runtime_enum_value("json.Value", "Null", Vec::new())?),
+                JsonValue::Bool(value) => Some(json_runtime_enum_value(
+                    "json.Value",
+                    "Bool",
+                    json_runtime_single_payload(Value::Bool(value))?,
+                )?),
+                JsonValue::Int(value) => Some(json_runtime_enum_value(
+                    "json.Value",
+                    "Int",
+                    json_runtime_single_payload(Value::Int(IntegerValue::from_i64(value)))?,
+                )?),
+                JsonValue::Float(value) => Some(json_runtime_enum_value(
+                    "json.Value",
+                    "Float",
+                    json_runtime_single_payload(Value::Float(value))?,
+                )?),
+                JsonValue::String(value) => Some(json_runtime_enum_value(
+                    "json.Value",
+                    "String",
+                    json_runtime_single_payload(Value::String(value))?,
+                )?),
+                JsonValue::Array(values) => {
+                    let capacity = json_runtime_container_capacity(values.len(), remaining, limit)?;
+                    let mut elements = Vec::new();
+                    json_parse_try_reserve(&mut elements, capacity)?;
+                    json_parse_try_reserve(&mut frames, 1)?;
+                    frames.push(MaterializationFrame::Array {
+                        remaining: values.into_iter(),
+                        elements,
+                    });
+                    None
+                }
+                JsonValue::Object(values) => {
+                    let capacity = json_runtime_container_capacity(values.len(), remaining, limit)?;
+                    let mut entries = Vec::new();
+                    json_parse_try_reserve(&mut entries, capacity)?;
+                    json_parse_try_reserve(&mut frames, 1)?;
+                    frames.push(MaterializationFrame::Object {
+                        remaining: values.into_iter(),
+                        entries,
+                        pending_key: None,
+                    });
+                    None
+                }
+            };
+        } else {
+            let frame = frames
+                .pop()
+                .expect("JSON materialization always has a pending frame");
+            match frame {
+                MaterializationFrame::Array {
+                    mut remaining,
+                    mut elements,
+                } => {
+                    if let Some(value) = completed.take() {
+                        elements.push(value);
+                    }
+                    if let Some(value) = remaining.next() {
+                        json_parse_try_reserve(&mut frames, 1)?;
+                        frames.push(MaterializationFrame::Array {
+                            remaining,
+                            elements,
+                        });
+                        next = Some(value);
+                    } else {
+                        completed = Some(json_runtime_enum_value(
+                            "json.Value",
+                            "Array",
+                            json_runtime_single_payload(Value::Vec(VecValue {
+                                element_type: json_runtime_type("json.Value")?,
+                                elements,
+                            }))?,
+                        )?);
+                    }
+                }
+                MaterializationFrame::Object {
+                    mut remaining,
+                    mut entries,
+                    mut pending_key,
+                } => {
+                    if let Some(value) = completed.take() {
+                        entries.push((
+                            Value::String(
+                                pending_key
+                                    .take()
+                                    .expect("completed JSON object values always have a key"),
+                            ),
+                            value,
+                        ));
+                    }
+                    if let Some((key, value)) = remaining.next() {
+                        json_parse_try_reserve(&mut frames, 1)?;
+                        frames.push(MaterializationFrame::Object {
+                            remaining,
+                            entries,
+                            pending_key: Some(key),
+                        });
+                        next = Some(value);
+                    } else {
+                        completed = Some(json_runtime_enum_value(
+                            "json.Value",
+                            "Object",
+                            json_runtime_single_payload(Value::Map(MapValue {
+                                key_type: json_runtime_type("String")?,
+                                value_type: json_runtime_type("json.Value")?,
+                                entries,
+                            }))?,
+                        )?);
+                    }
+                }
+            }
+        }
+
+        if next.is_none() && frames.is_empty() {
+            return Ok(completed.expect("completed JSON materialization has a value"));
+        }
+    }
+}
+
+fn json_parse_success_value(value: JsonValue) -> Result<Value> {
+    let value = json_value_to_runtime(value)?;
+    json_runtime_enum_value("Result", "Ok", json_runtime_single_payload(value)?)
+}
+
+fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
+    let error = json_parse_error_value(error)?;
+    json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
+}
+
+pub(crate) fn json_parse_to_runtime(source: &str) -> Result<Value> {
+    match json_codec::parse(source) {
+        Ok(value) => json_parse_success_value(value),
+        Err(error @ JsonCodecError::MaterializationTooLarge { .. })
+        | Err(error @ JsonCodecError::AllocationFailed) => {
+            Err(Diagnostic::coded("AU4005", error.to_string()))
+        }
+        Err(error) => json_parse_failure_value(error),
+    }
+}
+
+pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
+    let limit = json_runtime_node_limit();
+    let mut remaining = limit;
+    runtime_value_to_json_at_depth(value, 0, &mut remaining, limit)
+}
+
+pub(crate) fn json_int_metadata_is_exact(value: &IntegerValue) -> bool {
+    value.runtime_kind() == Some(IntegerKind::Int64)
+}
+
+fn json_exact_nominal_type(value: &Type, expected_name: &str) -> bool {
+    matches!(
+        value,
+        Type::Named(name, arguments) if name == expected_name && arguments.is_empty()
+    )
+}
+
+pub(crate) fn json_array_metadata_is_exact(value: &VecValue) -> bool {
+    json_exact_nominal_type(&value.element_type, "json.Value")
+}
+
+pub(crate) fn json_object_metadata_is_exact(value: &MapValue) -> bool {
+    json_exact_nominal_type(&value.key_type, "String")
+        && json_exact_nominal_type(&value.value_type, "json.Value")
+}
+
+fn runtime_value_to_json_at_depth(
+    value: &Value,
+    depth: usize,
+    remaining: &mut usize,
+    node_limit: usize,
+) -> Result<JsonValue> {
+    fn malformed(message: impl Into<String>) -> Diagnostic {
+        Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value`: {}", message.into()),
+        )
+    }
+
+    fn clone_string(value: &str) -> Result<String> {
+        let mut cloned = String::new();
+        if !value.is_empty() {
+            json_runtime_conversion_allocation_checkpoint()?;
+            cloned
+                .try_reserve(value.len())
+                .map_err(json_runtime_allocation_error)?;
+        }
+        cloned.push_str(value);
+        Ok(cloned)
+    }
+
+    consume_json_runtime_node(remaining, node_limit)?;
+
+    let Value::EnumVariant(variant) = value else {
+        return Err(malformed(format!(
+            "expected `json.Value`, found `{}`",
+            value.render()
+        )));
+    };
+    if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+        return Err(malformed(format!(
+            "expected enum `json.Value`, found `{}`",
+            nominal_runtime_base_name(&variant.enum_name)
+        )));
+    }
+
+    match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+        ("Null", []) => Ok(JsonValue::Null),
+        ("Bool", [Value::Bool(value)]) => Ok(JsonValue::Bool(*value)),
+        ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
+            let value = value
+                .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
+                .ok_or_else(|| malformed("Value.Int payload is outside `int64`"))?;
+            Ok(JsonValue::Int(value))
+        }
+        ("Int", [Value::Int(_)]) => Err(malformed(
+            "Value.Int payload must be exactly `int64` at runtime",
+        )),
+        ("Float", [Value::Float(value)]) => Ok(JsonValue::Float(*value)),
+        ("String", [Value::String(value)]) => Ok(JsonValue::String(clone_string(value)?)),
+        ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
+            let child_depth = json_runtime_child_depth(depth)?;
+            let capacity =
+                json_runtime_container_capacity(values.elements.len(), *remaining, node_limit)?;
+            let mut converted = Vec::new();
+            json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+            for value in &values.elements {
+                converted.push(runtime_value_to_json_at_depth(
+                    value,
+                    child_depth,
+                    remaining,
+                    node_limit,
+                )?);
+            }
+            Ok(JsonValue::Array(converted))
+        }
+        ("Array", [Value::Vec(_)]) => Err(malformed(
+            "Value.Array payload must be exactly `Vec[json.Value]` at runtime",
+        )),
+        ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
+            let child_depth = json_runtime_child_depth(depth)?;
+            let capacity =
+                json_runtime_container_capacity(entries.entries.len(), *remaining, node_limit)?;
+            let mut converted = Vec::new();
+            json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+            for (key, value) in &entries.entries {
+                let Value::String(key) = key else {
+                    return Err(malformed(format!(
+                        "Value.Object key must be `String`, found `{}`",
+                        key.render()
+                    )));
+                };
+                let value =
+                    runtime_value_to_json_at_depth(value, child_depth, remaining, node_limit)?;
+                converted.push((clone_string(key)?, value));
+            }
+            Ok(JsonValue::Object(converted))
+        }
+        ("Object", [Value::Map(_)]) => Err(malformed(
+            "Value.Object payload must be exactly `Map[String, json.Value]` at runtime",
+        )),
+        (variant_name, _) => Err(malformed(format!(
+            "variant `{variant_name}` has an invalid payload shape"
+        ))),
+    }
+}
+
+fn json_runtime_child_depth(depth: usize) -> Result<usize> {
+    let child_depth = depth.saturating_add(1);
+    if child_depth <= json_codec::MAX_JSON_DEPTH {
+        Ok(child_depth)
+    } else {
+        Err(json_dump_error_to_diagnostic(
+            JsonCodecError::NestingTooDeep {
+                limit: json_codec::MAX_JSON_DEPTH,
+                line: 0,
+                column: 0,
+                offset: 0,
+            },
+        ))
+    }
+}
+
+fn json_runtime_allocation_error(error: std::collections::TryReserveError) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!("memory allocation failed while preparing JSON output: {error}"),
+    )
+}
+
+fn json_runtime_conversion_try_reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<()> {
+    if additional == 0 {
+        return Ok(());
+    }
+    json_runtime_conversion_allocation_checkpoint()?;
+    values
+        .try_reserve(additional)
+        .map_err(json_runtime_allocation_error)
+}
+
+fn json_error_variant(variant_name: &str, payloads: Vec<Value>) -> Result<Value> {
+    json_runtime_enum_value("json.Error", variant_name, payloads)
+}
+
+fn json_location_payload(line: usize, column: usize) -> Result<Vec<Value>> {
+    let mut payloads = Vec::new();
+    json_parse_try_reserve(&mut payloads, 2)?;
+    payloads.push(Value::Int(IntegerValue::from_i32(
+        i32::try_from(line).expect("JSON input limit keeps error lines inside `int32`"),
+    )));
+    payloads.push(Value::Int(IntegerValue::from_i32(
+        i32::try_from(column).expect("JSON input limit keeps error columns inside `int32`"),
+    )));
+    Ok(payloads)
+}
+
+fn json_parse_error_value(error: JsonCodecError) -> Result<Value> {
+    match error {
+        JsonCodecError::Syntax {
+            message,
+            line,
+            column,
+            ..
+        } => {
+            let mut payloads = Vec::new();
+            json_parse_try_reserve(&mut payloads, 3)?;
+            payloads.push(Value::String(message));
+            payloads.extend(json_location_payload(line, column)?);
+            json_error_variant("Syntax", payloads)
+        }
+        JsonCodecError::NumberOutOfRange { line, column, .. } => {
+            json_error_variant("NumberOutOfRange", json_location_payload(line, column)?)
+        }
+        JsonCodecError::NestingTooDeep {
+            limit,
+            line,
+            column,
+            ..
+        } => {
+            let mut payloads = Vec::new();
+            json_parse_try_reserve(&mut payloads, 3)?;
+            payloads.push(Value::Int(IntegerValue::from_i32(
+                i32::try_from(limit).expect("JSON depth limit fits `int32`"),
+            )));
+            payloads.extend(json_location_payload(line, column)?);
+            json_error_variant("NestingTooDeep", payloads)
+        }
+        JsonCodecError::InputTooLarge {
+            actual_bytes,
+            limit_bytes,
+        } => {
+            let mut payloads = Vec::new();
+            json_parse_try_reserve(&mut payloads, 2)?;
+            payloads.push(Value::Int(IntegerValue::from_i64(
+                i64::try_from(actual_bytes)
+                    .expect("JSON input size is bounded by Aurora String capacity"),
+            )));
+            payloads.push(Value::Int(IntegerValue::from_i64(
+                i64::try_from(limit_bytes).expect("JSON input limit fits `int64`"),
+            )));
+            json_error_variant("InputTooLarge", payloads)
+        }
+        JsonCodecError::InvalidIndent { .. }
+        | JsonCodecError::NonFiniteNumber
+        | JsonCodecError::OutputTooLarge { .. }
+        | JsonCodecError::MaterializationTooLarge { .. }
+        | JsonCodecError::AllocationFailed => {
+            unreachable!("JSON parse resource failures are diagnostics, not json.Error values")
+        }
+    }
+}
+
+pub(crate) fn json_dump_error_to_diagnostic(error: JsonCodecError) -> Diagnostic {
+    let code = match error {
+        JsonCodecError::InvalidIndent { .. } | JsonCodecError::NestingTooDeep { .. } => "AU4003",
+        JsonCodecError::NonFiniteNumber => "AU4001",
+        JsonCodecError::OutputTooLarge { .. }
+        | JsonCodecError::MaterializationTooLarge { .. }
+        | JsonCodecError::AllocationFailed => "AU4005",
+        JsonCodecError::Syntax { .. }
+        | JsonCodecError::NumberOutOfRange { .. }
+        | JsonCodecError::InputTooLarge { .. } => {
+            unreachable!("json.dumps only returns serialization errors")
+        }
+    };
+    Diagnostic::coded(code, error.to_string())
+}
+
+fn host_json_variant<'a>(value: &'a Value, call: &str) -> Result<&'a EnumVariantValue> {
+    match value {
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "json.Value" =>
+        {
+            Ok(variant)
+        }
+        other => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected a runtime `json.Value`, found `{}`",
+                other.render()
+            ),
+        )),
+    }
+}
+
+fn host_json_exact_payload(
+    value: &Value,
+    expected_variant: &str,
+    call: &str,
+) -> Result<Option<Value>> {
+    let variant = host_json_variant(value, call)?;
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    match variant.payloads.as_slice() {
+        [payload] => Ok(Some(payload.clone())),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        )),
+    }
+}
+
+fn host_json_into_exact_payload(
+    value: Value,
+    expected_variant: &str,
+    call: &str,
+) -> Result<Option<Value>> {
+    let Value::EnumVariant(mut variant) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{call}` expected a runtime `json.Value`"),
+        ));
+    };
+    if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected enum `json.Value`, found `{}`",
+                nominal_runtime_base_name(&variant.enum_name)
+            ),
+        ));
+    }
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    if variant.payloads.len() != 1 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        ));
+    }
+    Ok(variant.payloads.pop())
+}
+
+fn host_json_indent_arg(value: &Value) -> Result<Option<i64>> {
+    let Value::EnumVariant(option) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        ));
+    };
+    match (
+        nominal_runtime_base_name(&option.enum_name),
+        option.variant_name.as_str(),
+        option.payloads.as_slice(),
+    ) {
+        ("Option", "None", []) => Ok(None),
+        ("Option", "Some", [Value::Int(value)]) => {
+            if !json_int_metadata_is_exact(value) {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "`json::dumps` expects `indent` to contain an `int64`",
+                ));
+            }
+            let indent = value
+                .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
+                .expect("exact int64 metadata guarantees an int64 runtime value");
+            Ok(Some(indent))
+        }
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        )),
+    }
+}
+
+fn legacy_json_value_is_finite(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Number(number) => {
+            number.as_i64().is_some()
+                || number.as_u64().is_some()
+                || number.as_f64().is_some_and(f64::is_finite)
+        }
+        serde_json::Value::Array(values) => values.iter().all(legacy_json_value_is_finite),
+        serde_json::Value::Object(entries) => entries.values().all(legacy_json_value_is_finite),
+        _ => true,
+    }
+}
+
+fn legacy_json_is_valid(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .is_ok_and(|value| legacy_json_value_is_finite(&value))
 }
 
 fn evaluate_host_builtin_with_args(
@@ -7895,12 +8624,130 @@ fn evaluate_host_builtin_with_args(
                 Path::new(&host_string_arg(&args, 0, name)?).is_absolute(),
             ))
         }
+        "json::parse" => {
+            host_expect_arity(name, &args, 1)?;
+            json_parse_to_runtime(host_string_ref_arg(&args, 0, name)?)
+        }
+        "json::dumps" => {
+            host_expect_arity(name, &args, 2)?;
+            let indent = host_json_indent_arg(&args[1])?;
+            let value = runtime_value_to_json(&args[0])?;
+            json_codec::dumps(&value, indent)
+                .map(Value::String)
+                .map_err(json_dump_error_to_diagnostic)
+        }
+        "json::is_null" => {
+            host_expect_arity(name, &args, 1)?;
+            let variant = host_json_variant(&args[0], name)?;
+            if variant.variant_name == "Null" && !variant.payloads.is_empty() {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Null` payload in `json::is_null`",
+                ));
+            }
+            Ok(Value::Bool(variant.variant_name == "Null"))
+        }
+        "json::as_bool" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(match host_json_exact_payload(&args[0], "Bool", name)? {
+                Some(Value::Bool(value)) => option_some(Value::Bool(value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
+        "json::as_int" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(match host_json_exact_payload(&args[0], "Int", name)? {
+                Some(Value::Int(value)) if json_int_metadata_is_exact(&value) => {
+                    option_some(Value::Int(value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Int` payload in `json::as_int`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
+        "json::as_float" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(match host_json_exact_payload(&args[0], "Float", name)? {
+                Some(Value::Float(value)) => option_some(Value::Float(value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Float` payload in `json::as_float`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
+        "json::into_string" => {
+            host_expect_arity(name, &args, 1)?;
+            let value = args
+                .into_iter()
+                .next()
+                .expect("validated host builtin arity provides one argument");
+            Ok(match host_json_into_exact_payload(value, "String", name)? {
+                Some(Value::String(value)) => option_some(Value::String(value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.String` payload in `json::into_string`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
+        "json::into_array" => {
+            host_expect_arity(name, &args, 1)?;
+            let value = args
+                .into_iter()
+                .next()
+                .expect("validated host builtin arity provides one argument");
+            Ok(match host_json_into_exact_payload(value, "Array", name)? {
+                Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
+                    option_some(Value::Vec(value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Array` payload in `json::into_array`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
+        "json::into_object" => {
+            host_expect_arity(name, &args, 1)?;
+            let value = args
+                .into_iter()
+                .next()
+                .expect("validated host builtin arity provides one argument");
+            Ok(match host_json_into_exact_payload(value, "Object", name)? {
+                Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
+                    option_some(Value::Map(value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Object` payload in `json::into_object`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }
         "json::is_valid" => {
             host_expect_arity(name, &args, 1)?;
-            Ok(Value::Bool(
-                serde_json::from_str::<serde_json::Value>(&host_string_arg(&args, 0, name)?)
-                    .is_ok(),
-            ))
+            Ok(Value::Bool(legacy_json_is_valid(&host_string_arg(
+                &args, 0, name,
+            )?)))
         }
         "json::stringify_map" => {
             host_expect_arity(name, &args, 1)?;

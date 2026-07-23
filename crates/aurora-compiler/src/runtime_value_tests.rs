@@ -1870,6 +1870,961 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
     }
 }
 
+fn runtime_json(value: crate::json_codec::JsonValue) -> Value {
+    super::json_value_to_runtime(value)
+        .expect("test JSON values should fit the runtime materialization budget")
+}
+
+#[test]
+fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_object_slots() {
+    use crate::json_codec::JsonValue;
+
+    let json = JsonValue::object(vec![
+        ("null".to_string(), JsonValue::Null),
+        ("bool".to_string(), JsonValue::Bool(true)),
+        ("int".to_string(), JsonValue::Int(i64::MIN)),
+        ("float".to_string(), JsonValue::Float(1.5)),
+        (
+            "array".to_string(),
+            JsonValue::Array(vec![JsonValue::String("value".to_string())]),
+        ),
+        (
+            "object".to_string(),
+            JsonValue::object(vec![("nested".to_string(), JsonValue::Int(i64::MAX))]),
+        ),
+    ]);
+
+    let runtime = runtime_json(json.clone());
+    let Value::EnumVariant(root) = &runtime else {
+        panic!("json.Value.Object should use Aurora's enum runtime representation");
+    };
+    assert_eq!(root.enum_name, "json.Value");
+    assert_eq!(root.variant_name, "Object");
+    let [Value::Map(object)] = root.payloads.as_slice() else {
+        panic!("json.Value.Object should carry Map[String, json.Value]");
+    };
+    assert_eq!(object.key_type, Type::named("String"));
+    assert_eq!(object.value_type, Type::named("json.Value"));
+    assert_eq!(
+        object
+            .entries
+            .iter()
+            .map(|(key, _)| key.render())
+            .collect::<Vec<_>>(),
+        vec!["null", "bool", "int", "float", "array", "object"]
+    );
+    assert_eq!(
+        super::runtime_value_to_json(&runtime)
+            .expect("well-formed json.Value should convert back to the shared codec"),
+        json
+    );
+}
+
+#[test]
+fn dynamic_json_parse_runtime_materialization_allocation_failure_is_au4005() {
+    let error = super::with_json_runtime_allocation_budget(0, || {
+        super::evaluate_host_builtin("json::parse", vec![Value::String("[null]".to_string())])
+    })
+    .expect_err("runtime-tree allocation failure must trap instead of aborting or returning Err");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing parsed JSON"
+    );
+}
+
+#[test]
+fn dynamic_json_parse_maps_the_public_node_limit_to_au4005() {
+    let element_count = crate::json_codec::MAX_JSON_VALUE_NODES;
+    let mut source = String::with_capacity(element_count.saturating_mul(5).saturating_add(2));
+    source.push('[');
+    for index in 0..element_count {
+        if index > 0 {
+            source.push(',');
+        }
+        source.push_str("null");
+    }
+    source.push(']');
+
+    let error = super::json_parse_to_runtime(&source)
+        .expect_err("the root plus one value beyond the public node cap must trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "JSON value exceeds the maximum materialized node count of 262144"
+    );
+}
+
+#[test]
+fn dynamic_json_shared_parse_adapter_borrows_the_source_allocation() {
+    let source = "[null]".repeat(64);
+    let source_ptr = source.as_ptr();
+    let args = vec![Value::String(source)];
+
+    let borrowed = super::host_string_ref_arg(&args, 0, "json::parse")
+        .expect("json.parse should borrow a String argument");
+
+    assert_eq!(borrowed.as_ptr(), source_ptr);
+}
+
+#[test]
+fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
+    const ELEMENTS: usize = 16_384;
+    let source = format!("[{}]", vec!["null"; ELEMENTS].join(","));
+
+    let parsed = super::evaluate_host_builtin("json::parse", vec![Value::String(source)])
+        .expect("a structurally dense input below the byte limit should parse");
+    let Value::EnumVariant(result) = parsed else {
+        panic!("json.parse should return Result");
+    };
+    assert_eq!(
+        (result.enum_name.as_str(), result.variant_name.as_str()),
+        ("Result", "Ok")
+    );
+    let [Value::EnumVariant(array)] = result.payloads.as_slice() else {
+        panic!("Result.Ok should contain json.Value.Array");
+    };
+    let [Value::Vec(values)] = array.payloads.as_slice() else {
+        panic!("json.Value.Array should contain Vec[json.Value]");
+    };
+    assert_eq!(values.element_type, Type::named("json.Value"));
+    assert_eq!(values.elements.len(), ELEMENTS);
+    assert!(values.elements.first().is_some_and(|value| {
+        matches!(
+            value,
+            Value::EnumVariant(variant)
+                if variant.enum_name == "json.Value"
+                    && variant.variant_name == "Null"
+                    && variant.payloads.is_empty()
+        )
+    }));
+    assert!(values.elements.last().is_some_and(|value| {
+        matches!(
+            value,
+            Value::EnumVariant(variant)
+                if variant.enum_name == "json.Value"
+                    && variant.variant_name == "Null"
+                    && variant.payloads.is_empty()
+        )
+    }));
+}
+
+#[test]
+fn dynamic_json_runtime_conversions_enforce_the_shared_node_limit() {
+    use crate::json_codec::JsonValue;
+
+    let value = JsonValue::Array(vec![JsonValue::Null, JsonValue::Null, JsonValue::Null]);
+    let runtime =
+        super::with_json_runtime_node_limit(4, || super::json_value_to_runtime(value.clone()))
+            .expect("the root plus three elements should fit an exact four-node limit");
+    let materialized =
+        super::with_json_runtime_node_limit(4, || super::runtime_value_to_json(&runtime))
+            .expect("dump conversion should accept the exact four-node boundary");
+    assert_eq!(materialized, value);
+
+    for operation in ["parse conversion", "dump conversion"] {
+        let error = super::with_json_runtime_node_limit(3, || match operation {
+            "parse conversion" => super::json_value_to_runtime(value.clone()).map(|_| ()),
+            "dump conversion" => super::runtime_value_to_json(&runtime).map(|_| ()),
+            _ => unreachable!(),
+        })
+        .expect_err("the fourth value node must exceed a three-node limit");
+        assert_eq!(error.code, "AU4005", "{operation}");
+        assert_eq!(
+            error.message, "JSON value exceeds the maximum materialized node count of 3",
+            "{operation}"
+        );
+    }
+
+    let object = JsonValue::Object(vec![(
+        "a very long object key".to_string(),
+        JsonValue::Null,
+    )]);
+    let runtime_object =
+        super::with_json_runtime_node_limit(2, || super::json_value_to_runtime(object.clone()))
+            .expect("an object key must not consume a value-node slot");
+    assert_eq!(
+        super::with_json_runtime_node_limit(2, || {
+            super::runtime_value_to_json(&runtime_object)
+        })
+        .expect("dump conversion must also exclude object keys from the node count"),
+        object
+    );
+}
+
+#[test]
+fn dynamic_json_parse_node_budget_precedes_container_allocations() {
+    use crate::json_codec::JsonValue;
+
+    let cases = [
+        (
+            "array",
+            JsonValue::Array(vec![JsonValue::Null, JsonValue::Null]),
+        ),
+        (
+            "object",
+            JsonValue::Object(vec![
+                ("first".to_string(), JsonValue::Null),
+                ("second".to_string(), JsonValue::Null),
+            ]),
+        ),
+    ];
+
+    for (label, value) in cases {
+        let result = super::with_json_runtime_allocation_budget(0, || {
+            super::with_json_runtime_node_limit(2, || super::json_value_to_runtime(value.clone()))
+        });
+        let error = result.expect_err(
+            "the node-limit diagnostic must precede an injected materialization allocation failure",
+        );
+        assert_eq!(error.code, "AU4005", "{label}");
+        assert_eq!(
+            error.message, "JSON value exceeds the maximum materialized node count of 2",
+            "{label}"
+        );
+
+        let allocation_error = super::with_json_runtime_allocation_budget(0, || {
+            super::with_json_runtime_node_limit(3, || super::json_value_to_runtime(value.clone()))
+        })
+        .expect_err("an exact-fit container should proceed to its first fallible allocation");
+        assert_eq!(allocation_error.code, "AU4005", "{label}");
+        assert_eq!(
+            allocation_error.message, "memory allocation failed while materializing parsed JSON",
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_dump_node_budget_precedes_container_and_key_allocations() {
+    use crate::json_codec::JsonValue;
+
+    let cases = [
+        (
+            "array",
+            JsonValue::Array(vec![JsonValue::Null, JsonValue::Null]),
+        ),
+        (
+            "object",
+            JsonValue::Object(vec![
+                ("first".to_string(), JsonValue::Null),
+                ("second".to_string(), JsonValue::Null),
+            ]),
+        ),
+    ];
+
+    for (label, value) in cases {
+        let runtime = runtime_json(value.clone());
+        assert_eq!(
+            super::with_json_runtime_node_limit(3, || { super::runtime_value_to_json(&runtime) })
+                .unwrap_or_else(|error| panic!(
+                    "{label} should fit the exact three-node limit: {error}"
+                )),
+            value,
+            "{label}"
+        );
+
+        let result = super::with_json_runtime_conversion_allocation_budget(0, || {
+            super::with_json_runtime_node_limit(2, || super::runtime_value_to_json(&runtime))
+        });
+        let error = result.expect_err(
+            "the node-limit diagnostic must precede an injected conversion allocation failure",
+        );
+        assert_eq!(error.code, "AU4005", "{label}");
+        assert_eq!(
+            error.message, "JSON value exceeds the maximum materialized node count of 2",
+            "{label}"
+        );
+
+        let allocation_error = super::with_json_runtime_conversion_allocation_budget(0, || {
+            super::with_json_runtime_node_limit(3, || super::runtime_value_to_json(&runtime))
+        })
+        .expect_err("an exact-fit container should proceed to its first fallible allocation");
+        assert_eq!(allocation_error.code, "AU4005", "{label}");
+        assert_eq!(
+            allocation_error.message, "memory allocation failed while preparing JSON output",
+            "{label}"
+        );
+
+        if label == "object" {
+            let key_allocation_error =
+                super::with_json_runtime_conversion_allocation_budget(1, || {
+                    super::with_json_runtime_node_limit(3, || {
+                        super::runtime_value_to_json(&runtime)
+                    })
+                })
+                .expect_err(
+                    "after the object buffer reserve, cloning its first key should remain fallible",
+                );
+            assert_eq!(key_allocation_error.code, "AU4005");
+            assert_eq!(
+                key_allocation_error.message,
+                "memory allocation failed while preparing JSON output"
+            );
+        }
+    }
+}
+
+#[test]
+fn dynamic_json_metadata_validation_is_structural_and_allocation_free() {
+    use crate::json_codec::JsonValue;
+
+    assert!(super::json_exact_nominal_type(
+        &Type::Named("json.Value".to_string(), Vec::new()),
+        "json.Value"
+    ));
+    assert!(!super::json_exact_nominal_type(
+        &Type::Named("json.Value".to_string(), vec![Type::Unit]),
+        "json.Value"
+    ));
+    assert!(!super::json_exact_nominal_type(
+        &Type::TypeParam("json.Value".to_string()),
+        "json.Value"
+    ));
+
+    for (name, value) in [
+        ("json::into_array", JsonValue::Array(Vec::new())),
+        ("json::into_object", JsonValue::Object(Vec::new())),
+    ] {
+        let runtime = runtime_json(value.clone());
+
+        let converted = super::with_json_runtime_conversion_allocation_budget(0, || {
+            super::runtime_value_to_json(&runtime)
+        })
+        .unwrap_or_else(|error| {
+            panic!("{name} metadata validation should allocate no temporary type: {error}")
+        });
+        assert_eq!(converted, value, "{name}");
+
+        let accessor = super::with_json_runtime_conversion_allocation_budget(0, || {
+            super::evaluate_host_builtin(name, vec![runtime])
+        })
+        .unwrap_or_else(|error| {
+            panic!("{name} metadata validation should allocate no temporary type: {error}")
+        });
+        assert!(
+            accessor.render().starts_with("Option.Some("),
+            "{name} should accept exact canonical metadata"
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
+    fn json_variant(variant_name: &str, payload: Value) -> Value {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".to_string(),
+            variant_name: variant_name.to_string(),
+            payloads: vec![payload],
+        })
+    }
+
+    let malformed = [
+        (
+            "int32 Int payload",
+            json_variant("Int", Value::Int(IntegerValue::from_i32(7))),
+            "exactly `int64`",
+        ),
+        (
+            "untyped Int payload",
+            json_variant("Int", Value::Int(IntegerValue::from_signed(7))),
+            "exactly `int64`",
+        ),
+        (
+            "wrong Array element metadata",
+            json_variant(
+                "Array",
+                Value::Vec(VecValue {
+                    element_type: Type::named("String"),
+                    elements: Vec::new(),
+                }),
+            ),
+            "exactly `Vec[json.Value]`",
+        ),
+        (
+            "wrong Object key metadata",
+            json_variant(
+                "Object",
+                Value::Map(MapValue {
+                    key_type: Type::named("int64"),
+                    value_type: Type::named("json.Value"),
+                    entries: Vec::new(),
+                }),
+            ),
+            "exactly `Map[String, json.Value]`",
+        ),
+        (
+            "wrong Object value metadata",
+            json_variant(
+                "Object",
+                Value::Map(MapValue {
+                    key_type: Type::named("String"),
+                    value_type: Type::named("String"),
+                    entries: Vec::new(),
+                }),
+            ),
+            "exactly `Map[String, json.Value]`",
+        ),
+    ];
+
+    for (label, value, expected_message) in malformed {
+        let error = super::runtime_value_to_json(&value).expect_err(label);
+        assert_eq!(error.code, "AU4001", "{label}");
+        assert!(error.message.contains(expected_message), "{label}: {error}");
+    }
+
+    for canonical in [
+        crate::json_codec::JsonValue::Int(7),
+        crate::json_codec::JsonValue::Array(Vec::new()),
+        crate::json_codec::JsonValue::Object(Vec::new()),
+    ] {
+        let runtime = runtime_json(canonical.clone());
+        assert_eq!(
+            super::runtime_value_to_json(&runtime)
+                .unwrap_or_else(|error| panic!("canonical metadata should pass: {error}")),
+            canonical
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
+    fn json_variant(variant_name: &str, payload: Value) -> Value {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".to_string(),
+            variant_name: variant_name.to_string(),
+            payloads: vec![payload],
+        })
+    }
+
+    let malformed = [
+        (
+            "json::as_int",
+            json_variant("Int", Value::Int(IntegerValue::from_i32(7))),
+        ),
+        (
+            "json::into_array",
+            json_variant(
+                "Array",
+                Value::Vec(VecValue {
+                    element_type: Type::named("String"),
+                    elements: Vec::new(),
+                }),
+            ),
+        ),
+        (
+            "json::into_object",
+            json_variant(
+                "Object",
+                Value::Map(MapValue {
+                    key_type: Type::named("int64"),
+                    value_type: Type::named("json.Value"),
+                    entries: Vec::new(),
+                }),
+            ),
+        ),
+        (
+            "json::into_object",
+            json_variant(
+                "Object",
+                Value::Map(MapValue {
+                    key_type: Type::named("String"),
+                    value_type: Type::named("String"),
+                    entries: Vec::new(),
+                }),
+            ),
+        ),
+    ];
+
+    for (name, value) in malformed {
+        let error = super::evaluate_host_builtin(name, vec![value])
+            .expect_err("malformed JSON payload metadata should be rejected");
+        assert_eq!(error.code, "AU4001", "{name}: {error}");
+    }
+
+    for (name, canonical) in [
+        ("json::as_int", crate::json_codec::JsonValue::Int(7)),
+        (
+            "json::into_array",
+            crate::json_codec::JsonValue::Array(Vec::new()),
+        ),
+        (
+            "json::into_object",
+            crate::json_codec::JsonValue::Object(Vec::new()),
+        ),
+    ] {
+        let result = super::evaluate_host_builtin(name, vec![runtime_json(canonical)])
+            .unwrap_or_else(|error| panic!("{name} should accept canonical metadata: {error}"));
+        assert!(
+            result.render().starts_with("Option.Some("),
+            "{name} should return Option.Some for the exact variant"
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
+    fn variant(enum_name: &str, variant_name: &str, payloads: Vec<Value>) -> Value {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: enum_name.to_string(),
+            variant_name: variant_name.to_string(),
+            payloads,
+        })
+    }
+
+    fn error(name: &str, value: Value) -> Diagnostic {
+        super::evaluate_host_builtin(name, vec![value])
+            .expect_err("a malformed runtime value must not cross the JSON host boundary")
+    }
+
+    for (name, value, expected) in [
+        (
+            "json::is_null",
+            Value::Bool(false),
+            "expected a runtime `json.Value`",
+        ),
+        (
+            "json::is_null",
+            variant("json.Value", "Null", vec![Value::Unit]),
+            "malformed runtime `json.Value.Null` payload",
+        ),
+        (
+            "json::as_bool",
+            variant("json.Value", "Bool", Vec::new()),
+            "malformed runtime `json.Value.Bool` payload",
+        ),
+        (
+            "json::as_bool",
+            variant("json.Value", "Bool", vec![Value::String("true".into())]),
+            "malformed runtime `json.Value.Bool` payload",
+        ),
+        (
+            "json::as_float",
+            variant(
+                "json.Value",
+                "Float",
+                vec![Value::Int(IntegerValue::from_i64(1))],
+            ),
+            "malformed runtime `json.Value.Float` payload",
+        ),
+        (
+            "json::into_string",
+            Value::String("not an enum".into()),
+            "expected a runtime `json.Value`",
+        ),
+        (
+            "json::into_string",
+            variant("json.Value", "String", vec![Value::Bool(false)]),
+            "malformed runtime `json.Value.String` payload",
+        ),
+        (
+            "json::into_array",
+            variant("other.Value", "Array", vec![Value::Unit]),
+            "expected enum `json.Value`",
+        ),
+        (
+            "json::into_object",
+            variant("json.Value", "Object", Vec::new()),
+            "malformed runtime `json.Value.Object` payload",
+        ),
+    ] {
+        let diagnostic = error(name, value);
+        assert_eq!(diagnostic.code, "AU4001", "{name}: {diagnostic}");
+        assert!(
+            diagnostic.message.contains(expected),
+            "{name}: expected `{expected}`, found `{diagnostic}`"
+        );
+    }
+
+    let wrong_key = variant(
+        "json.Value",
+        "Object",
+        vec![Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("json.Value"),
+            entries: vec![(
+                Value::Int(IntegerValue::from_i64(1)),
+                runtime_json(crate::json_codec::JsonValue::Null),
+            )],
+        })],
+    );
+    let diagnostic = super::runtime_value_to_json(&wrong_key)
+        .expect_err("runtime object keys must be String values, not merely String metadata");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert!(diagnostic.message.contains("Object key must be `String`"));
+
+    for indent in [
+        Value::Int(IntegerValue::from_i64(2)),
+        variant("Option", "None", vec![Value::Unit]),
+        variant("Option", "Some", vec![Value::String("2".into())]),
+    ] {
+        let diagnostic = super::evaluate_host_builtin(
+            "json::dumps",
+            vec![runtime_json(crate::json_codec::JsonValue::Null), indent],
+        )
+        .expect_err("json.dumps must reject malformed Option[int64] runtime values");
+        assert_eq!(diagnostic.code, "AU4001");
+        assert!(diagnostic.message.contains("expects `indent`"));
+    }
+}
+
+#[test]
+fn dynamic_json_materialization_counts_the_root_and_recovers_after_checkpoints() {
+    let error = super::with_json_runtime_node_limit(0, || {
+        super::json_value_to_runtime(crate::json_codec::JsonValue::Null)
+    })
+    .expect_err("the root value must consume one node from the shared materialization budget");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "JSON value exceeds the maximum materialized node count of 0"
+    );
+
+    let value = super::with_json_runtime_allocation_budget(16, || {
+        super::json_value_to_runtime(crate::json_codec::JsonValue::object(vec![(
+            "key".to_string(),
+            crate::json_codec::JsonValue::String("value".to_string()),
+        )]))
+    })
+    .expect("successful allocation checkpoints must decrement without changing the result");
+    assert_eq!(
+        super::runtime_value_to_json(&value).expect("materialized JSON must remain canonical"),
+        crate::json_codec::JsonValue::object(vec![(
+            "key".to_string(),
+            crate::json_codec::JsonValue::String("value".to_string()),
+        )])
+    );
+}
+
+#[test]
+fn dynamic_json_dumps_rejects_noncanonical_indent_integer_metadata() {
+    for indent in [
+        IntegerValue::from_i32(2),
+        IntegerValue::from_signed(2),
+        IntegerValue::from_u64(2),
+    ] {
+        let error = super::evaluate_host_builtin(
+            "json::dumps",
+            vec![
+                runtime_json(crate::json_codec::JsonValue::Null),
+                option_some(Value::Int(indent)),
+            ],
+        )
+        .expect_err("json::dumps must require exact int64 indent metadata");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(
+            error.message,
+            "`json::dumps` expects `indent` to contain an `int64`"
+        );
+    }
+
+    assert_eq!(
+        super::evaluate_host_builtin(
+            "json::dumps",
+            vec![
+                runtime_json(crate::json_codec::JsonValue::Null),
+                option_some(Value::Int(IntegerValue::from_i64(2))),
+            ],
+        )
+        .expect("canonical int64 indent metadata should remain valid"),
+        Value::String("null".to_string())
+    );
+}
+
+#[test]
+fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_clone() {
+    let mut value = runtime_json(crate::json_codec::JsonValue::Null);
+    for _ in 0..=crate::json_codec::MAX_JSON_DEPTH {
+        value = Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".to_string(),
+            variant_name: "Array".to_string(),
+            payloads: vec![Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements: vec![value],
+            })],
+        });
+    }
+
+    let error = super::runtime_value_to_json(&value)
+        .expect_err("runtime-to-codec conversion must enforce the dump depth limit");
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(error.message, "JSON value exceeds the maximum depth of 128");
+}
+
+#[test]
+fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
+    use crate::json_codec::JsonValue;
+
+    fn call(name: &str, args: Vec<Value>) -> Value {
+        super::evaluate_host_builtin(name, args)
+            .unwrap_or_else(|error| panic!("{name} should succeed: {error}"))
+    }
+
+    let parsed = call(
+        "json::parse",
+        vec![Value::String(
+            r#"{"z":1.0,"items":[true,null,"x"],"f":1.5}"#.to_string(),
+        )],
+    );
+    let Value::EnumVariant(result) = parsed else {
+        panic!("json.parse should return Result");
+    };
+    assert_eq!(
+        (result.enum_name.as_str(), result.variant_name.as_str()),
+        ("Result", "Ok")
+    );
+    let [value] = result.payloads.as_slice() else {
+        panic!("Result.Ok should carry one json.Value");
+    };
+    assert_eq!(
+        super::runtime_value_to_json(value).expect("parsed runtime value should be well formed"),
+        JsonValue::object(vec![
+            ("z".to_string(), JsonValue::Int(1)),
+            (
+                "items".to_string(),
+                JsonValue::Array(vec![
+                    JsonValue::Bool(true),
+                    JsonValue::Null,
+                    JsonValue::String("x".to_string()),
+                ]),
+            ),
+            ("f".to_string(), JsonValue::Float(1.5)),
+        ])
+    );
+    assert_eq!(
+        call("json::dumps", vec![value.clone(), option_none()]),
+        Value::String(r#"{"f":1.5,"items":[true,null,"x"],"z":1}"#.to_string())
+    );
+    assert_eq!(
+        call(
+            "json::dumps",
+            vec![
+                value.clone(),
+                option_some(Value::Int(IntegerValue::from_i64(2))),
+            ],
+        ),
+        Value::String(
+            "{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}"
+                .to_string()
+        )
+    );
+
+    let null = runtime_json(JsonValue::Null);
+    let boolean = runtime_json(JsonValue::Bool(true));
+    let integer = runtime_json(JsonValue::Int(7));
+    let float = runtime_json(JsonValue::Float(1.5));
+    let string = runtime_json(JsonValue::String("aurora".to_string()));
+    let array = runtime_json(JsonValue::Array(vec![JsonValue::Int(2)]));
+    let object = runtime_json(JsonValue::object(vec![(
+        "k".to_string(),
+        JsonValue::Bool(false),
+    )]));
+    let string_payload_ptr = match &string {
+        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            [Value::String(value)] => value.as_ptr(),
+            _ => panic!("json.Value.String should contain one String"),
+        },
+        _ => panic!("json.Value.String should be an enum variant"),
+    };
+    let array_payload_ptr = match &array {
+        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            [Value::Vec(value)] => value.elements.as_ptr(),
+            _ => panic!("json.Value.Array should contain one Vec"),
+        },
+        _ => panic!("json.Value.Array should be an enum variant"),
+    };
+    let object_payload_ptr = match &object {
+        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            [Value::Map(value)] => value.entries.as_ptr(),
+            _ => panic!("json.Value.Object should contain one Map"),
+        },
+        _ => panic!("json.Value.Object should be an enum variant"),
+    };
+
+    assert_eq!(call("json::is_null", vec![null]), Value::Bool(true));
+    assert_eq!(
+        call("json::is_null", vec![integer.clone()]),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        call("json::as_bool", vec![boolean]).render(),
+        "Option.Some(true)"
+    );
+    assert_eq!(
+        call("json::as_bool", vec![runtime_json(JsonValue::Null)]).render(),
+        "Option.None"
+    );
+    assert_eq!(
+        call("json::as_int", vec![integer.clone()]).render(),
+        "Option.Some(7)"
+    );
+    assert_eq!(
+        call("json::as_int", vec![runtime_json(JsonValue::Bool(true))]).render(),
+        "Option.None"
+    );
+    assert_eq!(
+        call("json::as_float", vec![float]).render(),
+        "Option.Some(1.5)"
+    );
+    assert_eq!(
+        call("json::as_float", vec![integer]).render(),
+        "Option.None",
+        "typed accessors must not coerce Int to Float"
+    );
+    let Value::EnumVariant(string_option) = call("json::into_string", vec![string]) else {
+        panic!("json.into_string should return Option");
+    };
+    assert!(matches!(
+        string_option.payloads.as_slice(),
+        [Value::String(value)]
+            if value == "aurora" && value.as_ptr() == string_payload_ptr
+    ));
+    let Value::EnumVariant(array_option) = call("json::into_array", vec![array]) else {
+        panic!("json.into_array should return Option");
+    };
+    assert!(matches!(
+        array_option.payloads.as_slice(),
+        [Value::Vec(VecValue { elements, .. })]
+            if elements == &vec![runtime_json(JsonValue::Int(2))]
+                && elements.as_ptr() == array_payload_ptr
+    ));
+    let Value::EnumVariant(object_option) = call("json::into_object", vec![object]) else {
+        panic!("json.into_object should return Option");
+    };
+    assert!(matches!(
+        object_option.payloads.as_slice(),
+        [Value::Map(MapValue { entries, .. })]
+            if entries.len() == 1
+                && entries[0].0 == Value::String("k".to_string())
+                && entries.as_ptr() == object_payload_ptr
+    ));
+    for (name, expected_variant) in [
+        ("json::into_string", JsonValue::Null),
+        ("json::into_array", JsonValue::Bool(false)),
+        ("json::into_object", JsonValue::Int(1)),
+    ] {
+        assert_eq!(
+            call(name, vec![runtime_json(expected_variant)]).render(),
+            "Option.None"
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
+    use crate::json_codec::{JsonCodecError, JsonValue, MAX_JSON_DEPTH, MAX_JSON_OUTPUT_BYTES};
+
+    fn call(name: &str, args: Vec<Value>) -> Result<Value, Diagnostic> {
+        super::evaluate_host_builtin(name, args)
+    }
+
+    let nested = format!(
+        "{}0{}",
+        "[".repeat(MAX_JSON_DEPTH + 1),
+        "]".repeat(MAX_JSON_DEPTH + 1)
+    );
+    for (source, expected_variant, expected_ints) in [
+        ("{\"x\":".to_string(), "Syntax", vec![1, 6]),
+        ("1e400".to_string(), "NumberOutOfRange", vec![1, 1]),
+        (
+            nested,
+            "NestingTooDeep",
+            vec![MAX_JSON_DEPTH as i128, 1, (MAX_JSON_DEPTH + 1) as i128],
+        ),
+    ] {
+        let parsed = call("json::parse", vec![Value::String(source)])
+            .expect("parse data failures should return typed Result.Err values");
+        let Value::EnumVariant(result) = parsed else {
+            panic!("json.parse should return Result");
+        };
+        assert_eq!(result.variant_name, "Err");
+        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+            panic!("Result.Err should contain json.Error");
+        };
+        assert_eq!(error.enum_name, "json.Error");
+        assert_eq!(error.variant_name, expected_variant);
+        let actual_ints = error
+            .payloads
+            .iter()
+            .filter_map(|value| match value {
+                Value::Int(value) => value.as_i128(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_ints, expected_ints);
+        for value in error.payloads.iter().filter_map(|value| match value {
+            Value::Int(value) => Some(value),
+            _ => None,
+        }) {
+            assert_eq!(
+                value.runtime_kind(),
+                Some(crate::integer::IntegerKind::Int32)
+            );
+        }
+    }
+
+    let oversized = super::json_parse_error_value(JsonCodecError::InputTooLarge {
+        actual_bytes: 67_108_865,
+        limit_bytes: 67_108_864,
+    })
+    .expect("typed input limit error should materialize");
+    let Value::EnumVariant(oversized) = oversized else {
+        panic!("input limit failure should use json.Error");
+    };
+    assert_eq!(oversized.variant_name, "InputTooLarge");
+    assert!(matches!(
+        oversized.payloads.as_slice(),
+        [Value::Int(actual), Value::Int(limit)]
+            if actual.runtime_kind() == Some(crate::integer::IntegerKind::Int64)
+                && limit.runtime_kind() == Some(crate::integer::IntegerKind::Int64)
+    ));
+
+    let invalid_indent = call(
+        "json::dumps",
+        vec![
+            runtime_json(JsonValue::Null),
+            option_some(Value::Int(IntegerValue::from_i64(17))),
+        ],
+    )
+    .expect_err("indent above sixteen should trap");
+    assert_eq!(invalid_indent.code, "AU4003");
+
+    let non_finite = call(
+        "json::dumps",
+        vec![runtime_json(JsonValue::Float(f64::INFINITY)), option_none()],
+    )
+    .expect_err("non-finite floats should trap");
+    assert_eq!(non_finite.code, "AU4001");
+
+    let mut too_deep = JsonValue::Null;
+    for _ in 0..=MAX_JSON_DEPTH {
+        too_deep = JsonValue::Array(vec![too_deep]);
+    }
+    let depth = call("json::dumps", vec![runtime_json(too_deep), option_none()])
+        .expect_err("dump nesting above the limit should trap");
+    assert_eq!(depth.code, "AU4003");
+
+    for codec_error in [
+        JsonCodecError::OutputTooLarge {
+            limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
+        },
+        JsonCodecError::AllocationFailed,
+    ] {
+        let diagnostic = super::json_dump_error_to_diagnostic(codec_error);
+        assert_eq!(diagnostic.code, "AU4005");
+    }
+
+    let mut impossible = String::new();
+    let allocation = impossible
+        .try_reserve(usize::MAX)
+        .expect_err("impossible capacity should fail deterministically");
+    let diagnostic = super::json_runtime_allocation_error(allocation);
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic.message.contains("preparing JSON output"));
+}
+
 #[test]
 fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     fn call(name: &str, args: Vec<Value>) -> Value {
@@ -1988,6 +2943,11 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     assert_eq!(
         call("json::is_valid", vec![Value::String("{".into())]),
         Value::Bool(false)
+    );
+    assert_eq!(
+        call("json::is_valid", vec![Value::String("1e400".into())]),
+        Value::Bool(false),
+        "the legacy validator must retain its finite-number contract when the dynamic parser enables arbitrary precision"
     );
     assert_eq!(
         call("json::stringify_map", vec![labels.clone()]).render(),

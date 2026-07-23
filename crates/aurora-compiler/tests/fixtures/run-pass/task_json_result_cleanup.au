@@ -1,0 +1,37 @@
+import json
+
+def decode(text: String) -> Result[json.Value, json.Error]:
+    return json.parse(text)
+
+def make_unobserved_value() -> json.Value:
+    return json.Value.Object({"items": json.Value.Array([json.Value.String("owned"), json.Value.Int(9)])})
+
+def print_task_result(result: own TaskResult[Result[json.Value, json.Error]]) -> int32:
+    match result:
+        case TaskResult.Ready(Result.Ok(value)):
+            print(json.dumps(value))
+        case TaskResult.Ready(Result.Err(error)):
+            print(error)
+            return 2
+        case TaskResult.Error(message):
+            print(message)
+            return 3
+        case TaskResult.Cancelled:
+            return 4
+        case TaskResult.TimedOut:
+            return 5
+    return 0
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(decode, "{\"answer\":42,\"ok\":true}")
+        _unobserved = group.start(make_unobserved_value)
+
+        first = print_task_result(task.result())
+        if first != 0:
+            return first
+        second = print_task_result(task.result())
+        if second != 0:
+            return second
+
+    return 0

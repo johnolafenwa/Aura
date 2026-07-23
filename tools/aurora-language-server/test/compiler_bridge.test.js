@@ -1267,7 +1267,7 @@ test("compiler bridge preserves definitions for namespace-imported symbols", asy
   assert.ok(
     analysis.occurrences.some(
       (occurrence) =>
-        occurrence.hover.includes("enum Status") &&
+          occurrence.hover.includes("enum pkg.types.Status") &&
         occurrence.definition !== null &&
         occurrence.definition.file_path === typesPath
     )
@@ -1356,7 +1356,7 @@ test("compiler bridge preserves complete owned enum payload signatures", async (
     const matchingVariantOccurrences = analysis.occurrences.filter(
       (occurrence) =>
         occurrence.hover.includes(
-          "variant Message(code: own int32, body: own String) -> Event"
+          "variant Message(code: own int32, body: own String) -> pkg.events.Event"
         ) &&
         occurrence.definition !== null &&
         occurrence.definition.file_path === canonicalEventsPath
@@ -1389,7 +1389,7 @@ test("compiler bridge preserves complete owned enum payload signatures", async (
     assert.ok(message);
     assert.equal(
       message.detail,
-      "Message(code: own int32, body: own String) -> Event"
+      "Message(code: own int32, body: own String) -> pkg.events.Event"
     );
 
     for (const [enumName, variantName, detail] of [
@@ -2112,6 +2112,166 @@ test("compiler bridge exposes control-plane module completions", async () => {
     assert.ok((await completions("log")).has("info"));
     assert.ok((await completions("metrics")).has("increment"));
     assert.ok((await completions("trace")).has("event"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes the recursive json.Value contract", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-json-value-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const prelude = ["import json", "", "def main() -> int32:"];
+    const completionsForLine = async (line) => {
+      const source = [...prelude, line, "    return 0"].join("\n");
+      const lineIndex = prelude.length;
+      const items = await completeWithCompiler(mainUri, source, lineIndex, line.length, ".");
+      assert.ok(items);
+      return items;
+    };
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const validSource = [
+      "import json",
+      "",
+      "def decode(text: String) -> Result[json.Value, json.Error]:",
+      "    return json.parse(text)",
+      "",
+      "def main() -> int32:",
+      "    value = json.Value.Int(7)",
+      "    print(json.dumps(value, indent=Option.Some(2)))",
+      "    return 0"
+    ].join("\n");
+    const analysis = await analyzeWithCompiler(mainUri, validSource);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("parse") &&
+          occurrence.hover.includes("Result[json.Value, json.Error]")
+      )
+    );
+
+    const moduleItems = await completionsForLine("    json.");
+    const moduleNames = new Set(moduleItems.map((item) => item.name));
+    for (const expected of [
+      "Value",
+      "Error",
+      "parse",
+      "dumps",
+      "is_null",
+      "as_bool",
+      "as_int",
+      "as_float",
+      "into_string",
+      "into_array",
+      "into_object"
+    ]) {
+      assert.ok(moduleNames.has(expected), `json completion should include ${expected}`);
+    }
+    assert.equal(
+      moduleItems.find((item) => item.name === "parse")?.detail,
+      "parse(text: String) -> Result[json.Value, json.Error]"
+    );
+    assert.equal(
+      moduleItems.find((item) => item.name === "dumps")?.detail,
+      "dumps(value: json.Value, indent: Option[int64] = ...) -> String"
+    );
+    const accessorDetails = {
+      as_bool: "as_bool(value: borrow json.Value) -> Option[bool]",
+      as_float: "as_float(value: borrow json.Value) -> Option[float64]",
+      as_int: "as_int(value: borrow json.Value) -> Option[int64]",
+      into_array:
+        "into_array(value: own json.Value) -> Option[Vec[json.Value]]",
+      into_object:
+        "into_object(value: own json.Value) -> Option[Map[String, json.Value]]",
+      into_string: "into_string(value: own json.Value) -> Option[String]",
+      is_null: "is_null(value: borrow json.Value) -> bool"
+    };
+    for (const [name, detail] of Object.entries(accessorDetails)) {
+      assert.equal(moduleItems.find((item) => item.name === name)?.detail, detail);
+    }
+
+    const valueItems = await completionsForLine("    json.Value.");
+    assert.deepEqual(
+      new Set(valueItems.map((item) => item.name)),
+      new Set(["Null", "Bool", "Int", "Float", "String", "Array", "Object"])
+    );
+    assert.deepEqual(
+      Object.fromEntries(valueItems.map((item) => [item.name, item.detail])),
+      {
+        Array: "Array(own Vec[json.Value]) -> json.Value",
+        Bool: "Bool(own bool) -> json.Value",
+        Float: "Float(own float64) -> json.Value",
+        Int: "Int(own int64) -> json.Value",
+        Null: "Null -> json.Value",
+        Object: "Object(own Map[String, json.Value]) -> json.Value",
+        String: "String(own String) -> json.Value"
+      }
+    );
+    const errorItems = await completionsForLine("    json.Error.");
+    assert.deepEqual(
+      Object.fromEntries(errorItems.map((item) => [item.name, item.detail])),
+      {
+        InputTooLarge:
+          "InputTooLarge(actual_bytes: own int64, limit_bytes: own int64) -> json.Error",
+        NestingTooDeep:
+          "NestingTooDeep(limit: own int32, line: own int32, column: own int32) -> json.Error",
+        NumberOutOfRange:
+          "NumberOutOfRange(line: own int32, column: own int32) -> json.Error",
+        Syntax:
+          "Syntax(message: own String, line: own int32, column: own int32) -> json.Error"
+      }
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nvariant Int(own int64) -> json.Value\n```"
+      )
+    );
+
+    const fromImportSource = [
+      "from json import Value, Error, parse, dumps",
+      "",
+      "def decode(text: String) -> Result[Value, Error]:",
+      "    return parse(text)",
+      "",
+      "def main() -> int32:",
+      "    value = Value.Int(7)",
+      "    print(dumps(value))",
+      "    return 0"
+    ].join("\n");
+    const fromImportAnalysis = await analyzeWithCompiler(mainUri, fromImportSource);
+    assert.ok(fromImportAnalysis);
+    assert.deepEqual(fromImportAnalysis.diagnostics, []);
+    assert.ok(
+      fromImportAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nvariant Int(own int64) -> json.Value\n```"
+      )
+    );
+
+    const fromImportCompletionSource = [
+      "from json import Value",
+      "",
+      "def main() -> int32:",
+      "    Value.",
+      "    return 0"
+    ].join("\n");
+    const fromImportItems = await completeWithCompiler(
+      mainUri,
+      fromImportCompletionSource,
+      3,
+      "    Value.".length,
+      "."
+    );
+    assert.ok(fromImportItems);
+    assert.equal(
+      fromImportItems.find((item) => item.name === "Int")?.detail,
+      "Int(own int64) -> json.Value"
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

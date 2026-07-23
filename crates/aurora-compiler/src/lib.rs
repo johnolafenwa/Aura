@@ -4,6 +4,7 @@ mod builtin_modules;
 pub mod call;
 pub mod diag;
 pub mod integer;
+pub(crate) mod json_codec;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
@@ -113,7 +114,8 @@ pub mod native_runtime_coverage {
         aurora_direct_vec_push_in_place, aurora_direct_vec_remove_in_place,
         aurora_direct_vec_reverse_in_place, aurora_direct_vec_set_in_place,
         aurora_direct_vec_set_index_in_place, aurora_direct_vec_swap_in_place,
-        aurora_direct_wait_all, aurora_direct_wait_all_timeout_value, aurora_direct_wait_any,
+        aurora_direct_vec_take_index_in_place, aurora_direct_wait_all,
+        aurora_direct_wait_all_timeout_value, aurora_direct_wait_any,
         aurora_direct_wait_any_timeout_value, aurora_direct_websocket_close,
         aurora_direct_websocket_listener_accept, aurora_direct_websocket_listener_local_addr,
         aurora_direct_websocket_recv_bytes, aurora_direct_websocket_recv_text,

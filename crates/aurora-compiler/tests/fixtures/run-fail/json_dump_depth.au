@@ -1,0 +1,7 @@
+import json
+
+def main():
+    mut value = json.Value.Null
+    for _ in range(129):
+        value = json.Value.Array([value])
+    print(json.dumps(value))

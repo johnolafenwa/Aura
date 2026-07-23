@@ -1,0 +1,26 @@
+enum Inner:
+    Pair(String, int32)
+    Solo(String)
+
+enum Outer:
+    Wrapped(Inner)
+    Empty
+
+def render(value: own Outer) -> int32:
+    mut score: int32 = -1
+    match value:
+        case Outer.Wrapped(Inner.Pair(text, count)):
+            print(text)
+            score = count
+        case Outer.Wrapped(Inner.Solo(text)):
+            print(text)
+            score = 1
+        case Outer.Empty:
+            score = 0
+    return score
+
+def main() -> int32:
+    print(render(Outer.Wrapped(Inner.Pair("pair", 7))))
+    print(render(Outer.Wrapped(Inner.Solo("solo"))))
+    print(render(Outer.Empty))
+    return 0

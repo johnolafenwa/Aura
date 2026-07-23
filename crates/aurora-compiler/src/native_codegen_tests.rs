@@ -248,6 +248,15 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
         "path::file_name",
         "path::extension",
         "path::is_absolute",
+        "json::parse",
+        "json::dumps",
+        "json::is_null",
+        "json::as_bool",
+        "json::as_int",
+        "json::as_float",
+        "json::into_string",
+        "json::into_array",
+        "json::into_object",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -266,6 +275,39 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
         assert!(super::host_builtin_return_type(name).is_some(), "{name}");
     }
     assert!(super::host_builtin_return_type("missing::call").is_none());
+}
+
+#[test]
+fn direct_dynamic_json_surface_uses_the_host_builtin_abi() {
+    let source = r#"
+import json
+
+def main() -> int32:
+    match json.parse("{\"ready\":true,\"count\":2}"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+
+    print(json.is_null(json.Value.Null))
+    print(json.as_bool(json.Value.Bool(true)))
+    print(json.as_int(json.Value.Int(7)))
+    print(json.as_float(json.Value.Float(1.5)))
+    print(json.into_string(json.Value.String("aurora")))
+    print(json.into_array(json.Value.Array([json.Value.Int(1)])))
+    print(json.into_object(json.Value.Object({"value": json.Value.Int(1)})))
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("dynamic JSON source should lower to MIR");
+    let object = emit_host_object(&mir).expect("dynamic JSON source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_host_builtin")),
+        "dynamic JSON direct code must use the host builtin ABI: {referenced:?}"
+    );
 }
 
 #[test]
@@ -5181,6 +5223,7 @@ def main() -> int32:
                 target: "%task".to_string(),
                 value: Rvalue::StartTask {
                     returns_handle: true,
+                    result_is_copy: true,
                     task_group: Operand::Place("%group".to_string()),
                     function: "worker".to_string(),
                     args: vec![MirArg {
@@ -5242,6 +5285,7 @@ def main() -> int32:
         target: "%task".to_string(),
         value: Rvalue::StartTask {
             returns_handle: true,
+            result_is_copy: true,
             task_group: Operand::Place("%group".to_string()),
             function: "worker".to_string(),
             args: vec![MirArg {
@@ -6210,6 +6254,32 @@ fn native_codegen_rejects_try_between_non_result_types() {
     let error = emit_host_object(&invalid_module)
         .expect_err("direct backend try should require Result operands and returns");
     assert!(error.contains("requires Result types"));
+}
+
+#[test]
+fn direct_try_moves_noncopy_ok_payloads_through_the_destructive_runtime_path() {
+    let source = r#"
+def produce() -> Result[String, String]:
+    return Result.Ok("owned payload")
+
+def forward() -> Result[String, String]:
+    result = produce()
+    value = try result
+    return Result.Ok(value)
+
+def main() -> int32:
+    return 0
+"#;
+
+    let module = lower_source_to_mir(source).expect("owned try source should lower to MIR");
+    let object = emit_host_object(&module).expect("owned try source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_variant_take_payload")),
+        "owned try must destructively take its successful payload: {referenced:?}"
+    );
 }
 
 #[test]
@@ -7542,6 +7612,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         infer_rvalue_type(
             &Rvalue::StartTask {
                 returns_handle: true,
+                result_is_copy: true,
                 task_group: Operand::Unit,
                 function: "helper".to_string(),
                 args: Vec::new(),
@@ -7560,6 +7631,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         infer_rvalue_type(
             &Rvalue::StartTask {
                 returns_handle: false,
+                result_is_copy: true,
                 task_group: Operand::Unit,
                 function: "helper".to_string(),
                 args: Vec::new(),
@@ -7575,6 +7647,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         infer_rvalue_type(
             &Rvalue::StartTask {
                 returns_handle: true,
+                result_is_copy: true,
                 task_group: Operand::Unit,
                 function: "missing".to_string(),
                 args: Vec::new(),
@@ -7592,6 +7665,47 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
 fn validate_operand_accepts_nested_places() {
     validate_operand(&Operand::Place("point.x".to_string()))
         .expect("nested places should now validate directly");
+}
+
+#[test]
+fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
+    let function = MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: vec![MirLocalType {
+            name: "value".to_string(),
+            ty: Type::named("int32"),
+        }],
+        return_type: Type::named("int32"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::Assign {
+                target: "%negated".to_string(),
+                value: Rvalue::Unary {
+                    op: UnaryOp::Neg,
+                    value: Operand::MovePlace("value".to_string()),
+                    span: Span::new(1, 1),
+                },
+            }],
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    };
+
+    let error = validate_function(&function, &HashMap::new())
+        .expect_err("MovePlace must be rejected for a non-consuming unary read");
+    assert!(error.contains("only permits `MovePlace` in consuming contexts"));
+
+    let mut consuming = function;
+    consuming.blocks[0].instructions[0] = Instruction::Assign {
+        target: "%moved".to_string(),
+        value: Rvalue::Use(Operand::MovePlace("value".to_string())),
+    };
+    validate_function(&consuming, &HashMap::new())
+        .expect("MovePlace should remain valid for a consuming assignment");
 }
 
 #[test]
@@ -8091,18 +8205,32 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
 
 #[test]
 fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
-    let classes = HashMap::from([(
-        "Entry".to_string(),
-        crate::mir::MirClass {
-            name: "Entry".to_string(),
-            type_params: Vec::new(),
-            fields: vec![crate::mir::MirClassField {
-                name: "name".to_string(),
-                ty: Type::named("String"),
-            }],
-            methods: Vec::new(),
-        },
-    )]);
+    let classes = HashMap::from([
+        (
+            "Entry".to_string(),
+            crate::mir::MirClass {
+                name: "Entry".to_string(),
+                type_params: Vec::new(),
+                fields: vec![crate::mir::MirClassField {
+                    name: "name".to_string(),
+                    ty: Type::named("String"),
+                }],
+                methods: Vec::new(),
+            },
+        ),
+        (
+            "Box".to_string(),
+            crate::mir::MirClass {
+                name: "Box".to_string(),
+                type_params: vec!["T".to_string()],
+                fields: vec![crate::mir::MirClassField {
+                    name: "value".to_string(),
+                    ty: Type::TypeParam("T".to_string()),
+                }],
+                methods: Vec::new(),
+            },
+        ),
+    ]);
     let variable_types = HashMap::from([
         (
             "result".to_string(),
@@ -8157,6 +8285,14 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
             &classes,
         ),
         None
+    );
+    assert_eq!(
+        direct_field_type(
+            &DirectType::Opaque(Type::Named("Box".to_string(), vec![Type::named("String")],)),
+            "value",
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::named("String")))
     );
     assert_eq!(
         infer_try_type(

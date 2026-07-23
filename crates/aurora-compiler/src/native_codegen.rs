@@ -290,6 +290,7 @@ struct NativeCodegen<'a> {
     vec_reverse_in_place: FuncId,
     vec_index: FuncId,
     vec_index_option: FuncId,
+    vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
     map_empty: FuncId,
     map_len: FuncId,
@@ -313,6 +314,7 @@ struct NativeCodegen<'a> {
     set_insert_in_place: FuncId,
     set_remove_in_place: FuncId,
     set_index_option: FuncId,
+    set_take_index_in_place: FuncId,
     retain_value: FuncId,
     release_value: FuncId,
     clone_value: FuncId,
@@ -334,11 +336,14 @@ struct NativeCodegen<'a> {
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
+    variant_take_payload: FuncId,
     instance_empty: FuncId,
     instance_get_field: FuncId,
-    instance_set_field: FuncId,
+    instance_take_field: FuncId,
+    instance_set_field_owned: FuncId,
     arg_buffer_new: FuncId,
     arg_buffer_store: FuncId,
+    arg_buffer_store_owned: FuncId,
     host_builtin: FuncId,
     channel_new: FuncId,
     channel_send: FuncId,
@@ -755,6 +760,7 @@ impl<'a> NativeCodegen<'a> {
             vec_reverse_in_place => ("aurora_direct_vec_reverse_in_place", [types::I64], Some(types::I64)),
             vec_index => ("aurora_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aurora_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
+            vec_take_index_in_place => ("aurora_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aurora_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             map_empty => ("aurora_direct_map_empty", [], Some(types::I64)),
             map_len => ("aurora_direct_map_len", [types::I64], Some(types::I64)),
@@ -778,6 +784,7 @@ impl<'a> NativeCodegen<'a> {
             set_insert_in_place => ("aurora_direct_set_insert_in_place", [types::I64, types::I64], Some(types::I64)),
             set_remove_in_place => ("aurora_direct_set_remove_in_place", [types::I64, types::I64], Some(types::I64)),
             set_index_option => ("aurora_direct_set_index_option", [types::I64, types::I64], Some(types::I64)),
+            set_take_index_in_place => ("aurora_direct_set_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             retain_value => ("aurora_direct_retain_value", [types::I64], Some(types::I64)),
             release_value => ("aurora_direct_release_value", [types::I64], None),
             clone_value => ("aurora_direct_clone_value", [types::I64], Some(types::I64)),
@@ -799,11 +806,14 @@ impl<'a> NativeCodegen<'a> {
             enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aurora_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
+            variant_take_payload => ("aurora_direct_variant_take_payload", [types::I64, types::I64], Some(types::I64)),
             instance_empty => ("aurora_direct_instance_empty", [types::I64, types::I64], Some(types::I64)),
             instance_get_field => ("aurora_direct_instance_get_field", [types::I64, types::I64, types::I64], Some(types::I64)),
-            instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            instance_take_field => ("aurora_direct_instance_take_field", [types::I64, types::I64, types::I64], Some(types::I64)),
+            instance_set_field_owned => ("aurora_direct_instance_set_field_owned", [types::I64, types::I64, types::I64, types::I64], None),
             arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
+            arg_buffer_store_owned => ("aurora_direct_arg_buffer_store_owned", [types::I64, types::I64, types::I64], None),
             host_builtin => ("aurora_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
@@ -969,7 +979,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_close => ("aurora_direct_tls_stream_close", [types::I64], Some(types::I64)),
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
             sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
-            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
         let mut functions = HashMap::new();
@@ -1135,6 +1145,7 @@ impl<'a> NativeCodegen<'a> {
             vec_reverse_in_place,
             vec_index,
             vec_index_option,
+            vec_take_index_in_place,
             vec_set_index_in_place,
             map_empty,
             map_len,
@@ -1158,6 +1169,7 @@ impl<'a> NativeCodegen<'a> {
             set_insert_in_place,
             set_remove_in_place,
             set_index_option,
+            set_take_index_in_place,
             retain_value,
             release_value,
             clone_value,
@@ -1179,11 +1191,14 @@ impl<'a> NativeCodegen<'a> {
             enum_variant,
             variant_matches,
             variant_payload,
+            variant_take_payload,
             instance_empty,
             instance_get_field,
-            instance_set_field,
+            instance_take_field,
+            instance_set_field_owned,
             arg_buffer_new,
             arg_buffer_store,
+            arg_buffer_store_owned,
             host_builtin,
             channel_new,
             channel_send,
@@ -1843,6 +1858,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_index_option = self
             .object
             .declare_func_in_func(self.vec_index_option, builder.func);
+        let vec_take_index_in_place = self
+            .object
+            .declare_func_in_func(self.vec_take_index_in_place, builder.func);
         let vec_set_index_in_place = self
             .object
             .declare_func_in_func(self.vec_set_index_in_place, builder.func);
@@ -1906,6 +1924,9 @@ impl<'a> NativeCodegen<'a> {
         let set_index_option = self
             .object
             .declare_func_in_func(self.set_index_option, builder.func);
+        let set_take_index_in_place = self
+            .object
+            .declare_func_in_func(self.set_take_index_in_place, builder.func);
         let retain_value = self
             .object
             .declare_func_in_func(self.retain_value, builder.func);
@@ -1969,21 +1990,30 @@ impl<'a> NativeCodegen<'a> {
         let variant_payload = self
             .object
             .declare_func_in_func(self.variant_payload, builder.func);
+        let variant_take_payload = self
+            .object
+            .declare_func_in_func(self.variant_take_payload, builder.func);
         let instance_empty = self
             .object
             .declare_func_in_func(self.instance_empty, builder.func);
         let instance_get_field = self
             .object
             .declare_func_in_func(self.instance_get_field, builder.func);
-        let instance_set_field = self
+        let instance_take_field = self
             .object
-            .declare_func_in_func(self.instance_set_field, builder.func);
+            .declare_func_in_func(self.instance_take_field, builder.func);
+        let instance_set_field_owned = self
+            .object
+            .declare_func_in_func(self.instance_set_field_owned, builder.func);
         let arg_buffer_new = self
             .object
             .declare_func_in_func(self.arg_buffer_new, builder.func);
         let arg_buffer_store = self
             .object
             .declare_func_in_func(self.arg_buffer_store, builder.func);
+        let arg_buffer_store_owned = self
+            .object
+            .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
         let host_builtin = self
             .object
             .declare_func_in_func(self.host_builtin, builder.func);
@@ -2576,6 +2606,7 @@ impl<'a> NativeCodegen<'a> {
             vec_reverse_in_place,
             vec_index,
             vec_index_option,
+            vec_take_index_in_place,
             vec_set_index_in_place,
             map_empty,
             map_len,
@@ -2599,6 +2630,7 @@ impl<'a> NativeCodegen<'a> {
             set_insert_in_place,
             set_remove_in_place,
             set_index_option,
+            set_take_index_in_place,
             retain_value,
             release_value,
             clone_value,
@@ -2620,11 +2652,14 @@ impl<'a> NativeCodegen<'a> {
             enum_variant,
             variant_matches,
             variant_payload,
+            variant_take_payload,
             instance_empty,
             instance_get_field,
-            instance_set_field,
+            instance_take_field,
+            instance_set_field_owned,
             arg_buffer_new,
             arg_buffer_store,
+            arg_buffer_store_owned,
             host_builtin,
             channel_new,
             channel_send,
@@ -3235,6 +3270,7 @@ struct FunctionCompiler<'a> {
     vec_reverse_in_place: cranelift_codegen::ir::FuncRef,
     vec_index: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
+    vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
     map_empty: cranelift_codegen::ir::FuncRef,
     map_len: cranelift_codegen::ir::FuncRef,
@@ -3258,6 +3294,7 @@ struct FunctionCompiler<'a> {
     set_insert_in_place: cranelift_codegen::ir::FuncRef,
     set_remove_in_place: cranelift_codegen::ir::FuncRef,
     set_index_option: cranelift_codegen::ir::FuncRef,
+    set_take_index_in_place: cranelift_codegen::ir::FuncRef,
     retain_value: cranelift_codegen::ir::FuncRef,
     release_value: cranelift_codegen::ir::FuncRef,
     clone_value: cranelift_codegen::ir::FuncRef,
@@ -3279,11 +3316,14 @@ struct FunctionCompiler<'a> {
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
+    variant_take_payload: cranelift_codegen::ir::FuncRef,
     instance_empty: cranelift_codegen::ir::FuncRef,
     instance_get_field: cranelift_codegen::ir::FuncRef,
-    instance_set_field: cranelift_codegen::ir::FuncRef,
+    instance_take_field: cranelift_codegen::ir::FuncRef,
+    instance_set_field_owned: cranelift_codegen::ir::FuncRef,
     arg_buffer_new: cranelift_codegen::ir::FuncRef,
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
+    arg_buffer_store_owned: cranelift_codegen::ir::FuncRef,
     host_builtin: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
@@ -3533,6 +3573,19 @@ impl<'a> FunctionCompiler<'a> {
             value.values[0]
         } else {
             self.retain_opaque_handle(value.values[0])
+        }
+    }
+
+    fn transfer_owned_opaque_value(&mut self, value: &ValueRef) -> Value {
+        if self.temporary_owns_opaque(value) {
+            self.clear_temporary_opaque_owned(value);
+            value.values[0]
+        } else {
+            let inst = self
+                .builder
+                .ins()
+                .call(self.clone_value, &[value.values[0]]);
+            self.builder.inst_results(inst)[0]
         }
     }
 
@@ -3814,16 +3867,26 @@ impl<'a> FunctionCompiler<'a> {
                 variant_name: _,
                 index,
             } => {
+                if let Operand::MovePlace(place) = scrutinee {
+                    return self.compile_take_variant_payload(place, *index);
+                }
                 let scrutinee = self.load_operand(scrutinee)?;
                 self.compile_variant_payload(scrutinee, *index)
             }
             Rvalue::StartTask {
                 returns_handle,
+                result_is_copy,
                 task_group,
                 function,
                 args,
                 ..
-            } => self.compile_start_task(*returns_handle, task_group, function, args),
+            } => self.compile_start_task(
+                *returns_handle,
+                *result_is_copy,
+                task_group,
+                function,
+                args,
+            ),
             Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
     }
@@ -3851,10 +3914,12 @@ impl<'a> FunctionCompiler<'a> {
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
-            let _ = self
+            let value = self.transfer_owned_opaque_value(&value);
+            let result = self
                 .builder
                 .ins()
-                .call(self.vec_push_in_place, &[vector.values[0], value.values[0]]);
+                .call(self.vec_push_in_place, &[vector.values[0], value]);
+            self.release_opaque_handle(self.builder.inst_results(result)[0]);
         }
         Ok(vector)
     }
@@ -3887,10 +3952,13 @@ impl<'a> FunctionCompiler<'a> {
         for entry in entries {
             let key = self.load_operand_as_opaque_direct(&entry.key, &key_direct_ty)?;
             let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
-            let _ = self.builder.ins().call(
-                self.map_set_in_place,
-                &[map.values[0], key.values[0], value.values[0]],
-            );
+            let key = self.transfer_owned_opaque_value(&key);
+            let value = self.transfer_owned_opaque_value(&value);
+            let result = self
+                .builder
+                .ins()
+                .call(self.map_set_in_place, &[map.values[0], key, value]);
+            self.release_opaque_handle(self.builder.inst_results(result)[0]);
         }
         Ok(map)
     }
@@ -3918,10 +3986,11 @@ impl<'a> FunctionCompiler<'a> {
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
+            let value = self.transfer_owned_opaque_value(&value);
             let _ = self
                 .builder
                 .ins()
-                .call(self.set_insert_in_place, &[set.values[0], value.values[0]]);
+                .call(self.set_insert_in_place, &[set.values[0], value]);
         }
         Ok(set)
     }
@@ -4469,9 +4538,11 @@ impl<'a> FunctionCompiler<'a> {
                     &[opcode, left_boxed, right_boxed, line, column],
                 );
                 let result_boxed = self.builder.inst_results(result)[0];
+                self.release_opaque_handle(left_boxed);
+                self.release_opaque_handle(right_boxed);
                 let unboxed = self.builder.ins().call(self.unbox_f64, &[result_boxed]);
                 let value = self.builder.inst_results(unboxed)[0];
-                self.builder.ins().call(self.release_value, &[result_boxed]);
+                self.release_opaque_handle(result_boxed);
                 Ok(ValueRef {
                     values: vec![value],
                     ty,
@@ -4855,10 +4926,8 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .call(self.sleep_value, &[duration.values[0]]);
-            return Ok(ValueRef {
-                values: self.builder.inst_results(inst).to_vec(),
-                ty: DirectType::Scalar(ScalarKind::Unit),
-            });
+            self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+            return Ok(unit_value(&mut self.builder));
         }
         if matches!(name, "wait_any" | "wait_all") {
             let mut tasks_arg: Option<&MirArg> = None;
@@ -5180,7 +5249,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let metadata = host_builtin_metadata(name)
             .expect("host builtin codegen is only called for registered host builtins");
-        debug_assert!(metadata.params.iter().all(|param| param.required));
+        // Checked MIR materializes builtin defaults before direct code generation, so
+        // optional metadata parameters are present in this argument list too.
         let expected_names = metadata
             .params
             .iter()
@@ -5424,10 +5494,10 @@ impl<'a> FunctionCompiler<'a> {
         let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
         let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
         match name {
-            "fs::exists" => Ok(ValueRef {
-                values: results,
-                ty: DirectType::Scalar(ScalarKind::Bool),
-            }),
+            "fs::exists" => {
+                let result = self.owned_opaque_result(results, Type::named("bool"));
+                self.coerce_value(result, &DirectType::Scalar(ScalarKind::Bool))
+            }
             "io::write" | "io::flush" => Ok(self.owned_opaque_result(
                 results,
                 Type::Named(
@@ -5891,6 +5961,7 @@ impl<'a> FunctionCompiler<'a> {
     fn load_operand(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         match operand {
             Operand::Place(place) => self.load_place(place),
+            Operand::MovePlace(place) => self.take_place(place),
             Operand::Int(value) => {
                 if let Ok(narrowed) = i64::try_from(*value) {
                     return Ok(ValueRef {
@@ -5939,7 +6010,9 @@ impl<'a> FunctionCompiler<'a> {
 
     fn operand_integer_kind(&self, operand: &Operand) -> Option<ScalarKind> {
         let kind = match operand {
-            Operand::Place(place) => self.type_of_place(place).ok()?.scalar_kind()?,
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                self.type_of_place(place).ok()?.scalar_kind()?
+            }
             Operand::Int(_)
             | Operand::Float(_)
             | Operand::String(_)
@@ -6002,6 +6075,82 @@ impl<'a> FunctionCompiler<'a> {
             value = self.extract_field(value, field)?;
         }
         Ok(value)
+    }
+
+    fn take_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        let segments = place.split('.').collect::<Vec<_>>();
+        let Some(root) = segments.first().copied() else {
+            return Err("direct backend encountered an empty move place".to_string());
+        };
+        let root_ty = self.local_type(root)?;
+        if segments.len() == 1 {
+            let vars = self.local_vars(root)?;
+            let values = vars
+                .iter()
+                .map(|var| self.builder.use_var(*var))
+                .collect::<Vec<_>>();
+            for (var, abi) in vars.into_iter().zip(root_ty.abi_types()) {
+                let zero = if abi == types::F64 {
+                    self.builder.ins().f64const(Ieee64::with_float(0.0))
+                } else {
+                    self.builder.ins().iconst(abi, 0)
+                };
+                self.builder.def_var(var, zero);
+            }
+            let moved = ValueRef {
+                values,
+                ty: root_ty,
+            };
+            self.mark_temporary_opaque_owned(&moved);
+            return Ok(moved);
+        }
+
+        let moved_ty = self.type_of_place(place)?;
+        if matches!(&root_ty, DirectType::Opaque(_)) {
+            let root_value = self.load_root(root)?;
+            let path = segments[1..].join(".");
+            let (field_ptr, field_len) = self.string_constant(path.as_bytes())?;
+            let inst = self.builder.ins().call(
+                self.instance_take_field,
+                &[root_value.values[0], field_ptr, field_len],
+            );
+            let moved = ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Opaque(direct_type_to_type(&moved_ty)),
+            };
+            self.mark_temporary_opaque_owned(&moved);
+            return self.coerce_value(moved, &moved_ty);
+        }
+
+        let vars = self.local_vars(root)?;
+        let mut current_ty = root_ty;
+        let mut start = 0usize;
+        let mut end = vars.len();
+        for field in &segments[1..] {
+            let (field_start, field_end, field_ty) =
+                required_direct_field_slice(&current_ty, field)?;
+            start += field_start;
+            end = start + (field_end - field_start);
+            current_ty = field_ty;
+        }
+        let values = vars[start..end]
+            .iter()
+            .map(|var| self.builder.use_var(*var))
+            .collect::<Vec<_>>();
+        for (var, abi) in vars[start..end].iter().copied().zip(current_ty.abi_types()) {
+            let zero = if abi == types::F64 {
+                self.builder.ins().f64const(Ieee64::with_float(0.0))
+            } else {
+                self.builder.ins().iconst(abi, 0)
+            };
+            self.builder.def_var(var, zero);
+        }
+        let moved = ValueRef {
+            values,
+            ty: current_ty,
+        };
+        self.mark_temporary_opaque_owned(&moved);
+        Ok(moved)
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
@@ -6358,29 +6507,18 @@ impl<'a> FunctionCompiler<'a> {
         let root = segments.remove(0);
         let result = if segments.is_empty() {
             self.store_root(root, value)
-        } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
-            && segments.len() == 1
-        {
+        } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
             let current = self.load_root(root)?;
             let current = self.ensure_opaque(current)?;
             let updated_value = self.ensure_opaque(value)?;
-            let (field_ptr, field_len) = self.string_constant(segments[0].as_bytes())?;
-            let inst = self.builder.ins().call(
-                self.instance_set_field,
-                &[
-                    current.values[0],
-                    field_ptr,
-                    field_len,
-                    updated_value.values[0],
-                ],
+            let updated_value = self.transfer_owned_opaque_value(&updated_value);
+            let field_path = segments.join(".");
+            let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
+            self.builder.ins().call(
+                self.instance_set_field_owned,
+                &[current.values[0], field_ptr, field_len, updated_value],
             );
-            self.store_root(
-                root,
-                ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
-                    ty: self.local_type(root)?,
-                },
-            )
+            Ok(())
         } else {
             let root_value = self.load_root(root)?;
             let updated = self.replace_nested_field(root_value, &segments, value)?;
@@ -6503,7 +6641,7 @@ impl<'a> FunctionCompiler<'a> {
                     .builder
                     .ins()
                     .call(self.instance_empty, &[class_ptr, class_len]);
-                let mut current = self.builder.inst_results(init)[0];
+                let current = self.builder.inst_results(init)[0];
                 let mut start = 0usize;
                 for field in &class.fields {
                     let end = start + field.ty.value_count();
@@ -6512,12 +6650,12 @@ impl<'a> FunctionCompiler<'a> {
                         ty: field.ty.clone(),
                     };
                     let field_value = self.ensure_opaque(field_value)?;
+                    let field_value = self.transfer_owned_opaque_value(&field_value);
                     let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-                    let inst = self.builder.ins().call(
-                        self.instance_set_field,
-                        &[current, field_ptr, field_len, field_value.values[0]],
+                    self.builder.ins().call(
+                        self.instance_set_field_owned,
+                        &[current, field_ptr, field_len, field_value],
                     );
-                    current = self.builder.inst_results(inst)[0];
                     start = end;
                 }
                 let boxed = ValueRef {
@@ -6590,11 +6728,12 @@ impl<'a> FunctionCompiler<'a> {
                     loaded
                 };
                 let payload = self.ensure_opaque(loaded)?;
-                let transferred = self.transfer_opaque_arg(&payload);
+                let transferred = self.transfer_owned_opaque_value(&payload);
                 let index_value = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder
-                    .ins()
-                    .call(self.arg_buffer_store, &[buffer, index_value, transferred]);
+                self.builder.ins().call(
+                    self.arg_buffer_store_owned,
+                    &[buffer, index_value, transferred],
+                );
             }
             buffer
         };
@@ -6635,11 +6774,11 @@ impl<'a> FunctionCompiler<'a> {
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, payload) in payloads.into_iter().enumerate() {
                 let payload = self.ensure_opaque(payload)?;
-                let transferred = self.transfer_opaque_arg(&payload);
+                let transferred = self.transfer_owned_opaque_value(&payload);
                 let index = self.builder.ins().iconst(types::I64, index as i64);
                 self.builder
                     .ins()
-                    .call(self.arg_buffer_store, &[buffer, index, transferred]);
+                    .call(self.arg_buffer_store_owned, &[buffer, index, transferred]);
             }
             buffer
         };
@@ -6684,6 +6823,32 @@ impl<'a> FunctionCompiler<'a> {
         Ok(payload)
     }
 
+    fn compile_take_variant_payload(
+        &mut self,
+        place: &str,
+        index: usize,
+    ) -> std::result::Result<ValueRef, String> {
+        let scrutinee = self.load_place(place)?;
+        self.compile_take_variant_payload_from_value(scrutinee, index)
+    }
+
+    fn compile_take_variant_payload_from_value(
+        &mut self,
+        scrutinee: ValueRef,
+        index: usize,
+    ) -> std::result::Result<ValueRef, String> {
+        let scrutinee = self.ensure_opaque(scrutinee)?;
+        let index = self.builder.ins().iconst(types::I64, index as i64);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.variant_take_payload, &[scrutinee.values[0], index]);
+        Ok(self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            Type::named("Unknown"),
+        ))
+    }
+
     fn compile_try_assign(
         &mut self,
         target: &str,
@@ -6711,6 +6876,14 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
         let value = self.ensure_opaque(loaded)?;
+        let source_is_owned = self.temporary_owns_opaque(&value);
+        if source_is_owned {
+            // Ownership must be modeled independently in each CFG successor. Keeping
+            // this value in the compile-time temporary set while emitting the first
+            // successor would make the second successor inherit the first one's
+            // release/transfer decision.
+            self.clear_temporary_opaque_owned(&value);
+        }
         let ok = self.variant_matches_value(value.values[0], "Result", "Ok")?;
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
@@ -6718,7 +6891,18 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.ins().brif(ok, ok_block, &[], err_block, &[]);
 
         self.builder.switch_to_block(ok_block);
-        let payload = self.compile_variant_payload(value.clone(), 0)?;
+        if source_is_owned {
+            self.mark_temporary_opaque_owned(&value);
+        }
+        let payload = if source_is_owned {
+            self.compile_take_variant_payload_from_value(value.clone(), 0)?
+        } else {
+            self.compile_variant_payload(value.clone(), 0)?
+        };
+        if source_is_owned {
+            self.clear_temporary_opaque_owned(&value);
+            self.release_opaque_handle(value.values[0]);
+        }
         let coerced = self.coerce_value(payload, &target_ty)?;
         self.store_place(target, coerced)?;
         self.release_all_temporary_owned();
@@ -6726,10 +6910,21 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(ok_block);
 
         self.builder.switch_to_block(err_block);
+        if source_is_owned {
+            self.mark_temporary_opaque_owned(&value);
+        }
         let error_result = if source_error_ty == target_error_ty {
             value.clone()
         } else {
-            let payload = self.compile_variant_payload(value.clone(), 0)?;
+            let payload = if source_is_owned {
+                self.compile_take_variant_payload_from_value(value.clone(), 0)?
+            } else {
+                self.compile_variant_payload(value.clone(), 0)?
+            };
+            if source_is_owned {
+                self.clear_temporary_opaque_owned(&value);
+                self.release_opaque_handle(value.values[0]);
+            }
             let converted =
                 self.convert_try_error_via_from(payload, &source_error_ty, &target_error_ty)?;
             self.compile_enum_variant_from_values(
@@ -6776,7 +6971,10 @@ impl<'a> FunctionCompiler<'a> {
                 {
                     return None;
                 }
-                let method = trait_impl.methods.iter().find(|method| method.name == "from")?;
+                let method = trait_impl
+                    .methods
+                    .iter()
+                    .find(|method| method.name == "from")?;
                 Some((
                     crate::sema::trait_impl_specificity_parts(
                         &trait_impl.for_type,
@@ -6786,12 +6984,12 @@ impl<'a> FunctionCompiler<'a> {
                 ))
             })
             .max_by_key(|(specificity, _)| *specificity)
-            .map(|(_, method)| method)
-            .ok_or_else(|| {
-                format!(
-                    "direct backend could not find `From[{source_ty}] for {target_ty}` required by `try`"
-                )
-            })?;
+            .map(|(_, method)| method);
+        let Some(method) = method else {
+            return Err(format!(
+                "direct backend could not find `From[{source_ty}] for {target_ty}` required by `try`"
+            ));
+        };
         let function_name = method.function_name;
         let expected = self
             .function_param_types
@@ -6805,9 +7003,11 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             payload.values
         };
-        let function = *self.function_refs.get(&function_name).ok_or_else(|| {
-            format!("direct backend does not know From function `{function_name}`")
-        })?;
+        let Some(function) = self.function_refs.get(&function_name).copied() else {
+            return Err(format!(
+                "direct backend does not know From function `{function_name}`"
+            ));
+        };
         let inst = self.builder.ins().call(function, &arguments);
         let results = self.builder.inst_results(inst).to_vec();
         let (converted, writebacks) = self.split_call_results(&function_name, results)?;
@@ -6955,6 +7155,13 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         cancel_before_cleanup: bool,
     ) -> std::result::Result<(), String> {
+        // Cleanup branches are generated off the caller's current control-flow
+        // path. Temporaries that were already owned by that caller remain live
+        // on its continuation and must not disappear from compile-time tracking
+        // merely because the cleanup branch releases its own results. Track only
+        // cleanup-created temporaries while emitting each run block, then restore
+        // the caller's owners at the merge.
+        let caller_owned_temporaries = std::mem::take(&mut self.owned_opaque_temporaries);
         for place in self.cleanup_places.clone().into_iter().rev() {
             let Some(variable) = self.cleanup_active_vars.get(&place).copied() else {
                 continue;
@@ -6976,7 +7183,9 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.seal_block(run_block);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
+            self.owned_opaque_temporaries.clear();
         }
+        self.owned_opaque_temporaries = caller_owned_temporaries;
         Ok(())
     }
 
@@ -7088,10 +7297,11 @@ impl<'a> FunctionCompiler<'a> {
                         .builder
                         .ins()
                         .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
-                    let _ = self
+                    let result = self
                         .builder
                         .ins()
                         .call(self.task_group_close, &[loaded.values[0], cancel_before]);
+                    self.release_opaque_handle(self.builder.inst_results(result)[0]);
                     return Ok(());
                 }
                 if self
@@ -7115,26 +7325,27 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        let method = find_method(self.classes.get(class_name), field)
-            .cloned()
-            .or_else(|| {
-                receiver_type_hint
-                    .as_ref()
-                    .and_then(|ty| self.find_trait_method(ty, field).cloned())
-            })
-            .or_else(|| {
-                self.find_trait_method(&Type::named(class_name), field)
-                    .cloned()
-            })
-            .or_else(|| {
-                find_trait_method_for_class_name(&self.trait_impls, class_name, field).cloned()
-            })
-            .ok_or({
-                format!(
-                    "direct backend does not know method `{}.{}`",
-                    class_name, field
-                )
-            })?;
+        let mut method = find_method(self.classes.get(class_name), field).cloned();
+        if method.is_none() {
+            method = receiver_type_hint
+                .as_ref()
+                .and_then(|ty| self.find_trait_method(ty, field).cloned());
+        }
+        if method.is_none() {
+            method = self
+                .find_trait_method(&Type::named(class_name), field)
+                .cloned();
+        }
+        if method.is_none() {
+            method =
+                find_trait_method_for_class_name(&self.trait_impls, class_name, field).cloned();
+        }
+        let Some(method) = method else {
+            return Err(format!(
+                "direct backend does not know method `{}.{}`",
+                class_name, field
+            ));
+        };
         let method_function_name = method.function_name.clone();
         if method.receiver == Some(MirReceiverKind::BorrowMut) && receiver_place.is_none() {
             return Err(format!(
@@ -7590,10 +7801,12 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let _ = self
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let result = self
                             .builder
                             .ins()
-                            .call(self.vec_push_in_place, &[object.values[0], value.values[0]]);
+                            .call(self.vec_push_in_place, &[object.values[0], value]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -7667,6 +7880,32 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
+                    "__take_index_option" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected internal consuming vector indexing to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let Some(receiver_place) = receiver_place else {
+                            return Err(
+                                "direct backend expected internal consuming vector indexing to provide its private receiver place"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.vec_take_index_in_place,
+                            &[object.values[0], index.values[0]],
+                        );
+                        self.store_place(receiver_place, object.clone())?;
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Option".to_string(), vec![element_ty]),
+                        ))
+                    }
                     "__index" => {
                         let [argument, line_arg, column_arg] = args else {
                             return Err(
@@ -7716,9 +7955,10 @@ impl<'a> FunctionCompiler<'a> {
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
+                        let value = self.transfer_owned_opaque_value(&value);
                         let inst = self.builder.ins().call(
                             self.vec_set_in_place,
-                            &[object.values[0], index.values[0], value.values[0]],
+                            &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -7758,16 +7998,18 @@ impl<'a> FunctionCompiler<'a> {
                             line.values[0],
                             column.values[0],
                         )?;
-                        let _ = self.builder.ins().call(
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let result = self.builder.ins().call(
                             self.vec_set_index_in_place,
                             &[
                                 object.values[0],
                                 normalized_index,
-                                value.values[0],
+                                value,
                                 line.values[0],
                                 column.values[0],
                             ],
                         );
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -7856,9 +8098,10 @@ impl<'a> FunctionCompiler<'a> {
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
+                        let value = self.transfer_owned_opaque_value(&value);
                         let inst = self.builder.ins().call(
                             self.vec_insert_in_place,
-                            &[object.values[0], index.values[0], value.values[0]],
+                            &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -7873,10 +8116,11 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `clear()` to take no arguments"
                                 .to_string());
                         }
-                        let _ = self
+                        let result = self
                             .builder
                             .ins()
                             .call(self.vec_clear_in_place, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -7887,10 +8131,11 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `reverse()` to take no arguments"
                                 .to_string());
                         }
-                        let _ = self
+                        let result = self
                             .builder
                             .ins()
                             .call(self.vec_reverse_in_place, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -7905,10 +8150,12 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let _ = self.builder.ins().call(
-                            self.vec_extend_in_place,
-                            &[object.values[0], value.values[0]],
-                        );
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let result = self
+                            .builder
+                            .ins()
+                            .call(self.vec_extend_in_place, &[object.values[0], value]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8017,10 +8264,12 @@ impl<'a> FunctionCompiler<'a> {
                             self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
                         let value =
                             self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.map_set_in_place,
-                            &[object.values[0], key.values[0], value.values[0]],
-                        );
+                        let key = self.transfer_owned_opaque_value(&key);
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_set_in_place, &[object.values[0], key, value]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8046,16 +8295,19 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let _ = self.builder.ins().call(
+                        let key = self.transfer_owned_opaque_value(&key);
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let result = self.builder.ins().call(
                             self.map_set_index_in_place,
                             &[
                                 object.values[0],
-                                key.values[0],
-                                value.values[0],
+                                key,
+                                value,
                                 line.values[0],
                                 column.values[0],
                             ],
                         );
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8155,10 +8407,11 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `clear()` to take no arguments"
                                 .to_string());
                         }
-                        let _ = self
+                        let result = self
                             .builder
                             .ins()
                             .call(self.map_clear_in_place, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8173,10 +8426,12 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let _ = self.builder.ins().call(
-                            self.map_extend_in_place,
-                            &[object.values[0], value.values[0]],
-                        );
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let result = self
+                            .builder
+                            .ins()
+                            .call(self.map_extend_in_place, &[object.values[0], value]);
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8254,10 +8509,11 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.set_insert_in_place,
-                            &[object.values[0], value.values[0]],
-                        );
+                        let value = self.transfer_owned_opaque_value(&value);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.set_insert_in_place, &[object.values[0], value]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -8301,6 +8557,32 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.set_index_option, &[object.values[0], index.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Option".to_string(), vec![element_ty]),
+                        ))
+                    }
+                    "__take_index_option" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected internal consuming set indexing to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let Some(receiver_place) = receiver_place else {
+                            return Err(
+                                "direct backend expected internal consuming set indexing to provide its private receiver place"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.set_take_index_in_place,
+                            &[object.values[0], index.values[0]],
+                        );
+                        self.store_place(receiver_place, object.clone())?;
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("Option".to_string(), vec![element_ty]),
@@ -8427,10 +8709,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.file_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -8598,10 +8878,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.process_child_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -8761,10 +9039,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.process_pipe_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9020,21 +9296,32 @@ impl<'a> FunctionCompiler<'a> {
                                 ty: DirectType::Scalar(ScalarKind::Bool),
                             })?
                         };
+                        let name = self.transfer_owned_opaque_value(&name);
+                        let command = self.transfer_owned_opaque_value(&command);
+                        let cwd = self.transfer_owned_opaque_value(&cwd);
+                        let env = self.transfer_owned_opaque_value(&env);
+                        let stdin = self.transfer_owned_opaque_value(&stdin);
+                        let stdout = self.transfer_owned_opaque_value(&stdout);
+                        let stderr = self.transfer_owned_opaque_value(&stderr);
+                        let restart = self.transfer_owned_opaque_value(&restart);
+                        let backoff = self.transfer_owned_opaque_value(&backoff);
+                        let max_restarts = self.transfer_owned_opaque_value(&max_restarts);
+                        let group = self.transfer_owned_opaque_value(&group);
                         let inst = self.builder.ins().call(
                             self.process_supervisor_start,
                             &[
                                 object.values[0],
-                                name.values[0],
-                                command.values[0],
-                                cwd.values[0],
-                                env.values[0],
-                                stdin.values[0],
-                                stdout.values[0],
-                                stderr.values[0],
-                                restart.values[0],
-                                backoff.values[0],
-                                max_restarts.values[0],
-                                group.values[0],
+                                name,
+                                command,
+                                cwd,
+                                env,
+                                stdin,
+                                stdout,
+                                stderr,
+                                restart,
+                                backoff,
+                                max_restarts,
+                                group,
                             ],
                         );
                         Ok(self.owned_opaque_result(
@@ -9130,10 +9417,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.process_supervisor_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9193,10 +9478,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.tcp_listener_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9470,10 +9753,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.tcp_stream_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9646,10 +9927,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.udp_socket_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9730,11 +10009,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.http_listener_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.http_listener_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -9801,14 +10083,11 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded_text)?;
                         let loaded_headers = self.load_operand(&bound[2].value)?;
                         let headers = self.ensure_opaque(loaded_headers)?;
+                        let text = self.transfer_owned_opaque_value(&text);
+                        let headers = self.transfer_owned_opaque_value(&headers);
                         let inst = self.builder.ins().call(
                             self.http_exchange_respond_text,
-                            &[
-                                object.values[0],
-                                status.values[0],
-                                text.values[0],
-                                headers.values[0],
-                            ],
+                            &[object.values[0], status.values[0], text, headers],
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -9828,14 +10107,11 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.ensure_opaque(loaded_bytes)?;
                         let loaded_headers = self.load_operand(&bound[2].value)?;
                         let headers = self.ensure_opaque(loaded_headers)?;
+                        let bytes = self.transfer_owned_opaque_value(&bytes);
+                        let headers = self.transfer_owned_opaque_value(&headers);
                         let inst = self.builder.ins().call(
                             self.http_exchange_respond_bytes,
-                            &[
-                                object.values[0],
-                                status.values[0],
-                                bytes.values[0],
-                                headers.values[0],
-                            ],
+                            &[object.values[0], status.values[0], bytes, headers],
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -10043,11 +10319,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.websocket_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.websocket_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -10075,11 +10354,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.unix_listener_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.unix_listener_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -10154,11 +10436,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.unix_stream_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.unix_stream_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -10202,11 +10487,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.tls_listener_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tls_listener_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -10281,11 +10569,14 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "close" => Ok(ValueRef {
-                        values: self
-                            .runtime_call_results(self.tls_stream_close, &[object.values[0]]),
-                        ty: DirectType::Scalar(ScalarKind::Unit),
-                    }),
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tls_stream_close, &[object.values[0]]);
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -10349,14 +10640,16 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = if let Some(timeout_arg) = timeout_arg {
                             let timeout = self.load_operand(&timeout_arg.value)?;
                             let timeout = self.ensure_opaque(timeout)?;
+                            let value = self.transfer_owned_opaque_value(&value);
                             self.builder.ins().call(
                                 self.channel_send_timeout_value,
-                                &[object.values[0], value.values[0], timeout.values[0]],
+                                &[object.values[0], value, timeout.values[0]],
                             )
                         } else {
+                            let value = self.transfer_owned_opaque_value(&value);
                             self.builder
                                 .ins()
-                                .call(self.channel_send, &[object.values[0], value.values[0]])
+                                .call(self.channel_send, &[object.values[0], value])
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -10384,10 +10677,11 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
+                        let value = self.transfer_owned_opaque_value(&value);
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.channel_try_send, &[object.values[0], value.values[0]]);
+                            .call(self.channel_try_send, &[object.values[0], value]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -10529,15 +10823,18 @@ impl<'a> FunctionCompiler<'a> {
                             Some(timeout) => {
                                 let timeout = self.load_operand(&timeout.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
+                                let default = self.transfer_owned_opaque_value(&loaded);
                                 self.builder.ins().call(
                                     self.channel_recv_or_value_timeout_value,
-                                    &[object.values[0], loaded.values[0], timeout.values[0]],
+                                    &[object.values[0], default, timeout.values[0]],
                                 )
                             }
-                            None => self.builder.ins().call(
-                                self.channel_recv_or_value,
-                                &[object.values[0], loaded.values[0]],
-                            ),
+                            None => {
+                                let default = self.transfer_owned_opaque_value(&loaded);
+                                self.builder
+                                    .ins()
+                                    .call(self.channel_recv_or_value, &[object.values[0], default])
+                            }
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -10556,10 +10853,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.channel_close, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -10653,15 +10948,18 @@ impl<'a> FunctionCompiler<'a> {
                             Some(timeout) => {
                                 let timeout = self.load_operand(&timeout.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
+                                let default = self.transfer_owned_opaque_value(&loaded);
                                 self.builder.ins().call(
                                     self.task_join_or_value_timeout_value,
-                                    &[object.values[0], loaded.values[0], timeout.values[0]],
+                                    &[object.values[0], default, timeout.values[0]],
                                 )
                             }
-                            None => self.builder.ins().call(
-                                self.task_join_or_value,
-                                &[object.values[0], loaded.values[0]],
-                            ),
+                            None => {
+                                let default = self.transfer_owned_opaque_value(&loaded);
+                                self.builder
+                                    .ins()
+                                    .call(self.task_join_or_value, &[object.values[0], default])
+                            }
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -10686,10 +10984,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.task_group_cancel, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     "close" => {
                         if !args.is_empty() {
@@ -10701,10 +10997,8 @@ impl<'a> FunctionCompiler<'a> {
                             .builder
                             .ins()
                             .call(self.task_group_close, &[object.values[0], cancel_before]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Unit),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -10807,7 +11101,7 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .call(self.instance_empty, &[class_ptr, class_len]);
-        let mut current =
+        let current =
             self.owned_opaque_result(self.builder.inst_results(init).to_vec(), target_ty.clone());
         let substitutions = match target_ty {
             Type::Named(name, args) if name == class_name => class
@@ -10838,13 +11132,12 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.load_operand_for_target(&field.value, &field_ty)?;
             let loaded = self.coerce_value(loaded, &field_ty)?;
             let loaded = self.ensure_opaque(loaded)?;
+            let loaded = self.transfer_owned_opaque_value(&loaded);
             let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-            let inst = self.builder.ins().call(
-                self.instance_set_field,
-                &[current.values[0], field_ptr, field_len, loaded.values[0]],
+            self.builder.ins().call(
+                self.instance_set_field_owned,
+                &[current.values[0], field_ptr, field_len, loaded],
             );
-            current = self
-                .owned_opaque_result(self.builder.inst_results(inst).to_vec(), target_ty.clone());
         }
         Ok(current)
     }
@@ -10852,6 +11145,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_start_task(
         &mut self,
         returns_handle: bool,
+        result_is_copy: bool,
         task_group: &Operand,
         function: &str,
         args: &[MirArg],
@@ -10897,6 +11191,10 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .iconst(types::I64, if returns_handle { 1 } else { 0 });
+        let result_is_copy_value = self
+            .builder
+            .ins()
+            .iconst(types::I64, if result_is_copy { 1 } else { 0 });
         let group = self.load_operand(task_group)?;
         let group = self.ensure_opaque(group)?;
         let task_group_value = group.values[0];
@@ -10908,6 +11206,7 @@ impl<'a> FunctionCompiler<'a> {
                 arg_count_value,
                 returns_handle_value,
                 task_group_value,
+                result_is_copy_value,
             ],
         );
         let ty = if returns_handle {
@@ -10923,10 +11222,10 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Opaque(ty) => {
                 Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), ty))
             }
-            _ => Ok(ValueRef {
-                values: self.builder.inst_results(call).to_vec(),
-                ty,
-            }),
+            _ => {
+                self.release_opaque_handle(self.builder.inst_results(call)[0]);
+                Ok(unit_value(&mut self.builder))
+            }
         }
     }
 
@@ -11500,7 +11799,9 @@ fn validate_function(
         match &block.terminator {
             Terminator::Return(operand) => validate_operand(operand)?,
             Terminator::Goto(_) => {}
-            Terminator::Branch { condition, .. } => validate_operand(condition)?,
+            Terminator::Branch { condition, .. } => {
+                validate_non_consuming_operand(condition, "a branch condition")?
+            }
             Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
             other => {
@@ -11523,24 +11824,25 @@ fn validate_rvalue(
         Rvalue::FormatString { parts } => {
             for part in parts {
                 if let MirFormatPart::Value(value) = part {
-                    validate_operand(value)?;
+                    validate_non_consuming_operand(value, "format-string interpolation")?;
                 }
             }
             Ok(())
         }
-        Rvalue::Unary { value, .. } => validate_operand(value),
+        Rvalue::Unary { value, .. } => validate_non_consuming_operand(value, "a unary expression"),
         Rvalue::Cast { value, ty, .. } => {
-            validate_operand(value)?;
+            validate_non_consuming_operand(value, "a cast expression")?;
             ensure_direct_type(ty, classes, "cast target")?;
             Ok(())
         }
         Rvalue::Binary { left, right, .. } => {
-            validate_operand(left)?;
-            validate_operand(right)
+            validate_non_consuming_operand(left, "the left side of a binary expression")?;
+            validate_non_consuming_operand(right, "the right side of a binary expression")
         }
         Rvalue::Call { callee, args } => {
             match callee {
-                CallTarget::Name(_) | CallTarget::Member { .. } => {}
+                CallTarget::Name(_) => {}
+                CallTarget::Member { object, .. } => validate_operand(object)?,
             }
             for argument in args {
                 validate_operand(&argument.value)?;
@@ -11580,13 +11882,18 @@ fn validate_rvalue(
             }
             Ok(())
         }
-        Rvalue::Construct { class_name, .. } => ensure_direct_type(
-            &Type::named(class_name),
-            classes,
-            &format!("class `{}`", class_name),
-        )
-        .map(|_| ()),
-        Rvalue::Member { object, .. } => validate_operand(object),
+        Rvalue::Construct { class_name, fields } => {
+            ensure_direct_type(
+                &Type::named(class_name),
+                classes,
+                &format!("class `{}`", class_name),
+            )?;
+            for field in fields {
+                validate_operand(&field.value)?;
+            }
+            Ok(())
+        }
+        Rvalue::Member { object, .. } => validate_non_consuming_operand(object, "a field read"),
         Rvalue::EnumVariant { payloads, .. } => {
             for payload in payloads {
                 validate_operand(payload)?;
@@ -11598,7 +11905,7 @@ fn validate_rvalue(
         Rvalue::StartTask {
             task_group, args, ..
         } => {
-            validate_operand(task_group)?;
+            validate_non_consuming_operand(task_group, "a task-group receiver")?;
             for argument in args {
                 validate_operand(&argument.value)?;
             }
@@ -11610,6 +11917,7 @@ fn validate_rvalue(
 fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {
     match operand {
         Operand::Place(_)
+        | Operand::MovePlace(_)
         | Operand::Int(_)
         | Operand::Bool(_)
         | Operand::Unit
@@ -11617,6 +11925,19 @@ fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {
         | Operand::String(_)
         | Operand::Duration(_) => Ok(()),
     }
+}
+
+fn validate_non_consuming_operand(
+    operand: &Operand,
+    context: &str,
+) -> std::result::Result<(), String> {
+    validate_operand(operand)?;
+    if matches!(operand, Operand::MovePlace(_)) {
+        return Err(format!(
+            "direct backend only permits `MovePlace` in consuming contexts, not in {context}"
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_direct_type(
@@ -12328,7 +12649,8 @@ fn builtin_opaque_member_return_type(
         | ("Vec", "get")
         | ("Vec", "set")
         | ("Vec", "remove")
-        | ("Vec", "__index_option") => direct_type(
+        | ("Vec", "__index_option")
+        | ("Vec", "__take_index_option") => direct_type(
             &Type::Named(
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
@@ -12388,7 +12710,7 @@ fn builtin_opaque_member_return_type(
         ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }
-        ("Set", "__index_option") => direct_type(
+        ("Set", "__index_option") | ("Set", "__take_index_option") => direct_type(
             &Type::Named(
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
@@ -13042,15 +13364,21 @@ fn direct_field_type(
             _ => None,
         };
     }
-    if !args.is_empty() {
+    let class = classes.get(class_name)?;
+    if args.len() != class.type_params.len() {
         return None;
     }
-    let class = classes.get(class_name)?;
     let field_info = class
         .fields
         .iter()
         .find(|candidate| candidate.name == field)?;
-    direct_type(&field_info.ty, classes)
+    let substitutions = class
+        .type_params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect::<HashMap<_, _>>();
+    direct_type(&substitute_type(&field_info.ty, &substitutions), classes)
 }
 
 fn infer_operand_type(
@@ -13059,7 +13387,7 @@ fn infer_operand_type(
     classes: &HashMap<String, MirClass>,
 ) -> Option<DirectType> {
     match operand {
-        Operand::Place(place) => {
+        Operand::Place(place) | Operand::MovePlace(place) => {
             let mut segments = place.split('.');
             let root = segments.next()?;
             let mut ty = variable_types.get(root)?.clone();
@@ -13106,16 +13434,18 @@ fn thunk_string_constant(
         *id
     } else {
         let name = format!("aurora_data_{}", codegen.string_data.len());
-        let id = codegen
+        let id = match codegen
             .object
             .declare_data(&name, Linkage::Local, false, false)
-            .map_err(|error| format!("failed to declare string data: {}", error))?;
+        {
+            Ok(id) => id,
+            Err(error) => return Err(format!("failed to declare string data: {}", error)),
+        };
         let mut data = DataDescription::new();
         data.define(bytes.to_vec().into_boxed_slice());
-        codegen
-            .object
-            .define_data(id, &data)
-            .map_err(|error| format!("failed to define string data: {}", error))?;
+        if let Err(error) = codegen.object.define_data(id, &data) {
+            return Err(format!("failed to define string data: {}", error));
+        }
         codegen.string_data.insert(bytes.to_vec(), id);
         id
     };
@@ -13184,13 +13514,13 @@ fn box_thunk_value(
             let instance_empty = codegen
                 .object
                 .declare_func_in_func(codegen.instance_empty, builder.func);
-            let instance_set_field = codegen
+            let instance_set_field_owned = codegen
                 .object
-                .declare_func_in_func(codegen.instance_set_field, builder.func);
+                .declare_func_in_func(codegen.instance_set_field_owned, builder.func);
             let (class_ptr, class_len) =
                 thunk_string_constant(codegen, builder, class.class_name.as_bytes())?;
             let init = builder.ins().call(instance_empty, &[class_ptr, class_len]);
-            let mut current = builder.inst_results(init)[0];
+            let current = builder.inst_results(init)[0];
             let mut start = 0usize;
             for field in &class.fields {
                 let end = start + field.ty.value_count();
@@ -13198,11 +13528,10 @@ fn box_thunk_value(
                     box_thunk_value(codegen, builder, &values[start..end], &field.ty)?;
                 let (field_ptr, field_len) =
                     thunk_string_constant(codegen, builder, field.name.as_bytes())?;
-                let inst = builder.ins().call(
-                    instance_set_field,
+                builder.ins().call(
+                    instance_set_field_owned,
                     &[current, field_ptr, field_len, field_value],
                 );
-                current = builder.inst_results(inst)[0];
                 start = end;
             }
             Ok(current)
@@ -13267,6 +13596,12 @@ fn unbox_thunk_value(
                     .call(instance_get_field, &[raw, field_ptr, field_len]);
                 let field_raw = builder.inst_results(inst)[0];
                 values.extend(unbox_thunk_value(codegen, builder, field_raw, &field.ty)?);
+                if !matches!(field.ty, DirectType::Opaque(_)) {
+                    let release_value = codegen
+                        .object
+                        .declare_func_in_func(codegen.release_value, builder.func);
+                    builder.ins().call(release_value, &[field_raw]);
+                }
             }
             Ok(values)
         }

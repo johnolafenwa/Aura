@@ -6,7 +6,7 @@ use super::{
     Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
 };
 use crate::diag::{Diagnostic, Span};
-use crate::integer::IntegerValue;
+use crate::integer::{IntegerKind, IntegerValue};
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm,
     MirMethod, MirModule, MirParam, MirTraitImpl, Operand, Rvalue, Terminator,
@@ -15,7 +15,7 @@ use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
     MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
-    RangeValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    RangeValue, SetValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
     UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
@@ -70,6 +70,111 @@ fn mir_rng_dispatches_nonbuiltin_traits_and_opaque_user_clone_methods() {
     }
 }
 
+#[test]
+fn mir_own_user_and_trait_receivers_transfer_the_original_allocation() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class DirectBox:
+    value: String
+
+    def take(own self) -> String:
+        return self.value
+
+trait Take:
+    def take(own self) -> String
+
+class TraitBox:
+    value: String
+
+impl Take for TraitBox:
+    def take(own self) -> String:
+        return self.value
+
+trait TakeString:
+    def take_string(own self) -> String
+
+impl TakeString for String:
+    def take_string(own self) -> String:
+        return self
+
+def main():
+    pass
+"#,
+    )
+    .expect("own receiver fixtures should lower");
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+
+    for (place, class_name, field) in [
+        ("direct", "DirectBox", "take"),
+        ("trait_value", "TraitBox", "take"),
+    ] {
+        let text = format!("{place}-").repeat(64);
+        let text_ptr = text.as_ptr();
+        let mut env = Env::default();
+        env.define_typed(
+            place,
+            Type::named(class_name),
+            Value::Instance(InstanceValue {
+                class_name: class_name.to_string(),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text))]),
+            }),
+        );
+
+        let returned = runtime
+            .evaluate_call(
+                &CallTarget::Member {
+                    object: Operand::MovePlace(place.to_string()),
+                    field: field.to_string(),
+                    receiver_place: Some(place.to_string()),
+                },
+                &[],
+                &mut env,
+            )
+            .unwrap_or_else(|error| panic!("{class_name}.{field} should run: {error}"));
+        match returned {
+            Value::String(value) => assert_eq!(
+                value.as_ptr(),
+                text_ptr,
+                "an own {class_name} receiver must enter its method without a snapshot clone"
+            ),
+            other => panic!("expected String from {class_name}.{field}, found {other:?}"),
+        }
+        assert!(
+            env.place_ref(place).is_err(),
+            "the source of an own {class_name} receiver must stay consumed"
+        );
+    }
+
+    let text = "builtin-trait-receiver-".repeat(64);
+    let text_ptr = text.as_ptr();
+    let mut env = Env::default();
+    env.define_typed("text", Type::named("String"), Value::String(text));
+    let returned = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::MovePlace("text".to_string()),
+                field: "take_string".to_string(),
+                receiver_place: Some("text".to_string()),
+            },
+            &[],
+            &mut env,
+        )
+        .expect("an own trait receiver on a builtin value should run");
+    let Value::String(returned) = returned else {
+        panic!("expected String from String.take_string");
+    };
+    assert_eq!(
+        returned.as_ptr(),
+        text_ptr,
+        "an own trait receiver on a builtin value must not snapshot-clone"
+    );
+    assert!(env.place_ref("text").is_err());
+}
+
 fn enum_payloads(value: Value, enum_name: &str, variant_name: &str) -> Vec<Value> {
     match value {
         Value::EnumVariant(variant) => {
@@ -111,6 +216,1463 @@ fn call_name(
     env: &mut Env,
 ) -> crate::diag::Result<Value> {
     runtime.evaluate_call(&crate::mir::CallTarget::Name(name.to_string()), args, env)
+}
+
+fn json_value(variant_name: &str, payloads: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: variant_name.to_string(),
+        payloads,
+    })
+}
+
+#[test]
+fn mir_json_borrowed_host_args_reference_the_existing_runtime_value() {
+    let mut env = Env::default();
+    env.define_typed(
+        "text",
+        Type::named("String"),
+        Value::String("{\"answer\":42}".repeat(32)),
+    );
+    env.define_typed(
+        "value",
+        Type::named("json.Value"),
+        json_value("String", vec![Value::String("payload".repeat(32))]),
+    );
+
+    let text_ptr = match env.place_ref("text").expect("text should exist") {
+        Value::String(text) => text.as_ptr(),
+        other => panic!("expected String, found {other:?}"),
+    };
+    let value_ptr = env.place_ref("value").expect("value should exist") as *const Value;
+
+    let text_operand = Operand::Place("text".to_string());
+    let value_operand = Operand::Place("value".to_string());
+    let text_arg =
+        super::borrow_mir_operand(&text_operand, &env).expect("String place should be borrowed");
+    let value_arg = super::borrow_mir_operand(&value_operand, &env)
+        .expect("json.Value place should be borrowed");
+
+    match text_arg.as_value() {
+        Value::String(text) => assert_eq!(text.as_ptr(), text_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+    assert_eq!(value_arg.as_value() as *const Value, value_ptr);
+    assert!(text_arg.is_borrowed_place());
+    assert!(value_arg.is_borrowed_place());
+}
+
+#[test]
+fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    let text = "owned-text".repeat(64);
+    let text_ptr = text.as_ptr();
+    env.define_typed(
+        "string_value",
+        Type::named("json.Value"),
+        json_value("String", vec![Value::String(text)]),
+    );
+    let string_result = call_name(
+        &mut runtime,
+        "json::into_string",
+        &[mir_arg(
+            None,
+            Operand::MovePlace("string_value".to_string()),
+        )],
+        &mut env,
+    )
+    .expect("json.into_string should succeed");
+    let mut string_payloads = enum_payloads(string_result, "Option", "Some");
+    match string_payloads.remove(0) {
+        Value::String(value) => assert_eq!(
+            value.as_ptr(),
+            text_ptr,
+            "owned String payload must be transferred, not cloned"
+        ),
+        other => panic!("expected String payload, found {other:?}"),
+    }
+    assert!(
+        env.place_ref("string_value").is_err(),
+        "the owned source place must be consumed"
+    );
+
+    let values = vec![json_value("Null", Vec::new())];
+    let values_ptr = values.as_ptr();
+    env.define_typed(
+        "array_value",
+        Type::named("json.Value"),
+        json_value(
+            "Array",
+            vec![Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements: values,
+            })],
+        ),
+    );
+    let array_result = call_name(
+        &mut runtime,
+        "json::into_array",
+        &[mir_arg(None, Operand::MovePlace("array_value".to_string()))],
+        &mut env,
+    )
+    .expect("json.into_array should succeed");
+    let mut array_payloads = enum_payloads(array_result, "Option", "Some");
+    match array_payloads.remove(0) {
+        Value::Vec(value) => assert_eq!(
+            value.elements.as_ptr(),
+            values_ptr,
+            "owned Vec payload must be transferred, not cloned"
+        ),
+        other => panic!("expected Vec payload, found {other:?}"),
+    }
+    assert!(env.place_ref("array_value").is_err());
+
+    let entries = vec![(
+        Value::String("k".to_string()),
+        json_value("Null", Vec::new()),
+    )];
+    let entries_ptr = entries.as_ptr();
+    env.define_typed(
+        "object_value",
+        Type::named("json.Value"),
+        json_value(
+            "Object",
+            vec![Value::Map(MapValue {
+                key_type: Type::named("String"),
+                value_type: Type::named("json.Value"),
+                entries,
+            })],
+        ),
+    );
+    let object_result = call_name(
+        &mut runtime,
+        "json::into_object",
+        &[mir_arg(
+            None,
+            Operand::MovePlace("object_value".to_string()),
+        )],
+        &mut env,
+    )
+    .expect("json.into_object should succeed");
+    let mut object_payloads = enum_payloads(object_result, "Option", "Some");
+    match object_payloads.remove(0) {
+        Value::Map(value) => assert_eq!(
+            value.entries.as_ptr(),
+            entries_ptr,
+            "owned Map payload must be transferred, not cloned"
+        ),
+        other => panic!("expected Map payload, found {other:?}"),
+    }
+    assert!(env.place_ref("object_value").is_err());
+}
+
+#[test]
+fn mir_json_variant_construction_moves_owned_payload_allocations() {
+    let mut runtime = test_runtime();
+
+    let text = "owned-text".repeat(64);
+    let text_ptr = text.as_ptr();
+    let values = vec![json_value("Null", Vec::new())];
+    let values_ptr = values.as_ptr();
+    let entries = vec![(
+        Value::String("key".to_string()),
+        json_value("Bool", vec![Value::Bool(true)]),
+    )];
+    let entries_ptr = entries.as_ptr();
+
+    let cases = [
+        ("text", "String", Type::named("String"), Value::String(text)),
+        (
+            "values",
+            "Array",
+            Type::Named("Vec".to_string(), vec![Type::named("json.Value")]),
+            Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements: values,
+            }),
+        ),
+        (
+            "entries",
+            "Object",
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("json.Value")],
+            ),
+            Value::Map(MapValue {
+                key_type: Type::named("String"),
+                value_type: Type::named("json.Value"),
+                entries,
+            }),
+        ),
+    ];
+
+    for (place, variant_name, ty, payload) in cases {
+        let mut env = Env::default();
+        env.define_typed(place, ty, payload);
+        let outcome = runtime
+            .evaluate_rvalue(
+                &Rvalue::EnumVariant {
+                    enum_name: "json.Value".to_string(),
+                    variant_name: variant_name.to_string(),
+                    payloads: vec![Operand::MovePlace(place.to_string())],
+                },
+                &mut env,
+            )
+            .expect("json.Value construction should succeed");
+        let super::RvalueOutcome::Value(Value::EnumVariant(variant)) = outcome else {
+            panic!("expected json.Value.{variant_name}");
+        };
+        match variant.payloads.as_slice() {
+            [Value::String(value)] => assert_eq!(value.as_ptr(), text_ptr),
+            [Value::Vec(value)] => assert_eq!(value.elements.as_ptr(), values_ptr),
+            [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), entries_ptr),
+            other => panic!("unexpected json.Value.{variant_name} payload: {other:?}"),
+        }
+        assert!(
+            env.place_ref(place).is_err(),
+            "owned json.Value.{variant_name} payload must be moved from its source place"
+        );
+    }
+}
+
+#[test]
+fn mir_json_wrong_variant_owned_accessor_still_consumes_the_source() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "value",
+        Type::named("json.Value"),
+        json_value("Int", vec![Value::Int(IntegerValue::from_i64(7))]),
+    );
+
+    assert_eq!(
+        call_name(
+            &mut runtime,
+            "json::into_string",
+            &[mir_arg(None, Operand::MovePlace("value".to_string()))],
+            &mut env,
+        )
+        .expect("wrong-variant extraction should return Option.None"),
+        option_none()
+    );
+    assert!(
+        env.place_ref("value").is_err(),
+        "an own argument is consumed even when its variant does not match"
+    );
+}
+
+#[test]
+fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let text = "nested-owned".repeat(64);
+    let text_ptr = text.as_ptr();
+    env.define_typed(
+        "holder",
+        Type::named("Holder"),
+        Value::Instance(InstanceValue {
+            class_name: "Holder".to_string(),
+            fields: BTreeMap::from([(
+                "value".to_string(),
+                json_value("String", vec![Value::String(text)]),
+            )]),
+        }),
+    );
+
+    let result = call_name(
+        &mut runtime,
+        "json::into_string",
+        &[mir_arg(
+            None,
+            Operand::MovePlace("holder.value".to_string()),
+        )],
+        &mut env,
+    )
+    .expect("nested owned json.Value should be extracted");
+    let mut payloads = enum_payloads(result, "Option", "Some");
+    match payloads.remove(0) {
+        Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
+        other => panic!("expected String payload, found {other:?}"),
+    }
+    assert!(
+        env.place_ref("holder.value").is_err(),
+        "the moved nested field must no longer contain a runtime value"
+    );
+    assert!(
+        env.place_ref("holder").is_ok(),
+        "moving a field must preserve the containing instance"
+    );
+}
+
+#[test]
+fn mir_place_reads_clone_and_preserve_copy_enum_payload_sources() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "timeout",
+        Type::named("Duration"),
+        Value::Duration(2_000_000_000),
+    );
+
+    let outcome = runtime
+        .evaluate_rvalue(
+            &Rvalue::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant_name: "Some".to_string(),
+                payloads: vec![Operand::Place("timeout".to_string())],
+            },
+            &mut env,
+        )
+        .expect("copy enum payload construction should succeed");
+    let super::RvalueOutcome::Value(Value::EnumVariant(variant)) = outcome else {
+        panic!("expected Option.Some(Duration)");
+    };
+    assert_eq!(variant.payloads, vec![Value::Duration(2_000_000_000)]);
+    assert_eq!(
+        env.read_place("timeout")
+            .expect("copy source should remain"),
+        Value::Duration(2_000_000_000)
+    );
+}
+
+#[test]
+fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let text = "owned match payload".repeat(32);
+    let text_ptr = text.as_ptr();
+    env.define_typed(
+        "packet",
+        Type::named("Packet"),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Packet".to_string(),
+            variant_name: "Text".to_string(),
+            payloads: vec![Value::String(text)],
+        }),
+    );
+
+    let outcome = runtime
+        .evaluate_rvalue(
+            &Rvalue::VariantPayload {
+                scrutinee: Operand::MovePlace("packet".to_string()),
+                variant_name: "Text".to_string(),
+                index: 0,
+            },
+            &mut env,
+        )
+        .expect("owned variant payload extraction should succeed");
+    let super::RvalueOutcome::Value(Value::String(text)) = outcome else {
+        panic!("expected moved String payload");
+    };
+    assert_eq!(text.as_ptr(), text_ptr);
+    match env
+        .read_place("packet")
+        .expect("private match owner remains")
+    {
+        Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit]),
+        other => panic!("expected Packet enum, found {other:?}"),
+    }
+}
+
+#[test]
+fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_error() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "valid_text",
+        Type::named("String"),
+        Value::String("{\"answer\":42}".repeat(32)),
+    );
+    env.define_typed(
+        "invalid_text",
+        Type::named("String"),
+        Value::String("{".repeat(32)),
+    );
+    let valid_text_ptr = match env.place_ref("valid_text").unwrap() {
+        Value::String(value) => value.as_ptr(),
+        other => panic!("expected String, found {other:?}"),
+    };
+    let invalid_text_ptr = match env.place_ref("invalid_text").unwrap() {
+        Value::String(value) => value.as_ptr(),
+        other => panic!("expected String, found {other:?}"),
+    };
+
+    for place in ["valid_text", "invalid_text"] {
+        let parsed = call_name(
+            &mut runtime,
+            "json::parse",
+            &[mir_arg(None, Operand::Place(place.to_string()))],
+            &mut env,
+        )
+        .expect("json.parse returns parse failures as Result.Err");
+        assert!(matches!(parsed, Value::EnumVariant(_)));
+    }
+    match env.place_ref("valid_text").unwrap() {
+        Value::String(value) => assert_eq!(value.as_ptr(), valid_text_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+    match env.place_ref("invalid_text").unwrap() {
+        Value::String(value) => assert_eq!(value.as_ptr(), invalid_text_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+
+    let payload = "borrowed-payload".repeat(32);
+    let payload_ptr = payload.as_ptr();
+    env.define_typed(
+        "string_value",
+        Type::named("json.Value"),
+        json_value("String", vec![Value::String(payload)]),
+    );
+    env.define_typed(
+        "indent",
+        Type::named("Option"),
+        option_some(Value::Int(IntegerValue::from_i64(2))),
+    );
+    let value_ptr = env.place_ref("string_value").unwrap() as *const Value;
+
+    call_name(
+        &mut runtime,
+        "json::dumps",
+        &[
+            mir_arg(None, Operand::Place("string_value".to_string())),
+            mir_arg(None, Operand::Place("indent".to_string())),
+        ],
+        &mut env,
+    )
+    .expect("json.dumps should borrow its value and copy indent");
+    for name in [
+        "json::is_null",
+        "json::as_bool",
+        "json::as_int",
+        "json::as_float",
+    ] {
+        call_name(
+            &mut runtime,
+            name,
+            &[mir_arg(None, Operand::Place("string_value".to_string()))],
+            &mut env,
+        )
+        .unwrap_or_else(|error| panic!("{name} should accept a borrowed json.Value: {error}"));
+    }
+
+    let retained = env.place_ref("string_value").unwrap();
+    assert_eq!(retained as *const Value, value_ptr);
+    match retained {
+        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            [Value::String(value)] => assert_eq!(value.as_ptr(), payload_ptr),
+            other => panic!("expected one String payload, found {other:?}"),
+        },
+        other => panic!("expected json.Value.String, found {other:?}"),
+    }
+    assert_eq!(
+        env.read_place("indent"),
+        Ok(option_some(Value::Int(IntegerValue::from_i64(2)))),
+        "copy-valued indent must remain available after json.dumps"
+    );
+
+    env.define_typed(
+        "malformed",
+        Type::named("json.Value"),
+        json_value("String", Vec::new()),
+    );
+    let malformed_ptr = env.place_ref("malformed").unwrap() as *const Value;
+    let error = call_name(
+        &mut runtime,
+        "json::dumps",
+        &[
+            mir_arg(None, Operand::Place("malformed".to_string())),
+            mir_arg(None, Operand::Place("indent".to_string())),
+        ],
+        &mut env,
+    )
+    .expect_err("malformed json.Value should fail validation");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        env.place_ref("malformed").unwrap() as *const Value,
+        malformed_ptr,
+        "borrowed validation failure must not replace or consume the source"
+    );
+}
+
+#[test]
+fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_source() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "source",
+        Type::named("String"),
+        Value::String("[null]".to_string()),
+    );
+    let source_ptr = match env.place_ref("source").expect("source should exist") {
+        Value::String(value) => value.as_ptr(),
+        other => panic!("expected String, found {other:?}"),
+    };
+
+    let error = crate::runtime_value::with_json_runtime_allocation_budget(0, || {
+        call_name(
+            &mut runtime,
+            "json::parse",
+            &[mir_arg(None, Operand::Place("source".to_string()))],
+            &mut env,
+        )
+    })
+    .expect_err("MIR parse materialization allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing parsed JSON"
+    );
+    match env
+        .place_ref("source")
+        .expect("borrowed parse source should survive the trap")
+    {
+        Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+}
+
+#[test]
+fn mir_json_adapters_reject_inexact_runtime_metadata() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    env.define_typed(
+        "indent",
+        Type::Named("Option".to_string(), vec![Type::named("int64")]),
+        option_some(Value::Int(IntegerValue::from_i32(2))),
+    );
+    let indent_error = call_name(
+        &mut runtime,
+        "json::dumps",
+        &[
+            mir_arg(
+                None,
+                Operand::String("unused-immediate-is-not-json".to_string()),
+            ),
+            mir_arg(None, Operand::Place("indent".to_string())),
+        ],
+        &mut env,
+    )
+    .expect_err("an int32-backed indent must not be accepted as Option[int64]");
+    assert_eq!(indent_error.code, "AU4001");
+    assert!(indent_error.message.contains("contain an `int64`"));
+
+    env.define_typed(
+        "int_value",
+        Type::named("json.Value"),
+        json_value("Int", vec![Value::Int(IntegerValue::from_i32(7))]),
+    );
+    let int_error = call_name(
+        &mut runtime,
+        "json::as_int",
+        &[mir_arg(None, Operand::Place("int_value".to_string()))],
+        &mut env,
+    )
+    .expect_err("json.Value.Int must carry exact int64 metadata");
+    assert_eq!(int_error.code, "AU4001");
+    assert!(int_error.message.contains("json.Value.Int"));
+    assert!(
+        env.place_ref("int_value").is_ok(),
+        "a rejected borrowed accessor must preserve its source"
+    );
+
+    for (place, variant, payload) in [
+        (
+            "array_value",
+            "Array",
+            Value::Vec(VecValue {
+                element_type: Type::named("String"),
+                elements: Vec::new(),
+            }),
+        ),
+        (
+            "object_value",
+            "Object",
+            Value::Map(MapValue {
+                key_type: Type::named("String"),
+                value_type: Type::named("bool"),
+                entries: Vec::new(),
+            }),
+        ),
+    ] {
+        env.define_typed(
+            place,
+            Type::named("json.Value"),
+            json_value(variant, vec![payload]),
+        );
+        let adapter = if variant == "Array" {
+            "json::into_array"
+        } else {
+            "json::into_object"
+        };
+        let error = call_name(
+            &mut runtime,
+            adapter,
+            &[mir_arg(None, Operand::MovePlace(place.to_string()))],
+            &mut env,
+        )
+        .expect_err("owned JSON collection adapters must validate exact metadata");
+        assert_eq!(error.code, "AU4001");
+        assert!(error.message.contains(&format!("json.Value.{variant}")));
+        assert!(
+            env.place_ref(place).is_err(),
+            "an own argument remains consumed when metadata validation fails"
+        );
+    }
+
+    assert_eq!(
+        IntegerValue::from_i64(1).runtime_kind(),
+        Some(IntegerKind::Int64),
+        "the canonical JSON integer constructor remains the accepted control"
+    );
+}
+
+#[test]
+fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    env.define_typed("not_json", Type::named("bool"), Value::Bool(true));
+    let error = call_name(
+        &mut runtime,
+        "json::as_bool",
+        &[mir_arg(None, Operand::Place("not_json".to_string()))],
+        &mut env,
+    )
+    .expect_err("borrowed JSON accessors must reject non-json runtime values");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "`json::as_bool` expected a runtime `json.Value`, found `true`"
+    );
+    assert_eq!(
+        env.read_place("not_json"),
+        Ok(Value::Bool(true)),
+        "a rejected borrowed accessor must preserve its source"
+    );
+
+    for (place, value, call, expected_message) in [
+        (
+            "malformed_null",
+            json_value("Null", vec![Value::Unit]),
+            "json::is_null",
+            "malformed runtime `json.Value.Null` payload in `json::is_null`",
+        ),
+        (
+            "missing_bool_payload",
+            json_value("Bool", Vec::new()),
+            "json::as_bool",
+            "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+        ),
+        (
+            "wrong_bool_payload",
+            json_value("Bool", vec![Value::Int(IntegerValue::from_i64(1))]),
+            "json::as_bool",
+            "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+        ),
+    ] {
+        env.define_typed(place, Type::named("json.Value"), value);
+        let source_ptr =
+            env.place_ref(place)
+                .expect("borrowed malformed source should exist") as *const Value;
+        let error = call_name(
+            &mut runtime,
+            call,
+            &[mir_arg(None, Operand::Place(place.to_string()))],
+            &mut env,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, expected_message);
+        assert_eq!(
+            env.place_ref(place).unwrap() as *const Value,
+            source_ptr,
+            "{call} must not replace a malformed borrowed source"
+        );
+    }
+
+    env.define_typed(
+        "valid_value",
+        Type::named("json.Value"),
+        json_value("Null", Vec::new()),
+    );
+    for (place, indent, expected_message) in [
+        (
+            "plain_indent",
+            Value::Bool(false),
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        ),
+        (
+            "malformed_indent",
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: "Option".to_string(),
+                variant_name: "Some".to_string(),
+                payloads: Vec::new(),
+            }),
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        ),
+    ] {
+        env.define_typed(place, Type::named("Option"), indent);
+        let error = call_name(
+            &mut runtime,
+            "json::dumps",
+            &[
+                mir_arg(None, Operand::Place("valid_value".to_string())),
+                mir_arg(None, Operand::Place(place.to_string())),
+            ],
+            &mut env,
+        )
+        .expect_err("json.dumps must validate the runtime Option[int64] shape");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, expected_message);
+        assert!(env.place_ref(place).is_ok());
+        assert!(env.place_ref("valid_value").is_ok());
+    }
+
+    env.define_typed(
+        "valid_indent",
+        Type::Named("Option".to_string(), vec![Type::named("int64")]),
+        option_none(),
+    );
+    for (args, expected_message) in [
+        (
+            vec![mir_arg(None, Operand::Place("valid_value".to_string()))],
+            "missing MIR argument",
+        ),
+        (
+            vec![
+                mir_arg(None, Operand::Place("valid_value".to_string())),
+                mir_arg(None, Operand::Place("missing_indent".to_string())),
+            ],
+            "unknown MIR place `missing_indent`",
+        ),
+        (
+            vec![
+                mir_arg(None, Operand::Place("missing_value".to_string())),
+                mir_arg(None, Operand::Place("valid_indent".to_string())),
+            ],
+            "unknown MIR place `missing_value`",
+        ),
+    ] {
+        let error = call_name(&mut runtime, "json::dumps", &args, &mut env)
+            .expect_err("json.dumps must report argument and place failures");
+        assert_eq!(error.message, expected_message);
+    }
+
+    for (call, operand, expected_message) in [
+        ("json::is_null", None, "missing MIR argument"),
+        (
+            "json::as_bool",
+            Some(Operand::Place("missing_borrowed_json".to_string())),
+            "unknown MIR place `missing_borrowed_json`",
+        ),
+        ("json::into_string", None, "missing MIR argument"),
+        (
+            "json::into_string",
+            Some(Operand::MovePlace("missing_owned_json".to_string())),
+            "unknown MIR place `missing_owned_json`",
+        ),
+    ] {
+        let args = operand
+            .map(|operand| vec![mir_arg(None, operand)])
+            .unwrap_or_default();
+        let error = call_name(&mut runtime, call, &args, &mut env)
+            .expect_err("JSON host calls must report missing arguments and places");
+        assert_eq!(error.message, expected_message);
+    }
+
+    for (place, value, expected_message) in [
+        (
+            "owned_non_json",
+            Value::String("text".to_string()),
+            "`json::into_string` expected a runtime `json.Value`",
+        ),
+        (
+            "owned_wrong_enum",
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: "Option".to_string(),
+                variant_name: "Some".to_string(),
+                payloads: vec![Value::String("text".to_string())],
+            }),
+            "`json::into_string` expected enum `json.Value`, found `Option`",
+        ),
+        (
+            "owned_missing_payload",
+            json_value("String", Vec::new()),
+            "malformed runtime `json.Value.String` payload in `json::into_string`",
+        ),
+        (
+            "owned_wrong_payload",
+            json_value("String", vec![Value::Bool(true)]),
+            "malformed runtime `json.Value.String` payload in `json::into_string`",
+        ),
+    ] {
+        env.define_typed(place, Type::named("json.Value"), value);
+        let error = call_name(
+            &mut runtime,
+            "json::into_string",
+            &[mir_arg(None, Operand::MovePlace(place.to_string()))],
+            &mut env,
+        )
+        .expect_err("owned JSON accessors must reject malformed runtime values");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, expected_message);
+        assert!(
+            env.place_ref(place).is_err(),
+            "an owned argument is consumed once runtime argument binding succeeds"
+        );
+    }
+}
+
+#[test]
+fn mir_json_host_argument_errors_preserve_borrowed_sources() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    let missing = call_name(&mut runtime, "json::parse", &[], &mut env)
+        .expect_err("json.parse should reject a missing text argument");
+    assert_eq!(missing.message, "missing MIR argument");
+
+    let unknown = call_name(
+        &mut runtime,
+        "json::parse",
+        &[mir_arg(Some("source"), Operand::String("null".to_string()))],
+        &mut env,
+    )
+    .expect_err("json.parse should reject unknown named MIR arguments");
+    assert_eq!(unknown.message, "unknown MIR argument `source`");
+
+    let too_many = call_name(
+        &mut runtime,
+        "json::parse",
+        &[
+            mir_arg(Some("text"), Operand::String("null".to_string())),
+            mir_arg(None, Operand::String("null".to_string())),
+        ],
+        &mut env,
+    )
+    .expect_err("json.parse should reject a positional argument after text is already bound");
+    assert_eq!(too_many.message, "too many MIR arguments");
+
+    let text = "{\"answer\":42}".repeat(32);
+    let text_ptr = text.as_ptr();
+    env.define_typed("text", Type::named("String"), Value::String(text));
+    let consuming_borrow = call_name(
+        &mut runtime,
+        "json::parse",
+        &[mir_arg(None, Operand::MovePlace("text".to_string()))],
+        &mut env,
+    )
+    .expect_err("a borrowed JSON host call should reject a consuming MIR operand");
+    assert_eq!(
+        consuming_borrow.message,
+        "cannot borrow consuming MIR operand `text` in `json::parse`"
+    );
+    match env
+        .place_ref("text")
+        .expect("the rejected consuming borrow must preserve its source")
+    {
+        Value::String(text) => assert_eq!(text.as_ptr(), text_ptr),
+        other => panic!("expected preserved String, found {other:?}"),
+    }
+
+    let wrong_place_type = call_name(
+        &mut runtime,
+        "json::parse",
+        &[mir_arg(None, Operand::Bool(true))],
+        &mut env,
+    )
+    .expect_err("json.parse should diagnose non-String immediate operands");
+    assert_eq!(wrong_place_type.code, "AU4001");
+    assert_eq!(
+        wrong_place_type.message,
+        "`json::parse` expects `String`, found `true`"
+    );
+
+    env.define_typed(
+        "value",
+        Type::named("json.Value"),
+        json_value("Null", Vec::new()),
+    );
+    let consuming_accessor = call_name(
+        &mut runtime,
+        "json::is_null",
+        &[mir_arg(None, Operand::MovePlace("value".to_string()))],
+        &mut env,
+    )
+    .expect_err("borrowed JSON accessors should reject consuming MIR operands");
+    assert_eq!(
+        consuming_accessor.message,
+        "cannot borrow consuming MIR operand `value`"
+    );
+    assert!(
+        env.place_ref("value").is_ok(),
+        "the rejected consuming accessor must not consume its source"
+    );
+}
+
+#[test]
+fn mir_failed_owned_place_moves_preserve_unmoved_state() {
+    let mut env = Env::default();
+    env.define_typed(
+        "scalar",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_signed(7)),
+    );
+    let scalar_nested = env
+        .take_place("scalar.value")
+        .expect_err("moving through a scalar should fail");
+    assert_eq!(
+        scalar_nested.message,
+        "cannot move nested MIR place `scalar.value` from a non-instance value"
+    );
+    assert_eq!(
+        env.read_place("scalar"),
+        Ok(Value::Int(IntegerValue::from_signed(7))),
+        "a failed nested move must not consume its scalar root"
+    );
+
+    env.define_typed(
+        "outer",
+        Type::named("Outer"),
+        Value::Instance(InstanceValue {
+            class_name: "Outer".to_string(),
+            fields: BTreeMap::from([
+                (
+                    "inner".to_string(),
+                    Value::Instance(InstanceValue {
+                        class_name: "Inner".to_string(),
+                        fields: BTreeMap::from([(
+                            "payload".to_string(),
+                            Value::EnumVariant(EnumVariantValue {
+                                enum_name: "Packet".to_string(),
+                                variant_name: "Text".to_string(),
+                                payloads: vec![Value::String("owned".repeat(32))],
+                            }),
+                        )]),
+                    }),
+                ),
+                ("sibling".to_string(), Value::Bool(true)),
+            ]),
+        }),
+    );
+
+    let missing_root = env
+        .take_place("missing")
+        .expect_err("root moves should reject unknown places");
+    assert_eq!(missing_root.message, "unknown MIR place `missing`");
+
+    let missing_nested_root = env
+        .take_place("missing.value")
+        .expect_err("nested moves should reject unknown roots");
+    assert_eq!(
+        missing_nested_root.message,
+        "unknown MIR place `missing.value`"
+    );
+
+    let missing_leaf = env
+        .take_place("outer.missing")
+        .expect_err("nested moves should reject unknown leaf fields");
+    assert!(missing_leaf
+        .message
+        .contains("class `Outer` has no field `missing`"));
+
+    let missing_intermediate = env
+        .take_place("outer.missing.value")
+        .expect_err("nested moves should reject unknown intermediate fields");
+    assert!(missing_intermediate
+        .message
+        .contains("class `Outer` has no field `missing`"));
+
+    let missing_variant_root = env
+        .take_variant_payload("missing", 0)
+        .expect_err("variant extraction should reject unknown roots");
+    assert_eq!(missing_variant_root.message, "unknown MIR place `missing`");
+
+    let missing_variant_field = env
+        .take_variant_payload("outer.missing", 0)
+        .expect_err("variant extraction should reject unknown nested fields");
+    assert!(missing_variant_field
+        .message
+        .contains("class `Outer` has no field `missing`"));
+
+    let scalar_variant_path = env
+        .take_variant_payload("outer.sibling.value", 0)
+        .expect_err("variant extraction should reject traversal through scalar fields");
+    assert_eq!(
+        scalar_variant_path.message,
+        "cannot access nested MIR place `outer.sibling.value` on a non-instance value"
+    );
+
+    let non_enum = env
+        .take_variant_payload("outer.sibling", 0)
+        .expect_err("variant extraction should reject non-enum nested values");
+    assert_eq!(
+        non_enum.message,
+        "cannot take enum payload from non-enum MIR place `outer.sibling`"
+    );
+
+    let missing_payload = env
+        .take_variant_payload("outer.inner.payload", 1)
+        .expect_err("variant extraction should reject absent payload indexes");
+    assert!(missing_payload
+        .message
+        .contains("enum variant `Packet.Text` does not carry a payload at index 1"));
+
+    let moved = env
+        .take_variant_payload("outer.inner.payload", 0)
+        .expect("the existing nested payload should move out");
+    assert_eq!(moved, Value::String("owned".repeat(32)));
+    assert_eq!(
+        env.read_place("outer.sibling"),
+        Ok(Value::Bool(true)),
+        "moving one nested payload must preserve sibling state"
+    );
+    let Value::EnumVariant(remaining) = env
+        .read_place("outer.inner.payload")
+        .expect("the private match owner should remain after payload extraction")
+    else {
+        panic!("expected the Packet enum to remain");
+    };
+    assert_eq!(
+        remaining.payloads,
+        vec![Value::Unit],
+        "the moved payload slot must be marked consumed"
+    );
+}
+
+#[test]
+fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
+    fn string_ptr(value: &Value) -> *const u8 {
+        match value {
+            Value::String(value) => value.as_ptr(),
+            other => panic!("expected String, found {other:?}"),
+        }
+    }
+
+    let string_type = Type::named("String");
+    let vector_type = Type::Named("Vec".to_string(), vec![string_type.clone()]);
+    for (method, index) in [("set", 0_u128), ("insert", 0), ("__set_index", 0)] {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        let payload = format!("{method}-payload-").repeat(64);
+        let payload_ptr = payload.as_ptr();
+        let vector = VecValue {
+            element_type: string_type.clone(),
+            elements: if method == "set" || method == "__set_index" {
+                vec![Value::String("old".to_string())]
+            } else {
+                Vec::new()
+            },
+        };
+        env.define_typed("vector", vector_type.clone(), Value::Vec(vector.clone()));
+        env.define_typed("payload", string_type.clone(), Value::String(payload));
+        let mut args = vec![
+            mir_arg(None, Operand::Int(index)),
+            mir_arg(None, Operand::MovePlace("payload".to_string())),
+        ];
+        if method == "__set_index" {
+            args.extend([
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(1)),
+            ]);
+        }
+        runtime
+            .evaluate_vec_method(vector, method, Some("vector"), &args, &mut env)
+            .unwrap_or_else(|error| panic!("Vec.{method} should succeed: {error}"));
+        let Value::Vec(updated) = env
+            .place_ref("vector")
+            .expect("mutated vector should be written back")
+        else {
+            panic!("expected vector writeback");
+        };
+        assert_eq!(
+            string_ptr(&updated.elements[0]),
+            payload_ptr,
+            "Vec.{method} must transfer its own value argument"
+        );
+        assert!(env.place_ref("payload").is_err());
+    }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let extended = "extended-vector-value".repeat(64);
+    let extended_ptr = extended.as_ptr();
+    let vector = VecValue {
+        element_type: string_type.clone(),
+        elements: Vec::new(),
+    };
+    env.define_typed("vector", vector_type.clone(), Value::Vec(vector.clone()));
+    env.define_typed(
+        "other",
+        vector_type.clone(),
+        Value::Vec(VecValue {
+            element_type: string_type.clone(),
+            elements: vec![Value::String(extended)],
+        }),
+    );
+    runtime
+        .evaluate_vec_method(
+            vector,
+            "extend",
+            Some("vector"),
+            &[mir_arg(None, Operand::MovePlace("other".to_string()))],
+            &mut env,
+        )
+        .expect("Vec.extend should succeed");
+    let Value::Vec(updated) = env
+        .place_ref("vector")
+        .expect("vector should be written back")
+    else {
+        panic!("expected vector writeback");
+    };
+    assert_eq!(string_ptr(&updated.elements[0]), extended_ptr);
+    assert!(env.place_ref("other").is_err());
+
+    let map_type = Type::Named(
+        "Map".to_string(),
+        vec![string_type.clone(), string_type.clone()],
+    );
+    for method in ["set", "__set_index"] {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        let key = format!("{method}-key-").repeat(64);
+        let key_ptr = key.as_ptr();
+        let value = format!("{method}-value-").repeat(64);
+        let value_ptr = value.as_ptr();
+        let map = MapValue {
+            key_type: string_type.clone(),
+            value_type: string_type.clone(),
+            entries: Vec::new(),
+        };
+        env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
+        env.define_typed("key", string_type.clone(), Value::String(key));
+        env.define_typed("value", string_type.clone(), Value::String(value));
+        let mut args = vec![
+            mir_arg(None, Operand::MovePlace("key".to_string())),
+            mir_arg(None, Operand::MovePlace("value".to_string())),
+        ];
+        if method == "__set_index" {
+            args.extend([
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(1)),
+            ]);
+        }
+        runtime
+            .evaluate_map_method(map, method, Some("map"), &args, &mut env)
+            .unwrap_or_else(|error| panic!("Map.{method} should succeed: {error}"));
+        let Value::Map(updated) = env.place_ref("map").expect("map should be written back") else {
+            panic!("expected map writeback");
+        };
+        assert_eq!(string_ptr(&updated.entries[0].0), key_ptr);
+        assert_eq!(string_ptr(&updated.entries[0].1), value_ptr);
+        assert!(env.place_ref("key").is_err());
+        assert!(env.place_ref("value").is_err());
+    }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let extended_key = "extended-map-key".repeat(64);
+    let extended_key_ptr = extended_key.as_ptr();
+    let extended_value = "extended-map-value".repeat(64);
+    let extended_value_ptr = extended_value.as_ptr();
+    let map = MapValue {
+        key_type: string_type.clone(),
+        value_type: string_type.clone(),
+        entries: Vec::new(),
+    };
+    env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
+    env.define_typed(
+        "other",
+        map_type,
+        Value::Map(MapValue {
+            key_type: string_type.clone(),
+            value_type: string_type.clone(),
+            entries: vec![(Value::String(extended_key), Value::String(extended_value))],
+        }),
+    );
+    runtime
+        .evaluate_map_method(
+            map,
+            "extend",
+            Some("map"),
+            &[mir_arg(None, Operand::MovePlace("other".to_string()))],
+            &mut env,
+        )
+        .expect("Map.extend should succeed");
+    let Value::Map(updated) = env.place_ref("map").expect("map should be written back") else {
+        panic!("expected map writeback");
+    };
+    assert_eq!(string_ptr(&updated.entries[0].0), extended_key_ptr);
+    assert_eq!(string_ptr(&updated.entries[0].1), extended_value_ptr);
+    assert!(env.place_ref("other").is_err());
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let inserted = "set-inserted-value".repeat(64);
+    let inserted_ptr = inserted.as_ptr();
+    let set_type = Type::Named("Set".to_string(), vec![string_type.clone()]);
+    let set = SetValue {
+        element_type: string_type.clone(),
+        elements: Vec::new(),
+    };
+    env.define_typed("set", set_type, Value::Set(set.clone()));
+    env.define_typed("inserted", string_type, Value::String(inserted));
+    runtime
+        .evaluate_set_method(
+            set,
+            "insert",
+            Some("set"),
+            &[mir_arg(None, Operand::MovePlace("inserted".to_string()))],
+            &mut env,
+        )
+        .expect("Set.insert should succeed");
+    let Value::Set(updated) = env.place_ref("set").expect("set should be written back") else {
+        panic!("expected set writeback");
+    };
+    assert_eq!(string_ptr(&updated.elements[0]), inserted_ptr);
+    assert!(env.place_ref("inserted").is_err());
+}
+
+#[test]
+fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
+    let name = "service-name".repeat(64);
+    let name_ptr = name.as_ptr();
+    let decoded_name = super::expect_owned_string_value(Value::String(name), "start(name=...)")
+        .expect("owned service name should decode");
+    assert_eq!(decoded_name.as_ptr(), name_ptr);
+
+    let command = vec![
+        Value::String("/bin/echo".repeat(32)),
+        Value::String("payload".repeat(32)),
+    ];
+    let command_ptrs = command
+        .iter()
+        .map(|value| match value {
+            Value::String(value) => value.as_ptr(),
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    let decoded_command = super::expect_owned_command_vec(
+        Value::Vec(VecValue {
+            element_type: Type::named("String"),
+            elements: command,
+        }),
+        "start(command=...)",
+    )
+    .expect("owned command should decode");
+    assert_eq!(
+        decoded_command
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>(),
+        command_ptrs
+    );
+
+    let cwd = "/tmp/owned-cwd".repeat(32);
+    let cwd_ptr = cwd.as_ptr();
+    let decoded_cwd = super::expect_owned_optional_string_value(
+        option_some(Value::String(cwd)),
+        "start(cwd=...)",
+    )
+    .expect("owned cwd should decode")
+    .expect("cwd should be Some");
+    assert_eq!(decoded_cwd.as_ptr(), cwd_ptr);
+
+    let header_name = "X-Owned-Header".repeat(32);
+    let header_name_ptr = header_name.as_ptr();
+    let header_value = "header-value".repeat(32);
+    let header_value_ptr = header_value.as_ptr();
+    let headers = super::expect_owned_headers_map(
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("String"),
+            entries: vec![(Value::String(header_name), Value::String(header_value))],
+        }),
+        "respond_text(headers=...)",
+    )
+    .expect("owned HTTP headers should decode");
+    assert_eq!(headers[0].0.as_ptr(), header_name_ptr);
+    assert_eq!(headers[0].1.as_ptr(), header_value_ptr);
+
+    assert_eq!(
+        super::expect_owned_bytes_value(
+            Value::Vec(VecValue {
+                element_type: Type::named("uint8"),
+                elements: vec![
+                    Value::Int(
+                        IntegerValue::from_typed_unsigned(1, IntegerKind::Uint8)
+                            .expect("1 fits uint8"),
+                    ),
+                    Value::Int(
+                        IntegerValue::from_typed_unsigned(255, IntegerKind::Uint8)
+                            .expect("255 fits uint8"),
+                    ),
+                ],
+            }),
+            "respond_bytes(bytes=...)",
+        )
+        .expect("owned HTTP bytes should decode"),
+        vec![1, 255]
+    );
+}
+
+#[test]
+fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
+    fn expect_string_ptr(value: Value, expected: *const u8, label: &str) {
+        match value {
+            Value::String(value) => assert_eq!(
+                value.as_ptr(),
+                expected,
+                "{label} must return the original owned allocation"
+            ),
+            other => panic!("{label} returned {other:?} instead of String"),
+        }
+    }
+
+    for method in ["put", "try_put"] {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        let channel = ChannelValue::new();
+        let payload = format!("{method}-queue-payload-").repeat(64);
+        let payload_ptr = payload.as_ptr();
+        env.define_typed("payload", Type::named("String"), Value::String(payload));
+        runtime
+            .evaluate_channel_method(
+                channel.clone(),
+                method,
+                &[mir_arg(None, Operand::MovePlace("payload".to_string()))],
+                &mut env,
+            )
+            .unwrap_or_else(|error| panic!("Queue.{method} should succeed: {error}"));
+        let crate::runtime_value::TryRecvResult::Value(received) = channel.try_recv() else {
+            panic!("Queue.{method} should enqueue one value");
+        };
+        expect_string_ptr(received, payload_ptr, &format!("Queue.{method}"));
+        assert!(env.place_ref("payload").is_err());
+    }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let queue_fallback = "queue-fallback".repeat(64);
+    let queue_fallback_ptr = queue_fallback.as_ptr();
+    env.define_typed(
+        "queue_fallback",
+        Type::named("String"),
+        Value::String(queue_fallback),
+    );
+    let fallback = runtime
+        .evaluate_channel_method(
+            ChannelValue::new(),
+            "get_or",
+            &[mir_arg(
+                None,
+                Operand::MovePlace("queue_fallback".to_string()),
+            )],
+            &mut env,
+        )
+        .expect("an empty Queue.get_or should return its fallback");
+    expect_string_ptr(fallback, queue_fallback_ptr, "Queue.get_or");
+    assert!(env.place_ref("queue_fallback").is_err());
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let task_fallback = "task-fallback".repeat(64);
+    let task_fallback_ptr = task_fallback.as_ptr();
+    env.define_typed(
+        "task_fallback",
+        Type::named("String"),
+        Value::String(task_fallback),
+    );
+    let pending = TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(50));
+        Ok(Value::Unit)
+    }));
+    let fallback = runtime
+        .evaluate_task_method(
+            pending,
+            "result_or",
+            &[mir_arg(
+                None,
+                Operand::MovePlace("task_fallback".to_string()),
+            )],
+            &mut env,
+        )
+        .expect("a pending Task.result_or should return its fallback immediately");
+    expect_string_ptr(fallback, task_fallback_ptr, "Task.result_or");
+    assert!(env.place_ref("task_fallback").is_err());
+}
+
+#[test]
+fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
+    fn expect_option_string_ptr(value: Value, expected: *const u8) {
+        let mut payloads = enum_payloads(value, "Option", "Some");
+        match payloads.remove(0) {
+            Value::String(value) => assert_eq!(value.as_ptr(), expected),
+            other => panic!("expected Option.Some(String), found {other:?}"),
+        }
+    }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let vector_text = "owned-vector-iteration".repeat(64);
+    let vector_text_ptr = vector_text.as_ptr();
+    let vector_type = Type::Named("Vec".to_string(), vec![Type::named("String")]);
+    env.define_typed(
+        "vector",
+        vector_type,
+        Value::Vec(VecValue {
+            element_type: Type::named("String"),
+            elements: vec![Value::String(vector_text)],
+        }),
+    );
+    let value = runtime
+        .evaluate_call(
+            &crate::mir::CallTarget::Member {
+                object: Operand::MovePlace("vector".to_string()),
+                field: "__take_index_option".to_string(),
+                receiver_place: Some("vector".to_string()),
+            },
+            &[mir_arg(None, Operand::Int(0))],
+            &mut env,
+        )
+        .expect("owned Vec iteration should take its next element");
+    expect_option_string_ptr(value, vector_text_ptr);
+    let Value::Vec(remaining) = env.read_place("vector").expect("vector should be restored") else {
+        panic!("expected vector writeback");
+    };
+    assert!(remaining.elements.is_empty());
+
+    let set_text = "owned-set-iteration".repeat(64);
+    let set_text_ptr = set_text.as_ptr();
+    let set_type = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    env.define_typed(
+        "set",
+        set_type,
+        Value::Set(SetValue {
+            element_type: Type::named("String"),
+            elements: vec![Value::String(set_text)],
+        }),
+    );
+    let value = runtime
+        .evaluate_call(
+            &crate::mir::CallTarget::Member {
+                object: Operand::MovePlace("set".to_string()),
+                field: "__take_index_option".to_string(),
+                receiver_place: Some("set".to_string()),
+            },
+            &[mir_arg(None, Operand::Int(0))],
+            &mut env,
+        )
+        .expect("owned Set iteration should take its next element");
+    expect_option_string_ptr(value, set_text_ptr);
+    let Value::Set(remaining) = env.read_place("set").expect("set should be restored") else {
+        panic!("expected set writeback");
+    };
+    assert!(remaining.elements.is_empty());
 }
 
 #[test]
@@ -1096,17 +2658,17 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
         Some(Type::named("net.TlsListener"))
     );
     let mut tls_runtime = test_runtime();
-    let tls_env = Env::default();
+    let mut tls_env = Env::default();
     let tls_address = result_ok_payload(
         tls_runtime
-            .evaluate_tls_listener_method(tls_listener.clone(), "local_addr", &[], &tls_env)
+            .evaluate_tls_listener_method(tls_listener.clone(), "local_addr", &[], &mut tls_env)
             .expect("tls listener local_addr should succeed"),
     );
     let Value::String(tls_address) = tls_address else {
         panic!("tls listener local_addr should return a string");
     };
     assert!(tls_runtime
-        .evaluate_tls_listener_method(tls_listener.clone(), "unsupported", &[], &tls_env)
+        .evaluate_tls_listener_method(tls_listener.clone(), "unsupported", &[], &mut tls_env)
         .expect_err("unsupported tls listener methods should fail")
         .message
         .contains("unsupported MIR tls listener method"));
@@ -1114,14 +2676,14 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
         let listener = tls_listener.clone();
         thread::spawn(move || {
             let mut server_runtime = test_runtime();
-            let server_env = Env::default();
+            let mut server_env = Env::default();
             let stream = result_ok_payload(
                 server_runtime
                     .evaluate_tls_listener_method(
                         listener,
                         "accept",
                         &[mir_arg(Some("timeout"), Operand::Duration(2_000_000_000))],
-                        &server_env,
+                        &mut server_env,
                     )
                     .expect("tls accept should succeed"),
             );
@@ -1138,7 +2700,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                         stream.clone(),
                         "read_line",
                         &[mir_arg(Some("timeout"), Operand::Duration(2_000_000_000))],
-                        &server_env,
+                        &mut server_env,
                     )
                     .expect("tls server read_line should succeed"),
             );
@@ -1156,7 +2718,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                                 mir_arg(Some("text"), Operand::String("ok".to_string())),
                                 mir_arg(Some("timeout"), Operand::Duration(2_000_000_000),),
                             ],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("tls server write_all should succeed")
                 ),
@@ -1164,7 +2726,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
             );
             assert_eq!(
                 server_runtime
-                    .evaluate_tls_stream_method(stream, "close", &[], &server_env)
+                    .evaluate_tls_stream_method(stream, "close", &[], &mut server_env)
                     .expect("tls server close should succeed"),
                 Value::Unit
             );
@@ -1192,7 +2754,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                         mir_arg(Some("text"), Operand::String("secure\n".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
                     ],
-                    &tls_env,
+                    &mut tls_env,
                 )
                 .expect("tls client write_all should succeed")
         ),
@@ -1208,20 +2770,20 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                         mir_arg(Some("count"), Operand::Int(2)),
                         mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
                     ],
-                    &tls_env,
+                    &mut tls_env,
                 )
                 .expect("tls client read_exact should succeed")
         ),
         bytes_vec_value(b"ok".to_vec())
     );
     assert!(tls_runtime
-        .evaluate_tls_stream_method(tls_client.clone(), "unsupported", &[], &tls_env)
+        .evaluate_tls_stream_method(tls_client.clone(), "unsupported", &[], &mut tls_env)
         .expect_err("unsupported tls stream methods should fail")
         .message
         .contains("unsupported MIR tls stream method"));
     assert_eq!(
         tls_runtime
-            .evaluate_tls_stream_method(tls_client, "close", &[], &tls_env)
+            .evaluate_tls_stream_method(tls_client, "close", &[], &mut tls_env)
             .expect("tls client close should succeed"),
         Value::Unit
     );
@@ -1258,7 +2820,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let read_file = FileValue::open(read_path.to_str().expect("temp path should be utf-8"))
         .expect("read fixture should open");
     let file_text = runtime
-        .evaluate_file_method(read_file.clone(), "read_all", &[], &env)
+        .evaluate_file_method(read_file.clone(), "read_all", &[], &mut env)
         .expect("file read_all should succeed");
     assert_eq!(
         result_ok_payload(file_text),
@@ -1269,7 +2831,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let read_file = FileValue::open(read_path.to_str().expect("temp path should be utf-8"))
         .expect("read fixture should reopen");
     let file_bytes = runtime
-        .evaluate_file_method(read_file.clone(), "read_bytes", &[], &env)
+        .evaluate_file_method(read_file.clone(), "read_bytes", &[], &mut env)
         .expect("file read_bytes should succeed");
     assert_eq!(
         result_ok_payload(file_bytes),
@@ -1289,7 +2851,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                         Some("text"),
                         Operand::String("written".to_string())
                     )],
-                    &env,
+                    &mut env,
                 )
                 .expect("file write_all should succeed")
         ),
@@ -1302,7 +2864,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     write_file.clone(),
                     "write_bytes",
                     &[mir_arg(Some("bytes"), Operand::Place("bytes".to_string()))],
-                    &env,
+                    &mut env,
                 )
                 .expect("file write_bytes should succeed")
         ),
@@ -1311,7 +2873,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_file_method(write_file.clone(), "flush", &[], &env)
+                .evaluate_file_method(write_file.clone(), "flush", &[], &mut env)
                 .expect("file flush should succeed")
         ),
         Value::Unit
@@ -1321,18 +2883,18 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             write_file.clone(),
             "write_all",
             &[mir_arg(Some("text"), Operand::Bool(true))],
-            &env,
+            &mut env,
         )
         .expect_err("file write_all should reject non-string text");
     assert!(bad_file_write.message.contains("expects `String`"));
     assert_eq!(
         runtime
-            .evaluate_file_method(write_file.clone(), "close", &[], &env)
+            .evaluate_file_method(write_file.clone(), "close", &[], &mut env)
             .expect("file close should succeed"),
         Value::Unit
     );
     let missing_file_method = runtime
-        .evaluate_file_method(write_file, "missing", &[], &env)
+        .evaluate_file_method(write_file, "missing", &[], &mut env)
         .expect_err("unknown file method should fail");
     assert!(missing_file_method
         .message
@@ -1355,39 +2917,39 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
     enum_payloads(
         runtime
-            .evaluate_process_completed_method(completed.clone(), "status", &[], &env)
+            .evaluate_process_completed_method(completed.clone(), "status", &[], &mut env)
             .expect("completed status should succeed"),
         "ExitStatus",
         "Exited",
     );
     assert_eq!(
         runtime
-            .evaluate_process_completed_method(completed.clone(), "success", &[], &env)
+            .evaluate_process_completed_method(completed.clone(), "success", &[], &mut env)
             .expect("completed success should succeed"),
         Value::Bool(true)
     );
     assert_eq!(
         runtime
-            .evaluate_process_completed_method(completed.clone(), "stdout", &[], &env)
+            .evaluate_process_completed_method(completed.clone(), "stdout", &[], &mut env)
             .expect("completed stdout should succeed"),
         Value::String("out".to_string())
     );
     assert_eq!(
         runtime
-            .evaluate_process_completed_method(completed.clone(), "stderr_bytes", &[], &env)
+            .evaluate_process_completed_method(completed.clone(), "stderr_bytes", &[], &mut env)
             .expect("completed stderr bytes should succeed"),
         bytes_vec_value(b"err".to_vec())
     );
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_completed_method(completed.clone(), "check", &[], &env)
+                .evaluate_process_completed_method(completed.clone(), "check", &[], &mut env)
                 .expect("completed check should succeed")
         ),
         Value::Unit
     );
     let bad_completed_method = runtime
-        .evaluate_process_completed_method(completed, "missing", &[], &env)
+        .evaluate_process_completed_method(completed, "missing", &[], &mut env)
         .expect_err("unknown completed method should fail");
     assert!(bad_completed_method
         .message
@@ -1409,21 +2971,21 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     .expect("process child should spawn");
     enum_payloads(
         runtime
-            .evaluate_process_child_method(child.clone(), "stdin", &[], &env)
+            .evaluate_process_child_method(child.clone(), "stdin", &[], &mut env)
             .expect("child stdin method should succeed"),
         "Option",
         "None",
     );
     enum_payloads(
         runtime
-            .evaluate_process_child_method(child.clone(), "stdout", &[], &env)
+            .evaluate_process_child_method(child.clone(), "stdout", &[], &mut env)
             .expect("child stdout method should succeed"),
         "Option",
         "Some",
     );
     enum_payloads(
         runtime
-            .evaluate_process_child_method(child.clone(), "stderr", &[], &env)
+            .evaluate_process_child_method(child.clone(), "stderr", &[], &mut env)
             .expect("child stderr method should succeed"),
         "Option",
         "Some",
@@ -1432,14 +2994,14 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_pipe_method(stdout_pipe, "read_all", &[], &env)
+                .evaluate_process_pipe_method(stdout_pipe, "read_all", &[], &mut env)
                 .expect("pipe read_all should succeed")
         ),
         Value::String("out".to_string())
     );
     enum_payloads(
         runtime
-            .evaluate_process_child_method(child.clone(), "wait", &[], &env)
+            .evaluate_process_child_method(child.clone(), "wait", &[], &mut env)
             .expect("child wait should succeed"),
         "Wait",
         "Exited",
@@ -1462,7 +3024,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     enum_payloads(
         result_ok_payload(
             runtime
-                .evaluate_process_child_method(ok_child, "wait_ok", &[], &env)
+                .evaluate_process_child_method(ok_child, "wait_ok", &[], &mut env)
                 .expect("wait_ok should succeed"),
         ),
         "ExitStatus",
@@ -1487,7 +3049,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     stdin_pipe.clone(),
                     "write_all",
                     &[mir_arg(Some("text"), Operand::String("cat".to_string()))],
-                    &env,
+                    &mut env,
                 )
                 .expect("pipe write_all should succeed")
         ),
@@ -1496,14 +3058,14 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_pipe_method(stdin_pipe.clone(), "flush", &[], &env)
+                .evaluate_process_pipe_method(stdin_pipe.clone(), "flush", &[], &mut env)
                 .expect("pipe flush should succeed")
         ),
         Value::Unit
     );
     assert_eq!(
         runtime
-            .evaluate_process_pipe_method(stdin_pipe, "close", &[], &env)
+            .evaluate_process_pipe_method(stdin_pipe, "close", &[], &mut env)
             .expect("pipe close should succeed"),
         Value::Unit
     );
@@ -1511,14 +3073,14 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_pipe_method(cat_stdout, "read_all", &[], &env)
+                .evaluate_process_pipe_method(cat_stdout, "read_all", &[], &mut env)
                 .expect("cat stdout should be readable")
         ),
         Value::String("cat".to_string())
     );
     enum_payloads(
         runtime
-            .evaluate_process_child_method(cat, "wait", &[], &env)
+            .evaluate_process_child_method(cat, "wait", &[], &mut env)
             .expect("cat wait should succeed"),
         "Wait",
         "Exited",
@@ -1545,7 +3107,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("pipe write_bytes should succeed")
         ),
@@ -1553,7 +3115,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
     assert_eq!(
         runtime
-            .evaluate_process_pipe_method(bytes_stdin, "close", &[], &env)
+            .evaluate_process_pipe_method(bytes_stdin, "close", &[], &mut env)
             .expect("byte cat stdin close should succeed"),
         Value::Unit
     );
@@ -1567,7 +3129,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     mir_arg(Some("max_bytes"), Operand::Int(6)),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("pipe read_bytes should succeed"),
     );
@@ -1575,7 +3137,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(byte_payload, vec![bytes_vec_value(b"-bytes".to_vec())]);
     enum_payloads(
         runtime
-            .evaluate_process_child_method(cat_bytes, "wait", &[], &env)
+            .evaluate_process_child_method(cat_bytes, "wait", &[], &mut env)
             .expect("byte cat wait should succeed"),
         "Wait",
         "Exited",
@@ -1584,13 +3146,13 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let supervisor = ProcessSupervisorValue::new();
     assert_eq!(
         runtime
-            .evaluate_process_supervisor_method(supervisor.clone(), "is_empty", &[], &env)
+            .evaluate_process_supervisor_method(supervisor.clone(), "is_empty", &[], &mut env)
             .expect("supervisor is_empty should succeed"),
         Value::Bool(true)
     );
     enum_payloads(
         runtime
-            .evaluate_process_supervisor_method(supervisor.clone(), "wait", &[], &env)
+            .evaluate_process_supervisor_method(supervisor.clone(), "wait", &[], &mut env)
             .expect("empty supervisor wait should time out immediately"),
         "SupervisorWait",
         "TimedOut",
@@ -1598,19 +3160,19 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_supervisor_method(supervisor.clone(), "stop", &[], &env)
+                .evaluate_process_supervisor_method(supervisor.clone(), "stop", &[], &mut env)
                 .expect("empty supervisor stop should succeed")
         ),
         Value::Unit
     );
     assert_eq!(
         runtime
-            .evaluate_process_supervisor_method(supervisor.clone(), "close", &[], &env)
+            .evaluate_process_supervisor_method(supervisor.clone(), "close", &[], &mut env)
             .expect("supervisor close should succeed"),
         Value::Unit
     );
     let supervisor_error = runtime
-        .evaluate_process_supervisor_method(supervisor, "missing", &[], &env)
+        .evaluate_process_supervisor_method(supervisor, "missing", &[], &mut env)
         .expect_err("unknown supervisor method should fail");
     assert!(supervisor_error
         .message
@@ -1619,7 +3181,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let tcp_listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp listener should bind");
     match result_ok_payload(
         runtime
-            .evaluate_tcp_listener_method(tcp_listener.clone(), "local_addr", &[], &env)
+            .evaluate_tcp_listener_method(tcp_listener.clone(), "local_addr", &[], &mut env)
             .expect("tcp listener local_addr should succeed"),
     ) {
         Value::String(address) => assert!(address.starts_with("127.0.0.1:")),
@@ -1631,7 +3193,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 tcp_listener.clone(),
                 "accept",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000))],
-                &env,
+                &mut env,
             )
             .expect("tcp listener accept should return a Result"),
         "Result",
@@ -1639,12 +3201,12 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
     assert_eq!(
         runtime
-            .evaluate_tcp_listener_method(tcp_listener.clone(), "close", &[], &env)
+            .evaluate_tcp_listener_method(tcp_listener.clone(), "close", &[], &mut env)
             .expect("tcp listener close should succeed"),
         Value::Unit
     );
     let tcp_listener_error = runtime
-        .evaluate_tcp_listener_method(tcp_listener, "missing", &[], &env)
+        .evaluate_tcp_listener_method(tcp_listener, "missing", &[], &mut env)
         .expect_err("unknown tcp listener method should fail");
     assert!(tcp_listener_error
         .message
@@ -1666,7 +3228,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                         mir_arg(Some("text"), Operand::String("ping".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("udp send_text should succeed")
         ),
@@ -1683,7 +3245,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("udp send_bytes should succeed")
         ),
@@ -1698,7 +3260,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     mir_arg(Some("max_bytes"), Operand::Int(16)),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("udp recv should succeed"),
     );
@@ -1712,14 +3274,14 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                     mir_arg(Some("max_bytes"), Operand::Int(16)),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("udp recv_from should succeed"),
     );
     enum_payloads(udp_recv_from, "Option", "Some");
     match result_ok_payload(
         runtime
-            .evaluate_udp_socket_method(udp_receiver.clone(), "local_addr", &[], &env)
+            .evaluate_udp_socket_method(udp_receiver.clone(), "local_addr", &[], &mut env)
             .expect("udp local_addr should succeed"),
     ) {
         Value::String(address) => assert!(address.starts_with("127.0.0.1:")),
@@ -1727,19 +3289,19 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     }
     enum_payloads(
         runtime
-            .evaluate_udp_socket_method(udp_sender.clone(), "peer_addr", &[], &env)
+            .evaluate_udp_socket_method(udp_sender.clone(), "peer_addr", &[], &mut env)
             .expect("udp peer_addr should return a Result"),
         "Result",
         "Err",
     );
     assert_eq!(
         runtime
-            .evaluate_udp_socket_method(udp_sender.clone(), "close", &[], &env)
+            .evaluate_udp_socket_method(udp_sender.clone(), "close", &[], &mut env)
             .expect("udp close should succeed"),
         Value::Unit
     );
     let udp_error = runtime
-        .evaluate_udp_socket_method(udp_sender, "missing", &[], &env)
+        .evaluate_udp_socket_method(udp_sender, "missing", &[], &mut env)
         .expect_err("unknown udp socket method should fail");
     assert!(udp_error
         .message
@@ -1752,26 +3314,26 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     };
     assert_eq!(
         runtime
-            .evaluate_udp_datagram_method(datagram.clone(), "address", &[], &env)
+            .evaluate_udp_datagram_method(datagram.clone(), "address", &[], &mut env)
             .expect("udp datagram address should succeed"),
         Value::String("127.0.0.1:9".to_string())
     );
     assert_eq!(
         runtime
-            .evaluate_udp_datagram_method(datagram.clone(), "bytes", &[], &env)
+            .evaluate_udp_datagram_method(datagram.clone(), "bytes", &[], &mut env)
             .expect("udp datagram bytes should succeed"),
         bytes_vec_value(b"text".to_vec())
     );
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_udp_datagram_method(datagram.clone(), "text", &[], &env)
+                .evaluate_udp_datagram_method(datagram.clone(), "text", &[], &mut env)
                 .expect("udp datagram text should succeed")
         ),
         Value::String("text".to_string())
     );
     let datagram_error = runtime
-        .evaluate_udp_datagram_method(datagram, "missing", &[], &env)
+        .evaluate_udp_datagram_method(datagram, "missing", &[], &mut env)
         .expect_err("unknown datagram method should fail");
     assert!(datagram_error
         .message
@@ -1780,7 +3342,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let http_listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
     match result_ok_payload(
         runtime
-            .evaluate_http_listener_method(http_listener.clone(), "local_addr", &[], &env)
+            .evaluate_http_listener_method(http_listener.clone(), "local_addr", &[], &mut env)
             .expect("http listener local_addr should succeed"),
     ) {
         Value::String(address) => assert!(address.starts_with("127.0.0.1:")),
@@ -1792,7 +3354,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 http_listener.clone(),
                 "accept",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000))],
-                &env,
+                &mut env,
             )
             .expect("http listener accept should return a Result"),
         "Result",
@@ -1800,12 +3362,12 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
     assert_eq!(
         runtime
-            .evaluate_http_listener_method(http_listener.clone(), "close", &[], &env)
+            .evaluate_http_listener_method(http_listener.clone(), "close", &[], &mut env)
             .expect("http listener close should succeed"),
         Value::Unit
     );
     let http_listener_error = runtime
-        .evaluate_http_listener_method(http_listener, "missing", &[], &env)
+        .evaluate_http_listener_method(http_listener, "missing", &[], &mut env)
         .expect_err("unknown http listener method should fail");
     assert!(http_listener_error
         .message
@@ -1863,7 +3425,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     ] {
         assert_result_err(
             runtime
-                .evaluate_tcp_stream_method(tcp_client.clone(), method, &[], &env)
+                .evaluate_tcp_stream_method(tcp_client.clone(), method, &[], &mut env)
                 .expect("closed tcp stream methods should return Result.Err"),
         );
     }
@@ -1892,7 +3454,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     ] {
         assert_result_err(
             runtime
-                .evaluate_tcp_stream_method(tcp_client.clone(), method, &args, &env)
+                .evaluate_tcp_stream_method(tcp_client.clone(), method, &args, &mut env)
                 .expect("closed tcp stream method should return Result.Err"),
         );
     }
@@ -1904,7 +3466,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 mir_arg(Some("max_bytes"), Operand::Place("negative".to_string())),
                 mir_arg(Some("timeout"), Operand::Unit),
             ],
-            &env,
+            &mut env,
         )
         .expect_err("negative tcp read size should fail before IO");
     assert!(negative_tcp_read
@@ -1918,7 +3480,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 mir_arg(Some("text"), Operand::Bool(true)),
                 mir_arg(Some("timeout"), Operand::Unit),
             ],
-            &env,
+            &mut env,
         )
         .expect_err("tcp write_all should reject non-string input");
     assert!(bad_tcp_write.message.contains("expects `String`"));
@@ -1926,7 +3488,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     tcp_listener.close();
     assert_result_err(
         runtime
-            .evaluate_tcp_listener_method(tcp_listener.clone(), "local_addr", &[], &env)
+            .evaluate_tcp_listener_method(tcp_listener.clone(), "local_addr", &[], &mut env)
             .expect("closed tcp listener local_addr should return Result.Err"),
     );
     assert_result_err(
@@ -1935,7 +3497,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 tcp_listener,
                 "accept",
                 &[mir_arg(Some("timeout"), Operand::Unit)],
-                &env,
+                &mut env,
             )
             .expect("closed tcp listener accept should return Result.Err"),
     );
@@ -1949,7 +3511,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 mir_arg(Some("max_bytes"), Operand::Place("negative".to_string())),
                 mir_arg(Some("timeout"), Operand::Unit),
             ],
-            &env,
+            &mut env,
         )
         .expect_err("negative udp recv size should fail before IO");
     assert!(negative_udp_recv
@@ -1963,7 +3525,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 mir_arg(Some("max_bytes"), Operand::Place("negative".to_string())),
                 mir_arg(Some("timeout"), Operand::Unit),
             ],
-            &env,
+            &mut env,
         )
         .expect_err("negative udp recv_from size should fail before IO");
     assert!(negative_udp_recv_from
@@ -1972,12 +3534,12 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     udp_socket.close();
     assert_result_err(
         runtime
-            .evaluate_udp_socket_method(udp_socket.clone(), "local_addr", &[], &env)
+            .evaluate_udp_socket_method(udp_socket.clone(), "local_addr", &[], &mut env)
             .expect("closed udp local_addr should return Result.Err"),
     );
     assert_result_err(
         runtime
-            .evaluate_udp_socket_method(udp_socket.clone(), "peer_addr", &[], &env)
+            .evaluate_udp_socket_method(udp_socket.clone(), "peer_addr", &[], &mut env)
             .expect("closed udp peer_addr should return Result.Err"),
     );
     assert_result_err(
@@ -1990,7 +3552,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                     mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                     mir_arg(Some("timeout"), Operand::Unit),
                 ],
-                &env,
+                &mut env,
             )
             .expect("closed udp send_bytes should return Result.Err"),
     );
@@ -2001,7 +3563,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     };
     assert_result_err(
         runtime
-            .evaluate_udp_datagram_method(invalid_datagram, "text", &[], &env)
+            .evaluate_udp_datagram_method(invalid_datagram, "text", &[], &mut env)
             .expect("invalid utf-8 datagram text should return Result.Err"),
     );
 
@@ -2009,7 +3571,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     http_listener.close();
     assert_result_err(
         runtime
-            .evaluate_http_listener_method(http_listener.clone(), "local_addr", &[], &env)
+            .evaluate_http_listener_method(http_listener.clone(), "local_addr", &[], &mut env)
             .expect("closed http listener local_addr should return Result.Err"),
     );
     assert_result_err(
@@ -2018,7 +3580,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                 http_listener,
                 "accept",
                 &[mir_arg(Some("timeout"), Operand::Unit)],
-                &env,
+                &mut env,
             )
             .expect("closed http listener accept should return Result.Err"),
     );
@@ -2061,7 +3623,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                     unix_client.clone(),
                     "read_line",
                     &[mir_arg(Some("timeout"), Operand::Unit)],
-                    &env,
+                    &mut env,
                 )
                 .expect("closed unix read_line should return Result.Err"),
         );
@@ -2074,7 +3636,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                         mir_arg(Some("count"), Operand::Int(4)),
                         mir_arg(Some("timeout"), Operand::Unit),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("closed unix read_exact should return Result.Err"),
         );
@@ -2087,7 +3649,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                         mir_arg(Some("text"), Operand::String("closed".to_string())),
                         mir_arg(Some("timeout"), Operand::Unit),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("closed unix write_all should return Result.Err"),
         );
@@ -2099,7 +3661,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                     mir_arg(Some("count"), Operand::Place("negative".to_string())),
                     mir_arg(Some("timeout"), Operand::Unit),
                 ],
-                &env,
+                &mut env,
             )
             .expect_err("negative unix read_exact size should fail before IO");
         assert!(negative_unix_read
@@ -2112,7 +3674,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
                     unix_listener,
                     "accept",
                     &[mir_arg(Some("timeout"), Operand::Unit)],
-                    &env,
+                    &mut env,
                 )
                 .expect("closed unix listener accept should return Result.Err"),
         );
@@ -2177,7 +3739,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         mir_arg(Some("text"), Operand::String("ping\n".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("tcp write_all should succeed")
         ),
@@ -2186,7 +3748,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_tcp_stream_method(tcp_client.clone(), "flush", &[], &env)
+                .evaluate_tcp_stream_method(tcp_client.clone(), "flush", &[], &mut env)
                 .expect("tcp flush should succeed")
         ),
         Value::Unit
@@ -2194,14 +3756,14 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_tcp_stream_method(tcp_client.clone(), "shutdown_write", &[], &env)
+                .evaluate_tcp_stream_method(tcp_client.clone(), "shutdown_write", &[], &mut env)
                 .expect("tcp shutdown_write should succeed")
         ),
         Value::Unit
     );
     match result_ok_payload(
         runtime
-            .evaluate_tcp_stream_method(tcp_client.clone(), "local_addr", &[], &env)
+            .evaluate_tcp_stream_method(tcp_client.clone(), "local_addr", &[], &mut env)
             .expect("tcp local_addr should succeed"),
     ) {
         Value::String(address) => assert!(address.starts_with("127.0.0.1:")),
@@ -2209,7 +3771,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     }
     match result_ok_payload(
         runtime
-            .evaluate_tcp_stream_method(tcp_client.clone(), "peer_addr", &[], &env)
+            .evaluate_tcp_stream_method(tcp_client.clone(), "peer_addr", &[], &mut env)
             .expect("tcp peer_addr should succeed"),
     ) {
         Value::String(address) => assert_eq!(address, tcp_address),
@@ -2221,7 +3783,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 tcp_client.clone(),
                 "read_line",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("tcp read_line should succeed"),
     );
@@ -2237,7 +3799,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         mir_arg(Some("count"), Operand::Int(5)),
                         mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("tcp read_exact should succeed")
         ),
@@ -2252,19 +3814,19 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     mir_arg(Some("max_bytes"), Operand::Int(4)),
                     mir_arg(Some("timeout"), Operand::Duration(50_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("tcp read_bytes should return a Result"),
     );
     enum_payloads(no_more_tcp, "Option", "None");
     assert_eq!(
         runtime
-            .evaluate_tcp_stream_method(tcp_client.clone(), "close", &[], &env)
+            .evaluate_tcp_stream_method(tcp_client.clone(), "close", &[], &mut env)
             .expect("tcp close should succeed"),
         Value::Unit
     );
     let tcp_error = runtime
-        .evaluate_tcp_stream_method(tcp_client, "missing", &[], &env)
+        .evaluate_tcp_stream_method(tcp_client, "missing", &[], &mut env)
         .expect_err("unknown tcp stream method should fail");
     assert!(tcp_error
         .message
@@ -2321,7 +3883,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                             mir_arg(Some("count"), Operand::Int(5)),
                             mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                         ],
-                        &env,
+                        &mut env,
                     )
                     .expect("unix read_exact should succeed")
             ),
@@ -2329,7 +3891,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         );
         assert_eq!(
             runtime
-                .evaluate_unix_stream_method(unix_client.clone(), "close", &[], &env)
+                .evaluate_unix_stream_method(unix_client.clone(), "close", &[], &mut env)
                 .expect("unix stream close should succeed"),
             Value::Unit
         );
@@ -2366,7 +3928,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         socket.clone(),
                         "recv_text",
                         &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                        &server_env,
+                        &mut server_env,
                     )
                     .expect("websocket recv_text should succeed"),
             );
@@ -2384,7 +3946,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                                 mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                                 mir_arg(Some("timeout"), Operand::Duration(5_000_000_000),),
                             ],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("websocket send_bytes should succeed")
                 ),
@@ -2396,7 +3958,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         socket.clone(),
                         "recv_bytes",
                         &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                        &server_env,
+                        &mut server_env,
                     )
                     .expect("websocket recv_bytes should succeed"),
             );
@@ -2414,7 +3976,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                                 mir_arg(Some("text"), Operand::String("server-done".to_string())),
                                 mir_arg(Some("timeout"), Operand::Duration(5_000_000_000),),
                             ],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("websocket send_text should succeed")
                 ),
@@ -2422,7 +3984,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
             assert_eq!(
                 server_runtime
-                    .evaluate_websocket_method(socket, "close", &[], &server_env)
+                    .evaluate_websocket_method(socket, "close", &[], &mut server_env)
                     .expect("websocket close should succeed"),
                 Value::Unit
             );
@@ -2447,7 +4009,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         mir_arg(Some("text"), Operand::String("hello websocket".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("websocket client send_text should succeed")
         ),
@@ -2459,7 +4021,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 websocket_client.clone(),
                 "recv_bytes",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("websocket client recv_bytes should succeed"),
     );
@@ -2477,7 +4039,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                         mir_arg(Some("timeout"), Operand::Duration(5_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("websocket client send_bytes should succeed")
         ),
@@ -2489,7 +4051,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 websocket_client.clone(),
                 "recv_text",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("websocket client recv_text should succeed"),
     );
@@ -2499,7 +4061,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     );
     assert_eq!(
         runtime
-            .evaluate_websocket_method(websocket_client, "close", &[], &env)
+            .evaluate_websocket_method(websocket_client, "close", &[], &mut env)
             .expect("websocket client close should succeed"),
         Value::Unit
     );
@@ -2544,18 +4106,18 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 .expect("http server should accept");
             assert_eq!(
                 server_runtime
-                    .evaluate_http_exchange_method(exchange.clone(), "method", &[], &server_env)
+                    .evaluate_http_exchange_method(exchange.clone(), "method", &[], &mut server_env)
                     .expect("http method should succeed"),
                 Value::String("POST".to_string())
             );
             assert_eq!(
                 server_runtime
-                    .evaluate_http_exchange_method(exchange.clone(), "path", &[], &server_env)
+                    .evaluate_http_exchange_method(exchange.clone(), "path", &[], &mut server_env)
                     .expect("http path should succeed"),
                 Value::String("/demo".to_string())
             );
             match server_runtime
-                .evaluate_http_exchange_method(exchange.clone(), "headers", &[], &server_env)
+                .evaluate_http_exchange_method(exchange.clone(), "headers", &[], &mut server_env)
                 .expect("http headers should succeed")
             {
                 Value::Map(headers) => assert!(!headers.entries.is_empty()),
@@ -2568,7 +4130,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                             exchange.clone(),
                             "body_text",
                             &[],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("http body_text should succeed")
                 ),
@@ -2576,7 +4138,12 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
             assert_eq!(
                 server_runtime
-                    .evaluate_http_exchange_method(exchange.clone(), "body_bytes", &[], &server_env)
+                    .evaluate_http_exchange_method(
+                        exchange.clone(),
+                        "body_bytes",
+                        &[],
+                        &mut server_env
+                    )
                     .expect("http body_bytes should succeed"),
                 bytes_vec_value(b"body".to_vec())
             );
@@ -2591,14 +4158,14 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                                 mir_arg(Some("text"), Operand::String("reply".to_string())),
                                 mir_arg(Some("headers"), Operand::Place("headers".to_string())),
                             ],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("http respond_text should succeed")
                 ),
                 Value::Unit
             );
             let exchange_error = server_runtime
-                .evaluate_http_exchange_method(exchange, "missing", &[], &server_env)
+                .evaluate_http_exchange_method(exchange, "missing", &[], &mut server_env)
                 .expect_err("unknown exchange method should fail");
             assert!(exchange_error
                 .message
@@ -2612,7 +4179,12 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 .expect("http server should accept a bytes request");
             assert_eq!(
                 server_runtime
-                    .evaluate_http_exchange_method(exchange.clone(), "body_bytes", &[], &server_env)
+                    .evaluate_http_exchange_method(
+                        exchange.clone(),
+                        "body_bytes",
+                        &[],
+                        &mut server_env
+                    )
                     .expect("http body_bytes should succeed"),
                 bytes_vec_value(b"bytes".to_vec())
             );
@@ -2627,7 +4199,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                                 mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                                 mir_arg(Some("headers"), Operand::Place("headers".to_string())),
                             ],
-                            &server_env,
+                            &mut server_env,
                         )
                         .expect("respond_bytes should succeed")
                 ),
@@ -2646,18 +4218,18 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     .expect("http request should succeed");
     assert_eq!(
         runtime
-            .evaluate_http_response_method(response.clone(), "status", &[], &env)
+            .evaluate_http_response_method(response.clone(), "status", &[], &mut env)
             .expect("http response status should succeed"),
         Value::Int(IntegerValue::from_signed(200))
     );
     assert_eq!(
         runtime
-            .evaluate_http_response_method(response.clone(), "reason", &[], &env)
+            .evaluate_http_response_method(response.clone(), "reason", &[], &mut env)
             .expect("http response reason should succeed"),
         Value::String("OK".to_string())
     );
     match runtime
-        .evaluate_http_response_method(response.clone(), "headers", &[], &env)
+        .evaluate_http_response_method(response.clone(), "headers", &[], &mut env)
         .expect("http response headers should succeed")
     {
         Value::Map(headers) => assert!(!headers.entries.is_empty()),
@@ -2666,14 +4238,14 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_http_response_method(response.clone(), "text", &[], &env)
+                .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
                 .expect("http response text should succeed")
         ),
         Value::String("reply".to_string())
     );
     assert_eq!(
         runtime
-            .evaluate_http_response_method(response.clone(), "bytes", &[], &env)
+            .evaluate_http_response_method(response.clone(), "bytes", &[], &mut env)
             .expect("http response bytes should succeed"),
         bytes_vec_value(b"reply".to_vec())
     );
@@ -2691,12 +4263,12 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     .expect("http bytes request should succeed");
     assert_eq!(
         runtime
-            .evaluate_http_response_method(bytes_response, "bytes", &[], &env)
+            .evaluate_http_response_method(bytes_response, "bytes", &[], &mut env)
             .expect("http bytes response should succeed"),
         bytes_vec_value(b"bytes-reply".to_vec())
     );
     let response_error = runtime
-        .evaluate_http_response_method(response, "missing", &[], &env)
+        .evaluate_http_response_method(response, "missing", &[], &mut env)
         .expect_err("unknown response method should fail");
     assert!(response_error
         .message
@@ -2943,7 +4515,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
                 writeback_place: Some("flag".to_string()),
             },
         ],
-        &env,
+        &mut env,
     )
     .expect("args should evaluate");
     assert_eq!(evaluated[0].value, Value::Int(IntegerValue::from_signed(7)));
@@ -3150,7 +4722,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             value: Operand::Place("missing".to_string()),
             writeback_place: None,
         }],
-        &env,
+        &mut env,
     )
     .err()
     .expect("reading a missing MIR place should fail");
@@ -3162,7 +4734,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             value: Operand::Unit,
             writeback_place: None,
         }],
-        &env,
+        &mut env,
     )
     .expect("unit operands should evaluate");
     assert_eq!(unit_value[0].value, Value::Unit);
@@ -3362,6 +4934,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
             target: "task".to_string(),
             value: Rvalue::StartTask {
                 returns_handle: true,
+                result_is_copy: true,
                 task_group: Operand::Unit,
                 function: "worker".to_string(),
                 args: Vec::new(),
@@ -3424,25 +4997,12 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             ty: Type::named("int32"),
         },
     ];
-    let evaluated_args = vec![
-        EvaluatedMirArg {
-            ty: None,
-            name: Some("source".to_string()),
-            value: Value::Int(IntegerValue::from_signed(1)),
-            writeback_place: None,
-        },
-        EvaluatedMirArg {
-            ty: None,
-            name: Some("target".to_string()),
-            value: Value::Int(IntegerValue::from_signed(1)),
-            writeback_place: Some("target".to_string()),
-        },
-    ];
+    let writeback_places = vec![None, Some("target".to_string())];
     runtime
         .apply_borrowed_param_writebacks(
             &params,
-            &evaluated_args,
-            &[
+            &writeback_places,
+            vec![
                 (0, Value::Int(IntegerValue::from_signed(4))),
                 (1, Value::Int(IntegerValue::from_signed(7))),
                 (9, Value::Int(IntegerValue::from_signed(11))),
@@ -3458,27 +5018,45 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     let missing_writeback = runtime
         .apply_borrowed_param_writebacks(
             &params,
-            &[
-                EvaluatedMirArg {
-                    ty: None,
-                    name: Some("source".to_string()),
-                    value: Value::Int(IntegerValue::from_signed(1)),
-                    writeback_place: None,
-                },
-                EvaluatedMirArg {
-                    ty: None,
-                    name: Some("target".to_string()),
-                    value: Value::Int(IntegerValue::from_signed(1)),
-                    writeback_place: None,
-                },
-            ],
-            &[(1, Value::Int(IntegerValue::from_signed(9)))],
+            &[None, None],
+            vec![(1, Value::Int(IntegerValue::from_signed(9)))],
             &mut env,
         )
         .expect_err("borrow-mut writebacks require an explicit writeback place");
     assert!(missing_writeback
         .message
         .contains("requires a writeback place"));
+
+    let text = "borrow-mut-writeback".repeat(64);
+    let text_ptr = text.as_ptr();
+    env.define_typed(
+        "text_target",
+        Type::named("String"),
+        Value::String("old".to_string()),
+    );
+    runtime
+        .apply_borrowed_param_writebacks(
+            &[MirParam {
+                name: "text".to_string(),
+                passing: crate::mir::MirReceiverKind::BorrowMut,
+                ty: Type::named("String"),
+            }],
+            &[Some("text_target".to_string())],
+            vec![(0, Value::String(text))],
+            &mut env,
+        )
+        .expect("borrow-mut writeback should transfer its returned allocation");
+    let Value::String(text_target) = env
+        .place_ref("text_target")
+        .expect("borrow-mut target should be updated")
+    else {
+        panic!("expected String borrow-mut target");
+    };
+    assert_eq!(
+        text_target.as_ptr(),
+        text_ptr,
+        "the final writeback handoff must not deep-clone the updated value"
+    );
 
     let by_value = MirFunction {
         name: "work".to_string(),
@@ -3866,7 +5444,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
 #[test]
 fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     let mut runtime = test_runtime();
-    let env = Env::default();
+    let mut env = Env::default();
 
     let sleeper = ProcessChildValue::spawn(
         vec![
@@ -3888,7 +5466,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 sleeper.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(-1))],
-                &env,
+                &mut env,
             )
             .expect("invalid wait timers should use the Wait.Failed carrier"),
         "Wait",
@@ -3902,7 +5480,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 sleeper.clone(),
                 "wait_or_none",
                 &[mir_arg(Some("timeout"), Operand::Duration(-1))],
-                &env,
+                &mut env,
             )
             .expect("invalid wait_or_none timers should use Result.Err"),
     );
@@ -3912,7 +5490,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 sleeper.clone(),
                 "wait_ok",
                 &[mir_arg(Some("timeout"), Operand::Duration(-1))],
-                &env,
+                &mut env,
             )
             .expect("invalid wait_ok timers should use Result.Err"),
     );
@@ -3922,7 +5500,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 sleeper.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(0))],
-                &env,
+                &mut env,
             )
             .expect("wait should surface timeout"),
         "Wait",
@@ -3935,7 +5513,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                     sleeper.clone(),
                     "wait_or_none",
                     &[mir_arg(Some("timeout"), Operand::Duration(0))],
-                    &env,
+                    &mut env,
                 )
                 .expect("wait_or_none should surface timeout as None"),
         ),
@@ -3945,7 +5523,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_child_method(sleeper.clone(), "kill", &[], &env)
+                .evaluate_process_child_method(sleeper.clone(), "kill", &[], &mut env)
                 .expect("kill should succeed")
         ),
         Value::Unit
@@ -3956,14 +5534,14 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 sleeper.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("killed child should become waitable"),
         "Wait",
         "Exited",
     );
     let unknown_method = runtime
-        .evaluate_process_child_method(sleeper, "missing", &[], &env)
+        .evaluate_process_child_method(sleeper, "missing", &[], &mut env)
         .expect_err("unknown process child methods should fail");
     assert!(unknown_method
         .message
@@ -3989,7 +5567,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 failing,
                 "wait_ok",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("wait_ok should return a Result"),
         "Result",
@@ -4013,7 +5591,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_child_method(terminable.clone(), "terminate", &[], &env)
+                .evaluate_process_child_method(terminable.clone(), "terminate", &[], &mut env)
                 .expect("terminate should succeed")
         ),
         Value::Unit
@@ -4022,9 +5600,9 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
         terminable.clone(),
         "wait",
         &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-        &env,
+        &mut env,
     );
-    let _ = runtime.evaluate_process_child_method(terminable, "close", &[], &env);
+    let _ = runtime.evaluate_process_child_method(terminable, "close", &[], &mut env);
 
     let cancellation = CancellationContext::default();
     let group = TaskGroupValue::new(&cancellation);
@@ -4060,13 +5638,14 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
                 cancelled_child.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("wait should observe cancellation"),
         "Wait",
         "Cancelled",
     );
-    let _ = cancelled_runtime.evaluate_process_child_method(cancelled_child, "close", &[], &env);
+    let _ =
+        cancelled_runtime.evaluate_process_child_method(cancelled_child, "close", &[], &mut env);
 }
 
 #[test]
@@ -4095,23 +5674,23 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     );
     assert_eq!(
         runtime
-            .evaluate_process_completed_method(failed_completed.clone(), "success", &[], &env)
+            .evaluate_process_completed_method(failed_completed.clone(), "success", &[], &mut env)
             .expect("completed success should evaluate"),
         Value::Bool(false)
     );
     assert!(runtime
-        .evaluate_process_completed_method(failed_completed.clone(), "stdout", &[], &env)
+        .evaluate_process_completed_method(failed_completed.clone(), "stdout", &[], &mut env)
         .expect_err("invalid stdout utf-8 should be rejected")
         .message
         .contains("invalid utf-8"));
     assert!(runtime
-        .evaluate_process_completed_method(failed_completed.clone(), "stderr", &[], &env)
+        .evaluate_process_completed_method(failed_completed.clone(), "stderr", &[], &mut env)
         .expect_err("invalid stderr utf-8 should be rejected")
         .message
         .contains("invalid utf-8"));
     assert_result_err(
         runtime
-            .evaluate_process_completed_method(failed_completed, "check", &[], &env)
+            .evaluate_process_completed_method(failed_completed, "check", &[], &mut env)
             .expect("failed process check should return Result.Err"),
     );
 
@@ -4133,7 +5712,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     eof_stdout.clone(),
                     "read_line",
                     &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                    &env,
+                    &mut env,
                 )
                 .expect("eof read_line should succeed"),
         ),
@@ -4150,14 +5729,14 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                         mir_arg(Some("max_bytes"), Operand::Int(8)),
                         mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("eof read_bytes should succeed"),
         ),
         "Option",
         "None",
     );
-    let _ = runtime.evaluate_process_child_method(eof_child, "wait", &[], &env);
+    let _ = runtime.evaluate_process_child_method(eof_child, "wait", &[], &mut env);
 
     let reader_child = ProcessChildValue::spawn(
         vec![
@@ -4182,7 +5761,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 closed_reader.clone(),
                 "read_line",
                 &[mir_arg(Some("timeout"), Operand::Duration(-1))],
-                &env,
+                &mut env,
             )
             .expect("invalid read_line timers should use Result.Err"),
     );
@@ -4195,19 +5774,19 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("max_bytes"), Operand::Int(8)),
                     mir_arg(Some("timeout"), Operand::Duration(-1)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("invalid read_bytes timers should use Result.Err"),
     );
     assert_eq!(
         runtime
-            .evaluate_process_pipe_method(closed_reader.clone(), "close", &[], &env)
+            .evaluate_process_pipe_method(closed_reader.clone(), "close", &[], &mut env)
             .expect("reader pipe close should succeed"),
         Value::Unit
     );
     assert_result_err(
         runtime
-            .evaluate_process_pipe_method(closed_reader.clone(), "read_all", &[], &env)
+            .evaluate_process_pipe_method(closed_reader.clone(), "read_all", &[], &mut env)
             .expect("closed read_all should return Result.Err"),
     );
     assert_result_err(
@@ -4216,7 +5795,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 closed_reader.clone(),
                 "read_line",
                 &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("closed read_line should return Result.Err"),
     );
@@ -4229,7 +5808,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("max_bytes"), Operand::Int(8)),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("closed read_bytes should return Result.Err"),
     );
@@ -4241,12 +5820,12 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                 mir_arg(Some("max_bytes"), Operand::Place("negative".to_string())),
                 mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
             ],
-            &env,
+            &mut env,
         )
         .expect_err("negative process pipe read sizes should fail")
         .message
         .contains("non-negative"));
-    let _ = runtime.evaluate_process_child_method(reader_child, "wait", &[], &env);
+    let _ = runtime.evaluate_process_child_method(reader_child, "wait", &[], &mut env);
 
     let writer_child = ProcessChildValue::spawn(
         vec!["/bin/cat".to_string()],
@@ -4268,7 +5847,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("text"), Operand::String("payload".to_string())),
                     mir_arg(Some("timeout"), Operand::Duration(-1)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("invalid write_all timers should use Result.Err"),
     );
@@ -4281,13 +5860,13 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                     mir_arg(Some("timeout"), Operand::Duration(-1)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("invalid write_bytes timers should use Result.Err"),
     );
     assert_eq!(
         runtime
-            .evaluate_process_pipe_method(closed_writer.clone(), "close", &[], &env)
+            .evaluate_process_pipe_method(closed_writer.clone(), "close", &[], &mut env)
             .expect("writer pipe close should succeed"),
         Value::Unit
     );
@@ -4300,7 +5879,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("text"), Operand::String("closed".to_string())),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("closed write_all should return Result.Err"),
     );
@@ -4313,21 +5892,21 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
                     mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
                     mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("closed write_bytes should return Result.Err"),
     );
     assert_result_err(
         runtime
-            .evaluate_process_pipe_method(closed_writer.clone(), "flush", &[], &env)
+            .evaluate_process_pipe_method(closed_writer.clone(), "flush", &[], &mut env)
             .expect("closed flush should return Result.Err"),
     );
     assert!(runtime
-        .evaluate_process_pipe_method(closed_writer, "missing", &[], &env)
+        .evaluate_process_pipe_method(closed_writer, "missing", &[], &mut env)
         .expect_err("unknown process pipe methods should fail")
         .message
         .contains("unsupported MIR process pipe method"));
-    let _ = runtime.evaluate_process_child_method(writer_child, "wait", &[], &env);
+    let _ = runtime.evaluate_process_child_method(writer_child, "wait", &[], &mut env);
 }
 
 #[test]
@@ -4402,7 +5981,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                     mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
                     mir_arg(Some("backoff"), Operand::Duration(-1)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("invalid supervisor backoff should use Result.Err"),
     );
@@ -4414,7 +5993,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 Some("name"),
                 Operand::String("missing-command".to_string()),
             )],
-            &env,
+            &mut env,
         )
         .expect_err("supervisor start should require a command");
     assert!(missing_command
@@ -4430,7 +6009,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("name"), Operand::String("oneshot".to_string())),
                         mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("supervisor start should succeed with defaulted optional args")
         ),
@@ -4442,7 +6021,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 supervisor.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("supervisor wait should surface an event"),
         "SupervisorWait",
@@ -4455,7 +6034,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                     supervisor.clone(),
                     "wait_or_none",
                     &[mir_arg(Some("timeout"), Operand::Duration(0))],
-                    &env,
+                    &mut env,
                 )
                 .expect("empty supervisor wait_or_none should return Result.Ok"),
         ),
@@ -4481,7 +6060,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("max_restarts"), Operand::Int(1)),
                         mir_arg(Some("group"), Operand::Bool(false)),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("supervisor start should accept all optional args")
         ),
@@ -4494,7 +6073,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                     supervisor.clone(),
                     "wait_or_none",
                     &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                    &env,
+                    &mut env,
                 )
                 .expect("supervisor wait_or_none should surface ready events"),
         ),
@@ -4512,7 +6091,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("name"), Operand::String("dupe".to_string())),
                         mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("supervisor start should accept a long-running child")
         ),
@@ -4527,7 +6106,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                     mir_arg(Some("name"), Operand::String("dupe".to_string())),
                     mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
                 ],
-                &env,
+                &mut env,
             )
             .expect("duplicate supervisor starts should return Result.Err"),
         "Result",
@@ -4536,14 +6115,14 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     assert_eq!(
         result_ok_payload(
             runtime
-                .evaluate_process_supervisor_method(supervisor.clone(), "stop", &[], &env)
+                .evaluate_process_supervisor_method(supervisor.clone(), "stop", &[], &mut env)
                 .expect("supervisor stop should clean up running children")
         ),
         Value::Unit
     );
     assert_eq!(
         runtime
-            .evaluate_process_supervisor_method(supervisor, "close", &[], &env)
+            .evaluate_process_supervisor_method(supervisor, "close", &[], &mut env)
             .expect("supervisor close should succeed"),
         Value::Unit
     );
@@ -4573,7 +6152,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("name"), Operand::String("cancelled".to_string())),
                         mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
                     ],
-                    &env,
+                    &mut env,
                 )
                 .expect("cancelled-runtime supervisor start should still register children")
         ),
@@ -4585,7 +6164,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 cancelled_supervisor.clone(),
                 "wait",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("supervisor wait should observe cancellation"),
         "SupervisorWait",
@@ -4597,7 +6176,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 cancelled_supervisor.clone(),
                 "wait_or_none",
                 &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                &env,
+                &mut env,
             )
             .expect("cancelled supervisor wait_or_none should return Result.Err"),
         "Result",
@@ -4607,13 +6186,13 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         cancelled_supervisor.clone(),
         "stop",
         &[],
-        &env,
+        &mut env,
     );
     let _ = cancelled_runtime.evaluate_process_supervisor_method(
         cancelled_supervisor,
         "close",
         &[],
-        &env,
+        &mut env,
     );
 }
 
@@ -7346,7 +8925,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_len = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "len",
             Some("values"),
             &[],
@@ -7357,7 +8936,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_empty = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "is_empty",
             Some("values"),
             &[],
@@ -7368,7 +8947,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_clone = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "clone",
             Some("values"),
             &[],
@@ -7382,7 +8961,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_get = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "get",
             Some("values"),
             &[mir_arg(Some("index"), Operand::Int(0))],
@@ -7396,7 +8975,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_contains = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "contains",
             Some("values"),
             &[mir_arg(Some("value"), Operand::Int(2))],
@@ -7407,7 +8986,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let vec_is_empty_args = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "is_empty",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7419,7 +8998,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`is_empty` does not take arguments"));
     let vec_clone_args = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "clone",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7431,7 +9010,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`clone` does not take arguments"));
     let vec_pop_args = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "pop",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7442,14 +9021,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .message
         .contains("`pop` does not take arguments"));
     let vec_pop_no_place = runtime
-        .evaluate_vec_method(vec_from_env(&env, "values"), "pop", None, &[], &mut env)
+        .evaluate_vec_method(vec_from_env(&mut env, "values"), "pop", None, &[], &mut env)
         .expect_err("vec pop should require a receiver place");
     assert!(vec_pop_no_place
         .message
         .contains("requires a mutable vector place"));
     let vec_set_index_no_place = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "__set_index",
             None,
             &[
@@ -7466,7 +9045,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("requires a mutable vector place"));
     let vec_swap_no_place = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "swap",
             None,
             &[
@@ -7481,7 +9060,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("requires a mutable vector place"));
     let vec_clear_args = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "clear",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7493,7 +9072,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`clear` does not take arguments"));
     let vec_reverse_args = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "reverse",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7505,7 +9084,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`reverse` does not take arguments"));
     let vec_extend_no_place = runtime
         .evaluate_vec_method(
-            vec_from_env(&env, "values"),
+            vec_from_env(&mut env, "values"),
             "extend",
             None,
             &[mir_arg(Some("other"), Operand::Place("other".to_string()))],
@@ -7518,7 +9097,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_len = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "len",
             Some("mapping"),
             &[],
@@ -7529,7 +9108,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_empty = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "is_empty",
             Some("mapping"),
             &[],
@@ -7540,7 +9119,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_clone = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "clone",
             Some("mapping"),
             &[],
@@ -7554,7 +9133,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_get = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "get",
             Some("mapping"),
             &[mir_arg(Some("key"), Operand::String("count".to_string()))],
@@ -7567,7 +9146,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     let map_get_missing = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "get",
             Some("mapping"),
             &[mir_arg(Some("key"), Operand::String("missing".to_string()))],
@@ -7578,7 +9157,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_values = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "values",
             Some("mapping"),
             &[],
@@ -7592,7 +9171,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_keys = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "keys",
             Some("mapping"),
             &[],
@@ -7606,7 +9185,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_contains = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "contains_key",
             Some("mapping"),
             &[mir_arg(Some("key"), Operand::String("count".to_string()))],
@@ -7616,7 +9195,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert_eq!(map_contains, Value::Bool(true));
     let map_missing_contains = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "contains_key",
             Some("mapping"),
             &[mir_arg(Some("key"), Operand::String("missing".to_string()))],
@@ -7626,7 +9205,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert_eq!(map_missing_contains, Value::Bool(false));
     let map_index = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "__index",
             Some("mapping"),
             &[
@@ -7641,7 +9220,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let map_len_args = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "len",
             Some("mapping"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7653,7 +9232,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`len` does not take arguments"));
     let map_empty_args = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "is_empty",
             Some("mapping"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7665,7 +9244,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("`is_empty` does not take arguments"));
     let map_clone_args = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "clone",
             Some("mapping"),
             &[mir_arg(None, Operand::Int(1))],
@@ -7839,10 +9418,10 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     let send = runtime
         .evaluate_channel_method(
-            channel_from_env(&env, "jobs"),
+            channel_from_env(&mut env, "jobs"),
             "put",
             &[mir_arg(Some("value"), Operand::Int(5))],
-            &env,
+            &mut env,
         )
         .expect("queue put should succeed");
     match send {
@@ -7851,7 +9430,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     }
 
     let recv = runtime
-        .evaluate_channel_method(channel_from_env(&env, "jobs"), "get", &[], &env)
+        .evaluate_channel_method(channel_from_env(&mut env, "jobs"), "get", &[], &mut env)
         .expect("queue get should succeed");
     assert_eq!(
         recv,
@@ -7863,7 +9442,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
 
     let close = runtime
-        .evaluate_channel_method(channel_from_env(&env, "jobs"), "close", &[], &env)
+        .evaluate_channel_method(channel_from_env(&mut env, "jobs"), "close", &[], &mut env)
         .expect("channel close should succeed");
     assert_eq!(close, Value::Unit);
 
@@ -7886,7 +9465,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 closed_channel.clone(),
                 "put",
                 &[mir_arg(Some("value"), Operand::Int(6))],
-                &env,
+                &mut env,
             )
             .expect("closed queue put should return a send error"),
         "Closed",
@@ -7898,7 +9477,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 closed_channel,
                 "try_put",
                 &[mir_arg(Some("value"), Operand::Int(7))],
-                &env,
+                &mut env,
             )
             .expect("closed queue try_put should return a send error"),
         "Closed",
@@ -7912,7 +9491,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 full_channel.clone(),
                 "try_put",
                 &[mir_arg(Some("value"), Operand::Int(8))],
-                &env,
+                &mut env,
             )
             .expect("full queue try_put should return a send error"),
         "Full",
@@ -7927,7 +9506,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                     mir_arg(Some("value"), Operand::Int(9)),
                     mir_arg(Some("timeout"), Operand::Duration(0)),
                 ],
-                &env,
+                &mut env,
             )
             .expect("timed out queue put should return a send error"),
         "TimedOut",
@@ -7952,7 +9531,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 ChannelValue::with_capacity(0),
                 "put",
                 &[mir_arg(Some("value"), Operand::Int(10))],
-                &env,
+                &mut env,
             )
             .expect("cancelled queue put should return a send error"),
         "Cancelled",
@@ -7963,7 +9542,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         |value: Value, variant_name: &str| enum_payloads(value, "QueueReceive", variant_name);
 
     let empty_get_or_none = runtime
-        .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &env)
+        .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &mut env)
         .expect("empty get_or_none should return Option.None immediately");
     assert_eq!(empty_get_or_none, option_none());
 
@@ -7973,7 +9552,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("queue should accept a value");
     assert_eq!(
         runtime
-            .evaluate_channel_method(queued_for_get_or_none, "get_or_none", &[], &env,)
+            .evaluate_channel_method(queued_for_get_or_none, "get_or_none", &[], &mut env,)
             .expect("queued get_or_none should return Option.Some"),
         option_some(Value::Int(IntegerValue::from_signed(12)))
     );
@@ -7982,13 +9561,13 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     closed_get_or_none.close();
     assert_eq!(
         runtime
-            .evaluate_channel_method(closed_get_or_none, "get_or_none", &[], &env)
+            .evaluate_channel_method(closed_get_or_none, "get_or_none", &[], &mut env)
             .expect("closed get_or_none should return Option.None"),
         option_none()
     );
     assert_eq!(
         cancelled_runtime
-            .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &env)
+            .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &mut env)
             .expect("cancelled get_or_none should return Option.None"),
         option_none()
     );
@@ -8003,7 +9582,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 queued_for_get_or,
                 "get_or",
                 &[mir_arg(Some("default"), Operand::Int(99))],
-                &env,
+                &mut env,
             )
             .expect("queued get_or should return the queued value"),
         Value::Int(IntegerValue::from_signed(14))
@@ -8014,7 +9593,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 ChannelValue::new(),
                 "get_or",
                 &[mir_arg(Some("default"), Operand::Int(99))],
-                &env,
+                &mut env,
             )
             .expect("empty get_or should return the fallback immediately"),
         Value::Int(IntegerValue::from_signed(99))
@@ -8027,7 +9606,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 closed_get_or,
                 "get_or",
                 &[mir_arg(Some("default"), Operand::Int(100))],
-                &env,
+                &mut env,
             )
             .expect("closed get_or should return the fallback"),
         Value::Int(IntegerValue::from_signed(100))
@@ -8038,14 +9617,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 ChannelValue::new(),
                 "get_or",
                 &[mir_arg(Some("default"), Operand::Int(101))],
-                &env,
+                &mut env,
             )
             .expect("cancelled get_or should return the fallback"),
         Value::Int(IntegerValue::from_signed(101))
     );
 
     let iteration_arg_error = runtime
-        .evaluate_channel_method(ChannelValue::new(), "__get_in_task_group", &[], &env)
+        .evaluate_channel_method(ChannelValue::new(), "__get_in_task_group", &[], &mut env)
         .expect_err("internal task-group get helper should enforce arity");
     assert!(iteration_arg_error
         .message
@@ -8056,7 +9635,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             ChannelValue::new(),
             "__get_in_task_group",
             &[mir_arg(None, Operand::Int(1))],
-            &env,
+            &mut env,
         )
         .expect_err("internal task-group get helper should require a task group");
     assert!(iteration_type_error
@@ -8077,7 +9656,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 closed_iteration_channel,
                 "__get_in_task_group",
                 &[mir_arg(None, Operand::Place("iter_group".to_string()))],
-                &iteration_env,
+                &mut iteration_env,
             )
             .expect("closed task-group iteration helper should return Closed"),
         "Closed",
@@ -8089,7 +9668,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             ChannelValue::new(),
             "__get_with_registered_producers",
             &[mir_arg(None, Operand::Int(1))],
-            &env,
+            &mut env,
         )
         .expect_err("registered-producer helper should reject arguments");
     assert!(registered_arg_error
@@ -8103,7 +9682,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 closed_registered_channel,
                 "__get_with_registered_producers",
                 &[],
-                &env,
+                &mut env,
             )
             .expect("closed registered-producer helper should return Closed"),
         "Closed",
@@ -8255,7 +9834,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 
     runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "__set_index",
             Some("mapping"),
             &[
@@ -8269,7 +9848,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("internal map indexed assignment should update existing keys");
     let map_set_index_no_place = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "__set_index",
             None,
             &[
@@ -8301,7 +9880,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "extend",
             Some("mapping"),
             &[mir_arg(
@@ -8313,7 +9892,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("map extend should update existing keys");
     let map_extend_no_place = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "extend",
             None,
             &[mir_arg(
@@ -8328,7 +9907,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .contains("requires a mutable map place"));
     let unsupported_map_method = runtime
         .evaluate_map_method(
-            map_from_env(&env, "mapping"),
+            map_from_env(&mut env, "mapping"),
             "mystery",
             Some("mapping"),
             &[],
@@ -8671,7 +10250,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Unit))),
             "clone",
             &[],
-            &env,
+            &mut env,
         )
         .expect_err("task clone should be unsupported");
     assert!(task_clone
@@ -8683,7 +10262,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true)))),
             "result",
             &[],
-            &env,
+            &mut env,
         )
         .expect("task result should succeed");
     assert_eq!(task_join, task_result_ready(Value::Bool(true)));
@@ -8693,19 +10272,19 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Unit))),
             "cancel",
             &[],
-            &env,
+            &mut env,
         )
         .expect_err("unsupported task method should fail");
     assert!(task_error.message.contains("unsupported task method"));
 
     let group = TaskGroupValue::new(&CancellationContext::default());
     let cancel = runtime
-        .evaluate_task_group_method(group.clone(), "cancel", &[], &env)
+        .evaluate_task_group_method(group.clone(), "cancel", &[], &mut env)
         .expect("task-group cancel should succeed");
     assert_eq!(cancel, Value::Unit);
 
     let no_target = runtime
-        .evaluate_task_group_method(group.clone(), "start", &[], &env)
+        .evaluate_task_group_method(group.clone(), "start", &[], &mut env)
         .expect_err("task-group start should reject empty args");
     assert!(no_target.message.contains("expects a target function"));
 
@@ -8714,7 +10293,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             group,
             "start",
             &[mir_arg(Some("target"), Operand::Int(3))],
-            &env,
+            &mut env,
         )
         .expect_err("task-group start should stay in MIR lowering");
     assert!(bad_target
@@ -8753,7 +10332,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let indexed = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "__index",
             Some("values"),
             &[
@@ -8768,7 +10347,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "__set_index",
             Some("values"),
             &[
@@ -8783,7 +10362,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let gotten = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "get",
             Some("values"),
             &[mir_arg(Some("index"), negative(2))],
@@ -8796,7 +10375,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
     );
     let missing = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "get",
             Some("values"),
             &[mir_arg(Some("index"), negative(5))],
@@ -8807,7 +10386,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let replaced = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "set",
             Some("values"),
             &[
@@ -8824,7 +10403,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let removed = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "remove",
             Some("values"),
             &[mir_arg(Some("index"), negative(2))],
@@ -8838,7 +10417,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let swapped = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "swap",
             Some("values"),
             &[
@@ -8852,7 +10431,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let inserted = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "insert",
             Some("values"),
             &[
@@ -8864,7 +10443,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         .expect("insert(-1, value) should insert before the final element");
     assert_eq!(inserted, Value::Bool(true));
 
-    let final_values = read_vec(&env)
+    let final_values = read_vec(&mut env)
         .elements
         .into_iter()
         .map(|value| match value {
@@ -8906,14 +10485,14 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         ),
     ] {
         let error = runtime
-            .evaluate_vec_method(read_vec(&env), field, Some("values"), &args, &mut env)
+            .evaluate_vec_method(read_vec(&mut env), field, Some("values"), &args, &mut env)
             .expect_err("too-negative trapping Vec operation should fail");
         assert_eq!(error.message, expected);
     }
 
     let read_error = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "__index",
             Some("values"),
             &[
@@ -8932,7 +10511,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
 
     let write_error = runtime
         .evaluate_vec_method(
-            read_vec(&env),
+            read_vec(&mut env),
             "__set_index",
             Some("values"),
             &[
@@ -9661,9 +11240,9 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     assert!(float_mod_negative_zero.message.contains("division by zero"));
 
     let task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
-    let env = Env::default();
+    let mut env = Env::default();
     let clone_error = runtime
-        .evaluate_task_method(task.clone(), "clone", &[], &env)
+        .evaluate_task_method(task.clone(), "clone", &[], &mut env)
         .expect_err("task clone should be unsupported");
     assert!(clone_error
         .message
@@ -9673,14 +11252,14 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
             task.clone(),
             "result",
             &[mir_arg(None, Operand::Int(1))],
-            &env,
+            &mut env,
         )
         .expect_err("result should reject arguments");
     assert!(join_args
         .message
         .contains("`result(timeout=...)` expects `Duration`, found `1`"));
     let bad_task_member = runtime
-        .evaluate_task_method(task, "missing", &[], &env)
+        .evaluate_task_method(task, "missing", &[], &mut env)
         .expect_err("unknown task members should fail");
     assert!(bad_task_member
         .message
@@ -9688,19 +11267,19 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
 
     let cancellation = CancellationContext::default();
     let group = TaskGroupValue::new(&cancellation);
-    let env = Env::default();
+    let mut env = Env::default();
     assert_eq!(
         runtime
-            .evaluate_task_group_method(group.clone(), "cancel", &[], &env)
+            .evaluate_task_group_method(group.clone(), "cancel", &[], &mut env)
             .expect("group cancel should succeed"),
         Value::Unit
     );
     let spawn_error = runtime
-        .evaluate_task_group_method(group.clone(), "start", &[], &env)
+        .evaluate_task_group_method(group.clone(), "start", &[], &mut env)
         .expect_err("group start should reject empty arg lists");
     assert!(spawn_error.message.contains("expects a target function"));
     let bad_group_member = runtime
-        .evaluate_task_group_method(group, "missing", &[], &env)
+        .evaluate_task_group_method(group, "missing", &[], &mut env)
         .expect_err("unknown task-group members should fail");
     assert!(bad_group_member
         .message
@@ -9841,7 +11420,7 @@ fn mir_runtime_duration_arithmetic_is_checked_exact_and_ordered() {
 #[test]
 fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     let mut runtime = test_runtime();
-    let env = Env::default();
+    let mut env = Env::default();
 
     let ready_task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
     match ready_task
@@ -9853,7 +11432,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     }
 
     let maybe_ready = runtime
-        .evaluate_task_method(ready_task.clone(), "result_or_none", &[], &env)
+        .evaluate_task_method(ready_task.clone(), "result_or_none", &[], &mut env)
         .expect("completed result_or_none should use cached task result");
     assert_eq!(
         enum_payloads(maybe_ready, "Option", "Some"),
@@ -9865,7 +11444,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
                 ready_task,
                 "result_or",
                 &[mir_arg(None, Operand::Bool(false))],
-                &env,
+                &mut env,
             )
             .expect("completed result_or should use cached task result"),
         Value::Bool(true)
@@ -9885,9 +11464,14 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
         }
 
         let mut runtime = test_runtime();
-        let env = Env::default();
+        let mut env = Env::default();
         assert_eq!(
-            runtime.evaluate_task_method(cancelled_task.clone(), "result_or_none", &[], &env)?,
+            runtime.evaluate_task_method(
+                cancelled_task.clone(),
+                "result_or_none",
+                &[],
+                &mut env
+            )?,
             option_none()
         );
         assert_eq!(
@@ -9895,7 +11479,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
                 cancelled_task,
                 "result_or",
                 &[mir_arg(None, Operand::String("fallback".to_string()))],
-                &env,
+                &mut env,
             )?,
             Value::String("fallback".to_string())
         );
@@ -9926,7 +11510,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     }));
     assert_eq!(
         cancelled_runtime
-            .evaluate_task_method(pending_task.clone(), "result_or_none", &[], &env)
+            .evaluate_task_method(pending_task.clone(), "result_or_none", &[], &mut env)
             .expect("cancelled runtimes should return Option.None"),
         option_none()
     );
@@ -9936,7 +11520,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
                 pending_task.clone(),
                 "result_or",
                 &[mir_arg(None, Operand::String("fallback".to_string()))],
-                &env,
+                &mut env,
             )
             .expect("cancelled runtimes should return the fallback"),
         Value::String("fallback".to_string())
@@ -10597,17 +12181,17 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         Value::Int(IntegerValue::from_signed(2)),
     );
     assert_eq!(
-        runtime.resolve_place_type("pair", &env),
+        runtime.resolve_place_type("pair", &mut env),
         Some(Type::Named(
             "Pair".to_string(),
             vec![Type::named("int32"), Type::named("bool")]
         ))
     );
     assert_eq!(
-        runtime.resolve_place_type("pair.left", &env),
+        runtime.resolve_place_type("pair.left", &mut env),
         Some(Type::named("int32"))
     );
-    assert_eq!(runtime.resolve_place_type("number.value", &env), None);
+    assert_eq!(runtime.resolve_place_type("number.value", &mut env), None);
     runtime
         .validate_value_fits_type(&Value::Bool(true), &Type::named("int32"), None)
         .expect("non-integer values are ignored by integer-width validation");
@@ -11393,12 +12977,12 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     let runtime = test_runtime();
     assert_eq!(
         runtime
-            .resolve_place_type("root", &env)
+            .resolve_place_type("root", &mut env)
             .expect("root type should resolve"),
         Type::named("Box")
     );
-    assert!(runtime.resolve_place_type("root.value", &env).is_none());
-    assert!(runtime.resolve_place_type("missing", &env).is_none());
+    assert!(runtime.resolve_place_type("root.value", &mut env).is_none());
+    assert!(runtime.resolve_place_type("missing", &mut env).is_none());
 
     let typed_runtime = MirRuntime::new(
         MirModule {
@@ -11419,7 +13003,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         CancellationContext::default(),
     );
     assert_eq!(
-        typed_runtime.resolve_place_type("root.value", &env),
+        typed_runtime.resolve_place_type("root.value", &mut env),
         Some(Type::named("int32"))
     );
 

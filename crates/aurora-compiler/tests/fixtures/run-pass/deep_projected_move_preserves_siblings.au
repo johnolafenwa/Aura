@@ -1,0 +1,18 @@
+class Payload:
+    value: String
+    sibling: String
+
+class Envelope:
+    payload: Payload
+    label: String
+
+def take(value: own String) -> String:
+    return value
+
+def main() -> int32:
+    envelope = Envelope(payload=Payload(value="moved", sibling="inner-survives"), label="outer-survives")
+    value = take(envelope.payload.value)
+    print(value)
+    print(envelope.payload.sibling)
+    print(envelope.label)
+    return 0

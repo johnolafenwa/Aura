@@ -74,6 +74,7 @@ export default defineConfig({
             { text: 'Ownership And Borrowing', link: '/manual/ownership-and-borrowing' },
             { text: 'Execution Model', link: '/manual/execution-model' },
             { text: 'Collections', link: '/manual/collections' },
+            { text: 'JSON Module', link: '/manual/json' },
             { text: 'Randomness Module', link: '/manual/randomness' },
             { text: 'Concurrency', link: '/manual/concurrency' },
             { text: 'I/O Module', link: '/manual/io' },

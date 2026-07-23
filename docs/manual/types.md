@@ -101,6 +101,7 @@ Move values transfer ownership:
 - `random.Rng`
 - ordinary user classes
 - user enum values with any move payload
+- `json.Value` and `json.Error`
 - `Option`, `Result`, and related outcome values with move payloads
 - `TaskGroup`
 - file, process, supervisor, and network resources
@@ -147,6 +148,7 @@ These types are provided by builtin modules and are reserved names.
 | --- | --- |
 | `io` | `io.Error` |
 | `fs` | `fs.File` |
+| `json` | `json.Value`, `json.Error` |
 | `random` | `random.Rng` |
 | `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.HttpResponse`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
 | `process` | `process.Child`, `process.Pipe`, `process.Completed`, `process.Supervisor`, `process.ExitStatus`, `process.Wait`, `process.Stdio`, `process.Error`, `process.RestartPolicy`, `process.SupervisorEvent`, `process.SupervisorWait` |
@@ -155,6 +157,11 @@ Resource types should usually be scoped with `with` or closed explicitly.
 `random.Rng` is an opaque move type rather than a resource: it has mutable
 state but no `close()` operation or `with` contract. Its complete type and
 sequence rules are in [Randomness Module](/manual/randomness).
+
+`json.Value` is a move type whose recursive variants represent Null, Boolean,
+`int64`, finite `float64`, String, Vec, and Map object data. `json.Error` is a
+move type because its Syntax variant owns a String. Their exact variants and
+number rules are in [JSON Module](/manual/json).
 
 ## Type Annotations
 

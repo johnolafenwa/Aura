@@ -199,6 +199,15 @@ See [Control-Plane Modules](/manual/control-plane).
 | `path.file_name` | `file_name(path: String) -> Option[String]` |
 | `path.extension` | `extension(path: String) -> Option[String]` |
 | `path.is_absolute` | `is_absolute(path: String) -> bool` |
+| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |
+| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` |
+| `json.is_null` | `is_null(value: borrow json.Value) -> bool` |
+| `json.as_bool` | `as_bool(value: borrow json.Value) -> Option[bool]` |
+| `json.as_int` | `as_int(value: borrow json.Value) -> Option[int64]` |
+| `json.as_float` | `as_float(value: borrow json.Value) -> Option[float64]` |
+| `json.into_string` | `into_string(value: own json.Value) -> Option[String]` |
+| `json.into_array` | `into_array(value: own json.Value) -> Option[Vec[json.Value]]` |
+| `json.into_object` | `into_object(value: own json.Value) -> Option[Map[String, json.Value]]` |
 | `json.is_valid` / `toml.is_valid` | `is_valid(text: String) -> bool` |
 | `json.stringify_map` / `toml.stringify_map` | `stringify_map(value: Map[String, String]) -> Result[String, String]` |
 | `json.parse_string_map` / `toml.parse_string_map` | `parse_string_map(text: String) -> Result[Map[String, String], String]` |
@@ -208,7 +217,11 @@ See [Control-Plane Modules](/manual/control-plane).
 | `metrics.get` | `(name: String) -> int64` |
 | `metrics.reset` | `() -> None` |
 
-Metrics are process-global `int64` counters; missing names read as zero and overflow is a runtime diagnostic. JSON/TOML maps serialize in sorted key order. See the module chapter for exact host-string/path and telemetry-record rules.
+Metrics are process-global `int64` counters; missing names read as zero and
+overflow is a runtime diagnostic. Dynamic JSON object dumps and legacy
+JSON/TOML string maps serialize in sorted key order. See [JSON
+Module](/manual/json) and the control-plane chapter for exact value, limit,
+host-string/path, and telemetry-record rules.
 
 ## Network Constructors And HTTP Client Helpers
 

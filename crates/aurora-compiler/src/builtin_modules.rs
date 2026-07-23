@@ -56,6 +56,28 @@ fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
     }
 }
 
+fn borrow_param(name: &str, ty: TypeRef) -> Param {
+    Param {
+        name: name.to_string(),
+        mode: ParamMode::Borrow,
+        borrow_label: None,
+        ty,
+        default: None,
+        span: builtin_span(),
+    }
+}
+
+fn own_param(name: &str, ty: TypeRef) -> Param {
+    Param {
+        name: name.to_string(),
+        mode: ParamMode::Own,
+        borrow_label: None,
+        ty,
+        default: None,
+        span: builtin_span(),
+    }
+}
+
 fn name_expr(name: &str) -> Expr {
     Expr {
         kind: ExprKind::Name(name.to_string()),
@@ -1516,6 +1538,229 @@ fn serialization_namespace(name: &str) -> ModuleNamespace {
     )
 }
 
+fn builtin_enum_info(
+    module_name: &str,
+    enum_name: &str,
+    variants: Vec<(&str, Vec<EnumPayloadFieldDecl>, bool)>,
+) -> EnumInfo {
+    EnumInfo {
+        module_name: module_name.to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: enum_name.to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads, named_payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: *named_payloads,
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads, named_payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .into_iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name,
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads,
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn json_value_type_ref() -> TypeRef {
+    type_ref("json.Value", Vec::new())
+}
+
+fn json_value_enum_info() -> EnumInfo {
+    let positional = |ty| {
+        vec![EnumPayloadFieldDecl {
+            name: None,
+            ty,
+            span: builtin_span(),
+        }]
+    };
+    builtin_enum_info(
+        "json",
+        "Value",
+        vec![
+            ("Null", Vec::new(), false),
+            ("Bool", positional(type_ref("bool", Vec::new())), false),
+            ("Int", positional(type_ref("int64", Vec::new())), false),
+            ("Float", positional(type_ref("float64", Vec::new())), false),
+            ("String", positional(type_ref("String", Vec::new())), false),
+            (
+                "Array",
+                positional(type_ref("Vec", vec![json_value_type_ref()])),
+                false,
+            ),
+            (
+                "Object",
+                positional(type_ref(
+                    "Map",
+                    vec![type_ref("String", Vec::new()), json_value_type_ref()],
+                )),
+                false,
+            ),
+        ],
+    )
+}
+
+fn json_error_enum_info() -> EnumInfo {
+    let named = |name: &str, ty| EnumPayloadFieldDecl {
+        name: Some(name.to_string()),
+        ty,
+        span: builtin_span(),
+    };
+    let location = || {
+        vec![
+            named("line", type_ref("int32", Vec::new())),
+            named("column", type_ref("int32", Vec::new())),
+        ]
+    };
+    let mut syntax = vec![named("message", type_ref("String", Vec::new()))];
+    syntax.extend(location());
+    let mut nesting = vec![named("limit", type_ref("int32", Vec::new()))];
+    nesting.extend(location());
+    builtin_enum_info(
+        "json",
+        "Error",
+        vec![
+            ("Syntax", syntax, true),
+            ("NumberOutOfRange", location(), true),
+            ("NestingTooDeep", nesting, true),
+            (
+                "InputTooLarge",
+                vec![
+                    named("actual_bytes", type_ref("int64", Vec::new())),
+                    named("limit_bytes", type_ref("int64", Vec::new())),
+                ],
+                true,
+            ),
+        ],
+    )
+}
+
+fn json_namespace() -> ModuleNamespace {
+    let option = |inner| type_ref("Option", vec![inner]);
+    let json_value = json_value_type_ref;
+    let functions_to_add = vec![
+        function_info(
+            "json",
+            "parse",
+            vec![value_param("text", type_ref("String", Vec::new()))],
+            type_ref(
+                "Result",
+                vec![json_value(), type_ref("json.Error", Vec::new())],
+            ),
+        ),
+        function_info(
+            "json",
+            "dumps",
+            vec![
+                value_param("value", json_value()),
+                value_param_with_default(
+                    "indent",
+                    option(type_ref("int64", Vec::new())),
+                    name_expr("None"),
+                ),
+            ],
+            type_ref("String", Vec::new()),
+        ),
+        function_info(
+            "json",
+            "is_null",
+            vec![borrow_param("value", json_value())],
+            type_ref("bool", Vec::new()),
+        ),
+        function_info(
+            "json",
+            "as_bool",
+            vec![borrow_param("value", json_value())],
+            option(type_ref("bool", Vec::new())),
+        ),
+        function_info(
+            "json",
+            "as_int",
+            vec![borrow_param("value", json_value())],
+            option(type_ref("int64", Vec::new())),
+        ),
+        function_info(
+            "json",
+            "as_float",
+            vec![borrow_param("value", json_value())],
+            option(type_ref("float64", Vec::new())),
+        ),
+        function_info(
+            "json",
+            "into_string",
+            vec![own_param("value", json_value())],
+            option(type_ref("String", Vec::new())),
+        ),
+        function_info(
+            "json",
+            "into_array",
+            vec![own_param("value", json_value())],
+            option(type_ref("Vec", vec![json_value()])),
+        ),
+        function_info(
+            "json",
+            "into_object",
+            vec![own_param("value", json_value())],
+            option(type_ref(
+                "Map",
+                vec![type_ref("String", Vec::new()), json_value()],
+            )),
+        ),
+    ];
+
+    let mut functions = serialization_namespace("json").functions;
+    functions.extend(
+        functions_to_add
+            .into_iter()
+            .map(|function| (function.decl.name.clone(), function)),
+    );
+    let value = json_value_enum_info();
+    let error = json_error_enum_info();
+    let enums = BTreeMap::from([
+        (value.decl.name.clone(), value),
+        (error.decl.name.clone(), error),
+    ]);
+    ModuleNamespace {
+        name: "json".to_string(),
+        path: "json".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        classes: BTreeMap::new(),
+        enums: enums.clone(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_classes: BTreeMap::new(),
+        all_enums: enums,
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    }
+}
+
 fn telemetry_namespace(name: &str) -> ModuleNamespace {
     let functions = match name {
         "metrics" => vec![
@@ -1573,7 +1818,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "random" => Some(random_namespace()),
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
-        "json" | "toml" => Some(serialization_namespace(name)),
+        "json" => Some(json_namespace()),
+        "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
     }

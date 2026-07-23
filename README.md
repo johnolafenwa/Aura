@@ -99,6 +99,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/randomness/deterministic_rng.au`
   - execute the stable seeded random stream, unbiased integer mapping, and
     deterministic in-place shuffle
+- `cargo run -p aura -- run examples/json/dynamic_values.au`
+  - parse recursive JSON into typed variants, inspect an exact accessor, and
+    emit deterministic compact and pretty JSON
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`

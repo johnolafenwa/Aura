@@ -1,0 +1,21 @@
+enum Inner:
+    Pair(String, int32)
+    Solo(String)
+
+enum Outer:
+    Wrapped(Inner)
+    Empty
+
+def extract(value: own Outer) -> String:
+    return match value:
+        case Outer.Wrapped(Inner.Pair(text, 0)): text
+        case Outer.Wrapped(Inner.Pair(text, _)): text
+        case Outer.Wrapped(Inner.Solo(text)): text
+        case Outer.Empty: "empty"
+
+def main() -> int32:
+    print(extract(Outer.Wrapped(Inner.Pair("first-arm", 0))))
+    print(extract(Outer.Wrapped(Inner.Pair("backtracked", 7))))
+    print(extract(Outer.Wrapped(Inner.Solo("solo"))))
+    print(extract(Outer.Empty))
+    return 0

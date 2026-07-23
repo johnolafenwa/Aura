@@ -36,6 +36,7 @@ When the implemented language surface changes, update these in the same pass:
 19. [18-packages-and-workspaces.md](18-packages-and-workspaces.md)
 20. [19-io-and-networking.md](19-io-and-networking.md)
 21. [20-randomness.md](20-randomness.md)
+22. [21-json.md](21-json.md)
 
 ## Scope Today
 
@@ -62,6 +63,8 @@ The current tutorial set covers:
 - arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons
 - deterministic seeded randomness, unbiased ranges, mutable-Vec shuffle, and
   the separate OS-secure integer/byte boundary
+- recursive `json.Value` trees, typed parse errors, exact accessors, consuming
+  payload extraction, and deterministic compact or pretty dumping
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

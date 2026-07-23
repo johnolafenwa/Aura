@@ -1,0 +1,45 @@
+def echo_duration(value: Duration) -> Duration:
+    return value
+
+def echo_queue(value: Queue[int32]) -> Queue[int32]:
+    return value
+
+def main() -> int32:
+    original_duration = Duration.ms(125)
+    original_queue = Queue[int32]()
+
+    with TaskGroup() as group:
+        duration_task = group.start(echo_duration, original_duration)
+        queue_task = group.start(echo_queue, original_queue)
+
+        match duration_task.result():
+            case TaskResult.Ready(value):
+                print(value.to_ms())
+            case TaskResult.Error(_message):
+                return 2
+            case TaskResult.Cancelled:
+                return 3
+            case TaskResult.TimedOut:
+                return 4
+
+        match queue_task.result():
+            case TaskResult.Ready(value):
+                value.put(9)
+            case TaskResult.Error(_message):
+                return 5
+            case TaskResult.Cancelled:
+                return 6
+            case TaskResult.TimedOut:
+                return 7
+
+    print(original_duration.to_ms())
+    match original_queue.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            return 8
+        case QueueReceive.TimedOut:
+            return 9
+        case QueueReceive.Cancelled:
+            return 10
+    return 0

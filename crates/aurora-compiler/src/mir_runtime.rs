@@ -12,6 +12,7 @@ use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::json_codec;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
@@ -21,17 +22,19 @@ use crate::runtime_value::{
     cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_host_builtin_with_program_args, float_floor_divmod, host_process_args, io_error,
-    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
-    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
-    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_to_runtime,
+    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
-    recv_for_registered_producers_iteration, recv_for_task_group_iteration,
-    register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
-    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
+    render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -456,15 +459,6 @@ struct EvaluatedMirArg {
     writeback_place: Option<String>,
 }
 
-struct TraitMemberCallContext<'a> {
-    receiver: &'a Value,
-    receiver_static_ty: Option<&'a Type>,
-    field: &'a str,
-    receiver_place: Option<&'a str>,
-    args: &'a [MirArg],
-    expected_return_type: Option<&'a Type>,
-}
-
 enum RvalueOutcome {
     Value(Value),
     Return(Value),
@@ -527,12 +521,12 @@ impl Env {
         }
     }
 
-    fn read_place(&self, place: &str) -> Result<Value> {
+    fn place_ref(&self, place: &str) -> Result<&Value> {
         let segments = split_place_segments(place)?;
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let mut value = match self.values.get(root).cloned() {
+        let mut value = match self.values.get(root) {
             Some(value) => value,
             None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
         };
@@ -545,7 +539,7 @@ impl Env {
                     segment, place
                 )));
             };
-            value = match instance.fields.get(segment).cloned() {
+            value = match instance.fields.get(segment) {
                 Some(value) => value,
                 None => {
                     return Err(Diagnostic::new(format!(
@@ -557,6 +551,52 @@ impl Env {
             index += 1;
         }
         Ok(value)
+    }
+
+    fn read_place(&self, place: &str) -> Result<Value> {
+        self.place_ref(place).cloned()
+    }
+
+    fn take_place(&mut self, place: &str) -> Result<Value> {
+        let segments = split_place_segments(place)?;
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
+        if rest.is_empty() {
+            return self
+                .values
+                .remove(root)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)));
+        }
+        let value = self
+            .values
+            .get_mut(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        take_nested_place(value, rest, place)
+    }
+
+    fn take_variant_payload(&mut self, place: &str, index: usize) -> Result<Value> {
+        let segments = split_place_segments(place)?;
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
+        let value = self
+            .values
+            .get_mut(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let value = nested_place_mut(value, rest, place)?;
+        let Value::EnumVariant(variant) = value else {
+            return Err(Diagnostic::new(format!(
+                "cannot take enum payload from non-enum MIR place `{place}`"
+            )));
+        };
+        let payload = variant.payloads.get_mut(index).ok_or_else(|| {
+            Diagnostic::new(format!(
+                "enum variant `{}.{}` does not carry a payload at index {}",
+                variant.enum_name, variant.variant_name, index
+            ))
+        })?;
+        Ok(std::mem::replace(payload, Value::Unit))
     }
 
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
@@ -648,6 +688,433 @@ fn write_nested_place(
         }
     };
     write_nested_place(child, &segments[1..], value, full_place)
+}
+
+fn take_nested_place(value: &mut Value, segments: &[String], full_place: &str) -> Result<Value> {
+    let Value::Instance(instance) = value else {
+        return Err(Diagnostic::new(format!(
+            "cannot move nested MIR place `{}` from a non-instance value",
+            full_place
+        )));
+    };
+    if segments.len() == 1 {
+        return instance.fields.remove(&segments[0]).ok_or_else(|| {
+            Diagnostic::new(format!(
+                "class `{}` has no field `{}` in MIR place `{}`",
+                instance.class_name, segments[0], full_place
+            ))
+        });
+    }
+    let child = instance.fields.get_mut(&segments[0]).ok_or_else(|| {
+        Diagnostic::new(format!(
+            "class `{}` has no field `{}` in MIR place `{}`",
+            instance.class_name, segments[0], full_place
+        ))
+    })?;
+    take_nested_place(child, &segments[1..], full_place)
+}
+
+fn nested_place_mut<'a>(
+    value: &'a mut Value,
+    segments: &[String],
+    full_place: &str,
+) -> Result<&'a mut Value> {
+    let Some((segment, rest)) = segments.split_first() else {
+        return Ok(value);
+    };
+    let Value::Instance(instance) = value else {
+        return Err(Diagnostic::new(format!(
+            "cannot access nested MIR place `{full_place}` on a non-instance value"
+        )));
+    };
+    let child = instance.fields.get_mut(segment).ok_or_else(|| {
+        Diagnostic::new(format!(
+            "class `{}` has no field `{}` in MIR place `{full_place}`",
+            instance.class_name, segment
+        ))
+    })?;
+    nested_place_mut(child, rest, full_place)
+}
+
+enum MirBorrowedOperand<'a> {
+    Place(&'a Value),
+    Immediate(Value),
+}
+
+impl MirBorrowedOperand<'_> {
+    fn as_value(&self) -> &Value {
+        match self {
+            Self::Place(value) => value,
+            Self::Immediate(value) => value,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_borrowed_place(&self) -> bool {
+        matches!(self, Self::Place(_))
+    }
+}
+
+fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorrowedOperand<'a>> {
+    Ok(match operand {
+        Operand::Place(place) => MirBorrowedOperand::Place(env.place_ref(place)?),
+        Operand::MovePlace(place) => {
+            return Err(Diagnostic::new(format!(
+                "cannot borrow consuming MIR operand `{place}`"
+            )))
+        }
+        Operand::Int(value) => {
+            MirBorrowedOperand::Immediate(Value::Int(IntegerValue::from_literal(*value)))
+        }
+        Operand::Duration(value) => MirBorrowedOperand::Immediate(Value::Duration(*value)),
+        Operand::Float(value) => MirBorrowedOperand::Immediate(Value::Float(*value)),
+        Operand::Bool(value) => MirBorrowedOperand::Immediate(Value::Bool(*value)),
+        Operand::String(value) => MirBorrowedOperand::Immediate(Value::String(value.clone())),
+        Operand::Unit => MirBorrowedOperand::Immediate(Value::Unit),
+    })
+}
+
+fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Result<&'a str> {
+    match operand {
+        Operand::Place(place) => match env.place_ref(place)? {
+            Value::String(value) => Ok(value),
+            other => Err(Diagnostic::coded(
+                "AU4001",
+                format!("`{call}` expects `String`, found `{}`", other.render()),
+            )),
+        },
+        Operand::MovePlace(place) => Err(Diagnostic::new(format!(
+            "cannot borrow consuming MIR operand `{place}` in `{call}`"
+        ))),
+        Operand::String(value) => Ok(value),
+        _ => {
+            let value = borrow_mir_operand(operand, env)?;
+            Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "`{call}` expects `String`, found `{}`",
+                    value.as_value().render()
+                ),
+            ))
+        }
+    }
+}
+
+fn take_mir_operand(operand: &Operand, env: &mut Env) -> Result<Value> {
+    match operand {
+        Operand::Place(place) => env.read_place(place),
+        Operand::MovePlace(place) => env.take_place(place),
+        Operand::Int(value) => Ok(Value::Int(IntegerValue::from_literal(*value))),
+        Operand::Duration(value) => Ok(Value::Duration(*value)),
+        Operand::Float(value) => Ok(Value::Float(*value)),
+        Operand::Bool(value) => Ok(Value::Bool(*value)),
+        Operand::String(value) => Ok(Value::String(value.clone())),
+        Operand::Unit => Ok(Value::Unit),
+    }
+}
+
+fn bind_mir_arg_refs<'a>(expected_names: &[&str], args: &'a [MirArg]) -> Result<Vec<&'a MirArg>> {
+    let mut values = vec![None; expected_names.len()];
+    let mut next_positional = 0usize;
+    for argument in args {
+        if let Some(name) = argument.name.as_deref() {
+            let Some(index) = expected_names
+                .iter()
+                .position(|candidate| *candidate == name)
+            else {
+                return Err(Diagnostic::new(format!("unknown MIR argument `{name}`")));
+            };
+            values[index] = Some(argument);
+            continue;
+        }
+        while next_positional < values.len() && values[next_positional].is_some() {
+            next_positional += 1;
+        }
+        if next_positional >= values.len() {
+            return Err(Diagnostic::new("too many MIR arguments"));
+        }
+        values[next_positional] = Some(argument);
+        next_positional += 1;
+    }
+    values
+        .into_iter()
+        .map(|argument| argument.ok_or_else(|| Diagnostic::new("missing MIR argument")))
+        .collect()
+}
+
+fn mir_json_variant<'a>(value: &'a Value, call: &str) -> Result<&'a EnumVariantValue> {
+    match value {
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "json.Value" =>
+        {
+            Ok(variant)
+        }
+        other => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected a runtime `json.Value`, found `{}`",
+                other.render()
+            ),
+        )),
+    }
+}
+
+fn mir_json_exact_payload<'a>(
+    value: &'a Value,
+    expected_variant: &str,
+    call: &str,
+) -> Result<Option<&'a Value>> {
+    let variant = mir_json_variant(value, call)?;
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    match variant.payloads.as_slice() {
+        [payload] => Ok(Some(payload)),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        )),
+    }
+}
+
+fn mir_json_into_exact_payload(
+    value: Value,
+    expected_variant: &str,
+    call: &str,
+) -> Result<Option<Value>> {
+    let Value::EnumVariant(mut variant) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{call}` expected a runtime `json.Value`"),
+        ));
+    };
+    if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected enum `json.Value`, found `{}`",
+                nominal_runtime_base_name(&variant.enum_name)
+            ),
+        ));
+    }
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    if variant.payloads.len() != 1 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        ));
+    }
+    Ok(variant.payloads.pop())
+}
+
+fn mir_json_indent(value: &Value) -> Result<Option<i64>> {
+    let Value::EnumVariant(option) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        ));
+    };
+    match (
+        nominal_runtime_base_name(&option.enum_name),
+        option.variant_name.as_str(),
+        option.payloads.as_slice(),
+    ) {
+        ("Option", "None", []) => Ok(None),
+        ("Option", "Some", [Value::Int(value)]) if json_int_metadata_is_exact(value) => value
+            .as_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                Diagnostic::coded(
+                    "AU4001",
+                    "`json::dumps` expects `indent` to contain an `int64`",
+                )
+            }),
+        ("Option", "Some", [Value::Int(_)]) => Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to contain an `int64`",
+        )),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        )),
+    }
+}
+
+fn malformed_json_variant_metadata(expected: &str, call: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        format!("malformed runtime `json.Value.{expected}` payload in `{call}`"),
+    )
+}
+
+fn evaluate_json_mir_host_call(
+    name: &str,
+    args: &[MirArg],
+    env: &mut Env,
+) -> Option<Result<Value>> {
+    let result = match name {
+        "json::parse" => {
+            let bound = match bind_mir_arg_refs(&["text"], args) {
+                Ok(bound) => bound,
+                Err(error) => return Some(Err(error)),
+            };
+            let text = match borrow_mir_string(&bound[0].value, env, name) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            json_parse_to_runtime(text)
+        }
+        "json::dumps" => {
+            let bound = match bind_mir_arg_refs(&["value", "indent"], args) {
+                Ok(bound) => bound,
+                Err(error) => return Some(Err(error)),
+            };
+            let indent = match borrow_mir_operand(&bound[1].value, env) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let indent = match mir_json_indent(indent.as_value()) {
+                Ok(indent) => indent,
+                Err(error) => return Some(Err(error)),
+            };
+            let value = match borrow_mir_operand(&bound[0].value, env) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let converted = match runtime_value_to_json(value.as_value()) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            json_codec::dumps(&converted, indent)
+                .map(Value::String)
+                .map_err(json_dump_error_to_diagnostic)
+        }
+        "json::is_null" => {
+            let bound = match bind_mir_arg_refs(&["value"], args) {
+                Ok(bound) => bound,
+                Err(error) => return Some(Err(error)),
+            };
+            let value = match borrow_mir_operand(&bound[0].value, env) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let variant = match mir_json_variant(value.as_value(), name) {
+                Ok(variant) => variant,
+                Err(error) => return Some(Err(error)),
+            };
+            if variant.variant_name == "Null" && !variant.payloads.is_empty() {
+                return Some(Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Null` payload in `json::is_null`",
+                )));
+            }
+            Ok(Value::Bool(variant.variant_name == "Null"))
+        }
+        "json::as_bool" | "json::as_int" | "json::as_float" => {
+            let bound = match bind_mir_arg_refs(&["value"], args) {
+                Ok(bound) => bound,
+                Err(error) => return Some(Err(error)),
+            };
+            let value = match borrow_mir_operand(&bound[0].value, env) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let expected = match name {
+                "json::as_bool" => "Bool",
+                "json::as_int" => "Int",
+                "json::as_float" => "Float",
+                _ => unreachable!(),
+            };
+            match mir_json_exact_payload(value.as_value(), expected, name) {
+                Ok(Some(Value::Bool(value))) if expected == "Bool" => {
+                    Ok(option_some(Value::Bool(*value)))
+                }
+                Ok(Some(Value::Int(value)))
+                    if expected == "Int" && json_int_metadata_is_exact(value) =>
+                {
+                    Ok(option_some(Value::Int(*value)))
+                }
+                Ok(Some(Value::Float(value))) if expected == "Float" => {
+                    Ok(option_some(Value::Float(*value)))
+                }
+                Ok(Some(_)) => Err(malformed_json_variant_metadata(expected, name)),
+                Ok(None) => Ok(option_none()),
+                Err(error) => Err(error),
+            }
+        }
+        "json::into_string" | "json::into_array" | "json::into_object" => {
+            let bound = match bind_mir_arg_refs(&["value"], args) {
+                Ok(bound) => bound,
+                Err(error) => return Some(Err(error)),
+            };
+            let value = match take_mir_operand(&bound[0].value, env) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let expected = match name {
+                "json::into_string" => "String",
+                "json::into_array" => "Array",
+                "json::into_object" => "Object",
+                _ => unreachable!(),
+            };
+            match mir_json_into_exact_payload(value, expected, name) {
+                Ok(Some(Value::String(value))) if expected == "String" => {
+                    Ok(option_some(Value::String(value)))
+                }
+                Ok(Some(Value::Vec(value)))
+                    if expected == "Array" && json_array_metadata_is_exact(&value) =>
+                {
+                    Ok(option_some(Value::Vec(value)))
+                }
+                Ok(Some(Value::Map(value)))
+                    if expected == "Object" && json_object_metadata_is_exact(&value) =>
+                {
+                    Ok(option_some(Value::Map(value)))
+                }
+                Ok(Some(_)) => Err(malformed_json_variant_metadata(expected, name)),
+                Ok(None) => Ok(option_none()),
+                Err(error) => Err(error),
+            }
+        }
+        _ => return None,
+    };
+    Some(result)
+}
+
+fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
+    match value {
+        Value::Channel(queue) => queues.push(queue.clone()),
+        Value::Vec(vector) => {
+            for element in &vector.elements {
+                collect_queue_handles(element, queues);
+            }
+        }
+        Value::Set(set) => {
+            for element in &set.elements {
+                collect_queue_handles(element, queues);
+            }
+        }
+        Value::Map(map) => {
+            for (key, value) in &map.entries {
+                collect_queue_handles(key, queues);
+                collect_queue_handles(value, queues);
+            }
+        }
+        Value::Instance(instance) => {
+            for value in instance.fields.values() {
+                collect_queue_handles(value, queues);
+            }
+        }
+        Value::EnumVariant(variant) => {
+            for payload in &variant.payloads {
+                collect_queue_handles(payload, queues);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl MirRuntime {
@@ -786,25 +1253,18 @@ impl MirRuntime {
         best
     }
 
-    fn evaluate_resolved_trait_member_call(
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_resolved_trait_method_call(
         &mut self,
-        context: TraitMemberCallContext<'_>,
+        receiver: Value,
+        receiver_ty: &Type,
+        field: &str,
+        method: MirMethod,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        expected_return_type: Option<&Type>,
         env: &mut Env,
-    ) -> Result<Option<Value>> {
-        let TraitMemberCallContext {
-            receiver,
-            receiver_static_ty,
-            field,
-            receiver_place,
-            args,
-            expected_return_type,
-        } = context;
-        let Some(receiver_ty) = receiver_static_ty else {
-            return Ok(None);
-        };
-        let Some(method) = self.find_trait_impl_method(receiver_ty, field).cloned() else {
-            return Ok(None);
-        };
+    ) -> Result<Value> {
         let function = self
             .functions
             .get(&method.function_name)
@@ -816,10 +1276,14 @@ impl MirRuntime {
                 ))
             })?;
         let evaluated_args = evaluate_named_args(args, env)?;
+        let writeback_places = evaluated_args
+            .iter()
+            .map(|argument| argument.writeback_place.clone())
+            .collect::<Vec<_>>();
         let outcome = self.call_function_with_receiver_type(
             &function,
-            Some(receiver.clone()),
-            evaluated_args.clone(),
+            Some(receiver),
+            evaluated_args,
             expected_return_type,
             Some(receiver_ty),
         )?;
@@ -836,11 +1300,11 @@ impl MirRuntime {
         }
         self.apply_borrowed_param_writebacks(
             &function.params,
-            &evaluated_args,
-            &outcome.updated_params,
+            &writeback_places,
+            outcome.updated_params,
             env,
         )?;
-        Ok(Some(outcome.value))
+        Ok(outcome.value)
     }
 
     fn find_from_trait_impl_method(
@@ -1198,7 +1662,9 @@ impl MirRuntime {
 
     fn resolve_operand_type(&self, operand: &Operand, env: &Env) -> Option<Type> {
         match operand {
-            Operand::Place(place) => self.resolve_place_type(place, env),
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                self.resolve_place_type(place, env)
+            }
             Operand::Int(_) => Some(Type::named("int64")),
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
@@ -1300,9 +1766,9 @@ impl MirRuntime {
                 env.define_typed("self", receiver_ty, receiver);
             }
 
-            for (param, argument) in function.params.iter().zip(bound_args.iter()) {
+            for (param, argument) in function.params.iter().zip(bound_args) {
                 let ty = substitute_type(&param.ty, &substitutions);
-                let value = self.coerce_value_to_type(argument.value.clone(), &ty, None)?;
+                let value = self.coerce_value_to_type(argument.value, &ty, None)?;
                 env.define_typed(&param.name, ty, value);
             }
 
@@ -1449,7 +1915,7 @@ impl MirRuntime {
                 }
             }
             Instruction::Eval { value } => {
-                let _ = self.evaluate_operand(value, env)?;
+                let _ = self.evaluate_owned_operand(value, env)?;
                 Ok(None)
             }
             Instruction::PushCleanup { place } => {
@@ -1475,9 +1941,9 @@ impl MirRuntime {
         _cleanup_stack: &mut Vec<String>,
     ) -> Result<BlockOutcome> {
         match terminator {
-            Terminator::Return(value) => {
-                Ok(BlockOutcome::Return(self.evaluate_operand(value, env)?))
-            }
+            Terminator::Return(value) => Ok(BlockOutcome::Return(
+                self.evaluate_owned_operand(value, env)?,
+            )),
             Terminator::Goto(label) => Ok(BlockOutcome::Goto(label.clone())),
             Terminator::Branch {
                 condition,
@@ -1705,7 +2171,9 @@ impl MirRuntime {
         expected_type: Option<&Type>,
     ) -> Result<RvalueOutcome> {
         match value {
-            Rvalue::Use(operand) => Ok(RvalueOutcome::Value(self.evaluate_operand(operand, env)?)),
+            Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
+                self.evaluate_owned_operand(operand, env)?,
+            )),
             Rvalue::FormatString { parts } => {
                 let mut rendered = String::new();
                 for part in parts {
@@ -1758,7 +2226,7 @@ impl MirRuntime {
                     }
                     _ => None,
                 };
-                let value = self.evaluate_operand(value, env)?;
+                let value = self.evaluate_owned_operand(value, env)?;
                 let Value::EnumVariant(variant) = value else {
                     return Err(Diagnostic::new(format!(
                         "MIR `try` requires a `Result` value at runtime, found `{}`",
@@ -1771,14 +2239,26 @@ impl MirRuntime {
                         variant.enum_name
                     )));
                 }
-                match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
-                    ("Ok", [payload]) => Ok(RvalueOutcome::Value(payload.clone())),
-                    ("Err", [payload]) => {
+                let EnumVariantValue {
+                    variant_name,
+                    mut payloads,
+                    ..
+                } = variant;
+                if payloads.len() != 1 {
+                    return Err(Diagnostic::new(
+                        "MIR `try` encountered an invalid `Result` payload at runtime",
+                    ));
+                }
+                let payload = payloads
+                    .pop()
+                    .expect("validated Result variant should carry one payload");
+                match variant_name.as_str() {
+                    "Ok" => Ok(RvalueOutcome::Value(payload)),
+                    "Err" => {
                         let source_ty = source_error_ty
-                            .or_else(|| self.infer_runtime_value_type(payload))
+                            .or_else(|| self.infer_runtime_value_type(&payload))
                             .unwrap_or_else(|| Type::named("Unknown"));
-                        let payload =
-                            self.convert_try_error_via_from(payload.clone(), &source_ty)?;
+                        let payload = self.convert_try_error_via_from(payload, &source_ty)?;
                         Ok(RvalueOutcome::Return(Value::EnumVariant(
                             EnumVariantValue {
                                 enum_name: "Result".to_string(),
@@ -1794,6 +2274,7 @@ impl MirRuntime {
             }
             Rvalue::StartTask {
                 returns_handle,
+                result_is_copy: _,
                 task_group,
                 function,
                 args,
@@ -1831,7 +2312,7 @@ impl MirRuntime {
                 element_type: element_type.clone(),
                 elements: elements
                     .iter()
-                    .map(|operand| self.evaluate_operand(operand, env))
+                    .map(|operand| self.evaluate_owned_operand(operand, env))
                     .collect::<Result<Vec<_>>>()?,
             }))),
             Rvalue::SetLiteral {
@@ -1840,7 +2321,7 @@ impl MirRuntime {
             } => {
                 let mut values = Vec::new();
                 for operand in elements {
-                    let value = self.evaluate_operand(operand, env)?;
+                    let value = self.evaluate_owned_operand(operand, env)?;
                     if !values.contains(&value) {
                         values.push(value);
                     }
@@ -1857,8 +2338,8 @@ impl MirRuntime {
             } => {
                 let mut values = Vec::new();
                 for entry in entries {
-                    let key = self.evaluate_operand(&entry.key, env)?;
-                    let value = self.evaluate_operand(&entry.value, env)?;
+                    let key = self.evaluate_owned_operand(&entry.key, env)?;
+                    let value = self.evaluate_owned_operand(&entry.value, env)?;
                     if let Some(index) = values
                         .iter()
                         .position(|(candidate_key, _)| *candidate_key == key)
@@ -1879,7 +2360,7 @@ impl MirRuntime {
                 for field in fields {
                     values.insert(
                         field.name.clone(),
-                        self.evaluate_operand(&field.value, env)?,
+                        self.evaluate_owned_operand(&field.value, env)?,
                     );
                 }
                 Ok(RvalueOutcome::Value(Value::Instance(InstanceValue {
@@ -1896,7 +2377,7 @@ impl MirRuntime {
                 variant_name: variant_name.clone(),
                 payloads: payloads
                     .iter()
-                    .map(|payload| self.evaluate_operand(payload, env))
+                    .map(|payload| take_mir_operand(payload, env))
                     .collect::<Result<Vec<_>>>()?,
             }))),
             Rvalue::VariantPayload {
@@ -1904,14 +2385,19 @@ impl MirRuntime {
                 variant_name: _,
                 index,
             } => {
-                let scrutinee = self.evaluate_operand(scrutinee, env)?;
+                if let Operand::MovePlace(place) = scrutinee {
+                    return Ok(RvalueOutcome::Value(
+                        env.take_variant_payload(place, *index)?,
+                    ));
+                }
+                let scrutinee = self.evaluate_owned_operand(scrutinee, env)?;
                 let Value::EnumVariant(variant) = scrutinee else {
                     return Err(Diagnostic::new(format!(
                         "MIR variant payload extraction expected an enum value, found `{}`",
                         scrutinee.render()
                     )));
                 };
-                let payload = variant.payloads.get(*index).cloned().ok_or_else(|| {
+                let payload = variant.payloads.into_iter().nth(*index).ok_or_else(|| {
                     Diagnostic::new(format!(
                         "enum variant `{}.{}` does not carry a payload at index {}",
                         variant.enum_name, variant.variant_name, index
@@ -2339,8 +2825,13 @@ impl MirRuntime {
                     };
                 }
 
+                if let Some(result) = evaluate_json_mir_host_call(name, args, env) {
+                    return result;
+                }
+
                 if let Some(metadata) = host_builtin_metadata(name) {
-                    debug_assert!(metadata.params.iter().all(|param| param.required));
+                    // Checked MIR materializes builtin defaults before runtime dispatch, so
+                    // optional metadata parameters are present in this argument list too.
                     let arg_names = metadata
                         .params
                         .iter()
@@ -2407,16 +2898,20 @@ impl MirRuntime {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
                     })?;
                 let evaluated_args = evaluate_named_args(args, env)?;
+                let writeback_places = evaluated_args
+                    .iter()
+                    .map(|argument| argument.writeback_place.clone())
+                    .collect::<Vec<_>>();
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
-                    evaluated_args.clone(),
+                    evaluated_args,
                     expected_return_type,
                 )?;
                 self.apply_borrowed_param_writebacks(
                     &function.params,
-                    &evaluated_args,
-                    &outcome.updated_params,
+                    &writeback_places,
+                    outcome.updated_params,
                     env,
                 )?;
                 Ok(outcome.value)
@@ -2429,7 +2924,64 @@ impl MirRuntime {
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                let receiver = self.evaluate_operand(object, env)?;
+                let mut receiver = self.evaluate_owned_operand(object, env)?;
+
+                if field == "__take_index_option" {
+                    let receiver = std::mem::replace(&mut receiver, Value::Unit);
+                    return match receiver {
+                        Value::Vec(vector) => self.evaluate_vec_method(
+                            vector,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        ),
+                        Value::Set(set) => self.evaluate_set_method(
+                            set,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        ),
+                        other => Err(Diagnostic::new(format!(
+                            "unsupported MIR member call `{}` on `{}`",
+                            field,
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if !matches!(receiver, Value::Instance(_)) {
+                    let resolved_receiver_ty = receiver_static_ty
+                        .clone()
+                        .or_else(|| self.infer_runtime_value_type(&receiver));
+                    if let Some(resolved_receiver_ty) = resolved_receiver_ty {
+                        let builtin_name = match &resolved_receiver_ty {
+                            Type::Named(name, _) => Some(name.as_str()),
+                            _ => None,
+                        };
+                        if builtin_name
+                            .and_then(|name| BuiltinMember::resolve(name, field))
+                            .is_none()
+                        {
+                            if let Some(method) = self
+                                .find_trait_impl_method(&resolved_receiver_ty, field)
+                                .cloned()
+                            {
+                                return self.evaluate_resolved_trait_method_call(
+                                    receiver,
+                                    &resolved_receiver_ty,
+                                    field,
+                                    method,
+                                    receiver_place.as_deref(),
+                                    args,
+                                    expected_return_type,
+                                    env,
+                                );
+                            }
+                        }
+                    }
+                }
 
                 match &receiver {
                     Value::Vec(vector) => self.evaluate_vec_method(
@@ -2488,24 +3040,7 @@ impl MirRuntime {
                         }
                         Ok(Value::Float(duration_to_seconds(*value)))
                     }
-                    Value::Rng(rng) => {
-                        if BuiltinMember::resolve("random.Rng", field).is_none() {
-                            if let Some(value) = self.evaluate_resolved_trait_member_call(
-                                TraitMemberCallContext {
-                                    receiver: &receiver,
-                                    receiver_static_ty: receiver_static_ty.as_ref(),
-                                    field,
-                                    receiver_place: receiver_place.as_deref(),
-                                    args,
-                                    expected_return_type,
-                                },
-                                env,
-                            )? {
-                                return Ok(value);
-                            }
-                        }
-                        self.evaluate_rng_method(rng.clone(), field, args, env)
-                    }
+                    Value::Rng(rng) => self.evaluate_rng_method(rng.clone(), field, args, env),
                     Value::String(value) => {
                         self.evaluate_string_method(value.clone(), field, args, env)
                     }
@@ -2517,46 +3052,9 @@ impl MirRuntime {
                         env,
                     ),
                     Value::Channel(channel) => {
-                        if BuiltinMember::resolve("Queue", field).is_none()
-                            && !matches!(
-                                field.as_str(),
-                                "__get_in_task_group" | "__get_with_registered_producers"
-                            )
-                        {
-                            if let Some(value) = self.evaluate_resolved_trait_member_call(
-                                TraitMemberCallContext {
-                                    receiver: &receiver,
-                                    receiver_static_ty: receiver_static_ty.as_ref(),
-                                    field,
-                                    receiver_place: receiver_place.as_deref(),
-                                    args,
-                                    expected_return_type,
-                                },
-                                env,
-                            )? {
-                                return Ok(value);
-                            }
-                        }
                         self.evaluate_channel_method(channel.clone(), field, args, env)
                     }
-                    Value::Task(task) => {
-                        if BuiltinMember::resolve("Task", field).is_none() {
-                            if let Some(value) = self.evaluate_resolved_trait_member_call(
-                                TraitMemberCallContext {
-                                    receiver: &receiver,
-                                    receiver_static_ty: receiver_static_ty.as_ref(),
-                                    field,
-                                    receiver_place: receiver_place.as_deref(),
-                                    args,
-                                    expected_return_type,
-                                },
-                                env,
-                            )? {
-                                return Ok(value);
-                            }
-                        }
-                        self.evaluate_task_method(task.clone(), field, args, env)
-                    }
+                    Value::Task(task) => self.evaluate_task_method(task.clone(), field, args, env),
                     Value::TaskGroup(group) => {
                         self.evaluate_task_group_method(group.clone(), field, args, env)
                     }
@@ -2657,10 +3155,18 @@ impl MirRuntime {
                                 ))
                             })?;
                         let evaluated_args = evaluate_named_args(args, env)?;
+                        let writeback_places = evaluated_args
+                            .iter()
+                            .map(|argument| argument.writeback_place.clone())
+                            .collect::<Vec<_>>();
                         let outcome = self.call_function_with_receiver_type(
                             &function,
-                            Some(receiver.clone()),
-                            evaluated_args.clone(),
+                            Some(if method.receiver == Some(MirReceiverKind::Value) {
+                                std::mem::replace(&mut receiver, Value::Unit)
+                            } else {
+                                receiver.clone()
+                            }),
+                            evaluated_args,
                             expected_return_type,
                             Some(&resolved_receiver_ty),
                         )?;
@@ -2677,8 +3183,8 @@ impl MirRuntime {
                         }
                         self.apply_borrowed_param_writebacks(
                             &function.params,
-                            &evaluated_args,
-                            &outcome.updated_params,
+                            &writeback_places,
+                            outcome.updated_params,
                             env,
                         )?;
                         Ok(outcome.value)
@@ -2703,10 +3209,18 @@ impl MirRuntime {
                                     ))
                                 })?;
                                 let evaluated_args = evaluate_named_args(args, env)?;
+                                let writeback_places = evaluated_args
+                                    .iter()
+                                    .map(|argument| argument.writeback_place.clone())
+                                    .collect::<Vec<_>>();
                                 let outcome = self.call_function_with_receiver_type(
                                     &function,
-                                    Some(receiver.clone()),
-                                    evaluated_args.clone(),
+                                    Some(if method.receiver == Some(MirReceiverKind::Value) {
+                                        std::mem::replace(&mut receiver, Value::Unit)
+                                    } else {
+                                        receiver.clone()
+                                    }),
+                                    evaluated_args,
                                     expected_return_type,
                                     Some(&resolved_receiver_ty),
                                 )?;
@@ -2723,8 +3237,8 @@ impl MirRuntime {
                                 }
                                 self.apply_borrowed_param_writebacks(
                                     &function.params,
-                                    &evaluated_args,
-                                    &outcome.updated_params,
+                                    &writeback_places,
+                                    outcome.updated_params,
                                     env,
                                 )?;
                                 return Ok(outcome.value);
@@ -2748,7 +3262,7 @@ impl MirRuntime {
         function: &str,
         args: &[MirArg],
         spawn_span: Span,
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         let function = self
             .functions
@@ -2757,10 +3271,10 @@ impl MirRuntime {
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{}`", function)))?;
         self.require_task_startable_function(&function)?;
         let bound_args = evaluate_named_args(args, env)?;
-        let queue_producer_args = bound_args
-            .iter()
-            .map(|arg| arg.value.clone())
-            .collect::<Vec<_>>();
+        let mut producer_queues = Vec::new();
+        for argument in &bound_args {
+            collect_queue_handles(&argument.value, &mut producer_queues);
+        }
 
         let value = self.evaluate_operand(task_group, env)?;
         let Value::TaskGroup(group_value) = value else {
@@ -2803,7 +3317,9 @@ impl MirRuntime {
                 .map(|outcome| outcome.value)
         })?;
         group_value.register_task(task.clone());
-        register_task_as_queue_producer_for_values(queue_producer_args.iter(), &task);
+        for queue in producer_queues {
+            queue.register_producer_task(&task);
+        }
 
         if returns_handle {
             Ok(Value::Task(task))
@@ -2815,27 +3331,27 @@ impl MirRuntime {
     fn apply_borrowed_param_writebacks(
         &mut self,
         params: &[MirParam],
-        evaluated_args: &[EvaluatedMirArg],
-        updated_params: &[(usize, Value)],
+        writeback_places: &[Option<String>],
+        updated_params: Vec<(usize, Value)>,
         env: &mut Env,
     ) -> Result<()> {
         for (index, value) in updated_params {
-            let Some(param) = params.get(*index) else {
+            let Some(param) = params.get(index) else {
                 continue;
             };
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
-            let place = evaluated_args
-                .get(*index)
-                .and_then(|argument| argument.writeback_place.as_deref())
+            let place = writeback_places
+                .get(index)
+                .and_then(Option::as_deref)
                 .ok_or_else(|| {
                     Diagnostic::new(format!(
                         "mutable borrowed MIR parameter `{}` requires a writeback place",
                         param.name
                     ))
                 })?;
-            env.write_place(place, value.clone())?;
+            env.write_place(place, value)?;
         }
         Ok(())
     }
@@ -2906,19 +3422,19 @@ impl MirRuntime {
         channel: ChannelValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "put" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["value", "timeout"], values)?;
-                let Some(value) = bound.first().map(|arg| arg.value.clone()) else {
-                    return Err(Diagnostic::new(format!(
-                        "internal error: `{}` should bind one argument",
-                        field
-                    )));
-                };
-                let timeout = expect_optional_timeout(Some(&bound[1].value), "put(timeout=...)")?;
+                let mut bound = bind_builtin_args(&["value", "timeout"], values)?.into_iter();
+                let value = bound
+                    .next()
+                    .expect("bound Queue.put value should exist")
+                    .value;
+                let timeout_arg = bound.next().expect("bound Queue.put timeout should exist");
+                let timeout =
+                    expect_optional_timeout(Some(&timeout_arg.value), "put(timeout=...)")?;
                 let outcome = channel
                     .send_with_timeout(value, timeout, Some(&self.cancellation))
                     .map_err(timer_error_to_diagnostic)?;
@@ -2937,12 +3453,11 @@ impl MirRuntime {
             "try_put" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
-                let Some(value) = bound.first().map(|arg| arg.value.clone()) else {
-                    return Err(Diagnostic::new(format!(
-                        "internal error: `{}` should bind one argument",
-                        field
-                    )));
-                };
+                let value = bound
+                    .into_iter()
+                    .next()
+                    .expect("bound Queue.try_put value should exist")
+                    .value;
                 match channel.try_send_result(value) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(*value))),
@@ -3037,14 +3552,16 @@ impl MirRuntime {
             }
             "get_or" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["default", "timeout"], values)?;
-                let Some(default) = bound.first().map(|arg| arg.value.clone()) else {
-                    return Err(Diagnostic::new(
-                        "internal error: `get_or` should bind a default argument",
-                    ));
-                };
+                let mut bound = bind_builtin_args(&["default", "timeout"], values)?.into_iter();
+                let default = bound
+                    .next()
+                    .expect("bound Queue.get_or default should exist")
+                    .value;
+                let timeout_arg = bound
+                    .next()
+                    .expect("bound Queue.get_or timeout should exist");
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "get_or(timeout=...)")?;
+                    expect_optional_timeout(Some(&timeout_arg.value), "get_or(timeout=...)")?;
                 let outcome = if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
                     if self.cancellation.is_cancelled() {
                         RecvValueResult::Cancelled
@@ -3152,6 +3669,23 @@ impl MirRuntime {
                     .map(option_some)
                     .unwrap_or_else(option_none))
             }
+            "__take_index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let mut updated = vector;
+                let (_, index) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                let value = index
+                    .filter(|index| *index < updated.elements.len())
+                    .map(|index| updated.elements.remove(index));
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "owned vector iteration requires its private source place",
+                    ));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(value.map(option_some).unwrap_or_else(option_none))
+            }
             "__index" => {
                 let values = evaluate_named_args(args, env)?;
                 if values.len() != 3 {
@@ -3179,10 +3713,18 @@ impl MirRuntime {
             }
             "set" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let mut bound = bind_builtin_args(&["index", "value"], values)?.into_iter();
+                let index_value = bound
+                    .next()
+                    .expect("bound Vec.set index should exist")
+                    .value;
+                let value = bound
+                    .next()
+                    .expect("bound Vec.set value should exist")
+                    .value;
                 let mut updated = vector;
                 let (supplied_index, index) =
-                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
                 let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
                         "vector set index `{}` is out of bounds for length `{}`",
@@ -3190,8 +3732,7 @@ impl MirRuntime {
                         updated.elements.len()
                     )));
                 };
-                let previous =
-                    std::mem::replace(&mut updated.elements[index], bound[1].value.clone());
+                let previous = std::mem::replace(&mut updated.elements[index], value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`set` requires a mutable vector place"));
                 };
@@ -3205,11 +3746,16 @@ impl MirRuntime {
                         "internal indexed assignment requires index, value, line, and column operands",
                     ));
                 }
-                let line = self.mir_index_from_value(values[2].value.clone())?;
-                let column = self.mir_index_from_value(values[3].value.clone())?;
+                let mut values = values.into_iter();
+                let index_value = values.next().expect("index argument should exist").value;
+                let value = values.next().expect("value argument should exist").value;
+                let line =
+                    self.mir_index_from_value(values.next().expect("line should exist").value)?;
+                let column =
+                    self.mir_index_from_value(values.next().expect("column should exist").value)?;
                 let mut updated = vector;
                 let (supplied_index, index) =
-                    self.mir_vec_index_from_value(values[0].value.clone(), updated.elements.len())?;
+                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
                 let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::at(
                         crate::diag::Span::new(line, column),
@@ -3220,7 +3766,7 @@ impl MirRuntime {
                         ),
                     ));
                 };
-                updated.elements[index] = values[1].value.clone();
+                updated.elements[index] = value;
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "indexed assignment requires a mutable vector place",
@@ -3287,10 +3833,18 @@ impl MirRuntime {
             }
             "insert" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let mut bound = bind_builtin_args(&["index", "value"], values)?.into_iter();
+                let index_value = bound
+                    .next()
+                    .expect("bound Vec.insert index should exist")
+                    .value;
+                let value = bound
+                    .next()
+                    .expect("bound Vec.insert value should exist")
+                    .value;
                 let mut updated = vector;
                 let (supplied_index, index) =
-                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
                 let Some(index) = index.filter(|index| *index <= updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
                         "vector insert index `{}` is out of bounds for length `{}`",
@@ -3298,7 +3852,7 @@ impl MirRuntime {
                         updated.elements.len()
                     )));
                 };
-                updated.elements.insert(index, bound[1].value.clone());
+                updated.elements.insert(index, value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`insert` requires a mutable vector place"));
                 };
@@ -3332,7 +3886,12 @@ impl MirRuntime {
             "extend" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
-                let Value::Vec(other) = bound[0].value.clone() else {
+                let Value::Vec(other) = bound
+                    .into_iter()
+                    .next()
+                    .expect("bound Vec.extend value should exist")
+                    .value
+                else {
                     return Err(Diagnostic::new("`extend` requires another `Vec[T]` value"));
                 };
                 let mut updated = vector;
@@ -3413,21 +3972,21 @@ impl MirRuntime {
             }
             "set" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["key", "value"], values)?;
+                let mut bound = bind_builtin_args(&["key", "value"], values)?.into_iter();
+                let key = bound.next().expect("bound Map.set key should exist").value;
+                let value = bound
+                    .next()
+                    .expect("bound Map.set value should exist")
+                    .value;
                 let mut updated = map;
                 let previous = if let Some(index) = updated
                     .entries
                     .iter()
-                    .position(|(candidate_key, _)| *candidate_key == bound[0].value)
+                    .position(|(candidate_key, _)| *candidate_key == key)
                 {
-                    Some(std::mem::replace(
-                        &mut updated.entries[index].1,
-                        bound[1].value.clone(),
-                    ))
+                    Some(std::mem::replace(&mut updated.entries[index].1, value))
                 } else {
-                    updated
-                        .entries
-                        .push((bound[0].value.clone(), bound[1].value.clone()));
+                    updated.entries.push((key, value));
                     None
                 };
                 let Some(place) = receiver_place else {
@@ -3443,9 +4002,10 @@ impl MirRuntime {
                         "internal map indexed assignment requires key, value, line, and column operands",
                     ));
                 }
+                let mut values = values.into_iter();
                 let mut updated = map;
-                let key = values[0].value.clone();
-                let value = values[1].value.clone();
+                let key = values.next().expect("map key should exist").value;
+                let value = values.next().expect("map value should exist").value;
                 if let Some(index) = updated
                     .entries
                     .iter()
@@ -3549,7 +4109,12 @@ impl MirRuntime {
             "extend" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
-                let Value::Map(other) = bound[0].value.clone() else {
+                let Value::Map(other) = bound
+                    .into_iter()
+                    .next()
+                    .expect("bound Map.extend value should exist")
+                    .value
+                else {
                     return Err(Diagnostic::new(
                         "`extend` requires another `Map[K, V]` value",
                     ));
@@ -3772,16 +4337,16 @@ impl MirRuntime {
             }
             "insert" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["value"], values)?;
+                let value = bind_builtin_args(&["value"], values)?
+                    .into_iter()
+                    .next()
+                    .expect("bound Set.insert value should exist")
+                    .value;
                 let mut updated = set;
-                let inserted = if updated
-                    .elements
-                    .iter()
-                    .any(|candidate| *candidate == bound[0].value)
-                {
+                let inserted = if updated.elements.contains(&value) {
                     false
                 } else {
-                    updated.elements.push(bound[0].value.clone());
+                    updated.elements.push(value);
                     true
                 };
                 let Some(place) = receiver_place else {
@@ -3820,6 +4385,21 @@ impl MirRuntime {
                     .cloned()
                     .map(option_some)
                     .unwrap_or_else(option_none))
+            }
+            "__take_index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                let mut updated = set;
+                let value =
+                    (index < updated.elements.len()).then(|| updated.elements.remove(index));
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "owned set iteration requires its private source place",
+                    ));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(value.map(option_some).unwrap_or_else(option_none))
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported set method `{}`",
@@ -3870,7 +4450,7 @@ impl MirRuntime {
         task: TaskValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "result" => {
@@ -3911,14 +4491,16 @@ impl MirRuntime {
             }
             "result_or" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["default", "timeout"], values)?;
-                let Some(default) = bound.first().map(|arg| arg.value.clone()) else {
-                    return Err(Diagnostic::new(
-                        "internal error: `result_or` should bind a default argument",
-                    ));
-                };
+                let mut bound = bind_builtin_args(&["default", "timeout"], values)?.into_iter();
+                let default = bound
+                    .next()
+                    .expect("bound Task.result_or default should exist")
+                    .value;
+                let timeout_arg = bound
+                    .next()
+                    .expect("bound Task.result_or timeout should exist");
                 let timeout =
-                    expect_optional_timeout(Some(&bound[1].value), "result_or(timeout=...)")?;
+                    expect_optional_timeout(Some(&timeout_arg.value), "result_or(timeout=...)")?;
                 let outcome = if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
                     if self.cancellation.is_cancelled() {
                         TaskWaitStatus::Cancelled
@@ -3939,7 +4521,7 @@ impl MirRuntime {
                         .map_err(timer_error_to_diagnostic)?
                 };
                 Ok(match outcome {
-                    TaskWaitStatus::Ready(result) => result.unwrap_or(default.clone()),
+                    TaskWaitStatus::Ready(result) => result.unwrap_or(default),
                     TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => default,
                 })
             }
@@ -3955,7 +4537,7 @@ impl MirRuntime {
         group: TaskGroupValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "cancel" => {
@@ -4547,7 +5129,7 @@ impl MirRuntime {
         file: FileValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "read_all" => {
@@ -4609,7 +5191,7 @@ impl MirRuntime {
         child: ProcessChildValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "stdin" => {
@@ -4712,7 +5294,7 @@ impl MirRuntime {
         pipe: ProcessPipeValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "read_all" => {
@@ -4813,7 +5395,7 @@ impl MirRuntime {
         completed: ProcessCompletedValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "status" => {
@@ -4865,11 +5447,11 @@ impl MirRuntime {
         supervisor: ProcessSupervisorValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "start" => {
-                let bound = bind_optional_builtin_args(
+                let mut bound = bind_optional_builtin_args(
                     &[
                         "name",
                         "command",
@@ -4885,55 +5467,65 @@ impl MirRuntime {
                     ],
                     evaluate_named_args(args, env)?,
                 )?;
-                let required = |index: usize, label: &str| -> Result<&EvaluatedMirArg> {
-                    bound[index].as_ref().ok_or_else(|| {
-                        Diagnostic::new(format!(
-                            "missing MIR argument `{}` for `start(...)`",
-                            label
-                        ))
-                    })
-                };
-                let name = expect_string_value(&required(0, "name")?.value, "start(...)")?;
-                let command = expect_command_vec(&required(1, "command")?.value, "start(...)")?;
+                let name = expect_owned_string_value(
+                    bound[0]
+                        .take()
+                        .ok_or_else(|| {
+                            Diagnostic::new("missing MIR argument `name` for `start(...)`")
+                        })?
+                        .value,
+                    "start(...)",
+                )?;
+                let command = expect_owned_command_vec(
+                    bound[1]
+                        .take()
+                        .ok_or_else(|| {
+                            Diagnostic::new("missing MIR argument `command` for `start(...)`")
+                        })?
+                        .value,
+                    "start(...)",
+                )?;
                 let cwd = bound[2]
-                    .as_ref()
-                    .map(|argument| expect_optional_string_value(&argument.value, "start(...)"))
+                    .take()
+                    .map(|argument| {
+                        expect_owned_optional_string_value(argument.value, "start(...)")
+                    })
                     .transpose()?
                     .flatten();
-                let env = match &bound[3] {
-                    Some(argument) => expect_headers_map(&argument.value, "start(...)")?,
+                let env = match bound[3].take() {
+                    Some(argument) => expect_owned_headers_map(argument.value, "start(...)")?,
                     None => Vec::new(),
                 };
-                let stdin = match &bound[4] {
+                let stdin = match bound[4].take() {
                     Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
                     None => crate::runtime_value::ProcessStdioConfig::Null,
                 };
-                let stdout = match &bound[5] {
+                let stdout = match bound[5].take() {
                     Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
                     None => crate::runtime_value::ProcessStdioConfig::Inherit,
                 };
-                let stderr = match &bound[6] {
+                let stderr = match bound[6].take() {
                     Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
                     None => crate::runtime_value::ProcessStdioConfig::Inherit,
                 };
-                let restart = match &bound[7] {
+                let restart = match bound[7].take() {
                     Some(argument) => decode_process_restart_policy(&argument.value, "start(...)")?,
                     None => ProcessRestartPolicy::OnFailure,
                 };
-                let backoff = match &bound[8] {
+                let backoff = match bound[8].take() {
                     Some(argument) => match expect_duration_value(&argument.value, "start(...)") {
                         Ok(backoff) => backoff,
                         Err(error) => return Ok(result_err(error)),
                     },
                     None => StdDuration::from_millis(100),
                 };
-                let max_restarts = match &bound[9] {
+                let max_restarts = match bound[9].take() {
                     Some(argument) => {
                         expect_supervisor_max_restarts(&argument.value, "start(...)")?
                     }
                     None => None,
                 };
-                let group = match &bound[10] {
+                let group = match bound[10].take() {
                     Some(argument) => expect_bool_value(&argument.value, "start(...)")?,
                     None => true,
                 };
@@ -5020,7 +5612,7 @@ impl MirRuntime {
         listener: TcpListenerValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "accept" => {
@@ -5058,7 +5650,7 @@ impl MirRuntime {
         stream: TcpStreamValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "read_all" => {
@@ -5202,7 +5794,7 @@ impl MirRuntime {
         socket: UdpSocketValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "send_text" => {
@@ -5286,7 +5878,7 @@ impl MirRuntime {
         datagram: UdpDatagramValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
         match field {
@@ -5308,7 +5900,7 @@ impl MirRuntime {
         listener: HttpListenerValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "accept" => {
@@ -5339,7 +5931,7 @@ impl MirRuntime {
         exchange: HttpExchangeValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "method" => {
@@ -5370,9 +5962,20 @@ impl MirRuntime {
                     &["status", "text", "headers"],
                     evaluate_named_args(args, env)?,
                 )?;
-                let status = expect_i32_value(&bound[0].value, "respond_text(...)")?;
-                let text = expect_string_value(&bound[1].value, "respond_text(...)")?;
-                let headers = expect_headers_map(&bound[2].value, "respond_text(...)")?;
+                let mut bound = bound.into_iter();
+                let status_arg = bound.next().expect("HTTP status argument should exist");
+                let status = expect_i32_value(&status_arg.value, "respond_text(...)")?;
+                let text = expect_owned_string_value(
+                    bound.next().expect("HTTP text argument should exist").value,
+                    "respond_text(...)",
+                )?;
+                let headers = expect_owned_headers_map(
+                    bound
+                        .next()
+                        .expect("HTTP headers argument should exist")
+                        .value,
+                    "respond_text(...)",
+                )?;
                 match exchange.respond_text(status, &text, headers) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5383,9 +5986,23 @@ impl MirRuntime {
                     &["status", "bytes", "headers"],
                     evaluate_named_args(args, env)?,
                 )?;
-                let status = expect_i32_value(&bound[0].value, "respond_bytes(...)")?;
-                let bytes = expect_bytes_value(&bound[1].value, "respond_bytes(...)")?;
-                let headers = expect_headers_map(&bound[2].value, "respond_bytes(...)")?;
+                let mut bound = bound.into_iter();
+                let status_arg = bound.next().expect("HTTP status argument should exist");
+                let status = expect_i32_value(&status_arg.value, "respond_bytes(...)")?;
+                let bytes = expect_owned_bytes_value(
+                    bound
+                        .next()
+                        .expect("HTTP bytes argument should exist")
+                        .value,
+                    "respond_bytes(...)",
+                )?;
+                let headers = expect_owned_headers_map(
+                    bound
+                        .next()
+                        .expect("HTTP headers argument should exist")
+                        .value,
+                    "respond_bytes(...)",
+                )?;
                 match exchange.respond_bytes(status, &bytes, headers) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -5403,7 +6020,7 @@ impl MirRuntime {
         response: HttpResponseValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
         match field {
@@ -5429,7 +6046,7 @@ impl MirRuntime {
         listener: WebSocketListenerValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "accept" => {
@@ -5456,7 +6073,7 @@ impl MirRuntime {
         socket: WebSocketValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "send_text" => {
@@ -5517,7 +6134,7 @@ impl MirRuntime {
         listener: UnixListenerValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "accept" => {
@@ -5544,7 +6161,7 @@ impl MirRuntime {
         stream: UnixStreamValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "read_line" => {
@@ -5598,7 +6215,7 @@ impl MirRuntime {
         listener: TlsListenerValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "accept" => {
@@ -5629,7 +6246,7 @@ impl MirRuntime {
         stream: TlsStreamValue,
         field: &str,
         args: &[MirArg],
-        env: &Env,
+        env: &mut Env,
     ) -> Result<Value> {
         match field {
             "read_line" => {
@@ -5815,12 +6432,22 @@ impl MirRuntime {
     fn evaluate_operand(&self, operand: &Operand, env: &Env) -> Result<Value> {
         match operand {
             Operand::Place(place) => env.read_place(place),
+            Operand::MovePlace(place) => Err(Diagnostic::new(format!(
+                "consuming MIR operand `{place}` reached a non-consuming context"
+            ))),
             Operand::Int(value) => Ok(Value::Int(IntegerValue::from_literal(*value))),
             Operand::Duration(value) => Ok(Value::Duration(*value)),
             Operand::Float(value) => Ok(Value::Float(*value)),
             Operand::Bool(value) => Ok(Value::Bool(*value)),
             Operand::String(value) => Ok(Value::String(value.clone())),
             Operand::Unit => Ok(Value::Unit),
+        }
+    }
+
+    fn evaluate_owned_operand(&self, operand: &Operand, env: &mut Env) -> Result<Value> {
+        match operand {
+            Operand::MovePlace(place) => env.take_place(place),
+            _ => self.evaluate_operand(operand, env),
         }
     }
 
@@ -6003,11 +6630,11 @@ enum BlockOutcome {
     Goto(String),
 }
 
-fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg>> {
+fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMirArg>> {
     args.iter()
         .map(|arg| {
             let ty = match &arg.value {
-                Operand::Place(place) => env.place_type(place).cloned(),
+                Operand::Place(place) | Operand::MovePlace(place) => env.place_type(place).cloned(),
                 Operand::Int(_) => Some(Type::named("int64")),
                 Operand::Duration(_) => Some(Type::named("Duration")),
                 Operand::Float(_) => Some(Type::named("float64")),
@@ -6017,6 +6644,7 @@ fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg
             };
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
+                Operand::MovePlace(place) => env.take_place(place)?,
                 Operand::Int(value) => Value::Int(IntegerValue::from_literal(*value)),
                 Operand::Duration(value) => Value::Duration(*value),
                 Operand::Float(value) => Value::Float(*value),
@@ -6148,12 +6776,38 @@ fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     }
 }
 
+fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
+    match value {
+        Value::String(text) => Ok(text),
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `String`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
 fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
     match value {
         Value::Vec(vector) if vector.element_type == Type::named("String") => vector
             .elements
             .iter()
             .map(|element| expect_string_value(element, label))
+            .collect(),
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Vec[String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_owned_command_vec(value: Value, label: &str) -> Result<Vec<String>> {
+    match value {
+        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+            .elements
+            .into_iter()
+            .map(|element| expect_owned_string_value(element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
             "`{}` expects `Vec[String]`, found `{}`",
@@ -6175,6 +6829,38 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
         {
             let mut bytes = Vec::with_capacity(vector.elements.len());
             for element in &vector.elements {
+                let Value::Int(value) = element else {
+                    unreachable!()
+                };
+                let byte = value
+                    .as_i128()
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                let byte = u8::try_from(byte)
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                bytes.push(byte);
+            }
+            Ok(bytes)
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Vec[uint8]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_owned_bytes_value(value: Value, label: &str) -> Result<Vec<u8>> {
+    match value {
+        Value::Vec(vector)
+            if (vector.element_type == Type::named("uint8")
+                || vector.element_type == Type::named("Unknown"))
+                && vector
+                    .elements
+                    .iter()
+                    .all(|element| matches!(element, Value::Int(_))) =>
+        {
+            let mut bytes = Vec::with_capacity(vector.elements.len());
+            for element in vector.elements {
                 let Value::Int(value) = element else {
                     unreachable!()
                 };
@@ -6224,6 +6910,36 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<Str
                     label
                 ))),
             }
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Option[String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Option<String>> {
+    match value {
+        Value::Unit => Ok(None),
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "None" =>
+        {
+            Ok(None)
+        }
+        Value::EnumVariant(mut variant)
+            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+        {
+            if variant.payloads.len() != 1 {
+                return Err(Diagnostic::new(format!(
+                    "`{}` expects `Option[String]`, found malformed option payload",
+                    label
+                )));
+            }
+            Ok(Some(expect_owned_string_value(
+                variant.payloads.pop().expect("one payload remains"),
+                label,
+            )?))
         }
         other => Err(Diagnostic::new(format!(
             "`{}` expects `Option[String]`, found `{}`",
@@ -6394,6 +7110,30 @@ fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)
                 headers.push((
                     expect_string_value(key, label)?,
                     expect_string_value(value, label)?,
+                ));
+            }
+            Ok(headers)
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Map[String, String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, String)>> {
+    match value {
+        Value::Map(map)
+            if (map.key_type == Type::named("String")
+                && map.value_type == Type::named("String"))
+                || map.entries.is_empty() =>
+        {
+            let mut headers = Vec::with_capacity(map.entries.len());
+            for (key, value) in map.entries {
+                headers.push((
+                    expect_owned_string_value(key, label)?,
+                    expect_owned_string_value(value, label)?,
                 ));
             }
             Ok(headers)

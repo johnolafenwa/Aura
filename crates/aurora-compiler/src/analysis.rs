@@ -672,12 +672,13 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
+            let enum_name = self.canonical_enum_identity(base_name, enum_info);
             for (name, variant) in &enum_info.variants {
                 completions.push(AnalysisCompletion {
                     name: name.clone(),
                     kind: "variant".to_string(),
                     detail: if variant.payloads.is_empty() {
-                        format!("{} -> {}", name, base_name)
+                        format!("{} -> {}", name, enum_name)
                     } else {
                         format!(
                             "{}({}) -> {}",
@@ -688,7 +689,7 @@ impl<'a> AnalysisBuilder<'a> {
                                 .map(format_enum_variant_payload)
                                 .collect::<Vec<_>>()
                                 .join(", "),
-                            enum_info.decl.name
+                            enum_name
                         )
                     },
                 });
@@ -948,9 +949,33 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn resolve_named_enum_info(&self, name: &str) -> Option<&EnumInfo> {
         if let Some((module_path, item_name)) = name.rsplit_once('.') {
-            return self.module_namespace(module_path)?.enums.get(item_name);
+            return self
+                .program
+                .module_registry
+                .get(module_path)
+                .or_else(|| self.module_namespace(module_path))
+                .and_then(|namespace| {
+                    namespace
+                        .enums
+                        .get(item_name)
+                        .or_else(|| namespace.all_enums.get(item_name))
+                });
         }
         self.program.enums.get(name)
+    }
+
+    fn canonical_enum_identity(&self, surface_name: &str, enum_info: &EnumInfo) -> String {
+        self.program
+            .canonical_type_names
+            .get(surface_name)
+            .cloned()
+            .unwrap_or_else(|| {
+                if surface_name.contains('.') || enum_info.module_name == self.program.module_name {
+                    surface_name.to_string()
+                } else {
+                    format!("{}.{}", enum_info.module_name, enum_info.decl.name)
+                }
+            })
     }
 
     fn resolve_match_variant_enum(&self, enum_name: &str) -> Option<ResolvedSymbol> {
@@ -979,7 +1004,9 @@ impl<'a> AnalysisBuilder<'a> {
             _ => self
                 .resolve_named_enum_info(enum_name)
                 .map(|enum_info| ResolvedSymbol {
-                    hover: format_enum_hover(enum_info),
+                    hover: format_enum_hover_named(
+                        &self.canonical_enum_identity(enum_name, enum_info),
+                    ),
                     definition: Some(self.enum_definition(enum_info)),
                 }),
         }
@@ -1027,6 +1054,7 @@ impl<'a> AnalysisBuilder<'a> {
             .as_deref()
             .or_else(|| scrutinee_type.map(base_type_name))?;
         let enum_info = self.resolve_named_enum_info(enum_name)?;
+        let canonical_enum_name = self.canonical_enum_identity(enum_name, enum_info);
         let variant_decl = enum_info
             .decl
             .variants
@@ -1035,7 +1063,7 @@ impl<'a> AnalysisBuilder<'a> {
         let variant_info = enum_info.variants.get(&variant.variant_name)?;
         Some(ResolvedSymbol {
             hover: format_variant_hover_payloads(
-                &enum_info.decl.name,
+                &canonical_enum_name,
                 &variant.variant_name,
                 variant_info
                     .payloads
@@ -1393,7 +1421,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(enum_info) = self.program.enums.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_enum_hover(enum_info),
+                hover: format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
                 definition: Some(self.enum_definition(enum_info)),
             });
         }
@@ -1495,13 +1523,11 @@ impl<'a> AnalysisBuilder<'a> {
                 });
             }
             if let Some(enum_info) = namespace.enums.get(field) {
+                let enum_name = format!("{}.{}", namespace.path, enum_info.decl.name);
                 return Some(ResolvedMember {
-                    hover: format_enum_hover(enum_info),
+                    hover: format_enum_hover_named(&enum_name),
                     definition: Some(self.enum_definition(enum_info)),
-                    ty: Some(Type::named(format!(
-                        "{}.{}",
-                        namespace.path, enum_info.decl.name
-                    ))),
+                    ty: Some(Type::named(enum_name)),
                 });
             }
             if let Some(trait_info) = namespace.traits.get(field) {
@@ -1591,9 +1617,10 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
+                let enum_name = self.canonical_enum_identity(base_name, enum_info);
                 return Some(ResolvedMember {
                     hover: format_variant_hover_payloads(
-                        &enum_info.decl.name,
+                        &enum_name,
                         field,
                         variant_info
                             .payloads
@@ -1605,7 +1632,7 @@ impl<'a> AnalysisBuilder<'a> {
                         variant_info.span,
                         field.len(),
                     )),
-                    ty: Some(Type::named(base_name)),
+                    ty: Some(Type::named(enum_name)),
                 });
             }
         }
@@ -2387,7 +2414,16 @@ impl<'a> AnalysisBuilder<'a> {
                             .map(|class_info| {
                                 self.analysis_class_type(name, class_info, args.clone())
                             })
-                            .unwrap_or_else(|| Type::Named(name.clone(), args)),
+                            .unwrap_or_else(|| {
+                                Type::Named(
+                                    self.program
+                                        .canonical_type_names
+                                        .get(name)
+                                        .cloned()
+                                        .unwrap_or_else(|| name.clone()),
+                                    args,
+                                )
+                            }),
                     )
                 }
                 _ => self.infer_expr_type(expr, scope),
@@ -2434,7 +2470,13 @@ impl<'a> AnalysisBuilder<'a> {
                             | "TaskGroup"
                     )
                 {
-                    return Some(Type::named(name));
+                    return Some(Type::named(
+                        self.program
+                            .canonical_type_names
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| name.clone()),
+                    ));
                 }
                 if let Some(function) = self.program.functions.get(name) {
                     return Some(function.signature.return_type.clone());
@@ -3144,8 +3186,8 @@ fn format_class_detail(class_info: &ClassInfo) -> String {
     format!("{}({})", class_info.decl.name, fields)
 }
 
-fn format_enum_hover(enum_info: &EnumInfo) -> String {
-    format!("```aurora\nenum {}\n```", enum_info.decl.name)
+fn format_enum_hover_named(enum_name: &str) -> String {
+    format!("```aurora\nenum {enum_name}\n```")
 }
 
 fn builtin_enum_hover(detail: &str, docs: &str) -> String {

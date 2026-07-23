@@ -18,7 +18,8 @@ Aurora already has useful foundations for that direction:
 - ownership, borrowing, cleanup, and package support
 - shell-free process execution, pipes, timeouts, process groups, and supervisors
 - program arguments, environment, paths, working-directory access, and clocks
-- typed `Map[String, String]` JSON/TOML codecs
+- recursive dynamic JSON values with typed parse errors and deterministic
+  dumping, plus typed `Map[String, String]` JSON/TOML compatibility codecs
 - structured log/trace records and process-local counters
 - certificate-validated HTTPS plus chunked HTTP framing
 
@@ -63,7 +64,7 @@ Aurora now has a usable first control-plane boundary, but it is still missing th
 
 - no maintained host-side dense-array surface for local numeric work
 - no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
-- no nested/schema-derived class and enum codecs or binary serialization format
+- no schema-derived class and enum codecs or binary serialization format
 - no external metrics exporter, scoped trace spans, or profiler integration
 - no public tensor or device handle model for the later accelerator-aware path
 
@@ -208,7 +209,8 @@ Aurora needs a maintained serialization story for service requests, manifests, e
 
 ### Required language/runtime surface
 
-- `JsonValue`-like dynamic tree support or equivalent codecs
+- implemented: recursive `json.Value`, typed `json.Error`, exact accessors,
+  deterministic dumping, and fixed resource limits
 - schema-derived encoding and decoding for Aurora classes and enums
 - streaming encoders and decoders
 - typed error reporting for schema mismatches
@@ -425,10 +427,14 @@ Deliverables:
 - implemented: scheduler-aware child I/O
 - implemented: structured JSON log and trace events
 - implemented: process-local counter metrics baseline
+- implemented: recursive JSON values, typed parse failures, deterministic
+  compact/pretty dumping, and exact accessors
 - implemented: typed string-map JSON/TOML codecs
 - implemented: args/environment/path/time host APIs and HTTPS/chunked HTTP
 
-Follow-on depth within this phase includes nested/schema-derived codecs, metrics exporters, scoped spans, profiling, redirect/pooling HTTP behavior, and higher-level custom-CA HTTP configuration.
+Follow-on depth within this phase includes schema-derived codecs, streaming
+serialization, metrics exporters, scoped spans, profiling, redirect/pooling
+HTTP behavior, and higher-level custom-CA HTTP configuration.
 
 Success criteria:
 

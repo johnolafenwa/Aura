@@ -1,5 +1,5 @@
 use super::{builtin_imported_binding, builtin_module_namespace, host_builtin_metadata};
-use crate::ast::ReceiverKind;
+use crate::ast::{ExprKind, ParamMode, ReceiverKind};
 use crate::diag::Span;
 use crate::sema::ImportedBinding;
 
@@ -172,4 +172,221 @@ fn random_namespace_exposes_one_opaque_rng_type_and_secure_functions() {
             .expect("Rng should import"),
         ImportedBinding::Class(_)
     ));
+}
+
+#[test]
+fn json_namespace_exposes_dynamic_tree_contract() {
+    use crate::sema::Type;
+
+    let namespace =
+        builtin_module_namespace(&["json".to_string()]).expect("json should be a builtin module");
+
+    let value = namespace.enums.get("Value").expect("json.Value enum");
+    assert_eq!(
+        value
+            .decl
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Null", "Bool", "Int", "Float", "String", "Array", "Object"]
+    );
+    let value_payloads = [
+        ("Null", Vec::new()),
+        ("Bool", vec![Type::named("bool")]),
+        ("Int", vec![Type::named("int64")]),
+        ("Float", vec![Type::named("float64")]),
+        ("String", vec![Type::named("String")]),
+        (
+            "Array",
+            vec![Type::Named(
+                "Vec".to_string(),
+                vec![Type::named("json.Value")],
+            )],
+        ),
+        (
+            "Object",
+            vec![Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("json.Value")],
+            )],
+        ),
+    ];
+    for (variant, expected) in value_payloads {
+        let actual = value.variants[variant]
+            .payloads
+            .iter()
+            .map(|payload| payload.ty.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "json.Value.{variant} payloads");
+        assert!(
+            value.variants[variant]
+                .payloads
+                .iter()
+                .all(|payload| payload.name.is_none()),
+            "json.Value tuple variants must use positional payloads"
+        );
+    }
+
+    let error = namespace.enums.get("Error").expect("json.Error enum");
+    assert_eq!(
+        error
+            .decl
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Syntax",
+            "NumberOutOfRange",
+            "NestingTooDeep",
+            "InputTooLarge"
+        ]
+    );
+    let error_payloads = [
+        (
+            "Syntax",
+            vec![
+                ("message", Type::named("String")),
+                ("line", Type::named("int32")),
+                ("column", Type::named("int32")),
+            ],
+        ),
+        (
+            "NumberOutOfRange",
+            vec![
+                ("line", Type::named("int32")),
+                ("column", Type::named("int32")),
+            ],
+        ),
+        (
+            "NestingTooDeep",
+            vec![
+                ("limit", Type::named("int32")),
+                ("line", Type::named("int32")),
+                ("column", Type::named("int32")),
+            ],
+        ),
+        (
+            "InputTooLarge",
+            vec![
+                ("actual_bytes", Type::named("int64")),
+                ("limit_bytes", Type::named("int64")),
+            ],
+        ),
+    ];
+    for (variant, expected) in error_payloads {
+        let actual = error.variants[variant]
+            .payloads
+            .iter()
+            .map(|payload| {
+                (
+                    payload.name.as_deref().expect("named json.Error payload"),
+                    payload.ty.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "json.Error.{variant} payloads");
+        assert!(error.variants[variant].named_payloads);
+    }
+
+    let parse = &namespace.functions["parse"];
+    assert_eq!(parse.signature.params, vec![Type::named("String")]);
+    assert_eq!(parse.decl.params[0].mode, ParamMode::Default);
+    assert_eq!(parse.signature.param_passings, vec![ReceiverKind::Borrow]);
+    assert_eq!(
+        parse.signature.return_type,
+        Type::Named(
+            "Result".to_string(),
+            vec![Type::named("json.Value"), Type::named("json.Error")]
+        )
+    );
+
+    let dumps = &namespace.functions["dumps"];
+    assert_eq!(
+        dumps.signature.params,
+        vec![
+            Type::named("json.Value"),
+            Type::Named("Option".to_string(), vec![Type::named("int64")])
+        ]
+    );
+    assert_eq!(
+        dumps.signature.param_passings,
+        vec![ReceiverKind::Borrow, ReceiverKind::Value]
+    );
+    assert_eq!(dumps.decl.params[0].mode, ParamMode::Default);
+    assert!(matches!(
+        dumps.decl.params[1]
+            .default
+            .as_ref()
+            .map(|default| &default.kind),
+        Some(ExprKind::Name(name)) if name == "None"
+    ));
+    assert_eq!(dumps.signature.return_type, Type::named("String"));
+    assert!(
+        !host_builtin_metadata("json::dumps")
+            .expect("json.dumps host metadata")
+            .params[1]
+            .required
+    );
+
+    for (name, return_type) in [
+        ("is_null", Type::named("bool")),
+        (
+            "as_bool",
+            Type::Named("Option".to_string(), vec![Type::named("bool")]),
+        ),
+        (
+            "as_int",
+            Type::Named("Option".to_string(), vec![Type::named("int64")]),
+        ),
+        (
+            "as_float",
+            Type::Named("Option".to_string(), vec![Type::named("float64")]),
+        ),
+    ] {
+        let function = &namespace.functions[name];
+        assert_eq!(function.decl.params[0].mode, ParamMode::Borrow, "{name}");
+        assert_eq!(
+            function.signature.param_passings,
+            vec![ReceiverKind::Borrow],
+            "{name}"
+        );
+        assert_eq!(function.signature.return_type, return_type, "{name}");
+    }
+
+    for (name, inner_type) in [
+        ("into_string", Type::named("String")),
+        (
+            "into_array",
+            Type::Named("Vec".to_string(), vec![Type::named("json.Value")]),
+        ),
+        (
+            "into_object",
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("json.Value")],
+            ),
+        ),
+    ] {
+        let function = &namespace.functions[name];
+        assert_eq!(function.decl.params[0].mode, ParamMode::Own, "{name}");
+        assert_eq!(
+            function.signature.param_passings,
+            vec![ReceiverKind::Value],
+            "{name}"
+        );
+        assert_eq!(
+            function.signature.return_type,
+            Type::Named("Option".to_string(), vec![inner_type]),
+            "{name}"
+        );
+    }
+
+    for legacy in ["is_valid", "stringify_map", "parse_string_map"] {
+        assert!(
+            namespace.functions.contains_key(legacy),
+            "legacy json helper {legacy} must remain available"
+        );
+    }
 }

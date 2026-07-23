@@ -7,7 +7,7 @@ use super::{
     render_runtime_diagnostic, runtime_span, value_mut, value_ref, value_type_name,
     with_cancellation_scope, OpaqueValue,
 };
-use crate::ast::{BinaryOp, UnaryOp};
+use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
@@ -25,7 +25,7 @@ use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::panic;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -285,12 +285,103 @@ fn close_via_direct(value: Value) {
     unsafe { release_value(ptr) };
 }
 
+fn direct_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
+    let buffer = super::aurora_direct_arg_buffer_new(arguments.len() as i64);
+    for (index, argument) in arguments.iter().copied().enumerate() {
+        super::aurora_direct_arg_buffer_store(buffer, index as i64, argument as i64);
+    }
+    super::aurora_direct_host_builtin(name.as_ptr(), name.len(), buffer, arguments.len() as i64)
+}
+
+fn direct_json_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
+    let clone_count = super::direct_value_clone_count();
+    let result = direct_host_builtin_call(name, arguments);
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "{name} must not clone an opaque argument before JSON evaluation"
+    );
+    result
+}
+
+fn direct_json_host_builtin_error(
+    name: &str,
+    arguments: Vec<Option<Value>>,
+) -> crate::diag::Diagnostic {
+    let pointers = arguments
+        .into_iter()
+        .map(|value| value.map_or(std::ptr::null_mut(), boxed_value))
+        .collect::<Vec<_>>();
+    let addresses = pointers
+        .iter()
+        .map(|pointer| *pointer as usize)
+        .collect::<Vec<_>>();
+    let name = name.to_string();
+    let result = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let arguments = addresses
+                .iter()
+                .map(|address| *address as *mut OpaqueValue)
+                .collect::<Vec<_>>();
+            let unexpected = direct_host_builtin_call(&name, &arguments);
+            unsafe {
+                release_value(unexpected);
+            }
+            Ok(Value::Unit)
+        })
+    });
+    for pointer in pointers.into_iter().filter(|pointer| !pointer.is_null()) {
+        unsafe {
+            release_value(pointer);
+        }
+    }
+    result.expect_err("the malformed direct JSON host call should fail")
+}
+
+fn direct_json_value(value: crate::json_codec::JsonValue) -> *mut OpaqueValue {
+    boxed_value(
+        crate::runtime_value::json_value_to_runtime(value)
+            .expect("test JSON values should fit the runtime materialization budget"),
+    )
+}
+
+fn direct_option_int(value: Option<i64>) -> *mut OpaqueValue {
+    boxed_value(match value {
+        Some(value) => crate::runtime_value::option_some(Value::Int(IntegerValue::from_i64(value))),
+        None => crate::runtime_value::option_none(),
+    })
+}
+
 #[test]
 fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     let empty_args = super::aurora_direct_arg_buffer_new(0);
     let value =
         super::aurora_direct_host_builtin(b"sys::args".as_ptr(), "sys::args".len(), empty_args, 0);
     assert!(matches!(unsafe { take_value(value) }, Value::Vec(_)));
+
+    let base = string_value("root");
+    let child = string_value("leaf");
+    let join_args = super::aurora_direct_arg_buffer_new(2);
+    super::aurora_direct_arg_buffer_store(join_args, 0, base as i64);
+    super::aurora_direct_arg_buffer_store(join_args, 1, child as i64);
+    let joined =
+        super::aurora_direct_host_builtin(b"path::join".as_ptr(), "path::join".len(), join_args, 2);
+    assert_eq!(
+        unsafe { take_value(joined) },
+        Value::String(format!("root{}leaf", std::path::MAIN_SEPARATOR))
+    );
+    unsafe {
+        super::with_value(base, |value| {
+            assert_eq!(value, &Value::String("root".to_string()))
+        });
+        super::with_value(child, |value| {
+            assert_eq!(value, &Value::String("leaf".to_string()))
+        });
+        release_value(base);
+        release_value(child);
+        release_value(joined);
+        release_value(value);
+    }
 
     let unknown = run_lightweight_root_task(|| {
         super::with_task_runtime_error_capture(|| {
@@ -324,13 +415,550 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
         .contains("invalid host builtin argument count"));
 }
 
-fn capture_runtime_error_message(f: impl FnOnce() + panic::UnwindSafe) -> String {
+#[test]
+fn direct_json_arg_buffer_reports_metadata_and_storage_contract_violations() {
+    fn assert_au4001(error: Diagnostic, message: &str) {
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, message);
+    }
+
+    let empty = super::DirectJsonArgBuffer {
+        handles: Vec::new(),
+    };
+    assert_au4001(
+        empty
+            .validate("json::missing")
+            .expect_err("unknown dynamic JSON builtins must be rejected"),
+        "unknown dynamic JSON host builtin `json::missing`",
+    );
+    assert_au4001(
+        empty
+            .validate("json::parse")
+            .expect_err("metadata arity must match the stored argument count"),
+        "`json::parse` expects 1 arguments, found 0",
+    );
+    assert_au4001(
+        empty
+            .handle("json::missing", 0, ReceiverKind::Borrow)
+            .expect_err("unknown metadata cannot supply an argument handle"),
+        "unknown dynamic JSON host builtin `json::missing`",
+    );
+    assert_au4001(
+        empty
+            .handle("json::parse", 1, ReceiverKind::Borrow)
+            .expect_err("argument indexes beyond metadata must be rejected"),
+        "`json::parse` has no argument 2",
+    );
+    assert_au4001(
+        empty
+            .handle("json::parse", 0, ReceiverKind::Borrow)
+            .expect_err("metadata without matching storage must be rejected"),
+        "`json::parse` is missing argument 1",
+    );
+
+    let null = super::DirectJsonArgBuffer { handles: vec![0] };
+    assert_au4001(
+        null.handle("json::parse", 0, ReceiverKind::Borrow)
+            .expect_err("null opaque handles must be rejected"),
+        "`json::parse` received a null argument 1",
+    );
+
+    let passing_mismatch = super::DirectJsonArgBuffer {
+        handles: vec![boxed_value(Value::String("{}".to_string())) as i64],
+    };
+    assert_au4001(
+        passing_mismatch
+            .handle("json::parse", 0, ReceiverKind::Value)
+            .expect_err("the runtime must detect compiler/runtime passing-mode drift"),
+        "dynamic JSON host ABI expected `json::parse` argument `text` to use Value passing, found Borrow",
+    );
+}
+
+#[test]
+fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
+    fn assert_au4001(error: Diagnostic, message: &str) {
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, message);
+    }
+    fn json_variant(variant_name: &str, payloads: Vec<Value>) -> Value {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".to_string(),
+            variant_name: variant_name.to_string(),
+            payloads,
+        })
+    }
+
+    assert_au4001(
+        direct_json_host_builtin_error("json::parse", vec![]),
+        "`json::parse` expects 1 arguments, found 0",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error("json::parse", vec![None]),
+        "`json::parse` received a null argument 1",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error("json::parse", vec![Some(Value::Bool(true))]),
+        "`json::parse` expects argument 1 to be `String`",
+    );
+
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::dumps",
+            vec![
+                Some(json_variant("Null", Vec::new())),
+                Some(Value::Bool(false)),
+            ],
+        ),
+        "`json::dumps` expects `indent` to be `Option[int64]`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::dumps",
+            vec![
+                Some(json_variant("Null", Vec::new())),
+                Some(crate::runtime_value::option_some(Value::String(
+                    "two".to_string(),
+                ))),
+            ],
+        ),
+        "`json::dumps` expects `indent` to be `Option[int64]`",
+    );
+
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::is_null",
+            vec![Some(json_variant("Null", vec![Value::Unit]))],
+        ),
+        "malformed runtime `json.Value.Null` payload in `json::is_null`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::as_bool",
+            vec![Some(Value::String("not-json".to_string()))],
+        ),
+        "`json::as_bool` expected a runtime `json.Value`, found `not-json`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::as_bool",
+            vec![Some(json_variant("Bool", Vec::new()))],
+        ),
+        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::as_bool",
+            vec![Some(json_variant(
+                "Bool",
+                vec![Value::Int(IntegerValue::from_i64(1))],
+            ))],
+        ),
+        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::as_float",
+            vec![Some(json_variant("Float", vec![Value::Bool(true)]))],
+        ),
+        "malformed runtime `json.Value.Float` payload in `json::as_float`",
+    );
+
+    assert_au4001(
+        direct_json_host_builtin_error("json::into_string", vec![Some(Value::Bool(true))]),
+        "`json::into_string` expected a runtime `json.Value`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::into_string",
+            vec![Some(Value::EnumVariant(EnumVariantValue {
+                enum_name: "Other".to_string(),
+                variant_name: "String".to_string(),
+                payloads: vec![Value::String("value".to_string())],
+            }))],
+        ),
+        "`json::into_string` expected enum `json.Value`, found `Other`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::into_string",
+            vec![Some(json_variant("String", Vec::new()))],
+        ),
+        "malformed runtime `json.Value.String` payload in `json::into_string`",
+    );
+    assert_au4001(
+        direct_json_host_builtin_error(
+            "json::into_string",
+            vec![Some(json_variant("String", vec![Value::Bool(true)]))],
+        ),
+        "malformed runtime `json.Value.String` payload in `json::into_string`",
+    );
+}
+
+#[test]
+fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_still_consume() {
+    use crate::json_codec::JsonValue;
+
+    for name in ["json::as_bool", "json::as_float"] {
+        let source = direct_json_value(JsonValue::Int(7));
+        let result = direct_json_host_builtin_call(name, &[source]);
+        expect_option_none(result);
+        unsafe {
+            super::with_value(source, |value| {
+                assert!(
+                    !matches!(value, Value::Unit),
+                    "{name} must preserve a borrowed value when returning None"
+                );
+            });
+            release_value(source);
+            release_value(result);
+        }
+    }
+
+    for name in ["json::into_string", "json::into_array", "json::into_object"] {
+        let source = direct_json_value(JsonValue::Null);
+        let result = direct_json_host_builtin_call(name, &[source]);
+        expect_option_none(result);
+        unsafe {
+            super::with_value(source, |value| {
+                assert!(
+                    matches!(value, Value::Unit),
+                    "{name} must consume its owned value even when returning None"
+                );
+            });
+            release_value(source);
+            release_value(result);
+        }
+    }
+}
+
+#[test]
+fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
+    use crate::json_codec::JsonValue;
+
+    let parse_source = boxed_value(Value::String(
+        r#"{"z":1.0,"items":[true,null,"x"]}"#.to_string(),
+    ));
+    let parse_source_allocation = unsafe {
+        super::with_value(parse_source, |value| match value {
+            Value::String(value) => value.as_ptr(),
+            other => panic!("expected parse source String, found {other:?}"),
+        })
+    };
+    let parsed = direct_json_host_builtin_call("json::parse", &[parse_source]);
+    let parsed_value = expect_result_ok_payload(parsed);
+    assert!(matches!(
+        parsed_value,
+        Value::EnumVariant(ref variant)
+            if variant.enum_name == "json.Value" && variant.variant_name == "Object"
+    ));
+    unsafe {
+        super::with_value(parse_source, |value| match value {
+            Value::String(value) => {
+                assert_eq!(value.as_ptr(), parse_source_allocation);
+                assert_eq!(value, r#"{"z":1.0,"items":[true,null,"x"]}"#);
+            }
+            other => panic!("borrowed json.parse source changed to {other:?}"),
+        });
+    }
+
+    let dump_source = direct_json_value(JsonValue::object(vec![
+        ("z".to_string(), JsonValue::Int(1)),
+        (
+            "items".to_string(),
+            JsonValue::Array(vec![JsonValue::Bool(true), JsonValue::Null]),
+        ),
+    ]));
+    let dump_object_allocation = unsafe {
+        super::with_value(dump_source, |value| match value {
+            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+                [Value::Map(value)] => value.entries.as_ptr(),
+                other => panic!("expected json.Value.Object payload, found {other:?}"),
+            },
+            other => panic!("expected json.Value.Object, found {other:?}"),
+        })
+    };
+    let indent = direct_option_int(None);
+    let dumped = direct_json_host_builtin_call("json::dumps", &[dump_source, indent]);
+    assert_eq!(
+        unsafe { take_value(dumped) },
+        Value::String(r#"{"items":[true,null],"z":1}"#.to_string())
+    );
+    unsafe {
+        super::with_value(dump_source, |value| match value {
+            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+                [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), dump_object_allocation),
+                other => panic!("borrowed dump payload changed to {other:?}"),
+            },
+            other => panic!("borrowed json.dumps source changed to {other:?}"),
+        });
+        super::with_value(indent, |value| {
+            assert_eq!(
+                value.render(),
+                "Option.None",
+                "copy-valued indent should remain usable"
+            )
+        });
+    }
+
+    let null = direct_json_value(JsonValue::Null);
+    let is_null = direct_json_host_builtin_call("json::is_null", &[null]);
+    assert_eq!(unsafe { take_value(is_null) }, Value::Bool(true));
+    unsafe {
+        super::with_value(null, |value| {
+            assert!(
+                matches!(
+                    value,
+                    Value::EnumVariant(variant)
+                        if variant.enum_name == "json.Value"
+                            && variant.variant_name == "Null"
+                ),
+                "json.is_null must preserve its borrowed argument"
+            )
+        });
+    }
+
+    for (name, input, expected) in [
+        ("json::as_bool", JsonValue::Bool(true), "Option.Some(true)"),
+        ("json::as_int", JsonValue::Int(7), "Option.Some(7)"),
+        ("json::as_float", JsonValue::Float(1.5), "Option.Some(1.5)"),
+    ] {
+        let source = direct_json_value(input);
+        let output = direct_json_host_builtin_call(name, &[source]);
+        assert_eq!(unsafe { take_value(output) }.render(), expected);
+        unsafe {
+            super::with_value(source, |value| {
+                assert!(
+                    !matches!(value, Value::Unit),
+                    "{name} must preserve its borrowed argument"
+                )
+            });
+            release_value(source);
+            release_value(output);
+        }
+    }
+
+    let owned_string = direct_json_value(JsonValue::String("aurora".to_string()));
+    let string_allocation = unsafe {
+        super::with_value(owned_string, |value| match value {
+            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+                [Value::String(value)] => value.as_ptr(),
+                other => panic!("expected json.Value.String payload, found {other:?}"),
+            },
+            other => panic!("expected json.Value.String, found {other:?}"),
+        })
+    };
+    let extracted_string = direct_json_host_builtin_call("json::into_string", &[owned_string]);
+    unsafe {
+        super::with_value(extracted_string, |value| match value {
+            Value::EnumVariant(variant)
+                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+            {
+                match variant.payloads.as_slice() {
+                    [Value::String(value)] => {
+                        assert_eq!(value, "aurora");
+                        assert_eq!(value.as_ptr(), string_allocation);
+                    }
+                    other => panic!("expected extracted String, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(String), found {other:?}"),
+        });
+        super::with_value(owned_string, |value| {
+            assert!(
+                matches!(value, Value::Unit),
+                "owned String source was not moved"
+            )
+        });
+    }
+
+    let owned_array = direct_json_value(JsonValue::Array(vec![JsonValue::Int(2)]));
+    let array_allocation = unsafe {
+        super::with_value(owned_array, |value| match value {
+            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+                [Value::Vec(value)] => value.elements.as_ptr(),
+                other => panic!("expected json.Value.Array payload, found {other:?}"),
+            },
+            other => panic!("expected json.Value.Array, found {other:?}"),
+        })
+    };
+    let extracted_array = direct_json_host_builtin_call("json::into_array", &[owned_array]);
+    unsafe {
+        super::with_value(extracted_array, |value| match value {
+            Value::EnumVariant(variant)
+                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+            {
+                match variant.payloads.as_slice() {
+                    [Value::Vec(value)] => {
+                        assert_eq!(value.elements.as_ptr(), array_allocation)
+                    }
+                    other => panic!("expected extracted Vec, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(Vec), found {other:?}"),
+        });
+        super::with_value(owned_array, |value| {
+            assert!(
+                matches!(value, Value::Unit),
+                "owned Array source was not moved"
+            )
+        });
+    }
+
+    let owned_object = direct_json_value(JsonValue::object(vec![(
+        "k".to_string(),
+        JsonValue::Int(3),
+    )]));
+    let object_allocation = unsafe {
+        super::with_value(owned_object, |value| match value {
+            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+                [Value::Map(value)] => value.entries.as_ptr(),
+                other => panic!("expected json.Value.Object payload, found {other:?}"),
+            },
+            other => panic!("expected json.Value.Object, found {other:?}"),
+        })
+    };
+    let extracted_object = direct_json_host_builtin_call("json::into_object", &[owned_object]);
+    unsafe {
+        super::with_value(extracted_object, |value| match value {
+            Value::EnumVariant(variant)
+                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+            {
+                match variant.payloads.as_slice() {
+                    [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), object_allocation),
+                    other => panic!("expected extracted Map, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(Map), found {other:?}"),
+        });
+        super::with_value(owned_object, |value| {
+            assert!(
+                matches!(value, Value::Unit),
+                "owned Object source was not moved"
+            )
+        });
+    }
+
+    for pointer in [
+        parse_source,
+        parsed,
+        dump_source,
+        indent,
+        dumped,
+        null,
+        is_null,
+        owned_string,
+        extracted_string,
+        owned_array,
+        extracted_array,
+        owned_object,
+        extracted_object,
+    ] {
+        unsafe { release_value(pointer) };
+    }
+}
+
+#[test]
+fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_source() {
+    let source = boxed_value(Value::String("[null]".to_string()));
+    let source_address = source as usize;
+    let source_ptr = unsafe {
+        super::with_value(source, |value| match value {
+            Value::String(value) => value.as_ptr(),
+            other => panic!("expected String, found {other:?}"),
+        })
+    };
+
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            crate::runtime_value::with_json_runtime_allocation_budget(0, || {
+                let _ =
+                    direct_host_builtin_call("json::parse", &[source_address as *mut OpaqueValue]);
+            });
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("direct parse materialization allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing parsed JSON"
+    );
+    unsafe {
+        super::with_value(source, |value| match value {
+            Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
+            other => panic!("expected String, found {other:?}"),
+        });
+        release_value(source);
+    }
+}
+
+#[test]
+fn direct_json_dump_trap_preserves_borrowed_value_and_copy_indent() {
+    let source = direct_json_value(crate::json_codec::JsonValue::Null);
+    let indent = direct_option_int(Some(17));
+    let source_address = source as usize;
+    let indent_address = indent as usize;
+    let clone_count = super::direct_value_clone_count();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = direct_host_builtin_call(
+                "json::dumps",
+                &[
+                    source_address as *mut OpaqueValue,
+                    indent_address as *mut OpaqueValue,
+                ],
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("invalid JSON indent should fail the active task");
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(
+        error.message,
+        "JSON indent must be between 0 and 16, found 17"
+    );
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "trapping json.dumps must not clone its borrowed value before evaluation"
+    );
+
+    unsafe {
+        super::with_value(source, |value| {
+            assert!(
+                matches!(
+                    value,
+                    Value::EnumVariant(variant)
+                        if variant.enum_name == "json.Value"
+                            && variant.variant_name == "Null"
+                ),
+                "json.dumps must preserve its borrowed value when dumping traps"
+            )
+        });
+        super::with_value(indent, |value| {
+            assert_eq!(
+                value.render(),
+                "Option.Some(17)",
+                "json.dumps must preserve its copy-valued indent when dumping traps"
+            )
+        });
+        release_value(source);
+        release_value(indent);
+    }
+}
+
+fn capture_runtime_diagnostic(f: impl FnOnce() + panic::UnwindSafe) -> Diagnostic {
     let payload = panic::catch_unwind(|| super::with_task_runtime_error_capture(f))
         .expect_err("runtime error should be captured as a panic");
     payload
         .downcast_ref::<crate::runtime_value::LightweightTaskFailureSignal>()
-        .map(|signal| signal.0.message.clone())
+        .map(|signal| signal.0.clone())
         .unwrap_or_else(|| panic!("unexpected panic payload"))
+}
+
+fn capture_runtime_error_message(f: impl FnOnce() + panic::UnwindSafe) -> String {
+    capture_runtime_diagnostic(f).message
 }
 
 fn expect_option_none(ptr: *mut OpaqueValue) {
@@ -1539,21 +2167,6 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
             group,
         ),
     ));
-    for value in [
-        name,
-        command,
-        cwd,
-        env,
-        stdin,
-        stdout,
-        stderr,
-        restart,
-        backoff,
-        max_restarts,
-        group,
-    ] {
-        unsafe { release_value(value) };
-    }
     let mut wait_payloads = expect_variant_ptr(
         super::aurora_direct_process_supervisor_wait(supervisor, duration_value(-1)),
         "SupervisorWait",
@@ -4318,6 +4931,19 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     assert_eq!(super::aurora_direct_vec_len(vec), 0);
     expect_option_none(super::aurora_direct_vec_pop_in_place(vec));
     expect_option_none(super::aurora_direct_vec_index_option(vec, 0));
+
+    let draining_vec = int_vec(&[10]);
+    assert_eq!(
+        expect_option_some_int(super::aurora_direct_vec_take_index_in_place(
+            draining_vec,
+            0,
+        )),
+        10
+    );
+    expect_option_none(super::aurora_direct_vec_take_index_in_place(
+        draining_vec,
+        0,
+    ));
 }
 
 #[test]
@@ -4501,7 +5127,7 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     );
 }
 
-unsafe extern "C" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
+unsafe extern "C-unwind" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
     let args = std::slice::from_raw_parts(args, len);
     let total = args
         .iter()
@@ -4510,7 +5136,294 @@ unsafe extern "C" fn test_native_thunk(args: *const i64, len: usize) -> *mut Opa
             other => panic!("expected int arg, found {:?}", other),
         })
         .sum();
+    for argument in args.iter().copied() {
+        super::aurora_direct_release_value(argument as *mut OpaqueValue);
+    }
     super::aurora_direct_box_i64(total)
+}
+
+#[test]
+fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_values() {
+    let external_duration = duration_value(125);
+    let external_queue = boxed_value(Value::Channel(ChannelValue::new()));
+    let external_duration_address = external_duration as usize;
+    let external_queue_address = external_queue as usize;
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let external_duration = external_duration_address as *mut OpaqueValue;
+            let duration_result = unsafe {
+                super::consume_direct_task_result(
+                    super::aurora_direct_retain_value(external_duration),
+                    true,
+                )
+            };
+            assert_eq!(
+                duration_result,
+                Value::Duration(125 * crate::runtime_value::NANOS_PER_MILLISECOND)
+            );
+            assert_eq!(
+                unsafe { value_ref(external_duration) },
+                Value::Duration(125 * crate::runtime_value::NANOS_PER_MILLISECOND),
+                "copy-result handoff must not empty a shared Duration wrapper"
+            );
+
+            let external_queue = external_queue_address as *mut OpaqueValue;
+            let queue_result = unsafe {
+                super::consume_direct_task_result(
+                    super::aurora_direct_retain_value(external_queue),
+                    true,
+                )
+            };
+            let Value::Channel(returned_queue) = queue_result else {
+                panic!("copy-result handoff should preserve Queue values");
+            };
+            returned_queue
+                .send(Value::Int(IntegerValue::from_signed(9)))
+                .expect("returned Queue alias should remain open");
+            let received = unsafe {
+                super::with_value(external_queue, |value| {
+                    let Value::Channel(queue) = value else {
+                        panic!("external Queue wrapper should remain intact");
+                    };
+                    queue.recv_with_cancellation(None, None)
+                })
+            }
+            .expect("external Queue alias should receive the returned alias's value");
+            assert_eq!(received, Some(Value::Int(IntegerValue::from_signed(9))));
+
+            let owned_string = string_value("allocation identity");
+            let allocation = unsafe {
+                super::with_value(owned_string, |value| match value {
+                    Value::String(value) => value.as_ptr(),
+                    other => panic!("expected String, found {other:?}"),
+                })
+            };
+            let moved = unsafe { super::consume_direct_task_result(owned_string, false) };
+            let Value::String(moved) = moved else {
+                panic!("noncopy result handoff should move String values");
+            };
+            assert_eq!(
+                moved.as_ptr(),
+                allocation,
+                "noncopy result handoff must preserve the owned allocation"
+            );
+
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "task-result handoff must balance every opaque wrapper reference"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    unsafe {
+        release_value(external_duration);
+        release_value(external_queue);
+    }
+}
+
+unsafe extern "C-unwind" fn direct_task_fresh_duration(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null() || arg_count == 0);
+    assert_eq!(arg_count, 0);
+    duration_value(125)
+}
+
+unsafe extern "C-unwind" fn direct_task_violates_owned_ledger_invariant(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null() || arg_count == 0);
+    assert_eq!(arg_count, 0);
+    let _intentionally_unreleased = string_value("late task-scope unwind");
+    int_value(0)
+}
+
+unsafe extern "C-unwind" fn direct_task_panics_before_result_handoff(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 1);
+    assert!(!args.is_null());
+    panic!("ordinary task panic before result handoff")
+}
+
+#[test]
+fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(move || {
+        let args = super::aurora_direct_arg_buffer_new(0);
+        let group = super::aurora_direct_task_group_new();
+        let task = unsafe {
+            super::aurora_direct_start_task_call(
+                direct_task_fresh_duration as *const () as usize as i64,
+                args,
+                0,
+                1,
+                group,
+                1,
+            )
+        };
+        let joined = super::aurora_direct_task_join(task);
+        match unsafe { take_value(joined) } {
+            Value::EnumVariant(variant)
+                if variant.enum_name == "TaskResult" && variant.variant_name == "Ready" =>
+            {
+                assert_eq!(
+                    variant.single_payload(),
+                    Some(&Value::Duration(
+                        125 * crate::runtime_value::NANOS_PER_MILLISECOND
+                    ))
+                );
+            }
+            other => panic!("expected ready Duration task result, found {other:?}"),
+        }
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+        }
+        assert_eq!(
+            super::direct_task_claim_flag_live_count(),
+            baseline,
+            "normal task completion must free its externally owned claim flag"
+        );
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let external = string_value("spawn failure argument");
+    unsafe {
+        super::retain_untracked_value(external);
+    }
+    let args_address = Box::into_raw(Box::new(vec![external as i64])) as usize;
+    let claim_flag_address = super::allocate_direct_task_claim_flag();
+
+    let error = unsafe {
+        super::spawn_direct_task_with_external_state(
+            CancellationContext::default(),
+            test_native_thunk,
+            args_address,
+            claim_flag_address,
+            true,
+        )
+    }
+    .expect_err("starting outside a scheduler should fail");
+    assert!(error.message.contains("requires an active task scheduler"));
+    assert_eq!(
+        unsafe { &*external }.ref_count.load(Ordering::Acquire),
+        1,
+        "spawn failure must release the raw argument-buffer owner"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "spawn failure must free its externally owned claim flag"
+    );
+    unsafe {
+        release_value(external);
+    }
+}
+
+#[test]
+fn native_runtime_direct_task_claim_flag_survives_late_scope_unwind() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(move || {
+        let args = super::aurora_direct_arg_buffer_new(0);
+        let group = super::aurora_direct_task_group_new();
+        let task = unsafe {
+            super::aurora_direct_start_task_call(
+                direct_task_violates_owned_ledger_invariant as *const () as usize as i64,
+                args,
+                0,
+                1,
+                group,
+                1,
+            )
+        };
+        let joined = super::aurora_direct_task_join(task);
+        let error = expect_task_result_error_message(joined);
+        assert!(
+            error.contains("normally completed direct task retained owned opaque values"),
+            "late scope invariant should become a task error, found {error:?}"
+        );
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+        }
+        assert_eq!(
+            super::direct_task_claim_flag_live_count(),
+            baseline,
+            "ordinary unwinding after the tracked scope must free external task state once"
+        );
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn native_runtime_direct_task_external_state_survives_panic_before_result_handoff() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("panic-path argument");
+    let argument_address = argument as usize;
+    let result = run_lightweight_root_task(move || {
+        let argument = argument_address as *mut OpaqueValue;
+        let args = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(args, 0, argument as i64);
+        let group = super::aurora_direct_task_group_new();
+        let task = unsafe {
+            super::aurora_direct_start_task_call(
+                direct_task_panics_before_result_handoff as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+            )
+        };
+        let joined = super::aurora_direct_task_join(task);
+        assert_eq!(
+            expect_task_result_error_message(joined),
+            "internal error: Aurora task panicked: ordinary task panic before result handoff"
+        );
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+        }
+        assert_eq!(
+            unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+            1,
+            "ordinary panic must release the child task's raw argument owner"
+        );
+        assert_eq!(
+            super::direct_task_claim_flag_live_count(),
+            baseline,
+            "ordinary panic must free the externally owned claim flag"
+        );
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+    unsafe {
+        release_value(argument);
+    }
 }
 
 #[test]
@@ -4852,6 +5765,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
                 2,
                 1,
                 group,
+                1,
             ))
         };
         let Value::Task(task) = task else {
@@ -4977,6 +5891,839 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     expect_unit(super::aurora_direct_task_group_close(group, 1));
     super::aurora_direct_sleep_ms(0);
     expect_unit(super::aurora_direct_sleep_value(duration_value(0)));
+}
+
+#[test]
+fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
+    enum Allocation {
+        String(*const u8),
+        Vec(*const Value),
+        Map(*const (Value, Value)),
+    }
+
+    let text = "owned enum payload".repeat(32);
+    let text_ptr = text.as_ptr();
+    let elements = vec![Value::Bool(true), Value::Bool(false)];
+    let elements_ptr = elements.as_ptr();
+    let entries = vec![(Value::String("key".to_string()), Value::Bool(true))];
+    let entries_ptr = entries.as_ptr();
+    let cases = [
+        ("String", Value::String(text), Allocation::String(text_ptr)),
+        (
+            "Array",
+            Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements,
+            }),
+            Allocation::Vec(elements_ptr),
+        ),
+        (
+            "Object",
+            Value::Map(MapValue {
+                key_type: Type::named("String"),
+                value_type: Type::named("json.Value"),
+                entries,
+            }),
+            Allocation::Map(entries_ptr),
+        ),
+    ];
+
+    for (variant_name, payload, allocation) in cases {
+        let payload = boxed_value(payload);
+        let mut handles = vec![payload as i64];
+        let payload_buffer = handles.as_mut_ptr();
+        std::mem::forget(handles);
+
+        let encoded = super::aurora_direct_enum_variant(
+            b"json.Value".as_ptr(),
+            "json.Value".len(),
+            variant_name.as_ptr(),
+            variant_name.len(),
+            payload_buffer,
+            1,
+        );
+        unsafe {
+            super::with_value(encoded, |value| {
+                let Value::EnumVariant(variant) = value else {
+                    panic!("expected json.Value.{variant_name}, found {value:?}");
+                };
+                match (&variant.payloads[..], &allocation) {
+                    ([Value::String(value)], Allocation::String(expected)) => {
+                        assert_eq!(value.as_ptr(), *expected)
+                    }
+                    ([Value::Vec(value)], Allocation::Vec(expected)) => {
+                        assert_eq!(value.elements.as_ptr(), *expected)
+                    }
+                    ([Value::Map(value)], Allocation::Map(expected)) => {
+                        assert_eq!(value.entries.as_ptr(), *expected)
+                    }
+                    (payloads, _) => {
+                        panic!("unexpected json.Value.{variant_name} payloads: {payloads:?}")
+                    }
+                }
+            });
+            release_value(encoded);
+        }
+    }
+}
+
+#[test]
+fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
+    let text = "nested direct move".repeat(32);
+    let text_ptr = text.as_ptr();
+    let holder = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Holder".to_string(),
+        fields: BTreeMap::from([(
+            "inner".to_string(),
+            Value::Instance(InstanceValue {
+                class_name: "Inner".to_string(),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text))]),
+            }),
+        )]),
+    }));
+
+    let moved = super::aurora_direct_instance_take_field(
+        holder,
+        b"inner.value".as_ptr(),
+        "inner.value".len(),
+    );
+    unsafe {
+        super::with_value(moved, |value| match value {
+            Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
+            other => panic!("expected moved String, found {other:?}"),
+        });
+        super::with_value(holder, |value| match value {
+            Value::Instance(holder) => match holder.fields.get("inner") {
+                Some(Value::Instance(inner)) => {
+                    assert!(!inner.fields.contains_key("value"));
+                }
+                other => panic!("expected nested Inner instance, found {other:?}"),
+            },
+            other => panic!("expected Holder instance, found {other:?}"),
+        });
+        release_value(moved);
+        release_value(holder);
+    }
+}
+
+#[test]
+fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_failure() {
+    fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
+        Value::Instance(InstanceValue {
+            class_name: class_name.to_string(),
+            fields,
+        })
+    }
+
+    let mut non_instance = Value::String("text".to_string());
+    assert_eq!(
+        super::take_direct_instance_field(&mut non_instance, &["value"], "value")
+            .expect_err("moving a field from a non-instance must fail"),
+        "cannot move field `value` from non-instance `String`"
+    );
+    assert_eq!(non_instance, Value::String("text".to_string()));
+
+    let mut empty_move = instance("Holder", BTreeMap::new());
+    assert_eq!(
+        super::take_direct_instance_field(&mut empty_move, &[], "")
+            .expect_err("an empty internal move path must fail"),
+        "direct runtime received an empty instance field path"
+    );
+
+    let mut missing_leaf = instance(
+        "Holder",
+        BTreeMap::from([("sibling".to_string(), Value::Bool(true))]),
+    );
+    let missing_leaf_before = missing_leaf.clone();
+    assert_eq!(
+        super::take_direct_instance_field(&mut missing_leaf, &["missing"], "missing")
+            .expect_err("a missing move leaf must fail"),
+        "class `Holder` has no field `missing` in move path `missing`"
+    );
+    assert_eq!(
+        missing_leaf, missing_leaf_before,
+        "a failed leaf move must preserve every sibling"
+    );
+
+    let mut missing_nested = instance("Holder", BTreeMap::new());
+    let missing_nested_before = missing_nested.clone();
+    assert_eq!(
+        super::take_direct_instance_field(&mut missing_nested, &["inner", "value"], "inner.value",)
+            .expect_err("a missing intermediate field must fail"),
+        "class `Holder` has no field `inner` in move path `inner.value`"
+    );
+    assert_eq!(missing_nested, missing_nested_before);
+
+    let mut non_instance_nested = instance(
+        "Holder",
+        BTreeMap::from([("inner".to_string(), Value::String("text".to_string()))]),
+    );
+    let non_instance_nested_before = non_instance_nested.clone();
+    assert_eq!(
+        super::take_direct_instance_field(
+            &mut non_instance_nested,
+            &["inner", "value"],
+            "inner.value",
+        )
+        .expect_err("a non-instance intermediate value must fail"),
+        "cannot move field `inner.value` from non-instance `String`"
+    );
+    assert_eq!(non_instance_nested, non_instance_nested_before);
+
+    let mut non_instance_assignment = Value::Bool(false);
+    assert_eq!(
+        super::set_direct_instance_field_owned(
+            &mut non_instance_assignment,
+            &["value"],
+            "value",
+            Value::String("new".to_string()),
+        )
+        .expect_err("owned assignment on a non-instance must fail"),
+        "cannot assign field `value` on non-instance `bool`"
+    );
+    assert_eq!(non_instance_assignment, Value::Bool(false));
+
+    let mut empty_assignment = instance("Holder", BTreeMap::new());
+    assert_eq!(
+        super::set_direct_instance_field_owned(
+            &mut empty_assignment,
+            &[],
+            "",
+            Value::String("new".to_string()),
+        )
+        .expect_err("an empty internal assignment path must fail"),
+        "direct runtime received an empty instance assignment path"
+    );
+
+    let mut missing_assignment = instance(
+        "Holder",
+        BTreeMap::from([("sibling".to_string(), Value::Bool(true))]),
+    );
+    let missing_assignment_before = missing_assignment.clone();
+    assert_eq!(
+        super::set_direct_instance_field_owned(
+            &mut missing_assignment,
+            &["inner", "value"],
+            "inner.value",
+            Value::String("new".to_string()),
+        )
+        .expect_err("a missing assignment intermediate must fail"),
+        "class `Holder` has no field `inner` in assignment path `inner.value`"
+    );
+    assert_eq!(
+        missing_assignment, missing_assignment_before,
+        "a failed owned assignment must preserve the target"
+    );
+
+    let mut nested_assignment = instance(
+        "Holder",
+        BTreeMap::from([(
+            "inner".to_string(),
+            instance(
+                "Inner",
+                BTreeMap::from([("sibling".to_string(), Value::Bool(true))]),
+            ),
+        )]),
+    );
+    let assigned = "nested owned assignment".repeat(16);
+    let assigned_storage = assigned.as_ptr();
+    super::set_direct_instance_field_owned(
+        &mut nested_assignment,
+        &["inner", "value"],
+        "inner.value",
+        Value::String(assigned),
+    )
+    .expect("an existing instance path should accept a new leaf");
+    let Value::Instance(holder) = &nested_assignment else {
+        panic!("expected Holder instance");
+    };
+    let Some(Value::Instance(inner)) = holder.fields.get("inner") else {
+        panic!("expected Inner instance");
+    };
+    assert_eq!(inner.fields.get("sibling"), Some(&Value::Bool(true)));
+    match inner.fields.get("value") {
+        Some(Value::String(value)) => assert_eq!(value.as_ptr(), assigned_storage),
+        other => panic!("expected nested owned String, found {other:?}"),
+    }
+}
+
+#[test]
+fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumption() {
+    fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
+        Value::Instance(InstanceValue {
+            class_name: class_name.to_string(),
+            fields,
+        })
+    }
+    fn assert_au4001(diagnostic: Diagnostic, message: &str) {
+        assert_eq!(diagnostic.code, "AU4001");
+        assert_eq!(diagnostic.message, message);
+    }
+    fn capture_wrapper_failure(work: impl FnOnce() + Send + 'static) -> Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                work();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("the direct wrapper should fail the active task")
+    }
+
+    for (target, path, expected) in [
+        (
+            Value::String("text".to_string()),
+            "value",
+            "cannot move field `value` from non-instance `String`",
+        ),
+        (
+            instance("Holder", BTreeMap::new()),
+            "missing",
+            "class `Holder` has no field `missing` in move path `missing`",
+        ),
+        (
+            instance("Holder", BTreeMap::new()),
+            "inner.value",
+            "class `Holder` has no field `inner` in move path `inner.value`",
+        ),
+        (
+            instance(
+                "Holder",
+                BTreeMap::from([("inner".to_string(), Value::Bool(false))]),
+            ),
+            "inner.value",
+            "cannot move field `inner.value` from non-instance `bool`",
+        ),
+        (
+            instance(
+                "Holder",
+                BTreeMap::from([(
+                    "inner".to_string(),
+                    instance(
+                        "Inner",
+                        BTreeMap::from([("value".to_string(), Value::String("kept".to_string()))]),
+                    ),
+                )]),
+            ),
+            "inner..value",
+            "invalid instance move path `inner..value`",
+        ),
+    ] {
+        let before = target.clone();
+        let target = boxed_value(target);
+        let target_address = target as usize;
+        let owned_path = path.to_string();
+        let diagnostic = capture_wrapper_failure(move || {
+            let _ = super::aurora_direct_instance_take_field(
+                target_address as *mut OpaqueValue,
+                owned_path.as_ptr(),
+                owned_path.len(),
+            );
+        });
+        assert_au4001(diagnostic, expected);
+        unsafe {
+            super::with_value(target, |value| {
+                assert_eq!(
+                    value, &before,
+                    "failed projected move `{path}` must preserve its target"
+                )
+            });
+            release_value(target);
+        }
+    }
+
+    for (target, path, expected) in [
+        (
+            Value::String("text".to_string()),
+            "value",
+            "cannot assign field `value` on non-instance `String`",
+        ),
+        (
+            instance("Holder", BTreeMap::new()),
+            "inner.value",
+            "class `Holder` has no field `inner` in assignment path `inner.value`",
+        ),
+        (
+            instance(
+                "Holder",
+                BTreeMap::from([("inner".to_string(), Value::Bool(false))]),
+            ),
+            "inner.value",
+            "cannot assign field `inner.value` on non-instance `bool`",
+        ),
+    ] {
+        let before = target.clone();
+        let target = boxed_value(target);
+        let owned = boxed_value(Value::String("consumed".to_string()));
+        unsafe {
+            retain_value(owned);
+        }
+        let target_address = target as usize;
+        let owned_address = owned as usize;
+        let owned_path = path.to_string();
+        let diagnostic = capture_wrapper_failure(move || {
+            super::aurora_direct_instance_set_field_owned(
+                target_address as *mut OpaqueValue,
+                owned_path.as_ptr(),
+                owned_path.len(),
+                owned_address as *mut OpaqueValue,
+            );
+        });
+        assert_au4001(diagnostic, expected);
+        unsafe {
+            super::with_value(target, |value| {
+                assert_eq!(
+                    value, &before,
+                    "failed projected assignment `{path}` must preserve its target"
+                )
+            });
+            super::with_value(owned, |value| {
+                assert_eq!(
+                    value,
+                    &Value::Unit,
+                    "an owned assignment argument must be consumed after path validation"
+                )
+            });
+            release_value(target);
+            release_value(owned);
+        }
+    }
+
+    let invalid_target = boxed_value(instance("Holder", BTreeMap::new()));
+    let invalid_owned = boxed_value(Value::String("still-owned".to_string()));
+    unsafe {
+        retain_value(invalid_owned);
+    }
+    let invalid_path = "inner..value";
+    let invalid_target_address = invalid_target as usize;
+    let invalid_owned_address = invalid_owned as usize;
+    let owned_invalid_path = invalid_path.to_string();
+    let diagnostic = capture_wrapper_failure(move || {
+        super::aurora_direct_instance_set_field_owned(
+            invalid_target_address as *mut OpaqueValue,
+            owned_invalid_path.as_ptr(),
+            owned_invalid_path.len(),
+            invalid_owned_address as *mut OpaqueValue,
+        );
+    });
+    assert_au4001(
+        diagnostic,
+        "invalid instance assignment path `inner..value`",
+    );
+    unsafe {
+        super::with_value(invalid_target, |value| {
+            assert_eq!(value, &instance("Holder", BTreeMap::new()))
+        });
+        super::with_value(invalid_owned, |value| {
+            assert_eq!(
+                value,
+                &Value::String("still-owned".to_string()),
+                "the wrapper must reject malformed paths before consuming the owned argument"
+            )
+        });
+        release_value(invalid_target);
+        release_value(invalid_owned);
+        release_value(invalid_owned);
+    }
+
+    let plain_target = boxed_value(Value::Bool(false));
+    let plain_new_value = boxed_value(Value::String("preserved".to_string()));
+    let plain_path = "value";
+    let plain_target_address = plain_target as usize;
+    let plain_new_value_address = plain_new_value as usize;
+    let owned_plain_path = plain_path.to_string();
+    let diagnostic = capture_wrapper_failure(move || {
+        let _ = super::aurora_direct_instance_set_field(
+            plain_target_address as *mut OpaqueValue,
+            owned_plain_path.as_ptr(),
+            owned_plain_path.len(),
+            plain_new_value_address as *mut OpaqueValue,
+        );
+    });
+    assert_au4001(
+        diagnostic,
+        "cannot assign field `value` on non-instance `bool`",
+    );
+    unsafe {
+        super::with_value(plain_target, |value| assert_eq!(value, &Value::Bool(false)));
+        super::with_value(plain_new_value, |value| {
+            assert_eq!(value, &Value::String("preserved".to_string()))
+        });
+        release_value(plain_target);
+        release_value(plain_new_value);
+    }
+}
+
+#[test]
+fn direct_instance_owned_field_set_preserves_payload_allocation_identity() {
+    let text = "owned class field".repeat(32);
+    let text_ptr = text.as_ptr();
+    let instance = super::aurora_direct_instance_empty(b"Holder".as_ptr(), "Holder".len());
+    super::aurora_direct_instance_set_field_owned(
+        instance,
+        b"value".as_ptr(),
+        "value".len(),
+        boxed_value(Value::String(text)),
+    );
+
+    unsafe {
+        super::with_value(instance, |value| match value {
+            Value::Instance(instance) => match instance.fields.get("value") {
+                Some(Value::String(value)) => assert_eq!(value.as_ptr(), text_ptr),
+                other => panic!("expected owned String field, found {other:?}"),
+            },
+            other => panic!("expected Holder instance, found {other:?}"),
+        });
+        release_value(instance);
+    }
+}
+
+#[test]
+fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
+    let text = "owned direct match".repeat(32);
+    let text_ptr = text.as_ptr();
+    let packet = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Packet".to_string(),
+        variant_name: "Text".to_string(),
+        payloads: vec![Value::String(text)],
+    }));
+    let moved = super::aurora_direct_variant_take_payload(packet, 0);
+
+    unsafe {
+        super::with_value(moved, |value| match value {
+            Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
+            other => panic!("expected moved String, found {other:?}"),
+        });
+        super::with_value(packet, |value| match value {
+            Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit]),
+            other => panic!("expected Packet enum, found {other:?}"),
+        });
+        release_value(moved);
+        release_value(packet);
+    }
+}
+
+#[test]
+fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
+    fn string_storage(value: *mut OpaqueValue) -> *const u8 {
+        unsafe {
+            super::with_value(value, |value| match value {
+                Value::String(value) => value.as_ptr(),
+                other => panic!("expected String, found {other:?}"),
+            })
+        }
+    }
+
+    let vector = super::aurora_direct_vec_empty();
+    let vector_item = string_value(&"vector item".repeat(32));
+    let vector_storage = string_storage(vector_item);
+    expect_unit(super::aurora_direct_vec_push_in_place(vector, vector_item));
+    unsafe {
+        super::with_value(vector, |value| match value {
+            Value::Vec(vector) => match vector.elements.as_slice() {
+                [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
+                other => panic!("expected one String vector element, found {other:?}"),
+            },
+            other => panic!("expected Vec, found {other:?}"),
+        });
+    }
+    let vector_taken = super::aurora_direct_vec_remove_in_place(vector, 0);
+    unsafe {
+        super::with_value(vector_taken, |value| match value {
+            Value::EnumVariant(option)
+                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            {
+                match option.payloads.as_slice() {
+                    [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
+                    other => panic!("expected taken vector String payload, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(String), found {other:?}"),
+        });
+    }
+
+    let map = super::aurora_direct_map_empty();
+    let map_key = string_value(&"map key".repeat(32));
+    let map_value = string_value(&"map value".repeat(32));
+    let map_key_storage = string_storage(map_key);
+    let map_value_storage = string_storage(map_value);
+    expect_option_none(super::aurora_direct_map_set_in_place(
+        map, map_key, map_value,
+    ));
+    unsafe {
+        super::with_value(map, |value| match value {
+            Value::Map(map) => match map.entries.as_slice() {
+                [(Value::String(key), Value::String(value))] => {
+                    assert_eq!(key.as_ptr(), map_key_storage);
+                    assert_eq!(value.as_ptr(), map_value_storage);
+                }
+                other => panic!("expected one String map entry, found {other:?}"),
+            },
+            other => panic!("expected Map, found {other:?}"),
+        });
+    }
+
+    let set = super::aurora_direct_set_empty();
+    let set_item = string_value(&"set item".repeat(32));
+    let set_storage = string_storage(set_item);
+    assert_eq!(super::aurora_direct_set_insert_in_place(set, set_item), 1);
+    unsafe {
+        super::with_value(set, |value| match value {
+            Value::Set(set) => match set.elements.as_slice() {
+                [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
+                other => panic!("expected one String set element, found {other:?}"),
+            },
+            other => panic!("expected Set, found {other:?}"),
+        });
+    }
+    let taken = super::aurora_direct_set_take_index_in_place(set, 0);
+    unsafe {
+        super::with_value(taken, |value| match value {
+            Value::EnumVariant(option)
+                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            {
+                match option.payloads.as_slice() {
+                    [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
+                    other => panic!("expected taken String payload, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(String), found {other:?}"),
+        });
+        super::with_value(set, |value| match value {
+            Value::Set(set) => assert!(set.elements.is_empty()),
+            other => panic!("expected Set, found {other:?}"),
+        });
+    }
+
+    let queue = super::aurora_direct_channel_new(std::ptr::null_mut());
+    let queued = string_value(&"queued item".repeat(32));
+    let queued_storage = string_storage(queued);
+    expect_result_ok_unit(super::aurora_direct_channel_try_send(queue, queued));
+    let received = super::aurora_direct_channel_recv_or_none(queue);
+    unsafe {
+        super::with_value(received, |value| match value {
+            Value::EnumVariant(option)
+                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            {
+                match option.payloads.as_slice() {
+                    [Value::String(value)] => assert_eq!(value.as_ptr(), queued_storage),
+                    other => panic!("expected queued String payload, found {other:?}"),
+                }
+            }
+            other => panic!("expected Option.Some(String), found {other:?}"),
+        });
+        for value in [vector, vector_taken, map, set, taken, queue, received] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
+    fn string_storage(value: *mut OpaqueValue) -> *const u8 {
+        unsafe {
+            super::with_value(value, |value| match value {
+                Value::String(value) => value.as_ptr(),
+                other => panic!("expected String, found {other:?}"),
+            })
+        }
+    }
+
+    let vector = super::aurora_direct_vec_empty();
+    expect_unit(super::aurora_direct_vec_push_in_place(
+        vector,
+        string_value("old"),
+    ));
+    let replacement = string_value(&"replacement".repeat(32));
+    let replacement_storage = string_storage(replacement);
+    expect_unit(super::aurora_direct_vec_set_index_in_place(
+        vector,
+        0,
+        replacement,
+        0,
+        0,
+    ));
+    unsafe {
+        super::with_value(vector, |value| match value {
+            Value::Vec(vector) => match vector.elements.as_slice() {
+                [Value::String(value)] => assert_eq!(value.as_ptr(), replacement_storage),
+                other => panic!("expected one replacement String, found {other:?}"),
+            },
+            other => panic!("expected Vec, found {other:?}"),
+        });
+    }
+
+    let closed_queue = super::aurora_direct_channel_new(std::ptr::null_mut());
+    expect_unit(super::aurora_direct_channel_close(closed_queue));
+    let queue_default = string_value(&"queue default".repeat(32));
+    let queue_default_storage = string_storage(queue_default);
+    let queue_fallback = super::aurora_direct_channel_recv_or_value(closed_queue, queue_default);
+    assert_eq!(string_storage(queue_fallback), queue_default_storage);
+
+    let pending_task = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(100));
+        Ok(Value::Unit)
+    }))));
+    let task_default = string_value(&"task default".repeat(32));
+    let task_default_storage = string_storage(task_default);
+    let task_fallback = super::aurora_direct_task_join_or_value(pending_task, task_default);
+    assert_eq!(string_storage(task_fallback), task_default_storage);
+
+    unsafe {
+        for value in [
+            vector,
+            closed_queue,
+            queue_fallback,
+            pending_task,
+            task_fallback,
+        ] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
+    let queue = ChannelValue::new();
+    let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Envelope".to_string(),
+        variant_name: "Ready".to_string(),
+        payloads: vec![Value::Vec(VecValue {
+            element_type: Type::named("Queue"),
+            elements: vec![Value::Channel(queue)],
+        })],
+    }));
+    let clone_count = super::direct_value_clone_count();
+    unsafe {
+        super::with_value(nested, |value| {
+            let mut queues = Vec::new();
+            crate::runtime_value::collect_queue_values(value, &mut queues);
+            assert_eq!(queues.len(), 1);
+        });
+    }
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "producer discovery must traverse task arguments by borrow"
+    );
+
+    let retained = string_value(&"abandoned task argument".repeat(32));
+    let retained_storage = unsafe {
+        super::with_value(retained, |value| match value {
+            Value::String(value) => value.as_ptr(),
+            other => panic!("expected String, found {other:?}"),
+        })
+    };
+    let abandoned = unsafe { retain_value(retained) };
+    let args_address = Box::into_raw(Box::new(vec![abandoned as i64])) as usize;
+    unsafe {
+        super::release_abandoned_direct_task_args(args_address);
+        super::with_value(retained, |value| match value {
+            Value::String(value) => assert_eq!(value.as_ptr(), retained_storage),
+            other => panic!("expected retained String, found {other:?}"),
+        });
+        release_value(retained);
+        release_value(nested);
+    }
+}
+
+#[test]
+fn direct_supervisor_start_consumes_every_value_argument_without_value_clones() {
+    let supervisor = boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new()));
+    let clone_count = super::direct_value_clone_count();
+    let result = super::aurora_direct_process_supervisor_start(
+        supervisor,
+        string_value("empty"),
+        super::aurora_direct_vec_empty(),
+        boxed_value(Value::Unit),
+        super::aurora_direct_map_empty(),
+        super::aurora_direct_process_null(),
+        super::aurora_direct_process_null(),
+        super::aurora_direct_process_null(),
+        process_restart_never_value(),
+        duration_value(0),
+        int_value(-1),
+        bool_value(false),
+    );
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count + 1,
+        "only the borrowed Supervisor receiver may be cloned by the direct runtime wrapper"
+    );
+    assert!(
+        expect_variant_value(expect_result_err_payload(result), "Error", "NoCommand").is_empty()
+    );
+    unsafe {
+        release_value(result);
+        release_value(supervisor);
+    }
+}
+
+#[test]
+fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
+    fn malformed_json_call(name: &'static str, values: Vec<*mut OpaqueValue>) -> String {
+        let addresses = values
+            .iter()
+            .map(|value| *value as usize)
+            .collect::<Vec<_>>();
+        let message = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let values = addresses
+                    .iter()
+                    .map(|address| *address as *mut OpaqueValue)
+                    .collect::<Vec<_>>();
+                let _ = direct_host_builtin_call(name, &values);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("malformed JSON metadata should fail the active task")
+        .message;
+        unsafe {
+            for value in values {
+                release_value(value);
+            }
+        }
+        message
+    }
+
+    let int = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "Int".to_string(),
+        payloads: vec![Value::Int(
+            IntegerValue::from_typed_signed(7, IntegerKind::Int32).expect("7 fits int32"),
+        )],
+    }));
+    assert!(malformed_json_call("json::as_int", vec![int])
+        .contains("malformed runtime `json.Value.Int` payload"));
+
+    let array = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "Array".to_string(),
+        payloads: vec![Value::Vec(VecValue {
+            element_type: Type::named("Unknown"),
+            elements: vec![],
+        })],
+    }));
+    assert!(malformed_json_call("json::into_array", vec![array])
+        .contains("malformed runtime `json.Value.Array` payload"));
+
+    let object = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "Object".to_string(),
+        payloads: vec![Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("Unknown"),
+            entries: vec![],
+        })],
+    }));
+    assert!(malformed_json_call("json::into_object", vec![object])
+        .contains("malformed runtime `json.Value.Object` payload"));
+
+    let source = direct_json_value(crate::json_codec::JsonValue::Null);
+    let indent = boxed_value(crate::runtime_value::option_some(Value::Int(
+        IntegerValue::from_typed_signed(2, IntegerKind::Int32).expect("2 fits int32"),
+    )));
+    assert!(malformed_json_call("json::dumps", vec![source, indent])
+        .contains("expects `indent` to contain an `int64`"));
 }
 
 #[test]
@@ -5300,6 +7047,164 @@ fn division_by_zero_helper_exits_with_error() {
         String::from_utf8_lossy(&output.stderr).contains("division by zero"),
         "division helper stderr should mention division by zero"
     );
+}
+
+#[test]
+fn io_read_line_reports_end_of_input_consistently_through_both_runtime_surfaces() {
+    const HELPER_ENV: &str = "AURORA_DIRECT_RUNTIME_READ_LINE_EOF_HELPER";
+    if std::env::var(HELPER_ENV).as_deref() == Ok("1") {
+        assert_eq!(
+            crate::runtime_value::io_read_line().expect("reading closed stdin should succeed"),
+            None,
+            "the shared runtime helper must represent EOF as absence, not an empty line"
+        );
+
+        let payload = expect_result_ok_payload(super::aurora_direct_io_read_line());
+        assert!(
+            expect_variant_value(payload, "Option", "None").is_empty(),
+            "the direct runtime must expose EOF as Result.Ok(Option.None)"
+        );
+        return;
+    }
+
+    let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+        .arg("--exact")
+        .arg(
+            "native_runtime::tests::io_read_line_reports_end_of_input_consistently_through_both_runtime_surfaces",
+        )
+        .arg("--nocapture")
+        .env(HELPER_ENV, "1")
+        .stdin(Stdio::null())
+        .output()
+        .expect("EOF helper process should run");
+
+    assert!(
+        output.status.success(),
+        "EOF behavior should agree across runtime surfaces\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn metrics_state_and_diagnostics_are_observable_from_each_fresh_entry_path() {
+    const HELPER_ENV: &str = "AURORA_RUNTIME_METRICS_BEHAVIOR_HELPER";
+    if let Ok(helper) = std::env::var(HELPER_ENV) {
+        let call = |name, args| crate::runtime_value::evaluate_host_builtin(name, args);
+        let metric = |name: &str| Value::String(name.to_string());
+        let int = |value| Value::Int(IntegerValue::from_signed(value));
+
+        match helper.as_str() {
+            "get-first" => {
+                assert_eq!(
+                    call("metrics::get", vec![metric("never-created")])
+                        .expect("reading a missing metric should succeed"),
+                    int(0),
+                    "missing metrics must read as zero"
+                );
+            }
+            "increment-first" => {
+                assert_eq!(
+                    call("metrics::increment", vec![metric("requests"), int(0)])
+                        .expect("a zero increment should create a stable zero metric"),
+                    Value::Unit
+                );
+                assert_eq!(
+                    call("metrics::get", vec![metric("requests")])
+                        .expect("the incremented metric should be readable"),
+                    int(0),
+                    "zero increments must remain observable as zero"
+                );
+                assert_eq!(
+                    call("metrics::increment", vec![metric("requests"), int(2)])
+                        .expect("a later increment should update the metric"),
+                    Value::Unit
+                );
+                assert_eq!(
+                    call("metrics::get", vec![metric("requests")])
+                        .expect("the updated metric should be readable"),
+                    int(2)
+                );
+            }
+            "reset-first" => {
+                assert_eq!(
+                    call("metrics::reset", vec![]).expect("reset should succeed"),
+                    Value::Unit
+                );
+                assert_eq!(
+                    call("metrics::get", vec![metric("missing")])
+                        .expect("a missing metric should be readable"),
+                    int(0)
+                );
+
+                let wrong_type = call("metrics::increment", vec![metric("requests"), Value::Unit])
+                    .expect_err("metric increments require int64 values");
+                assert_eq!(
+                    wrong_type.message,
+                    "`metrics.increment` expects `int64` for `value`"
+                );
+
+                let outside_int64 = call(
+                    "metrics::increment",
+                    vec![metric("requests"), int(i128::from(i64::MAX) + 1)],
+                )
+                .expect_err("metric increments outside int64 must be rejected");
+                assert_eq!(
+                    outside_int64.message,
+                    "metric increment does not fit in `int64`"
+                );
+
+                assert_eq!(
+                    call(
+                        "metrics::increment",
+                        vec![metric("requests"), int(i128::from(i64::MAX))]
+                    )
+                    .expect("the int64 maximum should remain a valid metric value"),
+                    Value::Unit
+                );
+                let overflow = call("metrics::increment", vec![metric("requests"), int(1)])
+                    .expect_err("metric addition overflow must be diagnosed");
+                assert_eq!(overflow.message, "metric value overflowed `int64`");
+                assert_eq!(
+                    call("metrics::get", vec![metric("requests")])
+                        .expect("a failed increment must preserve the old value"),
+                    int(i128::from(i64::MAX))
+                );
+
+                assert_eq!(
+                    call("metrics::reset", vec![]).expect("reset should clear all metrics"),
+                    Value::Unit
+                );
+                assert_eq!(
+                    call("metrics::get", vec![metric("requests")])
+                        .expect("a reset metric should read as missing"),
+                    int(0),
+                    "reset must make an existing metric observable as zero"
+                );
+            }
+            other => panic!("unknown metrics helper `{other}`"),
+        }
+        return;
+    }
+
+    for helper in ["get-first", "increment-first", "reset-first"] {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg(
+                "native_runtime::tests::metrics_state_and_diagnostics_are_observable_from_each_fresh_entry_path",
+            )
+            .arg("--nocapture")
+            .env(HELPER_ENV, helper)
+            .output()
+            .expect("metrics helper process should run");
+
+        assert!(
+            output.status.success(),
+            "metrics behavior helper `{helper}` failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -9525,8 +11430,214 @@ fn native_runtime_direct_forced_exit_runs_external_cleanup() {
     );
 }
 
+unsafe extern "C-unwind" fn direct_task_trap_while_holding_argument(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 1);
+    let _held_argument = unsafe { *args };
+    super::aurora_direct_fail_division_by_zero(0, 0)
+}
+
+unsafe extern "C-unwind" fn direct_task_cancel_while_holding_argument(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 1);
+    let _held_argument = unsafe { *args };
+    assert_eq!(super::aurora_direct_cancelled(), 1);
+    super::task_runtime_boundary(|| std::panic::panic_any(TaskCancelledSignal));
+    unreachable!("the cancellation boundary must exit the current lightweight task")
+}
+
+#[test]
+fn native_runtime_direct_forced_exit_releases_frame_owned_argument_references() {
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("owned by the direct task frame");
+    let argument_address = argument as usize;
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let argument = argument_address as *mut OpaqueValue;
+            let args = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_arg_buffer_store(args, 0, argument as i64);
+            let group = super::aurora_direct_task_group_new();
+            let task = unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_trap_while_holding_argument as *const () as usize as i64,
+                    args,
+                    1,
+                    1,
+                    group,
+                    1,
+                )
+            };
+            let joined = super::aurora_direct_task_join(task);
+            assert_eq!(expect_task_result_error_message(joined), "division by zero");
+            unsafe {
+                release_value(joined);
+                release_value(task);
+                release_value(group);
+            }
+            assert_eq!(
+                unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+                1,
+                "forced exit must release the argument reference claimed by the direct task frame"
+            );
+            Ok(Value::Unit)
+        })
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "forced task exit must free its externally owned claim flag"
+    );
+    unsafe {
+        release_value(argument);
+    }
+}
+
+#[test]
+fn native_runtime_direct_cancellation_releases_frame_owned_argument_references() {
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("owned by the cancelled direct task frame");
+    let argument_address = argument as usize;
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let argument = argument_address as *mut OpaqueValue;
+            let args = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_arg_buffer_store(args, 0, argument as i64);
+            let group = super::aurora_direct_task_group_new();
+            let task = unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_cancel_while_holding_argument as *const () as usize as i64,
+                    args,
+                    1,
+                    1,
+                    group,
+                    1,
+                )
+            };
+            let cancelled = super::aurora_direct_task_group_cancel(group);
+            expect_unit(cancelled);
+            unsafe {
+                release_value(cancelled);
+            }
+            let joined = super::aurora_direct_task_join(task);
+            match unsafe { take_value(joined) } {
+                Value::EnumVariant(variant)
+                    if variant.enum_name == "TaskResult" && variant.variant_name == "Cancelled" => {
+                }
+                other => panic!("expected TaskResult.Cancelled, found {other:?}"),
+            }
+            unsafe {
+                release_value(joined);
+                release_value(task);
+                release_value(group);
+            }
+            assert_eq!(
+                unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+                1,
+                "cancellation must release the argument reference claimed by the direct task frame"
+            );
+            Ok(Value::Unit)
+        })
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "task cancellation must free its externally owned claim flag"
+    );
+    unsafe {
+        release_value(argument);
+    }
+}
+
+#[test]
+fn native_runtime_direct_owned_ledger_balances_normal_and_buffer_transfers() {
+    let external = string_value("external owner");
+    let external_address = external as usize;
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let external = external_address as *mut OpaqueValue;
+            let tracked = unsafe { retain_value(external) };
+            let borrowed_buffer = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_arg_buffer_store(borrowed_buffer, 0, tracked as i64);
+            unsafe {
+                release_value(tracked);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "the raw buffer reference must not be mistaken for a task-frame owner"
+                );
+            });
+            assert_eq!(
+                unsafe { &*external }.ref_count.load(Ordering::Acquire),
+                2,
+                "the external and raw-buffer references must both remain live"
+            );
+            super::aurora_direct_arg_buffer_store(borrowed_buffer, 0, 0);
+            unsafe {
+                free_arg_buffer(borrowed_buffer, 1);
+            }
+            assert_eq!(
+                unsafe { &*external }.ref_count.load(Ordering::Acquire),
+                1,
+                "releasing the raw-buffer reference must not release the external owner"
+            );
+
+            let transferred = string_value("transferred to an owned buffer");
+            let owned_buffer = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_arg_buffer_store_owned(owned_buffer, 0, transferred as i64);
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "an owned buffer transfer must detach its frame-ledger entry"
+                );
+            });
+            super::aurora_direct_arg_buffer_store(owned_buffer, 0, 0);
+            unsafe {
+                free_arg_buffer(owned_buffer, 1);
+            }
+
+            let local = string_value("balanced local");
+            let retained = unsafe { retain_value(local) };
+            unsafe {
+                release_value(retained);
+                release_value(local);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "normal retain/release pairs must leave the task ledger empty"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    unsafe {
+        release_value(external);
+    }
+}
+
 #[test]
 fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
+    unsafe extern "C-unwind" fn successful_cleanup(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        boxed_value(Value::Unit)
+    }
+
     unsafe extern "C-unwind" fn failing_cleanup(
         _args: *const i64,
         _arg_count: usize,
@@ -9534,18 +11645,29 @@ fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
         super::runtime_error("cleanup failed")
     }
 
-    let retained = boxed_value(Value::String("retained cleanup argument".to_string()));
-    let retained_address = retained as usize;
+    let outer_retained = string_value("outer retained cleanup argument");
+    let failing_retained = string_value("failing retained cleanup argument");
+    let outer_retained_address = outer_retained as usize;
+    let failing_retained_address = failing_retained as usize;
     let result = run_lightweight_root_task(move || {
         let task = spawn_lightweight_task(move || {
             super::with_direct_task_runtime_scope(|| {
                 super::with_task_runtime_error_capture(|| {
-                    let retained = retained_address as *mut OpaqueValue;
-                    let args = super::aurora_direct_arg_buffer_new(1);
-                    super::aurora_direct_arg_buffer_store(args, 0, retained as i64);
+                    let outer_retained = outer_retained_address as *mut OpaqueValue;
+                    let outer_args = super::aurora_direct_arg_buffer_new(1);
+                    super::aurora_direct_arg_buffer_store(outer_args, 0, outer_retained as i64);
+                    super::aurora_direct_register_cleanup(
+                        successful_cleanup as *const () as usize as i64,
+                        outer_args,
+                        1,
+                    );
+
+                    let failing_retained = failing_retained_address as *mut OpaqueValue;
+                    let failing_args = super::aurora_direct_arg_buffer_new(1);
+                    super::aurora_direct_arg_buffer_store(failing_args, 0, failing_retained as i64);
                     super::aurora_direct_register_cleanup(
                         failing_cleanup as *const () as usize as i64,
-                        args,
+                        failing_args,
                         1,
                     );
                     super::runtime_error("body failed")
@@ -9566,12 +11688,20 @@ fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
 
     assert_eq!(result.expect("root task should complete"), Value::Unit);
     assert_eq!(
-        unsafe { &*retained }.ref_count.load(Ordering::SeqCst),
+        unsafe { &*outer_retained }.ref_count.load(Ordering::SeqCst),
         1,
-        "cleanup registration must release its retained arguments while unwinding"
+        "forced exit must release an outer cleanup snapshot left after a cleanup trap"
+    );
+    assert_eq!(
+        unsafe { &*failing_retained }
+            .ref_count
+            .load(Ordering::SeqCst),
+        1,
+        "forced exit must release the trapping cleanup's retained snapshot"
     );
     unsafe {
-        release_value(retained);
+        release_value(outer_retained);
+        release_value(failing_retained);
     }
 }
 

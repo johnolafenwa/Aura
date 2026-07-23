@@ -1,37 +1,43 @@
 #![cfg_attr(coverage, allow(dead_code))]
 
 use std::borrow::Borrow;
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
+use std::mem;
 use std::process;
 use std::slice;
 use std::str;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::ast::{BinaryOp, UnaryOp};
+use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
+use crate::builtin_modules::host_builtin_metadata;
 use crate::diag::{Diagnostic, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value,
+    cancel_current_lightweight_task_boundary, cast_numeric_value, collect_queue_values,
     current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
     evaluate_host_builtin, fail_current_lightweight_task, float_floor_divmod, io_error,
-    io_read_line, nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_to_runtime,
+    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
     process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
     process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
-    recv_for_registered_producers_iteration, recv_for_task_group_iteration,
-    register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
-    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task_with_cancellation,
+    recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
+    render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
@@ -74,6 +80,8 @@ impl Drop for DirectCleanupRegistration {
 }
 
 struct DirectTaskRuntimeState {
+    ownership_tracking_active: bool,
+    owned_value_refs: BTreeMap<usize, usize>,
     runtime_error_capture: bool,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
@@ -86,6 +94,8 @@ struct DirectTaskRuntimeState {
 impl Default for DirectTaskRuntimeState {
     fn default() -> Self {
         Self {
+            ownership_tracking_active: false,
+            owned_value_refs: BTreeMap::new(),
             runtime_error_capture: false,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
@@ -103,6 +113,12 @@ thread_local! {
     // runtime state behind the current lightweight-task identity instead.
     static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, DirectTaskRuntimeState>> =
         const { RefCell::new(BTreeMap::new()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static DIRECT_VALUE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 fn direct_task_runtime_key() -> u64 {
@@ -123,6 +139,56 @@ fn with_direct_task_runtime_state<T>(work: impl FnOnce(&mut DirectTaskRuntimeSta
     with_direct_task_runtime_state_for_key(direct_task_runtime_key(), work)
 }
 
+fn register_direct_owned_value(value: *mut OpaqueValue) {
+    if value.is_null() {
+        return;
+    }
+    let key = direct_task_runtime_key();
+    let overflow = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let Some(state) = states.get_mut(&key) else {
+            return false;
+        };
+        if !state.ownership_tracking_active {
+            return false;
+        }
+        let count = state.owned_value_refs.entry(value as usize).or_default();
+        match count.checked_add(1) {
+            Some(next) => {
+                *count = next;
+                false
+            }
+            None => true,
+        }
+    });
+    if overflow {
+        runtime_error("direct task owned-value reference count overflow");
+    }
+}
+
+fn unregister_direct_owned_value(value: *mut OpaqueValue) -> bool {
+    if value.is_null() {
+        return false;
+    }
+    let key = direct_task_runtime_key();
+    let removed = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let Some(state) = states.get_mut(&key) else {
+            return false;
+        };
+        let address = value as usize;
+        let Some(count) = state.owned_value_refs.get_mut(&address) else {
+            return false;
+        };
+        *count -= 1;
+        if *count == 0 {
+            state.owned_value_refs.remove(&address);
+        }
+        true
+    });
+    removed
+}
+
 struct DirectTaskRuntimeScopeGuard {
     key: u64,
     previous: Option<DirectTaskRuntimeState>,
@@ -140,7 +206,24 @@ impl Drop for DirectTaskRuntimeScopeGuard {
             }
             (current, restored_previous)
         });
-        drop(current);
+        let outstanding_owned_values = current
+            .as_ref()
+            .map(|current| current.owned_value_refs.clone())
+            .unwrap_or_default();
+        let outstanding_owned_value_types = outstanding_owned_values
+            .iter()
+            .map(|(address, count)| {
+                let type_name = unsafe {
+                    with_value(*address as *mut OpaqueValue, |value| {
+                        value_type_name(value).to_string()
+                    })
+                };
+                (*address, *count, type_name)
+            })
+            .collect::<Vec<_>>();
+        if let Some(current) = current {
+            release_direct_task_runtime_state(current);
+        }
 
         // Dropping owned cleanup registrations should not need direct runtime state,
         // but remove any fresh default entry created by a release boundary so a
@@ -148,37 +231,65 @@ impl Drop for DirectTaskRuntimeScopeGuard {
         if !restored_previous {
             let transient =
                 DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&self.key));
-            drop(transient);
+            if let Some(transient) = transient {
+                release_direct_task_runtime_state(transient);
+            }
+        }
+
+        if !std::thread::panicking() {
+            assert!(
+                outstanding_owned_values.is_empty(),
+                "normally completed direct task retained owned opaque values: {:?}",
+                outstanding_owned_value_types
+            );
         }
     }
 }
 
 fn with_direct_task_runtime_scope<T>(work: impl FnOnce() -> T) -> T {
     let key = direct_task_runtime_key();
-    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| {
-        states
-            .borrow_mut()
-            .insert(key, DirectTaskRuntimeState::default())
-    });
+    let state = DirectTaskRuntimeState {
+        ownership_tracking_active: true,
+        ..DirectTaskRuntimeState::default()
+    };
+    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().insert(key, state));
     let _guard = DirectTaskRuntimeScopeGuard { key, previous };
     work()
 }
 
 fn clear_direct_task_runtime_states() {
     let stale = DIRECT_TASK_RUNTIME_STATES.with(|states| std::mem::take(&mut *states.borrow_mut()));
-    drop(stale);
+    for state in stale.into_values() {
+        release_direct_task_runtime_state(state);
+    }
 }
 
 fn discard_current_direct_task_runtime_state() {
     let key = direct_task_runtime_key();
     let state = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
-    drop(state);
+    if let Some(state) = state {
+        release_direct_task_runtime_state(state);
+    }
 
     // Releasing owned cleanup arguments should not create runtime state, but
     // discard any defensive fallback entry before the task id can be observed
     // again by scheduler teardown.
     let transient = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
-    drop(transient);
+    if let Some(transient) = transient {
+        release_direct_task_runtime_state(transient);
+    }
+}
+
+fn release_direct_task_runtime_state(mut state: DirectTaskRuntimeState) {
+    let owned_value_refs = std::mem::take(&mut state.owned_value_refs);
+    drop(state);
+    for (address, count) in owned_value_refs {
+        for _ in 0..count {
+            unsafe {
+                release_untracked_value(address as *mut OpaqueValue);
+            }
+        }
+    }
 }
 
 fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {
@@ -469,11 +580,13 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mut OpaqueValue {
-    Box::into_raw(Box::new(OpaqueValue {
+    let value = Box::into_raw(Box::new(OpaqueValue {
         ref_count: AtomicUsize::new(1),
         value: RwLock::new(value),
         runtime_type_name: RwLock::new(runtime_type_name),
-    }))
+    }));
+    register_direct_owned_value(value);
+    value
 }
 
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect
@@ -513,6 +626,36 @@ fn release_ref_count(ref_count: &AtomicUsize) -> std::result::Result<bool, &'sta
     }
 }
 
+unsafe fn retain_untracked_value(value: *mut OpaqueValue) {
+    if value.is_null() {
+        return;
+    }
+    let opaque = unsafe {
+        value
+            .as_ref()
+            .unwrap_or_else(|| runtime_error("direct runtime received an invalid opaque value"))
+    };
+    if let Err(message) = retain_ref_count(&opaque.ref_count) {
+        runtime_error(message);
+    }
+}
+
+unsafe fn release_untracked_value(value: *mut OpaqueValue) {
+    if value.is_null() {
+        return;
+    }
+    let opaque = unsafe {
+        value
+            .as_ref()
+            .unwrap_or_else(|| runtime_error("direct runtime received an invalid opaque value"))
+    };
+    if release_ref_count(&opaque.ref_count).unwrap_or_else(|message| runtime_error(message)) {
+        unsafe {
+            drop(Box::from_raw(value));
+        }
+    }
+}
+
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
     let value = match ptr.as_ref() {
         Some(value) => value,
@@ -526,7 +669,14 @@ unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -
 }
 
 unsafe fn value_ref(ptr: *mut OpaqueValue) -> Value {
+    #[cfg(test)]
+    DIRECT_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
     with_value(ptr, Clone::clone)
+}
+
+#[cfg(test)]
+fn direct_value_clone_count() -> usize {
+    DIRECT_VALUE_CLONE_COUNT.with(Cell::get)
 }
 
 unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
@@ -742,6 +892,30 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
     value
 }
 
+unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
+    let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
+    unsafe {
+        aurora_direct_release_value(ptr);
+    }
+    value
+}
+
+unsafe fn consume_untracked_value(ptr: *mut OpaqueValue) -> Value {
+    let value = unsafe { value_ref(ptr) };
+    unsafe {
+        release_untracked_value(ptr);
+    }
+    value
+}
+
+unsafe fn consume_owned_untracked_value(ptr: *mut OpaqueValue) -> Value {
+    let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
+    unsafe {
+        release_untracked_value(ptr);
+    }
+    value
+}
+
 #[cfg(coverage)]
 #[doc(hidden)]
 pub unsafe fn aurora_direct_coverage_clone_value(ptr: *mut OpaqueValue) -> Value {
@@ -756,9 +930,367 @@ unsafe fn consume_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
             if handle == 0 {
                 runtime_error("direct runtime received a null enum payload handle");
             }
-            unsafe { consume_value(handle as *mut OpaqueValue) }
+            unsafe { consume_untracked_value(handle as *mut OpaqueValue) }
         })
         .collect()
+}
+
+unsafe fn consume_owned_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
+    let handles = unsafe { Vec::from_raw_parts(buffer, count, count) };
+    handles
+        .into_iter()
+        .map(|handle| {
+            if handle == 0 {
+                runtime_error("direct runtime received a null owned enum payload handle");
+            }
+            unsafe { consume_owned_untracked_value(handle as *mut OpaqueValue) }
+        })
+        .collect()
+}
+
+struct DirectJsonArgBuffer {
+    handles: Vec<i64>,
+}
+
+impl DirectJsonArgBuffer {
+    unsafe fn from_raw(buffer: *mut i64, count: usize) -> Self {
+        Self {
+            handles: unsafe { Vec::from_raw_parts(buffer, count, count) },
+        }
+    }
+
+    fn validate(&self, name: &str) -> std::result::Result<(), Diagnostic> {
+        let Some(metadata) = host_builtin_metadata(name) else {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("unknown dynamic JSON host builtin `{name}`"),
+            ));
+        };
+        if self.handles.len() != metadata.params.len() {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "`{name}` expects {} arguments, found {}",
+                    metadata.params.len(),
+                    self.handles.len()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn handle(
+        &self,
+        name: &str,
+        index: usize,
+        expected_passing: ReceiverKind,
+    ) -> std::result::Result<*mut OpaqueValue, Diagnostic> {
+        let metadata = host_builtin_metadata(name).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!("unknown dynamic JSON host builtin `{name}`"),
+            )
+        })?;
+        let parameter = metadata.params.get(index).ok_or_else(|| {
+            Diagnostic::coded("AU4001", format!("`{name}` has no argument {}", index + 1))
+        })?;
+        if parameter.passing != expected_passing {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "dynamic JSON host ABI expected `{name}` argument `{}` to use {:?} passing, found {:?}",
+                    parameter.name, expected_passing, parameter.passing
+                ),
+            ));
+        }
+        let handle = *self.handles.get(index).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!("`{name}` is missing argument {}", index + 1),
+            )
+        })?;
+        if handle == 0 {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("`{name}` received a null argument {}", index + 1),
+            ));
+        }
+        Ok(handle as *mut OpaqueValue)
+    }
+
+    fn with_borrow<T>(
+        &self,
+        name: &str,
+        index: usize,
+        read: impl FnOnce(&Value) -> std::result::Result<T, Diagnostic>,
+    ) -> std::result::Result<T, Diagnostic> {
+        let handle = self.handle(name, index, ReceiverKind::Borrow)?;
+        unsafe { with_value(handle, read) }
+    }
+
+    fn with_copy<T>(
+        &self,
+        name: &str,
+        index: usize,
+        read: impl FnOnce(&Value) -> std::result::Result<T, Diagnostic>,
+    ) -> std::result::Result<T, Diagnostic> {
+        let handle = self.handle(name, index, ReceiverKind::Value)?;
+        unsafe { with_value(handle, read) }
+    }
+
+    fn take_value(&self, name: &str, index: usize) -> std::result::Result<Value, Diagnostic> {
+        let handle = self.handle(name, index, ReceiverKind::Value)?;
+        Ok(unsafe { value_mut(handle, |value| mem::replace(value, Value::Unit)) })
+    }
+}
+
+impl Drop for DirectJsonArgBuffer {
+    fn drop(&mut self) {
+        for handle in self.handles.drain(..) {
+            if handle != 0 {
+                unsafe {
+                    release_untracked_value(handle as *mut OpaqueValue);
+                }
+            }
+        }
+    }
+}
+
+fn is_dynamic_json_host_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "json::parse"
+            | "json::dumps"
+            | "json::is_null"
+            | "json::as_bool"
+            | "json::as_int"
+            | "json::as_float"
+            | "json::into_string"
+            | "json::into_array"
+            | "json::into_object"
+    )
+}
+
+fn direct_json_variant<'a>(
+    value: &'a Value,
+    call: &str,
+) -> std::result::Result<&'a EnumVariantValue, Diagnostic> {
+    match value {
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "json.Value" =>
+        {
+            Ok(variant)
+        }
+        other => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected a runtime `json.Value`, found `{}`",
+                other.render()
+            ),
+        )),
+    }
+}
+
+fn direct_json_exact_payload<'a>(
+    value: &'a Value,
+    expected_variant: &str,
+    call: &str,
+) -> std::result::Result<Option<&'a Value>, Diagnostic> {
+    let variant = direct_json_variant(value, call)?;
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    match variant.payloads.as_slice() {
+        [payload] => Ok(Some(payload)),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        )),
+    }
+}
+
+fn direct_json_into_exact_payload(
+    value: Value,
+    expected_variant: &str,
+    call: &str,
+) -> std::result::Result<Option<Value>, Diagnostic> {
+    let Value::EnumVariant(mut variant) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{call}` expected a runtime `json.Value`"),
+        ));
+    };
+    if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{call}` expected enum `json.Value`, found `{}`",
+                nominal_runtime_base_name(&variant.enum_name)
+            ),
+        ));
+    }
+    if variant.variant_name != expected_variant {
+        return Ok(None);
+    }
+    if variant.payloads.len() != 1 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
+        ));
+    }
+    Ok(variant.payloads.pop())
+}
+
+fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnostic> {
+    let Value::EnumVariant(option) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        ));
+    };
+    match (
+        nominal_runtime_base_name(&option.enum_name),
+        option.variant_name.as_str(),
+        option.payloads.as_slice(),
+    ) {
+        ("Option", "None", []) => Ok(None),
+        ("Option", "Some", [Value::Int(value)]) => {
+            if !json_int_metadata_is_exact(value) {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "`json::dumps` expects `indent` to contain an `int64`",
+                ));
+            }
+            let indent = value
+                .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
+                .expect("exact int64 metadata guarantees an int64 runtime value");
+            Ok(Some(indent))
+        }
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            "`json::dumps` expects `indent` to be `Option[int64]`",
+        )),
+    }
+}
+
+fn evaluate_direct_json_host_builtin(
+    name: &str,
+    args: &DirectJsonArgBuffer,
+) -> std::result::Result<Value, Diagnostic> {
+    args.validate(name)?;
+    match name {
+        "json::parse" => args.with_borrow(name, 0, |value| {
+            let Value::String(text) = value else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{name}` expects argument 1 to be `String`"),
+                ));
+            };
+            json_parse_to_runtime(text)
+        }),
+        "json::dumps" => {
+            let indent = args.with_copy(name, 1, direct_json_indent)?;
+            args.with_borrow(name, 0, |value| {
+                let value = runtime_value_to_json(value)?;
+                json_codec::dumps(&value, indent)
+                    .map(Value::String)
+                    .map_err(json_dump_error_to_diagnostic)
+            })
+        }
+        "json::is_null" => args.with_borrow(name, 0, |value| {
+            let variant = direct_json_variant(value, name)?;
+            if variant.variant_name == "Null" && !variant.payloads.is_empty() {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Null` payload in `json::is_null`",
+                ));
+            }
+            Ok(Value::Bool(variant.variant_name == "Null"))
+        }),
+        "json::as_bool" => args.with_borrow(name, 0, |value| {
+            Ok(match direct_json_exact_payload(value, "Bool", name)? {
+                Some(Value::Bool(value)) => option_some(Value::Bool(*value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }),
+        "json::as_int" => args.with_borrow(name, 0, |value| {
+            Ok(match direct_json_exact_payload(value, "Int", name)? {
+                Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
+                    option_some(Value::Int(*value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Int` payload in `json::as_int`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }),
+        "json::as_float" => args.with_borrow(name, 0, |value| {
+            Ok(match direct_json_exact_payload(value, "Float", name)? {
+                Some(Value::Float(value)) => option_some(Value::Float(*value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Float` payload in `json::as_float`",
+                    ))
+                }
+                None => option_none(),
+            })
+        }),
+        "json::into_string" => Ok(
+            match direct_json_into_exact_payload(args.take_value(name, 0)?, "String", name)? {
+                Some(Value::String(value)) => option_some(Value::String(value)),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.String` payload in `json::into_string`",
+                    ))
+                }
+                None => option_none(),
+            },
+        ),
+        "json::into_array" => Ok(
+            match direct_json_into_exact_payload(args.take_value(name, 0)?, "Array", name)? {
+                Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
+                    option_some(Value::Vec(value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Array` payload in `json::into_array`",
+                    ))
+                }
+                None => option_none(),
+            },
+        ),
+        "json::into_object" => Ok(
+            match direct_json_into_exact_payload(args.take_value(name, 0)?, "Object", name)? {
+                Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
+                    option_some(Value::Map(value))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Object` payload in `json::into_object`",
+                    ))
+                }
+                None => option_none(),
+            },
+        ),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("unknown dynamic JSON host builtin `{name}`"),
+        )),
+    }
 }
 
 fn decode_bytes(ptr: *const u8, len: usize) -> String {
@@ -923,15 +1455,19 @@ fn process_optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Op
         .unwrap_or_else(|error| direct_timer_error(error))
 }
 
-fn duration_result_from_ptr(value: *mut OpaqueValue, label: &str) -> io::Result<StdDuration> {
-    match unsafe { value_ref(value) } {
-        value @ Value::Duration(_) => duration_value_to_host_timer(&value, label),
+fn duration_result_from_value(value: &Value, label: &str) -> io::Result<StdDuration> {
+    match value {
+        value @ Value::Duration(_) => duration_value_to_host_timer(value, label),
         other => runtime_error(format!(
             "`{}` expects `Duration`, found `{}`",
             label,
             value_type_name(other)
         )),
     }
+}
+
+fn duration_result_from_ptr(value: *mut OpaqueValue, label: &str) -> io::Result<StdDuration> {
+    duration_result_from_value(&unsafe { value_ref(value) }, label)
 }
 
 fn duration_from_ptr(value: *mut OpaqueValue, label: &str) -> StdDuration {
@@ -956,8 +1492,8 @@ macro_rules! process_timeout_or_return {
     };
 }
 
-fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<i32> {
-    let value = expect_i32_value(&unsafe { value_ref(value) }, label);
+fn supervisor_max_restarts_from_value(value: &Value, label: &str) -> Option<i32> {
+    let value = expect_i32_value(value, label);
     if value < -1 {
         runtime_error(format!(
             "`{}` expects `max_restarts` to be -1 or greater",
@@ -965,6 +1501,11 @@ fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Opt
         ));
     }
     (value >= 0).then_some(value)
+}
+
+#[cfg(test)]
+fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<i32> {
+    supervisor_max_restarts_from_value(&unsafe { value_ref(value) }, label)
 }
 
 fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
@@ -1087,7 +1628,7 @@ unsafe fn release_direct_cleanup_args(args: *mut i64, arg_count: usize) {
     for value in values.iter().copied() {
         if value != 0 {
             unsafe {
-                aurora_direct_release_value(value as *mut OpaqueValue);
+                release_untracked_value(value as *mut OpaqueValue);
             }
         }
     }
@@ -1116,26 +1657,43 @@ fn drain_direct_cleanup_stack() {
         key,
         previous: previous_depth,
     };
-    let registrations = with_direct_task_runtime_state_for_key(key, |state| {
-        std::mem::take(&mut state.cleanup_stack)
-    });
     let skip_max_depth_cleanup = direct_primary_runtime_diagnostic()
         .as_ref()
         .is_some_and(is_call_depth_diagnostic);
-    for registration in registrations.into_iter().rev() {
+    loop {
+        // Keep every registration owned by task-local state until its thunk
+        // returns. A cleanup thunk may itself trap, and the scheduler then
+        // force-resets the generated stack without running Rust destructors.
+        // The forced-exit callback can still reclaim this snapshot and every
+        // remaining outer registration from `DirectTaskRuntimeState`.
+        let registration = with_direct_task_runtime_state_for_key(key, |state| {
+            state.cleanup_stack.last().map(|registration| {
+                (
+                    registration.id,
+                    registration.thunk_ptr,
+                    registration.args,
+                    registration.arg_count,
+                    registration.call_depth,
+                )
+            })
+        });
+        let Some((id, thunk_ptr, args, arg_count, call_depth)) = registration else {
+            break;
+        };
         // Match the interpreter: a cleanup call captured at the saturated Aurora
         // call depth cannot enter its `close` method during recursion unwinding.
-        if skip_max_depth_cleanup && registration.call_depth >= DIRECT_MAX_CALL_DEPTH {
+        if skip_max_depth_cleanup && call_depth >= DIRECT_MAX_CALL_DEPTH {
+            drop(take_direct_cleanup_registration(id));
             continue;
         }
-        if registration.thunk_ptr != 0 {
-            let thunk: NativeThunk =
-                unsafe { std::mem::transmute(registration.thunk_ptr as usize) };
-            let result = unsafe { thunk(registration.args as *const i64, registration.arg_count) };
+        if thunk_ptr != 0 {
+            let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+            let result = unsafe { thunk(args as *const i64, arg_count) };
             unsafe {
                 aurora_direct_release_value(result);
             }
         }
+        drop(take_direct_cleanup_registration(id));
     }
 }
 
@@ -1734,16 +2292,10 @@ pub unsafe extern "C-unwind" fn aurora_direct_retain_value(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        if !value.is_null() {
-            let opaque = unsafe {
-                value.as_ref().unwrap_or_else(|| {
-                    runtime_error("direct runtime received a null opaque value pointer")
-                })
-            };
-            if let Err(message) = retain_ref_count(&opaque.ref_count) {
-                runtime_error(message);
-            }
+        unsafe {
+            retain_untracked_value(value);
         }
+        register_direct_owned_value(value);
         value
     })
 }
@@ -1756,17 +2308,9 @@ pub unsafe extern "C-unwind" fn aurora_direct_retain_value(
 /// ownership contract.
 pub unsafe extern "C-unwind" fn aurora_direct_release_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        if !value.is_null() {
-            unsafe {
-                let opaque = value.as_ref().unwrap_or_else(|| {
-                    runtime_error("direct runtime received a null opaque value pointer")
-                });
-                if release_ref_count(&opaque.ref_count)
-                    .unwrap_or_else(|message| runtime_error(message))
-                {
-                    drop(Box::from_raw(value));
-                }
-            }
+        unregister_direct_owned_value(value);
+        unsafe {
+            release_untracked_value(value);
         }
     })
 }
@@ -2524,7 +3068,7 @@ pub extern "C-unwind" fn aurora_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
+        let value = unsafe { consume_owned_value(value) };
         let inferred = inferred_collection_type(&value);
         with_vector_mut(vec, |vector| {
             if vector.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
@@ -2569,7 +3113,7 @@ pub extern "C-unwind" fn aurora_direct_vec_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
+        let value = unsafe { consume_owned_value(value) };
         let previous = with_vector_mut(vec, |vector| {
             let Some(normalized) = normalize_vec_index(index, vector.elements.len())
                 .filter(|normalized| *normalized < vector.elements.len())
@@ -2653,7 +3197,7 @@ pub extern "C-unwind" fn aurora_direct_vec_insert_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
+        let value = unsafe { consume_owned_value(value) };
         with_vector_mut(vec, |vector| {
             let Some(normalized) = normalize_vec_index(index, vector.elements.len())
                 .filter(|normalized| *normalized <= vector.elements.len())
@@ -2696,7 +3240,7 @@ pub extern "C-unwind" fn aurora_direct_vec_extend_in_place(
     other: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let other = unsafe { take_value(other) };
+        let other = unsafe { consume_owned_value(other) };
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `Vec[T]` value");
         };
@@ -2756,6 +3300,21 @@ pub extern "C-unwind" fn aurora_direct_vec_index_option(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_vec_take_index_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = with_vector_mut(vec, |vector| {
+            normalize_vec_index(index, vector.elements.len())
+                .filter(|normalized| *normalized < vector.elements.len())
+                .map(|normalized| vector.elements.remove(normalized))
+        });
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     vec: *mut OpaqueValue,
     index: i64,
@@ -2764,7 +3323,7 @@ pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
+        let value = unsafe { consume_owned_value(value) };
         let result = with_vector_mut(vec, |vector| {
             let normalized = match normalize_vec_index(index, vector.elements.len())
                 .filter(|normalized| *normalized < vector.elements.len())
@@ -2844,8 +3403,8 @@ pub extern "C-unwind" fn aurora_direct_map_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = unsafe { take_value(value) };
+        let key = unsafe { consume_owned_value(key) };
+        let value = unsafe { consume_owned_value(value) };
         let inferred_key_type = inferred_collection_type(&key);
         let inferred_value_type = inferred_collection_type(&value);
         let previous = with_map_mut(map, |map| {
@@ -3020,8 +3579,8 @@ pub extern "C-unwind" fn aurora_direct_map_set_index_in_place(
     _column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = unsafe { take_value(value) };
+        let key = unsafe { consume_owned_value(key) };
+        let value = unsafe { consume_owned_value(value) };
         with_map_mut(map, |map| {
             if let Some(index) = map
                 .entries
@@ -3053,7 +3612,7 @@ pub extern "C-unwind" fn aurora_direct_map_extend_in_place(
     other: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let other = unsafe { take_value(other) };
+        let other = unsafe { consume_owned_value(other) };
         let Value::Map(other) = other else {
             runtime_error("`extend` requires another `Map[K, V]` value");
         };
@@ -3116,7 +3675,7 @@ pub extern "C-unwind" fn aurora_direct_set_insert_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
+        let value = unsafe { consume_owned_value(value) };
         let inferred = inferred_collection_type(&value);
         let inserted = with_set_mut(set, |set| {
             if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
@@ -3169,6 +3728,25 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
             runtime_error("vector index does not fit in the runtime address space")
         });
         let value = with_set(set, |set| set.elements.get(index).cloned());
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_set_take_index_in_place(
+    set: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if index < 0 {
+            runtime_error(format!("set index `{}` cannot be negative", index));
+        }
+        let index = usize::try_from(index).unwrap_or_else(|_| {
+            runtime_error("set index does not fit in the runtime address space")
+        });
+        let value = with_set_mut(set, |set| {
+            (index < set.elements.len()).then(|| set.elements.remove(index))
+        });
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -3647,7 +4225,7 @@ pub extern "C-unwind" fn aurora_direct_enum_variant(
             payloads: if payload_count == 0 {
                 Vec::new()
             } else {
-                unsafe { consume_opaque_buffer(payloads_ptr, payload_count) }
+                unsafe { consume_owned_opaque_buffer(payloads_ptr, payload_count) }
             },
         }))
     })
@@ -3664,12 +4242,14 @@ pub extern "C-unwind" fn aurora_direct_variant_matches(
     task_runtime_boundary(|| {
         let expected_enum = decode_bytes(enum_ptr, enum_len);
         let expected_variant = decode_bytes(variant_ptr, variant_len);
-        match unsafe { value_ref(value) } {
-            Value::EnumVariant(variant) => i64::from(
-                nominal_runtime_base_name(&variant.enum_name) == expected_enum
-                    && variant.variant_name == expected_variant,
-            ),
-            _ => 0,
+        unsafe {
+            with_value(value, |value| match value {
+                Value::EnumVariant(variant) => i64::from(
+                    nominal_runtime_base_name(&variant.enum_name) == expected_enum
+                        && variant.variant_name == expected_variant,
+                ),
+                _ => 0,
+            })
         }
     })
 }
@@ -3693,6 +4273,37 @@ pub extern "C-unwind" fn aurora_direct_variant_payload(
             "expected enum value, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_variant_take_payload(
+    value: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let index =
+            usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid enum payload index"));
+        let payload = unsafe {
+            value_mut(value, |value| {
+                let Value::EnumVariant(variant) = value else {
+                    runtime_error(format!(
+                        "expected enum value, found `{}`",
+                        value_type_name(value)
+                    ));
+                };
+                let payload = variant.payloads.get_mut(index).unwrap_or_else(|| {
+                    runtime_error(format!(
+                        "enum variant `{}.{}` does not carry a payload at index {}",
+                        nominal_runtime_base_name(&variant.enum_name),
+                        variant.variant_name,
+                        index
+                    ))
+                });
+                std::mem::replace(payload, Value::Unit)
+            })
+        };
+        boxed_value(payload)
     })
 }
 
@@ -3761,6 +4372,59 @@ pub extern "C-unwind" fn aurora_direct_instance_get_field(
     })
 }
 
+fn take_direct_instance_field(
+    value: &mut Value,
+    segments: &[&str],
+    full_path: &str,
+) -> std::result::Result<Value, String> {
+    let Value::Instance(instance) = value else {
+        return Err(format!(
+            "cannot move field `{full_path}` from non-instance `{}`",
+            value_type_name(value)
+        ));
+    };
+    let Some((field, rest)) = segments.split_first() else {
+        return Err("direct runtime received an empty instance field path".to_string());
+    };
+    if rest.is_empty() {
+        return instance.fields.remove(*field).ok_or_else(|| {
+            format!(
+                "class `{}` has no field `{}` in move path `{full_path}`",
+                instance.class_name, field
+            )
+        });
+    }
+    let nested = instance.fields.get_mut(*field).ok_or_else(|| {
+        format!(
+            "class `{}` has no field `{}` in move path `{full_path}`",
+            instance.class_name, field
+        )
+    })?;
+    take_direct_instance_field(nested, rest, full_path)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_instance_take_field(
+    value: *mut OpaqueValue,
+    field_ptr: *const u8,
+    field_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let field_path = decode_bytes(field_ptr, field_len);
+        let segments = field_path.split('.').collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment.is_empty()) {
+            runtime_error(format!("invalid instance move path `{field_path}`"));
+        }
+        let moved = unsafe {
+            value_mut(value, |value| {
+                take_direct_instance_field(value, &segments, &field_path)
+            })
+        }
+        .unwrap_or_else(|message| runtime_error(message));
+        boxed_value(moved)
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_instance_set_field(
     value: *mut OpaqueValue,
@@ -3784,6 +4448,57 @@ pub extern "C-unwind" fn aurora_direct_instance_set_field(
                 value_type_name(other)
             )),
         }
+    })
+}
+
+fn set_direct_instance_field_owned(
+    value: &mut Value,
+    segments: &[&str],
+    full_path: &str,
+    new_value: Value,
+) -> std::result::Result<(), String> {
+    let Value::Instance(instance) = value else {
+        return Err(format!(
+            "cannot assign field `{full_path}` on non-instance `{}`",
+            value_type_name(value)
+        ));
+    };
+    let Some((field, rest)) = segments.split_first() else {
+        return Err("direct runtime received an empty instance assignment path".to_string());
+    };
+    if rest.is_empty() {
+        instance.fields.insert((*field).to_string(), new_value);
+        return Ok(());
+    }
+    let nested = instance.fields.get_mut(*field).ok_or_else(|| {
+        format!(
+            "class `{}` has no field `{}` in assignment path `{full_path}`",
+            instance.class_name, field
+        )
+    })?;
+    set_direct_instance_field_owned(nested, rest, full_path, new_value)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_instance_set_field_owned(
+    value: *mut OpaqueValue,
+    field_ptr: *const u8,
+    field_len: usize,
+    new_value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let field_path = decode_bytes(field_ptr, field_len);
+        let segments = field_path.split('.').collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment.is_empty()) {
+            runtime_error(format!("invalid instance assignment path `{field_path}`"));
+        }
+        let new_value = unsafe { consume_owned_value(new_value) };
+        unsafe {
+            value_mut(value, |value| {
+                set_direct_instance_field_owned(value, &segments, &field_path, new_value)
+            })
+        }
+        .unwrap_or_else(|message| runtime_error(message));
     })
 }
 
@@ -3812,6 +4527,15 @@ pub extern "C-unwind" fn aurora_direct_host_builtin(
         let name = decode_bytes(name_ptr, name_len);
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
+        if is_dynamic_json_host_builtin(&name) {
+            let args = unsafe { DirectJsonArgBuffer::from_raw(args_ptr, arg_count) };
+            let result = evaluate_direct_json_host_builtin(&name, &args);
+            drop(args);
+            return match result {
+                Ok(value) => boxed_value(value),
+                Err(error) => runtime_diagnostic_error(error),
+            };
+        }
         let args = unsafe { consume_opaque_buffer(args_ptr, arg_count) };
         match evaluate_host_builtin(&name, args) {
             Ok(value) => boxed_value(value),
@@ -3830,10 +4554,34 @@ pub extern "C-unwind" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index:
         unsafe {
             let previous = *buffer.add(index);
             if previous != 0 {
-                aurora_direct_release_value(previous as *mut OpaqueValue);
+                release_untracked_value(previous as *mut OpaqueValue);
             }
             if value != 0 {
-                aurora_direct_retain_value(value as *mut OpaqueValue);
+                retain_untracked_value(value as *mut OpaqueValue);
+            }
+            *buffer.add(index) = value;
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_arg_buffer_store_owned(
+    buffer: *mut i64,
+    index: i64,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        let index = match usize::try_from(index) {
+            Ok(index) => index,
+            Err(_) => runtime_error("invalid owned arg index"),
+        };
+        unsafe {
+            let previous = *buffer.add(index);
+            if previous != 0 {
+                release_untracked_value(previous as *mut OpaqueValue);
+            }
+            if value != 0 {
+                unregister_direct_owned_value(value as *mut OpaqueValue);
             }
             *buffer.add(index) = value;
         }
@@ -3944,30 +4692,31 @@ pub extern "C-unwind" fn aurora_direct_channel_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => {
-            match channel
-                .send_with_cancellation(unsafe { take_value(value) }, Some(&current_cancellation()))
-            {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(SendValueError::Closed(value)) => {
-                    boxed_value(result_err(send_error_closed(*value)))
-                }
-                Err(SendValueError::Cancelled(value)) => {
-                    boxed_value(result_err(send_error_cancelled(*value)))
-                }
-                Err(SendValueError::TimedOut(value)) => {
-                    boxed_value(result_err(send_error_timed_out(*value)))
-                }
-                Err(SendValueError::Full(value)) => {
-                    boxed_value(result_err(send_error_full(*value)))
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => {
+                match channel.send_with_cancellation(value, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(SendValueError::Closed(value)) => {
+                        boxed_value(result_err(send_error_closed(*value)))
+                    }
+                    Err(SendValueError::Cancelled(value)) => {
+                        boxed_value(result_err(send_error_cancelled(*value)))
+                    }
+                    Err(SendValueError::TimedOut(value)) => {
+                        boxed_value(result_err(send_error_timed_out(*value)))
+                    }
+                    Err(SendValueError::Full(value)) => {
+                        boxed_value(result_err(send_error_full(*value)))
+                    }
                 }
             }
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
     })
 }
 
@@ -3978,10 +4727,11 @@ pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
         let timeout = duration_from_ptr(duration, "put(timeout=...)");
         match unsafe { value_ref(channel) } {
             Value::Channel(channel) => match direct_timer_result_or_trap(channel.send_with_timeout(
-                unsafe { take_value(value) },
+                value,
                 Some(timeout),
                 Some(&current_cancellation()),
             )) {
@@ -4012,24 +4762,29 @@ pub extern "C-unwind" fn aurora_direct_channel_try_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => match channel.try_send_result(unsafe { take_value(value) }) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(SendValueError::Closed(value)) => {
-                boxed_value(result_err(send_error_closed(*value)))
-            }
-            Err(SendValueError::TimedOut(value)) => {
-                boxed_value(result_err(send_error_timed_out(*value)))
-            }
-            Err(SendValueError::Cancelled(value)) => {
-                boxed_value(result_err(send_error_cancelled(*value)))
-            }
-            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(*value))),
-        },
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => match channel.try_send_result(value) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(SendValueError::Closed(value)) => {
+                    boxed_value(result_err(send_error_closed(*value)))
+                }
+                Err(SendValueError::TimedOut(value)) => {
+                    boxed_value(result_err(send_error_timed_out(*value)))
+                }
+                Err(SendValueError::Cancelled(value)) => {
+                    boxed_value(result_err(send_error_cancelled(*value)))
+                }
+                Err(SendValueError::Full(value)) => {
+                    boxed_value(result_err(send_error_full(*value)))
+                }
+            },
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -4200,7 +4955,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let cancellation = current_cancellation();
-        let default = unsafe { value_ref(default) }.clone();
+        let default = unsafe { consume_owned_value(default) };
         match unsafe { value_ref(channel) } {
             Value::Channel(channel) => boxed_value(
                 match if cancellation.is_cancelled() {
@@ -4235,7 +4990,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { value_ref(default) }.clone();
+        let default = unsafe { consume_owned_value(default) };
         let timeout = duration_from_ptr(duration, "get_or(timeout=...)");
         match unsafe { value_ref(channel) } {
             Value::Channel(channel) => {
@@ -4396,7 +5151,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let cancellation = current_cancellation();
-        let default = unsafe { value_ref(default) }.clone();
+        let default = unsafe { consume_owned_value(default) };
         match unsafe { value_ref(task) } {
             Value::Task(task) => match if cancellation.is_cancelled() {
                 TaskWaitStatus::Cancelled
@@ -4433,7 +5188,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { value_ref(default) }.clone();
+        let default = unsafe { consume_owned_value(default) };
         let timeout = duration_from_ptr(duration, "result_or(timeout=...)");
         match unsafe { value_ref(task) } {
             Value::Task(task) => {
@@ -5704,24 +6459,36 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_start(
     group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let name = expect_string_value(&unsafe { value_ref(name) }, "start(...)");
-        let command = expect_command_vec(&unsafe { value_ref(command) }, "start(...)");
-        let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "start(...)");
-        let env = expect_headers_map(&unsafe { value_ref(env) }, "start(...)");
-        let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "start(...)")
+        let name = unsafe { consume_owned_value(name) };
+        let command = unsafe { consume_owned_value(command) };
+        let cwd = unsafe { consume_owned_value(cwd) };
+        let env = unsafe { consume_owned_value(env) };
+        let stdin = unsafe { consume_owned_value(stdin) };
+        let stdout = unsafe { consume_owned_value(stdout) };
+        let stderr = unsafe { consume_owned_value(stderr) };
+        let restart = unsafe { consume_owned_value(restart) };
+        let backoff = unsafe { consume_owned_value(backoff) };
+        let max_restarts = unsafe { consume_owned_value(max_restarts) };
+        let group = unsafe { consume_owned_value(group) };
+
+        let name = expect_string_value(&name, "start(...)");
+        let command = expect_command_vec(&command, "start(...)");
+        let cwd = expect_optional_string_value(&cwd, "start(...)");
+        let env = expect_headers_map(&env, "start(...)");
+        let stdin = decode_process_stdio(&stdin, "start(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "start(...)")
+        let stdout = decode_process_stdio(&stdout, "start(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "start(...)")
+        let stderr = decode_process_stdio(&stderr, "start(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let restart = decode_process_restart_policy(&unsafe { value_ref(restart) }, "start(...)")
+        let restart = decode_process_restart_policy(&restart, "start(...)")
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let backoff = match duration_result_from_ptr(backoff, "start(...)") {
+        let backoff = match duration_result_from_value(&backoff, "start(...)") {
             Ok(backoff) => backoff,
             Err(error) => return boxed_value(result_err(process_error_from_io(error))),
         };
-        let max_restarts = supervisor_max_restarts_from_ptr(max_restarts, "start(...)");
-        let group = expect_bool_value(&unsafe { value_ref(group) }, "start(...)");
+        let max_restarts = supervisor_max_restarts_from_value(&max_restarts, "start(...)");
+        let group = expect_bool_value(&group, "start(...)");
         match unsafe { value_ref(supervisor) } {
             Value::ProcessSupervisor(supervisor) => match supervisor.start(
                 name,
@@ -6904,9 +7671,11 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_respond_text(
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let text = unsafe { consume_owned_value(text) };
+        let headers = unsafe { consume_owned_value(headers) };
         let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_text(...)");
-        let text = expect_string_value(&unsafe { value_ref(text) }, "respond_text(...)");
-        let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_text(...)");
+        let text = expect_string_value(&text, "respond_text(...)");
+        let headers = expect_headers_map(&headers, "respond_text(...)");
         match unsafe { value_ref(exchange) } {
             Value::HttpExchange(exchange) => match exchange.respond_text(status, &text, headers) {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -6928,9 +7697,11 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_respond_bytes(
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let bytes = unsafe { consume_owned_value(bytes) };
+        let headers = unsafe { consume_owned_value(headers) };
         let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_bytes(...)");
-        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "respond_bytes(...)");
-        let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_bytes(...)");
+        let bytes = expect_bytes_value(&bytes, "respond_bytes(...)");
+        let headers = expect_headers_map(&headers, "respond_bytes(...)");
         match unsafe { value_ref(exchange) } {
             Value::HttpExchange(exchange) => {
                 match exchange.respond_bytes(status, &bytes, headers) {
@@ -7457,6 +8228,163 @@ fn checked_sleep_with_runtime_scheduler(timeout: StdDuration) -> Result<(), Diag
     Ok(())
 }
 
+unsafe fn release_abandoned_direct_task_args(args_address: usize) {
+    let args = unsafe { Box::from_raw(args_address as *mut Vec<i64>) };
+    for value in args.iter().copied() {
+        if value != 0 {
+            unsafe {
+                release_untracked_value(value as *mut OpaqueValue);
+            }
+        }
+    }
+}
+
+fn allocate_direct_task_claim_flag() -> usize {
+    let address = Box::into_raw(Box::new(AtomicBool::new(false))) as usize;
+    #[cfg(test)]
+    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(|count| count.set(count.get() + 1));
+    address
+}
+
+unsafe fn mark_direct_task_args_claimed(claim_flag_address: usize) {
+    unsafe { &*(claim_flag_address as *const AtomicBool) }.store(true, Ordering::Release);
+}
+
+unsafe fn direct_task_args_were_claimed(claim_flag_address: usize) -> bool {
+    unsafe { &*(claim_flag_address as *const AtomicBool) }.load(Ordering::Acquire)
+}
+
+unsafe fn release_direct_task_claim_flag(claim_flag_address: usize) {
+    unsafe {
+        drop(Box::from_raw(claim_flag_address as *mut AtomicBool));
+    }
+    #[cfg(test)]
+    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(|count| {
+        let current = count.get();
+        assert!(current > 0, "direct task claim-flag live count underflowed");
+        count.set(current - 1);
+    });
+}
+
+unsafe fn release_direct_task_external_state(args_address: usize, claim_flag_address: usize) {
+    unsafe {
+        if direct_task_args_were_claimed(claim_flag_address) {
+            drop(Box::from_raw(args_address as *mut Vec<i64>));
+        } else {
+            release_abandoned_direct_task_args(args_address);
+        }
+        release_direct_task_claim_flag(claim_flag_address);
+    }
+}
+
+struct DirectTaskExternalStateGuard {
+    args_address: usize,
+    claim_flag_address: usize,
+}
+
+impl Drop for DirectTaskExternalStateGuard {
+    fn drop(&mut self) {
+        unsafe {
+            release_direct_task_external_state(self.args_address, self.claim_flag_address);
+        }
+    }
+}
+
+#[cfg(test)]
+fn direct_task_claim_flag_live_count() -> usize {
+    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(Cell::get)
+}
+
+unsafe fn consume_direct_task_result(result_ptr: *mut OpaqueValue, result_is_copy: bool) -> Value {
+    if result_is_copy {
+        unsafe { consume_value(result_ptr) }
+    } else {
+        unsafe { consume_owned_value(result_ptr) }
+    }
+}
+
+unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
+    // Build the complete ledger entry off-state first. If collecting panics,
+    // the external-state guard still sees `claimed == false` and releases the
+    // raw buffer references itself. Installing the finished map and flipping
+    // the raw atomic flag are then allocation-free, so no partially claimed
+    // prefix can exist.
+    let mut owned_value_refs = BTreeMap::new();
+    for argument in args.iter().copied().filter(|argument| *argument != 0) {
+        let count = owned_value_refs.entry(argument as usize).or_insert(0usize);
+        *count = count
+            .checked_add(1)
+            .expect("a live task argument vector cannot exceed usize reference capacity");
+    }
+    with_direct_task_runtime_state(|state| {
+        assert!(
+            state.ownership_tracking_active,
+            "direct task arguments require an active ownership ledger"
+        );
+        assert!(
+            state.owned_value_refs.is_empty(),
+            "direct task ownership ledger must be empty before argument claim"
+        );
+        state.owned_value_refs = owned_value_refs;
+    });
+    unsafe {
+        mark_direct_task_args_claimed(claim_flag_address);
+    }
+}
+
+unsafe fn spawn_direct_task_with_external_state(
+    cancellation: CancellationContext,
+    thunk: NativeThunk,
+    args_address: usize,
+    claim_flag_address: usize,
+    result_is_copy: bool,
+) -> std::result::Result<TaskValue, Diagnostic> {
+    let entry = move || {
+        // This guard is created on the coroutine stack rather than captured by
+        // the force-reset closure. Normal return and ordinary Rust unwinding
+        // release the external state after the direct-runtime scope guard has
+        // finished; a forced reset abandons it and delegates to the scheduler
+        // cleanup below.
+        let _external_state = DirectTaskExternalStateGuard {
+            args_address,
+            claim_flag_address,
+        };
+        with_direct_task_runtime_scope(|| {
+            Ok(with_task_runtime_error_capture(|| {
+                unsafe {
+                    let args = &*(args_address as *const Vec<i64>);
+                    claim_direct_task_args(args, claim_flag_address);
+                }
+                let args = unsafe { &*(args_address as *const Vec<i64>) };
+                let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+                unsafe { consume_direct_task_result(result_ptr, result_is_copy) }
+            }))
+        })
+    };
+    let forced_exit_cleanup = move || {
+        discard_current_direct_task_runtime_state();
+        unsafe {
+            release_direct_task_external_state(args_address, claim_flag_address);
+        }
+    };
+    let task = unsafe {
+        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+            cancellation,
+            entry,
+            forced_exit_cleanup,
+        )
+    };
+    match task {
+        Ok(task) => Ok(task),
+        Err(error) => {
+            unsafe {
+                release_direct_task_external_state(args_address, claim_flag_address);
+            }
+            Err(error)
+        }
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     thunk_ptr: i64,
@@ -7464,6 +8392,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     arg_count: i64,
     returns_handle: i64,
     task_group: *mut OpaqueValue,
+    result_is_copy: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
@@ -7478,12 +8407,14 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             ));
             boxed.into_vec()
         };
-        let queue_producer_args = args
-            .iter()
-            .copied()
-            .filter(|arg| *arg != 0)
-            .map(|arg| unsafe { value_ref(arg as *mut OpaqueValue).clone() })
-            .collect::<Vec<_>>();
+        let mut queue_producers = Vec::new();
+        for arg in args.iter().copied().filter(|arg| *arg != 0) {
+            unsafe {
+                with_value(arg as *mut OpaqueValue, |value| {
+                    collect_queue_values(value, &mut queue_producers)
+                });
+            }
+        }
         let group = if task_group.is_null() {
             runtime_error("task starting requires a `TaskGroup`")
         } else {
@@ -7501,44 +8432,25 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
         // coroutine stack so the scheduler can reclaim it without unwinding
         // through those frames.
         let args_address = Box::into_raw(Box::new(args)) as usize;
-        let entry = move || {
-            with_direct_task_runtime_scope(|| {
-                Ok(with_task_runtime_error_capture(|| {
-                    let args = unsafe { &*(args_address as *const Vec<i64>) };
-                    let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
-                    let result = unsafe { consume_value(result_ptr) };
-                    unsafe {
-                        drop(Box::from_raw(args_address as *mut Vec<i64>));
-                    }
-                    result
-                }))
-            })
-        };
-        let forced_exit_cleanup = move || {
-            discard_current_direct_task_runtime_state();
-            unsafe {
-                drop(Box::from_raw(args_address as *mut Vec<i64>));
-            }
-        };
+        let claim_flag_address = allocate_direct_task_claim_flag();
         let task = unsafe {
-            spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+            spawn_direct_task_with_external_state(
                 cancellation,
-                entry,
-                forced_exit_cleanup,
+                thunk,
+                args_address,
+                claim_flag_address,
+                result_is_copy != 0,
             )
         };
         let task = match task {
             Ok(task) => task,
-            Err(error) => {
-                unsafe {
-                    drop(Box::from_raw(args_address as *mut Vec<i64>));
-                }
-                runtime_diagnostic_error(error)
-            }
+            Err(error) => runtime_diagnostic_error(error),
         };
 
         group.register_task(task.clone());
-        register_task_as_queue_producer_for_values(queue_producer_args.iter(), &task);
+        for queue in queue_producers {
+            queue.register_producer_task(&task);
+        }
 
         if returns_handle == 0 {
             return boxed_value(Value::Unit);
