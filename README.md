@@ -96,6 +96,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/duration_arithmetic.au`
   - execute signed Duration constructors, runtime scaling, floor division,
     comparison, and floating unit conversion
+- `cargo run -p aura -- run examples/randomness/deterministic_rng.au`
+  - execute the stable seeded random stream, unbiased integer mapping, and
+    deterministic in-place shuffle
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`

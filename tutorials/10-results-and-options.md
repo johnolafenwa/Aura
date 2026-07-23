@@ -48,6 +48,10 @@ match find_user(1):
 
 You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, and `String.strip_prefix()` all return `Option` values.
 
+Those APIs do not all obtain `T` the same way. `pop` transfers a stored value,
+while collection `get` clones one and therefore requires clone-safe `T`; a
+stored value containing `random.Rng` must be removed or otherwise transferred.
+
 ## `None` vs `Option.None`
 
 These look similar but are different:

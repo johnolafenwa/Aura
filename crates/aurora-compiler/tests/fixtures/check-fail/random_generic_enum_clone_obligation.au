@@ -1,0 +1,11 @@
+import random
+
+enum Envelope[T]:
+    Empty
+    Value(T)
+
+def duplicate[T](values: borrow Vec[Envelope[T]]) -> Vec[Envelope[T]]:
+    return values.clone()
+
+def reject(values: borrow Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:
+    return duplicate(values)

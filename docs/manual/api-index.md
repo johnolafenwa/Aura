@@ -10,8 +10,8 @@ This page indexes every maintained public builtin function, method, module type,
 | `range` | `range(stop: int32) -> Range`; `range(start: int32, stop: int32) -> Range` | End-exclusive integer range. |
 | `cancelled` | `cancelled() -> bool` | Returns the current task cancellation state. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task using the scheduler. |
-| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation. |
+| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; requires clone-safe `T`. |
 | `abs` | `abs(value: number) -> number` | Absolute value for integers and floats. |
 | `min` | `min(left: number, right: number) -> number` | Smaller value of the same numeric type. |
 | `max` | `max(left: number, right: number) -> number` | Larger value of the same numeric type. |
@@ -52,6 +52,30 @@ Duration operators are `Duration + Duration`, `Duration - Duration`,
 `Duration`, plus equality and all four ordering comparisons between Duration
 values. Arithmetic is checked on signed i128 nanoseconds.
 
+## Randomness
+
+See [Randomness Module](/manual/randomness) for the normative xoshiro256**
+algorithm, seed-42 vectors, ownership, secure-source boundary, and diagnostics.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `random.Rng` | `Rng(seed: int64) -> random.Rng` | Creates a move-only deterministic stream from the seed's exact two's-complement bit pattern. |
+| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64` | Uniform half-open `[lo, hi)` integer; mutable receiver. |
+| `random.Rng.next_float` | `next_float() -> float64` | Uniform 53-bit binary64 value in `[0.0, 1.0)`; mutable receiver. |
+| `random.Rng.shuffle` | `shuffle[T](values: borrow mut Vec[T]) -> None` | Descending Fisher-Yates shuffle in place; mutable receiver and vector. |
+| `random.secure_int` | `secure_int(lo: int64, hi: int64) -> int64` | OS-secure uniform half-open integer with no deterministic fallback. |
+| `random.secure_bytes` | `secure_bytes(n: int64) -> Vec[uint8]` | Exactly `n` OS-secure bytes for `0 <= n <= 2147483647`; zero skips entropy and larger counts trap with `AU4005` before allocation. |
+
+`random.Rng` has no public clone route. `AU3007` rejects the clone-producing
+collection and task APIs indexed below when their produced value contains, or
+may contain, an `Rng`, including through a user-defined wrapper. Cloning
+`Task[random.Rng]` or `Queue[random.Rng]` handles is valid because that copies
+only the handle; moves, collection removals, queue receives, and in-place
+shuffle transfer or rearrange values without duplicating generator state.
+Generic clone-producing calls infer clone-safety obligations and discharge them
+after specialization; the obligation is retained through generic callers and
+module imports.
+
 ## Collections
 
 See [Collections](/manual/collections) for ownership and iteration details.
@@ -63,10 +87,10 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Vec[T]()` | `Vec[T]()` | Empty vector constructor. |
 | `Vec.len` | `len() -> int32` | Element count. |
 | `Vec.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `Vec.clone` | `clone() -> Vec[T]` | Clones the vector and elements. |
+| `Vec.clone` | `clone() -> Vec[T]` | Clones the vector and elements; requires clone-safe `T`. |
 | `Vec.push` | `push(value: own T) -> None` | Appends `value`. |
 | `Vec.pop` | `pop() -> Option[T]` | Removes the last element or returns `None`. |
-| `Vec.get` | `get(index: int32) -> Option[T]` | Cloned element after negative-index normalization, or `None` when out of bounds. |
+| `Vec.get` | `get(index: int32) -> Option[T]` | Cloned element after negative-index normalization, or `None` when out of bounds; requires clone-safe `T`. |
 | `Vec.set` | `set(index: int32, value: own T) -> Option[T]` | Replaces and returns the old element after negative-index normalization; out of bounds is a runtime error. |
 | `Vec.remove` | `remove(index: int32) -> Option[T]` | Removes an element after negative-index normalization; out of bounds is a runtime error. |
 | `Vec.swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`; out of bounds is a runtime error. |
@@ -83,15 +107,15 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Map[K, V]()` | `Map[K, V]()` | Empty map constructor. |
 | `Map.len` | `len() -> int32` | Entry count. |
 | `Map.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `Map.clone` | `clone() -> Map[K, V]` | Clones keys and values. |
-| `Map.get` | `get(key: K) -> Option[V]` | Cloned value or `None` when absent. |
+| `Map.clone` | `clone() -> Map[K, V]` | Clones keys and values; requires clone-safe `K` and `V`. |
+| `Map.get` | `get(key: K) -> Option[V]` | Cloned value or `None` when absent; requires clone-safe `V`. |
 | `Map.set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces, returning the previous value. |
 | `Map.remove` | `remove(key: K) -> Option[V]` | Removes an entry and returns the previous value. |
 | `Map.contains_key` | `contains_key(key: K) -> bool` | Key lookup. |
-| `Map.keys` | `keys() -> Vec[K]` | Cloned keys in insertion order. |
-| `Map.values` | `values() -> Vec[V]` | Cloned values in insertion order. |
-| `Map.items` | `items() -> Vec[MapEntry[K, V]]` | Entries in insertion order. |
-| `Map.entries` | `entries() -> Vec[MapEntry[K, V]]` | Same as `items()`. |
+| `Map.keys` | `keys() -> Vec[K]` | Cloned keys in insertion order; requires clone-safe `K`. |
+| `Map.values` | `values() -> Vec[V]` | Cloned values in insertion order; requires clone-safe `V`. |
+| `Map.items` | `items() -> Vec[MapEntry[K, V]]` | Cloned entries in insertion order; requires clone-safe `K` and `V`. |
+| `Map.entries` | `entries() -> Vec[MapEntry[K, V]]` | Same clone-safety and ordering contract as `items()`. |
 | `Map.clear` | `clear() -> None` | Removes all entries. |
 | `Map.extend` | `extend(other: own Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
 | `MapEntry.key` | field `key: K` | Entry key. |
@@ -104,7 +128,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Set[T]()` | `Set[T]()` | Empty set constructor. |
 | `Set.len` | `len() -> int32` | Unique value count. |
 | `Set.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `Set.clone` | `clone() -> Set[T]` | Clones the set. |
+| `Set.clone` | `clone() -> Set[T]` | Clones the set; requires clone-safe `T`. |
 | `Set.contains` | `contains(value: T) -> bool` | Membership lookup. |
 | `Set.insert` | `insert(value: own T) -> bool` | `true` only when newly inserted. |
 | `Set.remove` | `remove(value: T) -> bool` | `true` only when a value was removed. |
@@ -122,9 +146,9 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | `Queue.get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for closed, timeout, cancellation, or immediate absence. |
 | `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
 | `Queue.close` | `close() -> None` | Closes the queue and wakes waiters. |
-| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome. |
-| `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence. |
-| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
+| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome; requires clone-safe `T`. |
+| `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; requires clone-safe `T`. |
+| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; requires clone-safe `T`. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
 | `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage and starts a child task. |
 | `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child without returning a handle. |

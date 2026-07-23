@@ -139,8 +139,9 @@ implicitly narrowed.
 
 A direct read produces `T` or `V` only when that element/value type is
 copyable. For a non-copy vector element, use `get(index)` for an explicit
-cloned optional read. For a non-copy map value, use `get(key)` for an explicit
-cloned optional read or `remove(key)` to transfer ownership. These non-copy
+cloned optional read only when the element type is clone-safe. For a non-copy
+map value, use `get(key)` only when the value type is clone-safe, or
+`remove(key)` to transfer ownership. These non-copy
 direct-read rejections use `AU3005`; a non-copy indexed compound assignment
 uses `AU3006` because its initial read has the same ownership problem. A missing map key
 in a direct read is runtime diagnostic `AU4003`. Integer indexing and slicing
@@ -227,6 +228,21 @@ For a type parameter, available methods and operators come from its declared bou
 
 Trait and implementation methods cannot declare default ordinary parameters in Aurora 0.1. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
+A clone-producing operation over unresolved generic types infers clone-safety
+obligations on the contributing declared parameters. Calls propagate those
+obligations to a fixed point and discharge them after substitution. The
+contract applies equally to ordinary, imported, inherent, associated, bounded
+trait, operator, task-target, and `From` calls. A concrete type that contains
+non-cloneable `random.Rng` state, or whose safety cannot be proved, is rejected
+with `AU3007`.
+
+An obligation inferred from a trait default method is part of that method's
+contract and is structurally substituted through `Self`, trait arguments, and
+method arguments. An explicit implementation may satisfy that contract but
+MUST NOT add a clone-safety requirement absent from it. Recursive nominal type
+inspection terminates conservatively rather than assuming an expanding cycle
+is safe.
+
 ## Control Flow
 
 `return` is valid only in a function or method. Its value must equal the declared return type; an omitted value has type `None`.
@@ -247,7 +263,8 @@ The managed binding cannot be moved out in a way that would prevent required cle
 without `self`. Target arguments are copied or moved into task-owned capture
 storage independently of the target ABI. Default-mode and explicit shared
 target parameters borrow that storage for the child call; `own` parameters
-consume it. `borrow mut` target parameters are rejected.
+consume it. Generic targets also enforce their inferred clone-safety
+obligations after specialization. `borrow mut` target parameters are rejected.
 
 Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
 

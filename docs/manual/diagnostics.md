@@ -16,7 +16,7 @@ the phase that owns the failure:
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
 | `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin handle method collision; `AU2999` general compile-time rejection |
-| `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment |
+| `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
 The registry is append-only. Once published, a code MUST NOT be reused,
@@ -30,15 +30,27 @@ yet have a narrower public category. It is a stable code, not permission for a
 tool to omit the code.
 
 `AU2006` identifies an explicit or inherited trait method whose name would
-shadow a builtin member on `Queue[T]`, `Task[T]`, or `TaskGroup`. Its guidance
+shadow a builtin member on `Queue[T]`, `Task[T]`, `TaskGroup`, or
+`random.Rng`. Its guidance
 requires the trait method to be renamed; backend dispatch is never selected by
 which implementation happens to run first.
 
 `AU3005` rejects a direct `Vec` or `Map` indexed read whose stored type is
-non-copy; use the explicit cloned `get` surface or transfer ownership with
-`remove` where available. `AU3006` rejects the corresponding indexed compound
+non-copy; use the explicit cloned `get` surface when the stored type is
+clone-safe, or transfer ownership with `remove` where available. `AU3006` rejects the corresponding indexed compound
 assignment because read-modify-write would otherwise require a hidden clone or
 destructive move of the stored value.
+
+`AU3007` rejects an operation that would duplicate non-cloneable state. The
+current protected state is `random.Rng`, and the check follows it through
+collections, user classes, enum payloads, and other value wrappers. A generic
+definition over unresolved types records an inferred clone-safety obligation;
+`AU3007` is emitted at an unsafe concrete specialization, when a concrete
+requirement cannot be proved, or when an implementation would strengthen its
+trait method's contract. Copying `Task[random.Rng]` or
+`Queue[random.Rng]` handles is valid because it copies only the handle;
+transferring the generator with a move, collection removal, or queue receive is
+also valid because it leaves one owner.
 
 ## Diagnostic Structure
 
@@ -164,6 +176,12 @@ Guidance is not a relaxation of ownership rules. In particular, Aurora never
 inserts a hidden clone or converts a borrow into ownership to recover from an
 error.
 
+For `AU3007`, guidance offers the two explicit single-owner exits: move or
+remove the existing value, or construct an independent generator from an
+explicit seed. It does not offer `.clone()` on any type whose value contains or
+may contain `random.Rng`. Clone-producing aliases—including collection reads
+and task-result observations—are subject to the same rule as a direct clone.
+
 When a binary left operand, index base, method receiver, or indexed-assignment
 target retains a non-copy borrow through later inputs, an overlapping later
 mutable borrow or consumption is `AU3002`. The conflicting later access is the
@@ -224,6 +242,12 @@ documented `InvalidInput`/process error when that API has a compatible typed
 carrier. A timer API without one traps with `AU4001`; deadline overflow never
 means an unlimited wait. This classification remains Provisional under
 ADR-0019.
+
+The random module returns plain values rather than a `random.Error` enum.
+`AU4003` reports an empty or reversed `next_int`/`secure_int` interval and a
+negative `secure_bytes` count. `AU4005` reports secure operating-system entropy
+or allocation failure. A secure operation never recovers by substituting bytes
+from the deterministic generator.
 
 ## CLI Exit Status
 

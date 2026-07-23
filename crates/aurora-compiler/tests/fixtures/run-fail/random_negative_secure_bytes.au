@@ -1,0 +1,5 @@
+import random
+
+def main() -> int32:
+    print(random.secure_bytes(-1))
+    return 0

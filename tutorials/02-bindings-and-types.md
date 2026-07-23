@@ -180,7 +180,10 @@ for index in range(items.len()):
 ```
 
 Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
-For non-copy element types like `String` or user-defined classes, indexed reads require `get(index)` instead of `items[index]` so the cloned read stays explicit:
+For clone-safe non-copy element types like `String` or ordinary user-defined
+classes, indexed reads require `get(index)` instead of `items[index]` so the
+cloned read stays explicit. A value containing `random.Rng` must be transferred
+with `remove(index)` instead of cloned:
 
 ```python
 names = ["Ada", "Grace"]

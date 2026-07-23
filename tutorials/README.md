@@ -35,6 +35,7 @@ When the implemented language surface changes, update these in the same pass:
 18. [17-modules-and-visibility.md](17-modules-and-visibility.md)
 19. [18-packages-and-workspaces.md](18-packages-and-workspaces.md)
 20. [19-io-and-networking.md](19-io-and-networking.md)
+21. [20-randomness.md](20-randomness.md)
 
 ## Scope Today
 
@@ -59,6 +60,8 @@ The current tutorial set covers:
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation
 - arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons
+- deterministic seeded randomness, unbiased ranges, mutable-Vec shuffle, and
+  the separate OS-secure integer/byte boundary
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

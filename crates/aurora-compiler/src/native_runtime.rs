@@ -14,6 +14,7 @@ use std::time::{Duration as StdDuration, Instant};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value,
     current_lightweight_task_cancellation, current_lightweight_task_id,
@@ -38,7 +39,7 @@ use crate::runtime_value::{
     wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
     HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
     SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
     TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
@@ -1229,6 +1230,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Set(_) => "Set".to_string(),
         Value::Map(_) => "Map".to_string(),
         Value::Duration(_) => "Duration".to_string(),
+        Value::Rng(_) => "random.Rng".to_string(),
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
         Value::Unit => "None".to_string(),
@@ -1273,6 +1275,7 @@ fn inferred_collection_type(value: &Value) -> Type {
             vec![map.key_type.clone(), map.value_type.clone()],
         ),
         Value::Duration(_) => Type::named("Duration"),
+        Value::Rng(_) => Type::named("random.Rng"),
         Value::Range(_) => Type::named("Range"),
         Value::Instance(instance) => Type::named(nominal_runtime_base_name(&instance.class_name)),
         Value::EnumVariant(variant) => Type::named(nominal_runtime_base_name(&variant.enum_name)),
@@ -2292,6 +2295,118 @@ pub extern "C-unwind" fn aurora_direct_range_advance(range: *mut OpaqueValue) ->
             value_type_name(other)
         )),
     })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_rng_new(seed: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Rng(RngValue::from_seed(seed))))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_rng_next_int(
+    rng: *mut OpaqueValue,
+    lo: i64,
+    hi: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let rng = match unsafe { value_ref(rng) } {
+            Value::Rng(rng) => rng,
+            other => runtime_error(format!(
+                "expected `random.Rng`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        rng.next_int(lo, hi)
+            .unwrap_or_else(|_| direct_invalid_random_bounds(lo, hi))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_rng_next_float(rng: *mut OpaqueValue) -> f64 {
+    task_runtime_boundary(|| match unsafe { value_ref(rng) } {
+        Value::Rng(rng) => rng.next_float(),
+        other => runtime_error(format!(
+            "expected `random.Rng`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_rng_shuffle(
+    rng: *mut OpaqueValue,
+    values: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let rng = match unsafe { value_ref(rng) } {
+            Value::Rng(rng) => rng,
+            other => runtime_error(format!(
+                "expected `random.Rng`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        with_vector_mut(values, |vector| rng.shuffle(&mut vector.elements));
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_random_secure_int(lo: i64, hi: i64) -> i64 {
+    task_runtime_boundary(|| match randomness::secure_int(lo, hi) {
+        Ok(value) => value,
+        Err(error) => direct_random_resource_error(error, Some((lo, hi))),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_random_secure_bytes(count: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if count < 0 {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4003",
+                format!(
+                    "`random.secure_bytes(n)` requires a non-negative byte count, found `{count}`"
+                ),
+            ));
+        }
+        // Every supported Aurora release target is 64-bit, so every
+        // non-negative int64 count is representable as usize. Allocation
+        // failure remains reported by secure_bytes itself.
+        let count = count as usize;
+        match randomness::secure_bytes(count) {
+            Ok(bytes) => boxed_value(bytes_vec_value(bytes)),
+            Err(error) => direct_random_resource_error(error, None),
+        }
+    })
+}
+
+fn direct_invalid_random_bounds(lo: i64, hi: i64) -> ! {
+    runtime_diagnostic_error(Diagnostic::coded(
+        "AU4003",
+        format!("random bounds require `lo < hi`, found `{lo} >= {hi}`"),
+    ))
+}
+
+fn direct_random_resource_error(error: SecureRandomError, bounds: Option<(i64, i64)>) -> ! {
+    match error {
+        SecureRandomError::InvalidRange => match bounds {
+            Some((lo, hi)) => direct_invalid_random_bounds(lo, hi),
+            None => runtime_diagnostic_error(Diagnostic::coded(
+                "AU4003",
+                "random bounds require `lo < hi`",
+            )),
+        },
+        error @ SecureRandomError::LengthExceedsVec { .. } => {
+            runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string()))
+        }
+        SecureRandomError::Allocation(error) => runtime_diagnostic_error(Diagnostic::coded(
+            "AU4005",
+            format!("secure random allocation failed: {error}"),
+        )),
+        SecureRandomError::Entropy(error) => runtime_diagnostic_error(Diagnostic::coded(
+            "AU4005",
+            format!("operating-system random source failed: {error}"),
+        )),
+    }
 }
 
 fn with_vector<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&VecValue) -> T) -> T {
@@ -3494,6 +3609,7 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
             Value::ProcessCompleted(_) => expected == "process.Completed",
             Value::ProcessSupervisor(_) => expected == "process.Supervisor",
             Value::Duration(_) => expected == "Duration",
+            Value::Rng(_) => expected == "random.Rng",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
             Value::Float(_) => expected == "float64" || expected == "float32",

@@ -84,6 +84,16 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 **Move type**
 : A type whose by-value use transfers ownership and makes the source place unavailable until it is reinitialized.
 
+**Clone-producing operation**
+: An operation that creates a second owned structural value while retaining the
+  original, including explicit collection clones, cloned collection reads, and
+  task-result observations.
+
+**Clone-safety obligation**
+: An inferred callable requirement that a substituted type must not duplicate
+  non-cloneable state through a clone-producing operation. Aurora 0.1 protects
+  `random.Rng` state under this contract.
+
 **Borrow**
 : Temporary access to an existing place without transferring ownership. A shared borrow permits reading; a mutable borrow permits exclusive mutation.
 

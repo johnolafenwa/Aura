@@ -1,7 +1,7 @@
-error[AU3002]: parameter `value` is borrowed; declare it as `own T` to take ownership, or clone the value before consuming it
+error[AU3002]: parameter `value` is borrowed; declare it as `own T` to take ownership
  --> crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au:2:17
   |
 2 |     values.push(value)
   |                 ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au:1:41: parameter `value` is borrowed here
-  = help: declare the parameter as `own T` when the function should consume it, or call `.clone()` to consume an independent copy
+  = help: declare the parameter as `own T` when the function should consume this non-cloneable value

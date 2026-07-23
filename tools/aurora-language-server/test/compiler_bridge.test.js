@@ -2192,6 +2192,76 @@ test("compiler bridge recovers completions and symbols for dangling-dot EOF buff
   }
 });
 
+test("compiler bridge exposes one random.Rng constructor and its stateful members", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-random-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const prelude = [
+      "import random",
+      "",
+      "def inspect(rng: borrow mut random.Rng) -> int32:"
+    ];
+    const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
+    const completionsForLine = async (line) => {
+      const source = sourceForLine(line);
+      const lines = source.split("\n");
+      const lineIndex = lines.findIndex((candidate) => candidate === line);
+      const character = lines[lineIndex].indexOf(".") + 1;
+      const items = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+      assert.ok(items);
+      return items;
+    };
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const validSource = sourceForLine("    print(rng.next_int(lo=0, hi=10))");
+    const analysis = await analyzeWithCompiler(mainUri, validSource);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const unavailableSecureFloat = await analyzeWithCompiler(
+      mainUri,
+      sourceForLine("    print(random.secure_float())")
+    );
+    assert.ok(unavailableSecureFloat);
+    assert.equal(unavailableSecureFloat.diagnostics.length, 1);
+    assert.equal(unavailableSecureFloat.diagnostics[0].code, "AU2001");
+    assert.match(
+      unavailableSecureFloat.diagnostics[0].message,
+      /module `random` has no callable member `secure_float`/
+    );
+
+    const moduleItems = await completionsForLine("    random.");
+    const rngItems = moduleItems.filter((item) => item.name === "Rng");
+    assert.equal(rngItems.length, 1);
+    assert.equal(rngItems[0].kind, "class");
+    assert.equal(rngItems[0].detail, "Rng(seed: int64)");
+    assert.equal(
+      moduleItems.find((item) => item.name === "secure_int")?.detail,
+      "secure_int(lo: int64, hi: int64) -> int64"
+    );
+    assert.equal(
+      moduleItems.find((item) => item.name === "secure_bytes")?.detail,
+      "secure_bytes(n: int64) -> Vec[uint8]"
+    );
+    assert.equal(moduleItems.some((item) => item.name === "secure_float"), false);
+
+    const memberItems = await completionsForLine("    rng.");
+    for (const [name, detail] of [
+      ["next_int", "next_int(lo: int64, hi: int64) -> int64"],
+      ["next_float", "next_float() -> float64"],
+      ["shuffle", "shuffle(values: borrow mut Vec[T]) -> None"]
+    ]) {
+      const matching = memberItems.filter((item) => item.name === name);
+      assert.equal(matching.length, 1);
+      assert.equal(matching[0].kind, "method");
+      assert.equal(matching[0].detail, detail);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge recovers imported completions and symbols when a buffer contains multiple dangling dots", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-multi-dangling-"));
   try {

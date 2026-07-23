@@ -162,6 +162,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "non-copy indexed compound assignment",
     },
     DiagnosticCodeInfo {
+        code: "AU3007",
+        band: "ownership",
+        title: "non-cloneable state duplication",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",

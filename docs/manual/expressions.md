@@ -295,12 +295,14 @@ after normalization is not clamped. A contextually typed integer literal may
 adopt `int32`, but an already-bound `int64` value is not implicitly narrowed.
 A map index must have exactly the map's key type. Direct reads are permitted
 only when the map value type is copyable. For a non-copy value, use `get(key)`
-for an explicit cloned optional read or `remove(key)` to transfer the stored
-value. A missing key in a direct read is a runtime `AU4003` lookup violation.
+for an explicit cloned optional read only when the value type is clone-safe;
+use `remove(key)` to transfer any stored value, including one that contains
+`random.Rng`. A missing key in a direct read is a runtime `AU4003` lookup violation.
 
 A direct vector read of a copy element returns the value. Moving a non-copy
 vector element by direct indexing is restricted; use `get(index)` when the
-intended operation is an explicit cloned/optional read. Index assignment is a
+intended operation is an explicit cloned/optional read and the element type is
+clone-safe. Use `remove(index)` to transfer a non-cloneable stored value. Index assignment is a
 statement target and is covered by
 [Statements](/manual/statements#bindings-and-assignment).
 

@@ -1,0 +1,12 @@
+enum Chain[T]:
+    End(T)
+    Link(indirect Chain[Vec[T]])
+
+def duplicate[T](values: borrow Vec[Chain[T]]) -> Vec[Chain[T]]:
+    return values.clone()
+
+def accept(values: borrow Vec[Chain[int64]]) -> Vec[Chain[int64]]:
+    return duplicate(values)
+
+def main() -> int32:
+    return 0

@@ -1,4 +1,4 @@
-error[AU2999]: function `add` has no parameter named `total`
+error[AU2004]: function `add` has no parameter named `total`
  --> crates/aurora-compiler/tests/fixtures/check-fail/named_args_unknown_parameter.au:5:15
   |
 5 |     print(add(total=1, right=2))

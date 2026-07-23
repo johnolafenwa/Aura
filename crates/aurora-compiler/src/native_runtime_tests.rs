@@ -10,12 +10,13 @@ use super::{
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, CancellationContext, ChannelValue,
     EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
     LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
-    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
+    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
@@ -710,6 +711,261 @@ fn direct_duration_runtime_surface_is_checked_exact_and_uses_floor_division() {
         .message
         .contains("expected `Duration`, found `String`"));
     unsafe { release_value(string_ptr) };
+}
+
+#[test]
+fn direct_random_runtime_is_deterministic_borrowed_and_mutates_vectors_in_place() {
+    let integers = super::aurora_direct_rng_new(42);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            integers,
+            b"random.Rng".as_ptr(),
+            "random.Rng".len(),
+        ),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(integers, b"Rng".as_ptr(), "Rng".len()),
+        0,
+        "a builtin generator must not satisfy an unrelated bare user type named Rng",
+    );
+    assert_eq!(super::aurora_direct_rng_next_int(integers, 0, 10), 2);
+    assert_eq!(super::aurora_direct_rng_next_int(integers, -5, 6), 2);
+    assert_eq!(
+        super::aurora_direct_rng_next_int(integers, i64::MIN, i64::MAX),
+        3_321_214_725_393_783_201
+    );
+    assert_eq!(super::aurora_direct_rng_next_int(integers, 7, 8), 7);
+
+    let retained = unsafe { retain_value(integers) };
+    unsafe { release_value(integers) };
+    assert!((0..10).contains(&super::aurora_direct_rng_next_int(retained, 0, 10)));
+    unsafe { release_value(retained) };
+
+    let floats = super::aurora_direct_rng_new(42);
+    assert_eq!(
+        super::aurora_direct_rng_next_float(floats),
+        0.083_862_971_059_882_16
+    );
+    assert_eq!(
+        super::aurora_direct_rng_next_float(floats),
+        0.378_980_250_662_668_6
+    );
+    unsafe { release_value(floats) };
+
+    let shuffle_rng = super::aurora_direct_rng_new(42);
+    let values = string_vec(&["a", "b", "c", "d", "e", "f"]);
+    super::aurora_direct_rng_shuffle(shuffle_rng, values);
+    match unsafe { super::value_ref(values) } {
+        Value::Vec(vector) => assert_eq!(
+            vector
+                .elements
+                .into_iter()
+                .map(|value| value.render())
+                .collect::<Vec<_>>(),
+            ["d", "f", "e", "b", "c", "a"]
+        ),
+        other => panic!("expected shuffled vector, found {other:?}"),
+    }
+    unsafe {
+        release_value(values);
+        release_value(shuffle_rng);
+    }
+
+    assert_eq!(super::aurora_direct_random_secure_int(5, 6), 5);
+    for count in [0, 8] {
+        let bytes = super::aurora_direct_random_secure_bytes(count);
+        match unsafe { super::value_ref(bytes) } {
+            Value::Vec(vector) => {
+                assert_eq!(vector.element_type, Type::named("uint8"));
+                assert_eq!(vector.elements.len(), count as usize);
+            }
+            other => panic!("expected secure bytes, found {other:?}"),
+        }
+        unsafe { release_value(bytes) };
+    }
+
+    let invalid_rng = super::aurora_direct_rng_new(42);
+    let invalid_rng_address = invalid_rng as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ =
+                super::aurora_direct_rng_next_int(invalid_rng_address as *mut OpaqueValue, 4, 4);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("invalid deterministic bounds should fail the active task");
+    unsafe { release_value(invalid_rng) };
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(
+        error.message,
+        "random bounds require `lo < hi`, found `4 >= 4`"
+    );
+}
+
+#[test]
+fn direct_random_runtime_rejects_wrong_receivers_and_shuffle_targets() {
+    let integer_receiver = string_value("not a generator");
+    let integer_receiver_address = integer_receiver as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_rng_next_int(
+                integer_receiver_address as *mut OpaqueValue,
+                0,
+                10,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("next_int on a non-generator should fail the active task");
+    unsafe { release_value(integer_receiver) };
+    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+
+    let float_receiver = string_value("not a generator");
+    let float_receiver_address = float_receiver as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_rng_next_float(float_receiver_address as *mut OpaqueValue);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("next_float on a non-generator should fail the active task");
+    unsafe { release_value(float_receiver) };
+    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+
+    let shuffle_receiver = string_value("not a generator");
+    let shuffle_receiver_address = shuffle_receiver as usize;
+    let values = string_vec(&["a", "b"]);
+    let values_address = values as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aurora_direct_rng_shuffle(
+                shuffle_receiver_address as *mut OpaqueValue,
+                values_address as *mut OpaqueValue,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("shuffle on a non-generator should fail the active task");
+    unsafe {
+        release_value(shuffle_receiver);
+        release_value(values);
+    }
+    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+
+    let shuffle_rng = super::aurora_direct_rng_new(42);
+    let shuffle_rng_address = shuffle_rng as usize;
+    let non_vector = super::aurora_direct_rng_new(7);
+    let non_vector_address = non_vector as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aurora_direct_rng_shuffle(
+                shuffle_rng_address as *mut OpaqueValue,
+                non_vector_address as *mut OpaqueValue,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("shuffle with a non-vector target should fail the active task");
+    unsafe {
+        release_value(shuffle_rng);
+        release_value(non_vector);
+    }
+    assert_eq!(error.message, "expected `Vec`, found `random.Rng`");
+}
+
+#[test]
+fn direct_secure_random_runtime_preserves_validation_and_resource_diagnostics() {
+    let invalid_bounds = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_random_secure_int(8, 8);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("invalid secure random bounds should fail the active task");
+    assert_eq!(invalid_bounds.code, "AU4003");
+    assert_eq!(
+        invalid_bounds.message,
+        "random bounds require `lo < hi`, found `8 >= 8`"
+    );
+
+    let negative_count = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_random_secure_bytes(-1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("negative secure byte counts should fail the active task");
+    assert_eq!(negative_count.code, "AU4003");
+    assert_eq!(
+        negative_count.message,
+        "`random.secure_bytes(n)` requires a non-negative byte count, found `-1`"
+    );
+
+    let unrepresentable_count = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_random_secure_bytes(i64::from(i32::MAX) + 1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("secure byte counts above the Vec length domain should fail the active task");
+    assert_eq!(unrepresentable_count.code, "AU4005");
+    assert_eq!(
+        unrepresentable_count.message,
+        "`random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`"
+    );
+
+    let allocation = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_random_secure_bytes(i64::MAX);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("an impossible secure byte count should fail the active task");
+    assert_eq!(allocation.code, "AU4005");
+    assert_eq!(
+        allocation.message,
+        "`random.secure_bytes(n)` count `9223372036854775807` exceeds the maximum `Vec` length `2147483647`"
+    );
+
+    let host_allocation_error = Vec::<u8>::new()
+        .try_reserve_exact(usize::MAX)
+        .expect_err("usize::MAX bytes must exceed the host allocation domain");
+    let mapped_allocation = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::direct_random_resource_error(
+                SecureRandomError::Allocation(host_allocation_error),
+                None,
+            )
+        })
+    })
+    .expect_err("host allocation failure should fail the active task");
+    assert_eq!(mapped_allocation.code, "AU4005");
+    assert!(
+        mapped_allocation
+            .message
+            .starts_with("secure random allocation failed:"),
+        "unexpected allocation diagnostic: {}",
+        mapped_allocation.message
+    );
+
+    let entropy = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::direct_random_resource_error(
+                SecureRandomError::Entropy(getrandom::Error::UNSUPPORTED),
+                None,
+            )
+        })
+    })
+    .expect_err("an unavailable OS random source should fail the active task");
+    assert_eq!(entropy.code, "AU4005");
+    assert_eq!(
+        entropy.message,
+        format!(
+            "operating-system random source failed: {}",
+            getrandom::Error::UNSUPPORTED
+        )
+    );
 }
 
 #[test]
@@ -7805,6 +8061,11 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         "Map"
     );
     assert_eq!(value_type_name(&Value::Duration(5)), "Duration");
+    assert_value_metadata(
+        &Value::Rng(RngValue::from_seed(42)),
+        "random.Rng",
+        "random.Rng",
+    );
     assert_eq!(
         value_type_name(&Value::Range(RangeValue { start: 1, end: 2 })),
         "Range"

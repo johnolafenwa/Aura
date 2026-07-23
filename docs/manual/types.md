@@ -98,6 +98,7 @@ Move values transfer ownership:
 - `Vec[T]`
 - `Map[K, V]`
 - `Set[T]`
+- `random.Rng`
 - ordinary user classes
 - user enum values with any move payload
 - `Option`, `Result`, and related outcome values with move payloads
@@ -111,6 +112,14 @@ Move values can still be shared through `borrow` and `borrow mut`, or duplicated
 `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` are treated as move outcome values even when `T` is copyable. `Range` is also not a general copy type in Aurora 0.1; use ranges directly in iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.
+
+Copy/move classification and clone safety are distinct. `random.Rng` is not
+merely a move type: it exposes no public duplication route. A clone-producing
+operation is valid only when its produced type cannot contain an `Rng` through
+an ordinary value-storing class, enum, or collection path. `Task[T]` and
+`Queue[T]` stop that traversal because copying either handle does not observe
+or copy its stored `T`; moving, removing, or receiving a value also transfers
+one owner instead of cloning it.
 
 ## Builtin Generic Types
 
@@ -138,10 +147,14 @@ These types are provided by builtin modules and are reserved names.
 | --- | --- |
 | `io` | `io.Error` |
 | `fs` | `fs.File` |
+| `random` | `random.Rng` |
 | `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.HttpResponse`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
 | `process` | `process.Child`, `process.Pipe`, `process.Completed`, `process.Supervisor`, `process.ExitStatus`, `process.Wait`, `process.Stdio`, `process.Error`, `process.RestartPolicy`, `process.SupervisorEvent`, `process.SupervisorWait` |
 
 Resource types should usually be scoped with `with` or closed explicitly.
+`random.Rng` is an opaque move type rather than a resource: it has mutable
+state but no `close()` operation or `with` contract. Its complete type and
+sequence rules are in [Randomness Module](/manual/randomness).
 
 ## Type Annotations
 
@@ -299,7 +312,9 @@ The static type determines whether reading an owned place copies it or moves
 it. A copy declaration is valid only when every stored field or payload is
 copy. Borrowing and parameter passing do not change the underlying type, and
 Aurora inserts neither hidden cloning nor runtime coercion. Type annotations
-are erased after checking and add no evaluation step.
+are erased after checking and add no evaluation step. Generic clone-producing
+uses infer clone-safety obligations that are checked after specialization; this
+does not change the underlying copy/move category.
 
 ## Diagnostics
 
@@ -313,7 +328,8 @@ category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and
 `AU3004` reports an invalid ownership or receiver type mode. `AU3005` reports a
 non-copy indexed read, and `AU3006` reports a non-copy indexed compound
-assignment. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,
+assignment. `AU3007` reports an operation or specialization that would
+duplicate non-cloneable `random.Rng` state. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,
 or exactness failure, `AU4003` means a bounds or lookup violation, `AU4004` means a zero
 divisor, and `AU4005` means a trapping resource or I/O failure.
 

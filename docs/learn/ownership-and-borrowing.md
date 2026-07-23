@@ -24,7 +24,10 @@ print(count)
 print(other)
 ```
 
-Everything else — `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, class instances, `TaskGroup`, file handles, process and network resources — is a **move type**. Assigning a move value transfers ownership:
+Everything else — `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
+`random.Rng`, class instances, `TaskGroup`, file handles, process resources,
+and network resources — is a **move type**. Assigning a move value transfers
+ownership:
 
 ```python
 name = "aurora"
@@ -38,7 +41,8 @@ The rule prevents two bindings from thinking they are responsible for the same o
 
 ## Cloning When Two Owners Are Needed
 
-If a program genuinely wants two independent copies of a move value, it says so with `.clone()`:
+If a move type supports independent duplication, a program asks for it
+explicitly with `.clone()`:
 
 ```python
 name = "aurora"
@@ -57,6 +61,11 @@ snapshot = jobs.clone()
 print(jobs.len())
 print(snapshot.len())
 ```
+
+That requires every produced element to be clone-safe. `random.Rng` deliberately
+has no clone route, and putting one inside a vector, map, class, or enum does
+not change that. A generic clone helper is still valid: Aurora infers the
+requirement and rejects only a specialization that would duplicate an `Rng`.
 
 Clone close to the reason for cloning. A clone at the call site tells the reader that the program is deliberately keeping both values.
 
@@ -187,7 +196,10 @@ match names.get(0):
         print("missing")
 ```
 
-This is why a program can read from a collection repeatedly without juggling its ownership.
+This is why a program can read clone-safe values from a collection repeatedly
+without juggling ownership. A value containing `random.Rng` must instead leave
+through an ownership-transferring operation such as `Vec.remove`, `Map.remove`,
+or a Queue receive.
 
 ## Tasks And Borrowing
 
@@ -243,7 +255,8 @@ When a program starts to feel tangled, run down this list:
   parameter borrows by default.
 - Pass `borrow T` when the function only needs to inspect.
 - Pass `borrow mut T` when the function should update a caller-owned value.
-- Clone as locally as possible when two owners are genuinely needed.
+- Clone as locally as possible when two owners are genuinely needed and the
+  value is clone-safe.
 - Put resources in `with` blocks.
 - Put concurrent child work inside a `TaskGroup`.
 - Let `Result`, `Option`, and the outcome enums carry control flow — don't smuggle failure through strings or magic values.

@@ -1,0 +1,5 @@
+import random
+
+def main() -> int32:
+    value = random.secure_int(lo=1, lo=2)
+    return 0

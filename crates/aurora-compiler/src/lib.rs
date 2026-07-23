@@ -12,6 +12,7 @@ mod native_codegen;
 mod native_runtime;
 mod package;
 pub mod parser;
+mod randomness;
 pub mod runtime_value;
 pub mod sema;
 
@@ -82,35 +83,37 @@ pub mod native_runtime_coverage {
         aurora_direct_process_pipe_flush, aurora_direct_process_pipe_read_all,
         aurora_direct_process_pipe_read_bytes, aurora_direct_process_pipe_write_all,
         aurora_direct_process_pipe_write_bytes, aurora_direct_process_run,
-        aurora_direct_process_start, aurora_direct_release_value, aurora_direct_set_contains,
-        aurora_direct_set_empty, aurora_direct_set_index_option, aurora_direct_set_insert_in_place,
-        aurora_direct_set_is_empty, aurora_direct_set_len, aurora_direct_set_remove_in_place,
-        aurora_direct_sleep_ms, aurora_direct_sleep_value, aurora_direct_string_byte_len,
-        aurora_direct_string_len, aurora_direct_string_literal, aurora_direct_tcp_listener_accept,
-        aurora_direct_tcp_listener_close, aurora_direct_tcp_listener_local_addr,
-        aurora_direct_tcp_stream_close, aurora_direct_tcp_stream_flush,
-        aurora_direct_tcp_stream_local_addr, aurora_direct_tcp_stream_peer_addr,
-        aurora_direct_tcp_stream_read_all, aurora_direct_tcp_stream_read_exact,
-        aurora_direct_tcp_stream_shutdown_read, aurora_direct_tcp_stream_shutdown_write,
-        aurora_direct_tcp_stream_write_all, aurora_direct_tcp_stream_write_bytes,
-        aurora_direct_udp_datagram_address, aurora_direct_udp_datagram_bytes,
-        aurora_direct_udp_datagram_text, aurora_direct_udp_socket_close,
-        aurora_direct_udp_socket_local_addr, aurora_direct_udp_socket_recv,
-        aurora_direct_udp_socket_recv_from, aurora_direct_udp_socket_send_bytes,
-        aurora_direct_unary_value, aurora_direct_unary_value_at, aurora_direct_unbox_bool,
-        aurora_direct_unbox_i64, aurora_direct_unbox_int64, aurora_direct_unbox_u64,
-        aurora_direct_unix_listener_accept, aurora_direct_unix_listener_close,
-        aurora_direct_unix_stream_close, aurora_direct_unix_stream_read_exact,
-        aurora_direct_unix_stream_write_all, aurora_direct_value_as_condition,
-        aurora_direct_variant_payload, aurora_direct_vec_clear_in_place,
-        aurora_direct_vec_contains, aurora_direct_vec_empty, aurora_direct_vec_extend_in_place,
-        aurora_direct_vec_get, aurora_direct_vec_index, aurora_direct_vec_index_option,
-        aurora_direct_vec_insert_in_place, aurora_direct_vec_is_empty, aurora_direct_vec_len,
-        aurora_direct_vec_pop_in_place, aurora_direct_vec_push_in_place,
-        aurora_direct_vec_remove_in_place, aurora_direct_vec_reverse_in_place,
-        aurora_direct_vec_set_in_place, aurora_direct_vec_set_index_in_place,
-        aurora_direct_vec_swap_in_place, aurora_direct_wait_all,
-        aurora_direct_wait_all_timeout_value, aurora_direct_wait_any,
+        aurora_direct_process_start, aurora_direct_random_secure_bytes,
+        aurora_direct_random_secure_int, aurora_direct_release_value, aurora_direct_rng_new,
+        aurora_direct_rng_next_float, aurora_direct_rng_next_int, aurora_direct_rng_shuffle,
+        aurora_direct_set_contains, aurora_direct_set_empty, aurora_direct_set_index_option,
+        aurora_direct_set_insert_in_place, aurora_direct_set_is_empty, aurora_direct_set_len,
+        aurora_direct_set_remove_in_place, aurora_direct_sleep_ms, aurora_direct_sleep_value,
+        aurora_direct_string_byte_len, aurora_direct_string_len, aurora_direct_string_literal,
+        aurora_direct_tcp_listener_accept, aurora_direct_tcp_listener_close,
+        aurora_direct_tcp_listener_local_addr, aurora_direct_tcp_stream_close,
+        aurora_direct_tcp_stream_flush, aurora_direct_tcp_stream_local_addr,
+        aurora_direct_tcp_stream_peer_addr, aurora_direct_tcp_stream_read_all,
+        aurora_direct_tcp_stream_read_exact, aurora_direct_tcp_stream_shutdown_read,
+        aurora_direct_tcp_stream_shutdown_write, aurora_direct_tcp_stream_write_all,
+        aurora_direct_tcp_stream_write_bytes, aurora_direct_udp_datagram_address,
+        aurora_direct_udp_datagram_bytes, aurora_direct_udp_datagram_text,
+        aurora_direct_udp_socket_close, aurora_direct_udp_socket_local_addr,
+        aurora_direct_udp_socket_recv, aurora_direct_udp_socket_recv_from,
+        aurora_direct_udp_socket_send_bytes, aurora_direct_unary_value,
+        aurora_direct_unary_value_at, aurora_direct_unbox_bool, aurora_direct_unbox_i64,
+        aurora_direct_unbox_int64, aurora_direct_unbox_u64, aurora_direct_unix_listener_accept,
+        aurora_direct_unix_listener_close, aurora_direct_unix_stream_close,
+        aurora_direct_unix_stream_read_exact, aurora_direct_unix_stream_write_all,
+        aurora_direct_value_as_condition, aurora_direct_variant_payload,
+        aurora_direct_vec_clear_in_place, aurora_direct_vec_contains, aurora_direct_vec_empty,
+        aurora_direct_vec_extend_in_place, aurora_direct_vec_get, aurora_direct_vec_index,
+        aurora_direct_vec_index_option, aurora_direct_vec_insert_in_place,
+        aurora_direct_vec_is_empty, aurora_direct_vec_len, aurora_direct_vec_pop_in_place,
+        aurora_direct_vec_push_in_place, aurora_direct_vec_remove_in_place,
+        aurora_direct_vec_reverse_in_place, aurora_direct_vec_set_in_place,
+        aurora_direct_vec_set_index_in_place, aurora_direct_vec_swap_in_place,
+        aurora_direct_wait_all, aurora_direct_wait_all_timeout_value, aurora_direct_wait_any,
         aurora_direct_wait_any_timeout_value, aurora_direct_websocket_close,
         aurora_direct_websocket_listener_accept, aurora_direct_websocket_listener_local_addr,
         aurora_direct_websocket_recv_bytes, aurora_direct_websocket_recv_text,
@@ -912,6 +915,7 @@ fn qualify_impl_decl_for_export(program: &Program, decl: &ast::ImplDecl) -> ast:
         .iter()
         .map(|arg| qualify_export_type_ref(program, arg))
         .collect();
+    qualified.for_type = qualify_export_type_ref(program, &qualified.for_type);
     qualified.methods = qualified
         .methods
         .iter()
@@ -1000,6 +1004,7 @@ fn qualify_trait_impl_info_for_export(
         .iter()
         .map(|ty| qualify_export_type(program, ty))
         .collect();
+    qualified.for_type = qualify_export_type(program, &qualified.for_type);
     for method in qualified.methods.values_mut() {
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method

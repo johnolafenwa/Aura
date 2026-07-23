@@ -1,0 +1,2 @@
+error[AU4005]: `random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/random_secure_bytes_vec_limit.au

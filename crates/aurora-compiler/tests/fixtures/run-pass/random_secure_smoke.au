@@ -1,0 +1,7 @@
+import random
+
+def main() -> int32:
+    print(random.secure_int(5, 6))
+    print(random.secure_bytes(0).len())
+    print(random.secure_bytes(8).len())
+    return 0

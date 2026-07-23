@@ -3,8 +3,8 @@ use crate::diag::Span;
 
 use super::{
     bind_call_arguments, callable_params_from_decl, format_argument_count,
-    BuiltinAssociatedFunction, BuiltinFunction, BuiltinMember, CallConvention, CallableParam,
-    ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
+    BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
+    CallConvention, CallableParam, ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
 };
 
 fn dummy_arg(name: Option<&str>) -> Argument {
@@ -107,6 +107,7 @@ fn bind_call_arguments_reports_named_binding_errors() {
         CallConvention::PositionalOrNamed,
     )
     .unwrap_err();
+    assert_eq!(duplicate.code, "AU2004");
     assert!(duplicate.message.contains("provided more than once"));
 
     let unknown = bind_call_arguments(
@@ -117,6 +118,7 @@ fn bind_call_arguments_reports_named_binding_errors() {
         CallConvention::PositionalOrNamed,
     )
     .unwrap_err();
+    assert_eq!(unknown.code, "AU2004");
     assert!(unknown.message.contains("has no parameter named"));
 
     let missing = bind_call_arguments(
@@ -171,6 +173,7 @@ fn bind_call_arguments_reports_named_binding_errors() {
         CallConvention::PositionalOrNamed,
     )
     .unwrap_err();
+    assert_eq!(overlap.code, "AU2004");
     assert!(overlap.message.contains("provided more than once"));
 }
 
@@ -396,6 +399,85 @@ fn duration_call_metadata_covers_constructors_and_exact_unit_conversions() {
     assert!(BuiltinMember::DurationToSeconds
         .docs()
         .contains("nearest representable"));
+}
+
+#[test]
+fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
+    let constructor = BuiltinClassConstructor::resolve("random", "Rng")
+        .expect("random.Rng should have host constructor metadata");
+    assert_eq!(constructor, BuiltinClassConstructor::RandomRng);
+    assert_eq!(constructor.name(), "Rng");
+    assert_eq!(constructor.detail(), "Rng(seed: int64) -> random.Rng");
+    assert!(constructor.docs().contains("deterministic"));
+    assert_eq!(BuiltinClassConstructor::resolve("random", "Missing"), None);
+
+    let named_seed = [dummy_arg(Some("seed"))];
+    let bound = constructor
+        .bind_args(&named_seed, Span::new(1, 1))
+        .expect("seed should bind by name");
+    assert_eq!(bound.len(), 1);
+    assert!(bound[0].is_some());
+    assert!(constructor
+        .bind_args(&[], Span::new(1, 1))
+        .unwrap_err()
+        .message
+        .contains("missing required argument `seed`"));
+
+    for (name, expected) in [
+        ("next_int", BuiltinMember::RngNextInt),
+        ("next_float", BuiltinMember::RngNextFloat),
+        ("shuffle", BuiltinMember::RngShuffle),
+    ] {
+        assert_eq!(BuiltinMember::resolve("random.Rng", name), Some(expected));
+        assert_eq!(
+            BuiltinMember::resolve("Rng", name),
+            None,
+            "an unrelated user class named Rng must not acquire random.Rng metadata"
+        );
+    }
+    assert_eq!(
+        BuiltinMember::RngNextInt.detail(),
+        "next_int(lo: int64, hi: int64) -> int64"
+    );
+    assert_eq!(
+        BuiltinMember::RngNextFloat.detail(),
+        "next_float() -> float64"
+    );
+    assert!(BuiltinMember::RngNextFloat
+        .docs()
+        .contains("half-open interval `[0, 1)`"));
+    assert_eq!(
+        BuiltinMember::RngShuffle.detail(),
+        "shuffle(values: borrow mut Vec[T]) -> None"
+    );
+    assert_eq!(
+        BuiltinMember::RngNextInt.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::RngNextFloat.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::RngShuffle.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::RngShuffle.argument_passing(0),
+        Some(ReceiverKind::BorrowMut)
+    );
+
+    let next_args = [dummy_arg(Some("hi")), dummy_arg(Some("lo"))];
+    let ordered = BuiltinMember::RngNextInt
+        .bind_args(&next_args, Span::new(1, 1))
+        .expect("named bounds should bind in declaration order");
+    assert_eq!(ordered[0].and_then(|arg| arg.name.as_deref()), Some("lo"));
+    assert_eq!(ordered[1].and_then(|arg| arg.name.as_deref()), Some("hi"));
+
+    let shuffle_args = [dummy_arg(Some("values"))];
+    BuiltinMember::RngShuffle
+        .bind_args(&shuffle_args, Span::new(1, 1))
+        .expect("shuffle values should bind by name");
 }
 
 #[test]

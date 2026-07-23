@@ -26,6 +26,7 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 ## Runtime And Library Reference
 
 - [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`, literals, iteration, mutation, and method contracts.
+- [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, `wait_any`, `wait_all`, and scheduler-aware waits.
 - [I/O Module](/manual/io): standard input/output and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, scoped file cleanup, byte and text limits.

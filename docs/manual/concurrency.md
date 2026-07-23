@@ -72,9 +72,9 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome. |
-| `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation. Without an explicit timeout, this helper performs an immediate check. |
-| `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation. Without an explicit timeout, this helper performs an immediate check. |
+| `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome; requires clone-safe `T`. |
+| `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation; requires clone-safe `T`. Without an explicit timeout, this helper performs an immediate check. |
+| `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation; requires clone-safe `T`. Without an explicit timeout, this helper performs an immediate check. |
 
 `TaskResult[T]` variants:
 
@@ -88,6 +88,11 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
 
 The completed value is stored by the task and cloned for each observation. Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime-backed resource is single-observer-only in 0.1. That restriction is not yet enforced statically, so a second observation can alias the same host resource; transfer such a result to exactly one designated observer.
+
+`random.Rng` is stricter: every task-result observation that could return a
+generator, including through a wrapper, is rejected statically with `AU3007`.
+For unresolved generic `T`, these methods infer a clone-safety obligation that
+is checked after specialization.
 
 ## Queue[T]
 
@@ -152,8 +157,8 @@ explicitly is still the clearest program shape.
 | --- | --- | --- |
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
-| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait. |
+| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait; requires clone-safe `T`. |
 
 `WaitAny[T]` variants:
 
@@ -221,7 +226,10 @@ targets must infer all type arguments. Default/shared and `own` target
 parameters are supported, while `borrow mut` targets are rejected. Queue
 iteration yields `T` by ownership transfer and rejects all explicit ownership
 modifiers. Timeout and capacity expressions must have the documented exact
-types. A supplied Queue capacity must be greater than zero.
+types. Task-result and multi-task observations infer clone-safety obligations
+for unresolved result types and reject a concrete result containing
+`random.Rng`. Queue receive operations transfer one owned value and do not
+require clone safety. A supplied Queue capacity must be greater than zero.
 
 ## Runtime Semantics
 
@@ -245,7 +253,8 @@ declaration-stable parameter mode. `put` owns its offered value and returns it
 inside `SendError` when no send occurs. Queue iteration captures the copyable
 handle once at loop entry, produces already-owned items, and never freezes or
 borrows the source binding. Task result observation
-clones the stored runtime value; the single-observer resource limitation below
+clones the stored runtime value after satisfying its clone-safety obligation;
+the single-observer resource limitation below
 is therefore significant.
 
 ## Diagnostics
@@ -261,7 +270,9 @@ method-reference misuse, and remaining static concurrency rejections. `AU3001`
 reports use after a value moves into task or queue storage. `AU3002` reports
 invalid borrowed capture/storage use and the rejected `borrow mut` task-target
 boundary. `AU3003` reports a mutating call through an immutable place, and
-`AU3004` reports each forbidden Queue-iteration ownership modifier. Timeout,
+`AU3004` reports each forbidden Queue-iteration ownership modifier. `AU3007`
+reports a task-result or multi-task observation whose produced value contains
+or may contain non-cloneable `random.Rng` state. Timeout,
 cancellation, closure, fullness, and an observed task error are typed values,
 not diagnostics. An unread child trap retains its original code. `AU4001`
 reports a general runtime trap, including zero or negative Queue capacity.

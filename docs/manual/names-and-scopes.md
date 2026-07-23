@@ -128,7 +128,17 @@ Associated methods are methods without a receiver and are referenced through the
 
 ## Builtin Names And Modules
 
-Top-level builtin functions such as `print`, `range`, and `sleep` are available without import. Builtin modules such as `fs`, `io`, `net`, `process`, `sys`, `path`, `json`, `toml`, `log`, `trace`, and `metrics` must be imported before their module-qualified members are used.
+Top-level builtin functions such as `print`, `range`, and `sleep` are available without import. Builtin modules such as `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `json`, `toml`, `log`, `trace`, and `metrics` must be imported before their module-qualified members are used.
+
+`random.Rng` is the builtin type and constructor spelling for a deterministic
+generator. Its methods remain module-qualified through the receiver type;
+there is no implicit global random-stream name. The secure operations are
+`random.secure_int` and `random.secure_bytes`.
+
+Builtin behavior follows declaration origin, not a coincidental module/type
+spelling. A user source file whose logical module name is `random` may declare
+its own `Rng` class; that class remains an ordinary user class in checking,
+analysis, MIR lowering, clone-safety classification, and both backends.
 
 Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Error` use the same qualified-member model as user enums. Short-form variant patterns and constructors are available only where the checker can determine a unique expected enum type.
 

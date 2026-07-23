@@ -106,6 +106,11 @@ Not every failure is well-described by a plain `Result[T, String]`. Aurora APIs 
 | `wait_any` | `WaitAny[T]` | The caller sees which task completed, with its value or error. |
 | `wait_all` | `WaitAll[T]` | Either every value is available, or the first failing index is reported. |
 
+Task-result and multi-task wait APIs clone a stored successful value. Their
+result type must therefore be clone-safe: an observation that would return
+`random.Rng`, including through a wrapper, is rejected with `AU3007`. Queue
+receive outcomes transfer one owned item and do not have this restriction.
+
 Using the right enum lets a program handle one case specifically while still handling the others:
 
 ```python

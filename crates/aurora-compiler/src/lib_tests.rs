@@ -784,6 +784,302 @@ fn module_loader_package_qualification_ignores_paths_outside_graph_sources() {
 }
 
 #[test]
+fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespaces() {
+    let temp = TempDir::new("aurora-rng-clone-obligation-imports");
+    let utils_path = temp.path().join("utils.au");
+    let wrapped_path = temp.path().join("wrapped.au");
+    let other_path = temp.path().join("other.au");
+    fs::write(
+        &utils_path,
+        r#"public def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+public class Duplicator:
+    public def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+"#,
+    )
+    .expect("write generic clone helper module");
+    fs::write(
+        &wrapped_path,
+        r#"import random
+
+public class Holder:
+    public generator: random.Rng
+
+public enum Status:
+    Value(random.Rng)
+"#,
+    )
+    .expect("write wrapped Rng module");
+    fs::write(
+        &other_path,
+        r#"import random
+
+public class Holder:
+    public generator: int64
+
+public enum Status:
+    Value(int64)
+"#,
+    )
+    .expect("write same-leaf nominal collision module");
+
+    let safe_path = temp.path().join("safe.au");
+    fs::write(
+        &safe_path,
+        r#"import utils
+from utils import Duplicator
+
+def main() -> int32:
+    values = [1, 2]
+    function_copies = utils.duplicate(values)
+    method_copies = Duplicator.duplicate(values)
+    print(function_copies)
+    print(method_copies)
+    return 0
+"#,
+    )
+    .expect("write safe imported generic use");
+    check_path(&safe_path).expect("safe imported function and method instantiations should check");
+
+    for (file_name, extra_import, helper) in [
+        ("bad_function.au", "", "utils.duplicate"),
+        (
+            "bad_method.au",
+            "from utils import Duplicator\n",
+            "Duplicator.duplicate",
+        ),
+    ] {
+        let path = temp.path().join(file_name);
+        fs::write(
+            &path,
+            format!(
+                "import random\nimport utils\n{extra_import}\ndef main() -> int32:\n    values = [random.Rng(seed=1)]\n    copies = {helper}(values)\n    print(copies)\n    return 0\n"
+            ),
+        )
+        .expect("write rejected imported generic use");
+        let error = check_path(&path)
+            .expect_err("imported clone obligations must reject Rng instantiations");
+        assert_eq!(error.code, "AU3007", "unexpected diagnostic for {helper}");
+    }
+
+    let collision_path = temp.path().join("collision.au");
+    fs::write(
+        &collision_path,
+        r#"import random
+import other
+import wrapped
+
+class Holder:
+    value: int32
+
+def main() -> int32:
+    holders = [wrapped.Holder(random.Rng(seed=1))]
+    copies = holders.clone()
+    print(copies)
+    return 0
+"#,
+    )
+    .expect("write qualified wrapper collision use");
+    let collision = check_path(&collision_path)
+        .expect_err("a qualified imported wrapper must not collapse to a same-leaf local class");
+    assert_eq!(collision.code, "AU3007");
+    assert!(collision.message.contains("wrapped.Holder"));
+
+    let enum_collision_path = temp.path().join("enum_collision.au");
+    fs::write(
+        &enum_collision_path,
+        r#"import random
+import other
+import wrapped
+
+enum Status:
+    Ready
+
+def main() -> int32:
+    statuses = [wrapped.Status.Value(random.Rng(seed=1))]
+    copies = statuses.clone()
+    print(copies)
+    return 0
+"#,
+    )
+    .expect("write qualified enum collision use");
+    let enum_collision = check_path(&enum_collision_path)
+        .expect_err("a qualified imported enum must not collapse to a same-leaf local enum");
+    assert_eq!(enum_collision.code, "AU3007");
+    assert!(enum_collision.message.contains("wrapped.Status"));
+
+    let from_import_path = temp.path().join("from_import.au");
+    fs::write(
+        &from_import_path,
+        r#"import random
+from wrapped import Holder
+
+def make() -> Holder:
+    return Holder(random.Rng(seed=1))
+
+def main() -> int32:
+    holders = [make()]
+    copies = holders.clone()
+    print(copies)
+    return 0
+"#,
+    )
+    .expect("write from-import constructor use");
+    let from_import = check_path(&from_import_path).expect_err(
+        "a from-import constructor result must retain its defining module's nominal identity",
+    );
+    assert_eq!(from_import.code, "AU3007");
+    assert!(from_import.message.contains("wrapped.Holder"));
+}
+
+#[test]
+fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
+    let temp = TempDir::new("aurora-imported-same-leaf-class-identity");
+    let named_path = temp.path().join("named.au");
+    let remote_path = temp.path().join("remote.au");
+    let main_path = temp.path().join("main.au");
+    fs::write(
+        &named_path,
+        r#"public trait Named:
+    def name(borrow self) -> String
+"#,
+    )
+    .expect("write shared trait module");
+    fs::write(
+        &remote_path,
+        r#"from named import Named
+
+public class User:
+    public label: String
+
+    public def associated() -> String:
+        return "remote-associated"
+
+    public def inherent(borrow self) -> String:
+        return f"remote-inherent:{self.label}"
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return f"remote:{self.label}"
+"#,
+    )
+    .expect("write remote same-leaf class module");
+    fs::write(
+        &main_path,
+        r#"from named import Named
+import remote
+
+class User:
+    label: String
+
+    def associated() -> String:
+        return "local-associated"
+
+    def inherent(borrow self) -> String:
+        return f"local-inherent:{self.label}"
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return f"local:{self.label}"
+
+def main() -> int32:
+    local = User(label="L")
+    imported = remote.User(label="R")
+    print(User.associated())
+    print(remote.User.associated())
+    print(local.inherent())
+    print(imported.inherent())
+    print(local.name())
+    print(imported.name())
+    return 0
+"#,
+    )
+    .expect("write same-leaf dispatch entry module");
+
+    let output = run_path(&main_path).expect("same-leaf class identities should run distinctly");
+    assert_eq!(
+        output.stdout,
+        "local-associated\nremote-associated\nlocal-inherent:L\nremote-inherent:R\nlocal:L\nremote:R\n"
+    );
+
+    let mir = lower_path_to_mir(&main_path).expect("same-leaf class identities should lower");
+    assert!(mir.classes.iter().any(|class| class.name == "User"));
+    assert!(mir.classes.iter().any(|class| class.name == "remote.User"));
+    assert!(emit_host_native_object(&mir).is_ok());
+}
+
+#[test]
+fn qualified_inherent_associated_methods_use_class_type_arguments_for_clone_safety() {
+    let temp = TempDir::new("aurora-qualified-associated-clone-safety");
+    let factory_path = temp.path().join("factory.au");
+    fs::write(
+        &factory_path,
+        r#"public class Factory[T]:
+    public def probe() -> int32:
+        values = Vec[T]()
+        copies = values.clone()
+        print(copies)
+        return 0
+"#,
+    )
+    .expect("write generic associated-method module");
+
+    let safe_path = temp.path().join("safe.au");
+    fs::write(
+        &safe_path,
+        r#"import factory
+
+def main() -> int32:
+    print(factory.Factory[int64].probe())
+    with group = TaskGroup():
+        group.start_soon(factory.Factory[int64].probe)
+    return 0
+"#,
+    )
+    .expect("write safe qualified associated-method use");
+    check_path(&safe_path)
+        .expect("a qualified associated method should use its safe class specialization");
+
+    let unsafe_path = temp.path().join("unsafe.au");
+    fs::write(
+        &unsafe_path,
+        r#"import factory
+import random
+
+def main() -> int32:
+    print(factory.Factory[random.Rng].probe())
+    return 0
+"#,
+    )
+    .expect("write unsafe qualified associated-method use");
+    let error = check_path(&unsafe_path)
+        .expect_err("a qualified associated method must reject an unsafe class specialization");
+    assert_eq!(error.code, "AU3007");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+
+    let task_path = temp.path().join("unsafe_task.au");
+    fs::write(
+        &task_path,
+        r#"import factory
+import random
+
+def main() -> int32:
+    with group = TaskGroup():
+        group.start_soon(factory.Factory[random.Rng].probe)
+    return 0
+"#,
+    )
+    .expect("write unsafe qualified associated-method task target");
+    let task_error = check_path(&task_path).expect_err(
+        "a qualified associated-method task target must reject an unsafe specialization",
+    );
+    assert_eq!(task_error.code, "AU3007");
+    assert!(task_error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
 fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     let temp = TempDir::new("aurora-lib-helpers");
     let pkg_dir = temp.path().join("pkg");

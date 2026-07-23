@@ -1,0 +1,14 @@
+import random
+
+def main() -> int32:
+    mut integers = random.Rng(seed=42)
+    print(integers.next_int(lo=0, hi=10))
+    print(integers.next_int(-5, 6))
+    print(integers.next_int(-9223372036854775808, 9223372036854775807))
+    print(integers.next_int(7, 8))
+
+    mut floats = random.Rng(42)
+    print(floats.next_float())
+    print(floats.next_float())
+    print(floats.next_float())
+    return 0

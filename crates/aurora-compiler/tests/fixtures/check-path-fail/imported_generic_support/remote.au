@@ -1,0 +1,29 @@
+public trait Named:
+    def name(borrow self) -> String
+
+public class NamedValue:
+    public label: String
+
+impl Named for NamedValue:
+    def name(borrow self) -> String:
+        return self.label.clone()
+
+public class UnnamedValue:
+    public label: String
+
+public class BoundBox[T: Named]:
+    public value: T
+
+public enum BoundEnvelope[T: Named]:
+    Empty
+    Value(T)
+
+public class PlainBox[T]:
+    public value: T
+
+public enum PlainEnvelope[T]:
+    Empty
+    Value(T)
+
+public class Phantom[T]:
+    public marker: int64

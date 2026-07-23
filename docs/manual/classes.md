@@ -161,7 +161,8 @@ class User:
         return self.name
 ```
 
-A shared-borrowed receiver cannot move an owned field. Clone to produce an owned result:
+A shared-borrowed receiver cannot move an owned field. When the field type
+supports cloning, clone to produce an owned result:
 
 ```python
 class User:
@@ -181,7 +182,7 @@ class Counter:
         return self.value
 ```
 
-Aurora 0.1 rejects a corresponding non-copy call such as `-> borrow[self] String`; return an owned clone or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
+Aurora 0.1 rejects a corresponding non-copy call such as `-> borrow[self] String`; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
 
 ## `copy class`
 

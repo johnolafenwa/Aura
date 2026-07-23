@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use crate::ast::{
@@ -149,6 +149,7 @@ fn function_info(
             return_type: lower_type_ref(&return_type),
             return_passing: ReceiverKind::Value,
             return_borrow_source: None,
+            rng_clone_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),
     }
@@ -204,6 +205,7 @@ impl HostBuiltinMetadata {
 fn class_info(module_name: &str, name: &str) -> ClassInfo {
     ClassInfo {
         module_name: module_name.to_string(),
+        is_builtin: true,
         decl: ClassDecl {
             public: true,
             copy: false,
@@ -1327,6 +1329,48 @@ fn process_namespace() -> ModuleNamespace {
     }
 }
 
+fn random_namespace() -> ModuleNamespace {
+    let rng = class_info("random", "Rng");
+    let classes = BTreeMap::from([("Rng".to_string(), rng)]);
+    let functions = [
+        function_info(
+            "random",
+            "secure_int",
+            vec![
+                value_param("lo", type_ref("int64", Vec::new())),
+                value_param("hi", type_ref("int64", Vec::new())),
+            ],
+            type_ref("int64", Vec::new()),
+        ),
+        function_info(
+            "random",
+            "secure_bytes",
+            vec![value_param("n", type_ref("int64", Vec::new()))],
+            type_ref("Vec", vec![type_ref("uint8", Vec::new())]),
+        ),
+    ]
+    .into_iter()
+    .map(|function| (function.decl.name.clone(), function))
+    .collect::<BTreeMap<_, _>>();
+
+    ModuleNamespace {
+        name: "random".to_string(),
+        path: "random".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        classes: classes.clone(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_classes: classes,
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    }
+}
+
 fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNamespace {
     let functions = functions
         .into_iter()
@@ -1526,6 +1570,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
         "process" => Some(process_namespace()),
+        "random" => Some(random_namespace()),
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
         "json" | "toml" => Some(serialization_namespace(name)),
@@ -1534,7 +1579,9 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     }
 }
 
-const HOST_BUILTIN_MODULES: &[&str] = &["sys", "path", "json", "toml", "metrics", "log", "trace"];
+const HOST_BUILTIN_MODULES: &[&str] = &[
+    "sys", "path", "json", "toml", "metrics", "log", "trace", "random",
+];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
     HOST_BUILTIN_MODULES
@@ -1566,7 +1613,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "sys", "path", "json", "toml", "log", "metrics", "trace",
+        "io", "fs", "net", "process", "random", "sys", "path", "json", "toml", "log", "metrics",
+        "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

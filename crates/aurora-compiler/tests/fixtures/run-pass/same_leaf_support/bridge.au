@@ -1,0 +1,12 @@
+from same_leaf_support.remote import Holder
+from same_leaf_support.remote import Envelope
+import random
+
+public def make_holder(generator: own random.Rng) -> Holder[random.Rng]:
+    return Holder[random.Rng](generator)
+
+public def make_envelope(generator: own random.Rng) -> Envelope[random.Rng]:
+    return Envelope.Value(generator)
+
+public def make_empty_envelope() -> Envelope[random.Rng]:
+    return Envelope.Empty

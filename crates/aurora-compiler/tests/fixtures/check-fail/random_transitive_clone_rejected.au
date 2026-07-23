@@ -1,0 +1,10 @@
+import random
+
+class Holder:
+    generator: random.Rng
+
+def main() -> int32:
+    holders = [Holder(random.Rng(seed=1))]
+    copies = holders.clone()
+    print(copies)
+    return 0

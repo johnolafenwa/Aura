@@ -1,0 +1,2 @@
+error[AU4003]: `random.secure_bytes(n)` requires a non-negative byte count, found `-1`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/random_negative_secure_bytes.au

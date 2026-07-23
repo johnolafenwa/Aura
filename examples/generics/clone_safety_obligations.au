@@ -1,0 +1,12 @@
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def forward[T](values: borrow Vec[T]) -> Vec[T]:
+    return duplicate(values)
+
+def main() -> int32:
+    values = [1, 2, 3]
+    copies = forward(values)
+    print(values)
+    print(copies)
+    return 0

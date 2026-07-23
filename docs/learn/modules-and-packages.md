@@ -42,6 +42,10 @@ print(double(21))
 
 Both styles are useful. A quick rule: when a file imports many names from a module, keep the module prefix; when the imported name is the central concept of the file, drop it.
 
+Both styles also preserve the full callable contract. If a public generic
+helper performs a clone-producing operation, its inferred clone-safety
+obligation follows the import and is checked where the helper is specialized.
+
 ## Packages
 
 A **package** is a directory with an `Aurora.toml` manifest and usually a `src/` directory:

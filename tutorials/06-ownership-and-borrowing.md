@@ -53,6 +53,7 @@ The built-in move types include:
 
 - `String`
 - `Vec[T]`, `Map[K, V]`, `Set[T]`
+- `random.Rng`
 - `TaskGroup`
 - user-defined classes (by default)
 
@@ -93,7 +94,7 @@ error: use of moved value `name`
 
 ## Cloning: Explicit Copies Of Move Types
 
-When you need a true independent copy of a move type, call `.clone()`:
+When a move type supports independent duplication, call `.clone()`:
 
 ```python
 name: String = "aurora"
@@ -113,6 +114,11 @@ print(ys.len())        # 3 -- unaffected
 ```
 
 `.clone()` is explicit because copying a large data structure is expensive. Aurora makes sure you know when you are paying that cost, unlike Python where every `=` on a list is a cheap reference but every mutation might surprise you via aliasing.
+
+Move types are not automatically cloneable. `random.Rng` exposes no clone
+route, and a class, enum, or collection containing one cannot be cloned through
+a public clone-producing operation. Generic clone helpers infer this
+requirement and reject an unsafe concrete specialization with `AU3007`.
 
 ## Passing Values To Functions
 
@@ -656,7 +662,7 @@ Here is how to translate your Python intuition:
 | Python concept | Aurora equivalent |
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
-| `x = copy.deepcopy(y)` | `x = y.clone()` |
+| `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
 | `def f(x): ...` reads x | `def f(x: borrow T): ...` |
 | `def f(x): x.mutate()` | `def f(x: borrow mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
@@ -668,8 +674,9 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 ## Summary
 
 1. Every value has one owner. When the owner goes out of scope, the value is freed.
-2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, classes) transfer ownership.
-3. Use `.clone()` when you need an explicit independent copy of a move type.
+2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, `random.Rng`, classes) transfer ownership.
+3. Use `.clone()` when you need an explicit independent copy and the move type
+   supports clone; `random.Rng` and values containing it do not.
 4. Use `borrow T` to lend read-only access. Use `borrow mut T` to lend mutable access.
 5. `borrow mut` is exclusive -- no other borrows of the same value can exist at the same time.
 6. Method receivers follow the same rules: `self` (or `borrow self`) reads, `borrow mut self` modifies, and `own self` consumes.

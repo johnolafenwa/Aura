@@ -75,6 +75,7 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `process.RestartPolicy`
 - `process.SupervisorEvent`
 - `process.SupervisorWait`
+- `random.Rng`
 
 Builtin generic or runtime-facing types currently accepted:
 
@@ -138,7 +139,7 @@ Current package-system limits:
 
 Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
 
-Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
+Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `random.Rng`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
 
 `copy class` declarations are allowed when all fields are copy types.
 
@@ -161,7 +162,9 @@ Borrowing forms:
 
 Mutable borrow arguments must be mutable places. Overlapping `borrow mut` arguments with other borrows of the same value are rejected. Non-copy fields cannot be moved out of borrowed values.
 
-`.clone()` produces an explicit independent copy of a move type.
+`.clone()` produces an explicit independent copy when the move type exposes
+clone and its stored values are clone-safe. `random.Rng`, and an ordinary value
+that contains one, has no public clone route.
 
 ## Statements
 
@@ -211,7 +214,7 @@ The current compiler supports these expression forms:
 - `try expr`
 - parenthesized expressions
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; non-copy values use `get(key)` for an explicit cloned optional read or `remove(key)` for ownership transfer. Integer indexing and slicing are not supported on `String`.
+Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
 
 ## Methods
 
@@ -501,6 +504,31 @@ Current builtin member methods include:
 - `TaskGroup.start(...)`
 - `TaskGroup.start_soon(...)`
 - `TaskGroup.cancel()`
+- `random.Rng.next_int(...)`
+- `random.Rng.next_float()`
+- `random.Rng.shuffle(...)`
+
+## Randomness
+
+Import `random` for two deliberately separate surfaces. A mutable
+`random.Rng(seed)` is a deterministic, move-only xoshiro256** stream with
+half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic Vec
+shuffle. Seed mapping and sequences are stable throughout Aurora 0.1.x and
+identical through MIR and direct execution.
+
+`random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
+operating system's secure source. They have no seed and never fall back to the
+deterministic generator. `secure_bytes(0)` returns an empty vector without an
+entropy request. Invalid bounds/counts trap with `AU4003`; entropy or
+allocation failure traps with `AU4005`. There is no `random.Error` or secure
+floating function. See [20-randomness.md](20-randomness.md).
+
+Clone-producing generic bodies infer clone-safety obligations rather than
+rejecting unresolved type parameters. Requirements propagate through generic
+calls, imports, trait/default/associated dispatch, operators, and `From`, then
+reject an unsafe concrete `random.Rng` specialization with `AU3007`. Task and
+Queue handles remain clone barriers because copying a handle does not observe
+its payload.
 
 ## Pattern Matching
 

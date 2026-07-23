@@ -70,6 +70,8 @@ Across module boundaries:
 - calling a private method is rejected
 - keyword construction only exposes `public` fields -- you cannot set a private field from another module
 - trait impls defined in imported modules still participate in generic bounds and method lookup
+- inferred clone-safety obligations on public generic functions and methods
+  survive both namespace and direct imports
 
 Within the same module, all members are accessible regardless of visibility.
 

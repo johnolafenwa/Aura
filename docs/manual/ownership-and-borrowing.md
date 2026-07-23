@@ -34,6 +34,7 @@ Move values transfer ownership on by-value use. Current move categories include:
 
 - `String`
 - `Vec[T]`, `Map[K, V]`, and `Set[T]`
+- `random.Rng`
 - ordinary user classes
 - user or builtin enums with any move payload
 - `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` even when `T` is copyable
@@ -190,7 +191,7 @@ def identity(value: borrow[source] int32) -> borrow[source] int32:
 
 The returned expression must derive from the selected source. A source may be named by its parameter name, `self`, or a borrow label. When exactly one eligible source exists, it may be inferred; multiple eligible sources require an explicit selection.
 
-Shared borrowed-return declarations may derive from shared or mutable borrows. Mutable borrowed-return declarations may derive only from mutable borrows. A call returning a copy type becomes an ordinary copied value. Aurora 0.1 rejects calls producing non-copy borrowed results because neither maintained backend has live alias storage yet; return an owned clone or expose an owner method instead.
+Shared borrowed-return declarations may derive from shared or mutable borrows. Mutable borrowed-return declarations may derive only from mutable borrows. A call returning a copy type becomes an ordinary copied value. Aurora 0.1 rejects calls producing non-copy borrowed results because neither maintained backend has live alias storage yet; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method instead.
 
 Borrow labels describe source equivalence across a call signature. They do not create arbitrary reference values, permit returning a local owned non-copy temporary, or extend the lifetime of a source. Non-copy declarations remain checked for provenance so the reserved contract is stable for Phase 6. The detailed signature rules are in [Functions](/manual/functions#borrowed-returns).
 
@@ -247,6 +248,17 @@ print(copy)
 ```
 
 String and collection clones copy their owned contents. Cloning runtime-backed resource handles does not necessarily create an independent host resource; rely on the resource's documented API rather than assuming deep host duplication.
+
+Not every move type supports cloning. `random.Rng` is deliberately
+non-cloneable, and wrapping it in a class, enum, or collection does not make
+the stored generator cloneable. Clone-producing collection reads and task
+observations follow the same structural rule. Copying a `Task[T]` or `Queue[T]`
+handle is different because it copies only the handle, not a stored `T`.
+
+When a clone-producing operation depends on an unresolved generic type, the
+callable acquires an inferred clone-safety obligation. Safe specializations
+remain valid; a specialization that would duplicate `random.Rng` is rejected
+with `AU3007`.
 
 ## Tasks And Borrowing
 
@@ -309,7 +321,8 @@ defaults are legal, with shared temporaries lasting through the call;
 `borrow mut` defaults are rejected. Place-prefix overlap, partial moves,
 control-flow joins, loop repetition, borrowed-return provenance, borrowed
 matches, borrowed iteration, task capture, and managed-resource containment are
-checked before lowering.
+checked before lowering. Clone-producing generic operations infer obligations
+that are propagated through calls and discharged after specialization.
 
 ## Runtime Semantics
 
@@ -372,6 +385,8 @@ shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
 `AU3005` rejects a direct indexed read of a non-copy Vec element or Map value;
 `AU3006` rejects the corresponding indexed compound read-modify-write.
+`AU3007` rejects direct or transitive duplication of non-cloneable
+`random.Rng` state, including an unsafe generic specialization.
 Ownership failures are static. A runtime operation reached through an owned or
 borrowed value keeps its own code: `AU4001` for a general trap, `AU4002` for
 arithmetic overflow or underflow, `AU4003` for a bounds or lookup violation,

@@ -170,13 +170,15 @@ pub fn bind_call_arguments<'arg, 'param>(
 
             saw_named = true;
             let Some(&param_index) = param_indexes.get(name) else {
-                return Err(Diagnostic::at(
+                return Err(Diagnostic::coded_at(
+                    "AU2004",
                     argument.span,
                     format!("{} has no parameter named `{}`", callee_name, name),
                 ));
             };
             if ordered_args[param_index].is_some() {
-                return Err(Diagnostic::at(
+                return Err(Diagnostic::coded_at(
+                    "AU2004",
                     argument.span,
                     format!("parameter `{}` was provided more than once", name),
                 ));
@@ -240,6 +242,7 @@ const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
 const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const DURATION_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const RNG_SEED_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("seed")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("tasks"),
@@ -350,6 +353,12 @@ const STATUS_BYTES_HEADERS_PARAMS: [BuiltinParam; 3] = [
 ];
 const TASK_GROUP_START_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "function", ReceiverKind::Borrow)];
+const RNG_NEXT_INT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "lo", ReceiverKind::Borrow),
+    builtin_param!(required, "hi", ReceiverKind::Borrow),
+];
+const RNG_SHUFFLE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "values", ReceiverKind::BorrowMut)];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinFunction {
@@ -625,6 +634,56 @@ impl BuiltinAssociatedFunction {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum BuiltinClassConstructor {
+    RandomRng,
+}
+
+impl BuiltinClassConstructor {
+    pub fn resolve(module_name: &str, class_name: &str) -> Option<Self> {
+        match (module_name, class_name) {
+            ("random", "Rng") => Some(Self::RandomRng),
+            _ => None,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::RandomRng => "Rng",
+        }
+    }
+
+    pub const fn qualified_name(self) -> &'static str {
+        match self {
+            Self::RandomRng => "random.Rng",
+        }
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::RandomRng => "Rng(seed: int64) -> random.Rng",
+        }
+    }
+
+    pub const fn docs(self) -> &'static str {
+        match self {
+            Self::RandomRng => {
+                "Constructs a deterministic random-number generator from a signed 64-bit seed."
+            }
+        }
+    }
+
+    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
+        bind_call_arguments(
+            &format!("`{}`", self.qualified_name()),
+            &RNG_SEED_PARAMS,
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinMember {
     FloatSqrt,
     IntegerToFloat,
@@ -786,6 +845,9 @@ pub enum BuiltinMember {
     ProcessSupervisorStop,
     ProcessSupervisorIsEmpty,
     ProcessSupervisorClose,
+    RngNextInt,
+    RngNextFloat,
+    RngShuffle,
 }
 
 impl BuiltinMember {
@@ -976,6 +1038,9 @@ impl BuiltinMember {
             ("process.Supervisor", "stop") => Some(Self::ProcessSupervisorStop),
             ("process.Supervisor", "is_empty") => Some(Self::ProcessSupervisorIsEmpty),
             ("process.Supervisor", "close") => Some(Self::ProcessSupervisorClose),
+            ("random.Rng", "next_int") => Some(Self::RngNextInt),
+            ("random.Rng", "next_float") => Some(Self::RngNextFloat),
+            ("random.Rng", "shuffle") => Some(Self::RngShuffle),
             _ => None,
         }
     }
@@ -1140,6 +1205,9 @@ impl BuiltinMember {
             Self::ProcessSupervisorStop => "stop",
             Self::ProcessSupervisorIsEmpty => "is_empty",
             Self::ProcessSupervisorClose => "close",
+            Self::RngNextInt => "next_int",
+            Self::RngNextFloat => "next_float",
+            Self::RngShuffle => "shuffle",
         }
     }
 
@@ -1321,6 +1389,9 @@ impl BuiltinMember {
             Self::ProcessSupervisorStop => "stop() -> Result[None, process.Error]",
             Self::ProcessSupervisorIsEmpty => "is_empty() -> bool",
             Self::ProcessSupervisorClose => "close() -> None",
+            Self::RngNextInt => "next_int(lo: int64, hi: int64) -> int64",
+            Self::RngNextFloat => "next_float() -> float64",
+            Self::RngShuffle => "shuffle(values: borrow mut Vec[T]) -> None",
         }
     }
 
@@ -1556,6 +1627,15 @@ impl BuiltinMember {
             Self::ProcessSupervisorStop => "Stops every supervised child and clears the supervisor.",
             Self::ProcessSupervisorIsEmpty => "Returns true when the supervisor has no running or pending services.",
             Self::ProcessSupervisorClose => "Closes the supervisor, stopping all managed children.",
+            Self::RngNextInt => {
+                "Returns an unbiased deterministic integer from the half-open interval `[lo, hi)`."
+            }
+            Self::RngNextFloat => {
+                "Returns a deterministic `float64` value from the half-open interval `[0, 1)`."
+            }
+            Self::RngShuffle => {
+                "Shuffles `values` in place using this generator's deterministic state."
+            }
         }
     }
 
@@ -1647,8 +1727,15 @@ impl BuiltinMember {
             | Self::ProcessCompletedCheck
             | Self::ProcessSupervisorStop
             | Self::ProcessSupervisorIsEmpty
-            | Self::ProcessSupervisorClose => {
+            | Self::ProcessSupervisorClose
+            | Self::RngNextFloat => {
                 BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
+            }
+            Self::RngNextInt => {
+                BuiltinCallShape::fixed(&RNG_NEXT_INT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::RngShuffle => {
+                BuiltinCallShape::fixed(&RNG_SHUFFLE_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::TcpListenerAccept
             | Self::TcpStreamReadAll
@@ -1859,6 +1946,9 @@ impl BuiltinMember {
                 | Self::ProcessSupervisorStart
                 | Self::ProcessSupervisorStop
                 | Self::ProcessSupervisorClose
+                | Self::RngNextInt
+                | Self::RngNextFloat
+                | Self::RngShuffle
         ) {
             ReceiverKind::BorrowMut
         } else {

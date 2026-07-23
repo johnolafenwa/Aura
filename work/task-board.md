@@ -5,8 +5,8 @@ Last updated: 2026-07-22
 ## Active Work Session
 
 - Started: 2026-07-22 16:10:25 BST.
-- Current elapsed: 5h 13m 31s as of 2026-07-22 21:23:56 BST.
-- Target: Complete authorized Batch 2 of 5; the active ticket is Phase 3 Duration nanosecond semantics across the static surface, MIR and direct backends, timer sinks, reference, examples, tutorials, LSP, and behavioral fixtures before its exact full gate and logical commit.
+- Current elapsed: 11h 28m 51s as of 2026-07-23 03:39:16 BST.
+- Target: Complete authorized Batch 2 of 5; Phase 3 Randomness is full-gated and ready to commit, after which the active ticket becomes Phase 3 JSON across its recursive value model, typed parse errors, exact number policy, bounded deterministic codec, ownership-aware accessors, MIR/direct parity, LSP, reference, examples, tutorials, and behavioral fixtures.
 - Stop rule: complete Batch 2 and report its checkpoint, encounter a genuine stop under the provisional-decision protocol, or reach 12 continuous hours at 2026-07-23 04:10:25 BST. Do not begin Phase 5.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
 - Coverage rule: floors stay frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only and one downward-truncated re-ratchet at sign-off.

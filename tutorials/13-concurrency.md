@@ -153,6 +153,10 @@ See [examples/concurrency/task_group_associated_method.au](../examples/concurren
 
 Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
 
+`random.Rng` is different: task observations clone the stored result, so
+`Task.result`, `result_or_none`, and `result_or` reject a result containing an
+`Rng` with `AU3007`. Copying the task handle remains valid.
+
 For ordinary code, use:
 
 ```python
@@ -215,6 +219,9 @@ match wait_all(task_list, timeout=20ms):
     case WaitAll.Cancelled:
         print("cancelled")
 ```
+
+`wait_any` and `wait_all` also clone successful stored results and require
+clone-safe `T`. Queue receive APIs transfer ownership and can carry an `Rng`.
 
 See [examples/concurrency/task_group_wait_helpers.au](../examples/concurrency/task_group_wait_helpers.au).
 

@@ -1,0 +1,20 @@
+trait Duplicator[T]:
+    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+
+class Marker[T]:
+    value: T
+
+impl[T] Duplicator[T] for Marker[T]:
+    pass
+
+def duplicate_through_bound[T, M: Duplicator[T]](marker: borrow M, values: borrow Vec[T]) -> Vec[T]:
+    return marker.duplicate(values)
+
+def main() -> int32:
+    marker = Marker(0)
+    values = [4, 5]
+    copies = duplicate_through_bound(marker, values)
+    print(values)
+    print(copies)
+    return 0

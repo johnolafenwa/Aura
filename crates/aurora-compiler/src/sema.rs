@@ -12,8 +12,8 @@ use crate::ast::{
     VariantPattern, WithStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction, BuiltinFunction,
-    BuiltinMember, CallConvention,
+    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
+    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::integer::{
@@ -32,16 +32,31 @@ pub struct Program {
     pub trait_impls: Vec<TraitImplInfo>,
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
     pub module_registry: BTreeMap<String, ModuleNamespace>,
+    /// Canonical nominal identities for names visible in the checked module.
+    /// Imported aliases map to their defining module, while local names map
+    /// to themselves. Tooling uses this to mirror checker type identity.
+    pub canonical_type_names: BTreeMap<String, String>,
     pub top_level_stmts: Vec<Stmt>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassInfo {
     pub module_name: String,
+    /// True only for classes synthesized by a builtin module namespace.
+    /// A user module may have the same logical name without acquiring builtin behavior.
+    pub is_builtin: bool,
     pub decl: ClassDecl,
     pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     pub fields: BTreeMap<String, FieldInfo>,
     pub methods: BTreeMap<String, MethodInfo>,
+}
+
+impl ClassInfo {
+    pub(crate) fn builtin_constructor(&self) -> Option<BuiltinClassConstructor> {
+        self.is_builtin
+            .then(|| BuiltinClassConstructor::resolve(&self.module_name, &self.decl.name))
+            .flatten()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +282,11 @@ pub struct FunctionSignature {
     pub return_type: Type,
     pub return_passing: ReceiverKind,
     pub return_borrow_source: Option<String>,
+    /// Generic type parameters that must not resolve to a type containing
+    /// non-cloneable `random.Rng` state. These obligations are inferred from
+    /// clone-producing operations in the callable body and propagated through
+    /// generic calls.
+    pub rng_clone_safe_type_params: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -495,6 +515,329 @@ pub(crate) fn type_is_copy_in_program(ty: &Type, program: &Program) -> bool {
         &program.imported_modules,
         &program.module_registry,
     )
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum RngCloneSafety {
+    Safe,
+    ContainsRng,
+    Unknown,
+}
+
+impl RngCloneSafety {
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::ContainsRng, _) | (_, Self::ContainsRng) => Self::ContainsRng,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            _ => Self::Safe,
+        }
+    }
+}
+
+fn rng_clone_safety_in_context_with_modules(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+) -> RngCloneSafety {
+    rng_clone_safety_in_context_inner(
+        ty,
+        classes,
+        enums,
+        imported_modules,
+        module_registry,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn rng_clone_safety_in_context_inner(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+    visiting: &mut BTreeSet<String>,
+) -> RngCloneSafety {
+    let Type::Named(name, args) = ty else {
+        return match ty {
+            Type::TypeParam(_) => RngCloneSafety::Unknown,
+            Type::Unit | Type::Module(_) => RngCloneSafety::Safe,
+            Type::Named(_, _) => unreachable!(),
+        };
+    };
+    if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 {
+        return RngCloneSafety::Safe;
+    }
+
+    if let Some(class_info) = classes
+        .get(name)
+        .or_else(|| copy_class_info_from_modules(name, imported_modules, module_registry))
+    {
+        if class_info.is_builtin
+            && class_info.module_name == "random"
+            && class_info.decl.name == "Rng"
+            && args.is_empty()
+        {
+            return RngCloneSafety::ContainsRng;
+        }
+        if args.len() != class_info.decl.type_params.len() {
+            return RngCloneSafety::Unknown;
+        }
+        let key = format!(
+            "class:{}:{}:{}",
+            class_info.is_builtin, class_info.module_name, class_info.decl.name
+        );
+        if !visiting.insert(key.clone()) {
+            return args.iter().fold(RngCloneSafety::Safe, |safety, arg| {
+                safety.combine(rng_clone_safety_in_context_inner(
+                    arg,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                ))
+            });
+        }
+        let substitutions = substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+        let safety = class_info
+            .fields
+            .values()
+            .map(|field| substitute_type(&field.ty, &substitutions))
+            .fold(RngCloneSafety::Safe, |safety, field_ty| {
+                safety.combine(rng_clone_safety_in_context_inner(
+                    &field_ty,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                ))
+            });
+        visiting.remove(&key);
+        safety
+    } else if name == "random.Rng" && args.is_empty() {
+        // A canonical builtin type can reach clone-safety checking without
+        // its namespace in reduced checker contexts. Resolved user classes
+        // with the same nominal spelling took the class branch above.
+        RngCloneSafety::ContainsRng
+    } else if let Some(enum_info) = enums
+        .get(name)
+        .or_else(|| copy_enum_info_from_modules(name, imported_modules, module_registry))
+    {
+        if args.len() != enum_info.decl.type_params.len() {
+            return RngCloneSafety::Unknown;
+        }
+        let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+        if !visiting.insert(key.clone()) {
+            return args.iter().fold(RngCloneSafety::Safe, |safety, arg| {
+                safety.combine(rng_clone_safety_in_context_inner(
+                    arg,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                ))
+            });
+        }
+        let substitutions = substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+        let safety = enum_info
+            .variants
+            .values()
+            .flat_map(|variant| variant.payloads.iter())
+            .map(|payload| substitute_type(&payload.ty, &substitutions))
+            .fold(RngCloneSafety::Safe, |safety, payload_ty| {
+                safety.combine(rng_clone_safety_in_context_inner(
+                    &payload_ty,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                ))
+            });
+        visiting.remove(&key);
+        safety
+    } else {
+        args.iter().fold(RngCloneSafety::Safe, |safety, arg| {
+            safety.combine(rng_clone_safety_in_context_inner(
+                arg,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            ))
+        })
+    }
+}
+
+fn rng_clone_obligation_params_in_context_with_modules(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+) -> BTreeSet<String> {
+    let mut params = BTreeSet::new();
+    collect_rng_clone_obligation_params_in_context_inner(
+        ty,
+        classes,
+        enums,
+        imported_modules,
+        module_registry,
+        &mut BTreeSet::new(),
+        &mut params,
+    );
+    params
+}
+
+fn collect_rng_clone_obligation_params_from_args(
+    args: &[Type],
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+    visiting: &mut BTreeSet<String>,
+    params: &mut BTreeSet<String>,
+) {
+    for arg in args {
+        collect_rng_clone_obligation_params_in_context_inner(
+            arg,
+            classes,
+            enums,
+            imported_modules,
+            module_registry,
+            visiting,
+            params,
+        );
+    }
+}
+
+fn collect_rng_clone_obligation_params_in_context_inner(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    imported_modules: &BTreeMap<String, ModuleNamespace>,
+    module_registry: &BTreeMap<String, ModuleNamespace>,
+    visiting: &mut BTreeSet<String>,
+    params: &mut BTreeSet<String>,
+) {
+    match ty {
+        Type::TypeParam(name) => {
+            params.insert(name.clone());
+        }
+        Type::Unit | Type::Module(_) => {}
+        Type::Named(name, args) if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 => {
+            // Cloning a Queue or Task copies only its shared handle, not its
+            // contained or eventual value.
+        }
+        Type::Named(name, args) => {
+            if let Some(class_info) = classes
+                .get(name)
+                .or_else(|| copy_class_info_from_modules(name, imported_modules, module_registry))
+            {
+                let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                if !visiting.insert(key.clone()) {
+                    collect_rng_clone_obligation_params_from_args(
+                        args,
+                        classes,
+                        enums,
+                        imported_modules,
+                        module_registry,
+                        visiting,
+                        params,
+                    );
+                    return;
+                }
+                if args.len() == class_info.decl.type_params.len() {
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    for field in class_info.fields.values() {
+                        collect_rng_clone_obligation_params_in_context_inner(
+                            &substitute_type(&field.ty, &substitutions),
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                            params,
+                        );
+                    }
+                } else {
+                    collect_rng_clone_obligation_params_from_args(
+                        args,
+                        classes,
+                        enums,
+                        imported_modules,
+                        module_registry,
+                        visiting,
+                        params,
+                    );
+                }
+                visiting.remove(&key);
+            } else if let Some(enum_info) = enums
+                .get(name)
+                .or_else(|| copy_enum_info_from_modules(name, imported_modules, module_registry))
+            {
+                let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                if !visiting.insert(key.clone()) {
+                    collect_rng_clone_obligation_params_from_args(
+                        args,
+                        classes,
+                        enums,
+                        imported_modules,
+                        module_registry,
+                        visiting,
+                        params,
+                    );
+                    return;
+                }
+                if args.len() == enum_info.decl.type_params.len() {
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    for payload in enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| variant.payloads.iter())
+                    {
+                        collect_rng_clone_obligation_params_in_context_inner(
+                            &substitute_type(&payload.ty, &substitutions),
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                            params,
+                        );
+                    }
+                } else {
+                    collect_rng_clone_obligation_params_from_args(
+                        args,
+                        classes,
+                        enums,
+                        imported_modules,
+                        module_registry,
+                        visiting,
+                        params,
+                    );
+                }
+                visiting.remove(&key);
+            } else {
+                collect_rng_clone_obligation_params_from_args(
+                    args,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                    params,
+                );
+            }
+        }
+    }
 }
 
 fn copy_class_info_from_modules<'a>(
@@ -741,6 +1084,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     };
     let mut type_names = BTreeMap::<String, crate::diag::Span>::new();
     let mut type_arities = BTreeMap::<String, usize>::new();
+    let mut canonical_type_names = BTreeMap::<String, String>::new();
     let mut item_names = BTreeMap::<String, (&'static str, crate::diag::Span)>::new();
     let mut imported_modules = BTreeMap::new();
 
@@ -759,6 +1103,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 imported_functions.insert(name.clone(), function.clone());
             }
             ImportedBinding::Class(class_info) => {
+                canonical_type_names.insert(
+                    name.clone(),
+                    format!("{}.{}", class_info.module_name, class_info.decl.name),
+                );
                 type_names.insert(name.clone(), class_info.decl.span);
                 type_arities.insert(name.clone(), class_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("class", class_info.decl.span));
@@ -768,6 +1116,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 imported_classes.insert(name.clone(), class_info.clone());
             }
             ImportedBinding::Enum(enum_info) => {
+                canonical_type_names.insert(
+                    name.clone(),
+                    format!("{}.{}", enum_info.module_name, enum_info.decl.name),
+                );
                 type_names.insert(name.clone(), enum_info.decl.span);
                 type_arities.insert(name.clone(), enum_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("enum", enum_info.decl.span));
@@ -777,6 +1129,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 imported_enums.insert(name.clone(), enum_info.clone());
             }
             ImportedBinding::Trait(trait_info) => {
+                canonical_type_names.insert(
+                    name.clone(),
+                    format!("{}.{}", trait_info.module_name, trait_info.decl.name),
+                );
                 type_names.insert(name.clone(), trait_info.decl.span);
                 type_arities.insert(name.clone(), trait_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("trait", trait_info.decl.span));
@@ -810,6 +1166,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 }
                 type_names.insert(class_decl.name.clone(), class_decl.span);
                 type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
+                canonical_type_names.insert(class_decl.name.clone(), class_decl.name.clone());
             }
             Item::Enum(enum_decl) => {
                 reject_reserved_type_name(&enum_decl.name, enum_decl.span)?;
@@ -826,6 +1183,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 }
                 type_names.insert(enum_decl.name.clone(), enum_decl.span);
                 type_arities.insert(enum_decl.name.clone(), enum_decl.type_params.len());
+                canonical_type_names.insert(enum_decl.name.clone(), enum_decl.name.clone());
             }
             Item::Function(function_decl) => {
                 if BuiltinFunction::from_name(&function_decl.name).is_some() {
@@ -880,6 +1238,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &traits,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &trait_type_param_scope,
             Some(&self_placeholder),
         )?;
@@ -901,6 +1260,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         &param.ty,
                         &type_names,
                         &type_arities,
+                        &canonical_type_names,
                         &method_type_param_scope,
                         Some(&self_placeholder),
                     )
@@ -910,6 +1270,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method.return_type,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &method_type_param_scope,
                 Some(&self_placeholder),
             )?;
@@ -918,6 +1279,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &traits,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &method_type_param_scope,
                 Some(&self_placeholder),
             )?;
@@ -932,6 +1294,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             return_type,
                             return_passing: method.return_passing,
                             return_borrow_source: None,
+                            rng_clone_safe_type_params: BTreeSet::new(),
                         },
                         type_param_bounds,
                     },
@@ -970,6 +1333,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &traits,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &enum_type_param_scope,
         )?;
         let mut variants = BTreeMap::new();
@@ -984,6 +1348,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             &payload.ty,
                             &type_names,
                             &type_arities,
+                            &canonical_type_names,
                             &enum_type_param_scope,
                         )?,
                         span: payload.span,
@@ -1042,6 +1407,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &traits,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &class_type_param_scope,
         )?;
         let mut fields = BTreeMap::new();
@@ -1051,6 +1417,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &field.ty,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &class_type_param_scope,
             )?;
             if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
@@ -1099,6 +1466,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     &traits,
                     &type_names,
                     &type_arities,
+                    &canonical_type_names,
                     &method_type_param_scope,
                     Some(&class_self_type),
                 )?,
@@ -1111,6 +1479,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         &param.ty,
                         &type_names,
                         &type_arities,
+                        &canonical_type_names,
                         &method_type_param_scope,
                         Some(&class_self_type),
                     )
@@ -1120,6 +1489,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method.return_type,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &method_type_param_scope,
                 Some(&class_self_type),
             )?;
@@ -1134,6 +1504,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             return_type,
                             return_passing: method.return_passing,
                             return_borrow_source: None,
+                            rng_clone_safe_type_params: BTreeSet::new(),
                         },
                         type_param_bounds,
                     },
@@ -1154,6 +1525,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             class_decl.name.clone(),
             ClassInfo {
                 module_name: module_name.clone(),
+                is_builtin: false,
                 decl: class_decl.clone(),
                 type_param_bounds,
                 fields,
@@ -1346,6 +1718,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &module_name,
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &classes,
         &enums,
         &empty_functions,
@@ -1406,6 +1779,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &traits,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_param_scope(&function_decl.type_params),
         )?;
         let params = function_decl
@@ -1416,6 +1790,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     &param.ty,
                     &type_names,
                     &type_arities,
+                    &canonical_type_names,
                     &function_type_param_scope,
                 )
             })
@@ -1424,6 +1799,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &function_decl.return_type,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &function_type_param_scope,
         )?;
         let param_passings = resolve_param_passings(
@@ -1453,6 +1829,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     return_type,
                     return_passing: function_decl.return_passing,
                     return_borrow_source,
+                    rng_clone_safe_type_params: BTreeSet::new(),
                 },
                 type_param_bounds,
             },
@@ -1493,6 +1870,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &traits,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_param_scope(&impl_decl.type_params),
         )?;
         if impl_decl.trait_args.len() != trait_info.decl.type_params.len() {
@@ -1514,12 +1892,21 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         let trait_args = impl_decl
             .trait_args
             .iter()
-            .map(|arg| lower_type(arg, &type_names, &type_arities, &impl_type_param_scope))
+            .map(|arg| {
+                lower_type(
+                    arg,
+                    &type_names,
+                    &type_arities,
+                    &canonical_type_names,
+                    &impl_type_param_scope,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let for_type = lower_type(
             &impl_decl.for_type,
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &impl_type_param_scope,
         )?;
         if matches!(for_type, Type::TypeParam(_)) {
@@ -1575,6 +1962,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &traits,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &method_type_param_scope,
                 Some(&for_type),
             )?;
@@ -1586,6 +1974,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         &param.ty,
                         &type_names,
                         &type_arities,
+                        &canonical_type_names,
                         &method_type_param_scope,
                         Some(&for_type),
                     )
@@ -1595,6 +1984,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method.return_type,
                 &type_names,
                 &type_arities,
+                &canonical_type_names,
                 &method_type_param_scope,
                 Some(&for_type),
             )?;
@@ -1659,6 +2049,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         return_type,
                         return_passing: method.return_passing,
                         return_borrow_source,
+                        rng_clone_safe_type_params: BTreeSet::new(),
                     },
                     type_param_bounds,
                 },
@@ -1706,6 +2097,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         ),
                         return_passing: trait_method.signature.return_passing,
                         return_borrow_source: trait_method.signature.return_borrow_source.clone(),
+                        rng_clone_safe_type_params: trait_method
+                            .signature
+                            .rng_clone_safe_type_params
+                            .clone(),
                     },
                     type_param_bounds: substitute_trait_bounds(
                         &trait_method.type_param_bounds,
@@ -1727,7 +2122,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         });
     }
 
-    let program = Program {
+    let mut program = Program {
         module: module.clone(),
         module_name,
         source_path: None,
@@ -1738,6 +2133,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         trait_impls,
         imported_modules,
         module_registry: context.module_registry,
+        canonical_type_names: canonical_type_names.clone(),
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
@@ -1774,10 +2170,302 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         }
     }
 
-    let checker = FunctionChecker::new(
+    // Clone safety is an inferred generic obligation, much like an implicit
+    // effect. Check callable bodies to a fixed point so an obligation arising
+    // in one generic callable propagates through generic-to-generic calls,
+    // regardless of declaration order. The lattice is finite: each callable
+    // can acquire only names from its declared type-parameter scope.
+    loop {
+        type CallableKey = (String, String);
+        let (
+            function_obligations,
+            class_method_obligations,
+            trait_method_obligations,
+            impl_method_obligations,
+        ) = {
+            let checker = FunctionChecker::new(
+                &program.module_name,
+                &type_names,
+                &type_arities,
+                &canonical_type_names,
+                &program.classes,
+                &program.enums,
+                &program.functions,
+                &program.traits,
+                &program.trait_impls,
+                &program.imported_modules,
+                &program.module_registry,
+            );
+            let mut function_obligations = BTreeMap::<String, BTreeSet<String>>::new();
+            let mut class_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
+            let mut trait_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
+            let mut impl_method_obligations = BTreeMap::<(usize, String), BTreeSet<String>>::new();
+
+            for (trait_name, trait_info) in &program.traits {
+                let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
+                let self_placeholder = Type::TypeParam("Self".to_string());
+                for (method_name, method) in &trait_info.methods {
+                    let method_type_param_scope =
+                        merged_type_param_scope(&trait_type_param_scope, &method.decl.type_params);
+                    checker.check_param_defaults(
+                        &method.decl.params,
+                        &method_type_param_scope,
+                        Some(&self_placeholder),
+                        false,
+                        "trait method",
+                    )?;
+                    let sink = Rc::new(RefCell::new(BTreeSet::new()));
+                    checker
+                        .with_module_name(&trait_info.module_name)
+                        .with_rng_clone_obligation_sink(sink.clone())
+                        .check_trait_method(trait_info, method)?;
+                    trait_method_obligations.insert(
+                        (trait_name.clone(), method_name.clone()),
+                        sink.borrow().clone(),
+                    );
+                }
+            }
+            for (function_name, function) in &program.functions {
+                if function.module_name != program.module_name {
+                    continue;
+                }
+                let sink = Rc::new(RefCell::new(BTreeSet::new()));
+                checker
+                    .with_module_name(&function.module_name)
+                    .with_rng_clone_obligation_sink(sink.clone())
+                    .check_function(function)?;
+                function_obligations.insert(function_name.clone(), sink.borrow().clone());
+            }
+
+            for (class_name, class) in &program.classes {
+                for (method_name, method) in &class.methods {
+                    let sink = Rc::new(RefCell::new(BTreeSet::new()));
+                    checker
+                        .with_module_name(&class.module_name)
+                        .with_rng_clone_obligation_sink(sink.clone())
+                        .check_method(&class.decl, method)?;
+                    class_method_obligations.insert(
+                        (class_name.clone(), method_name.clone()),
+                        sink.borrow().clone(),
+                    );
+                }
+            }
+
+            for (impl_index, trait_impl) in program.trait_impls.iter().enumerate() {
+                checker
+                    .with_module_name(&trait_impl.module_name)
+                    .with_type_params(
+                        type_param_scope(&trait_impl.type_params),
+                        trait_impl.type_param_bounds.clone(),
+                    )
+                    .check_trait_impl_supertraits(trait_impl)?;
+                let explicit_method_names = trait_impl
+                    .decl
+                    .methods
+                    .iter()
+                    .map(|method| method.name.as_str())
+                    .collect::<BTreeSet<_>>();
+                for (method_name, method) in &trait_impl.methods {
+                    if !explicit_method_names.contains(method_name.as_str()) {
+                        continue;
+                    }
+                    let sink = Rc::new(RefCell::new(BTreeSet::new()));
+                    checker
+                        .with_module_name(&trait_impl.module_name)
+                        .with_rng_clone_obligation_sink(sink.clone())
+                        .check_trait_impl_method(
+                            &trait_impl.for_type,
+                            &trait_impl.type_params,
+                            &trait_impl.type_param_bounds,
+                            method,
+                        )?;
+                    impl_method_obligations
+                        .insert((impl_index, method_name.clone()), sink.borrow().clone());
+                }
+            }
+
+            (
+                function_obligations,
+                class_method_obligations,
+                trait_method_obligations,
+                impl_method_obligations,
+            )
+        };
+
+        let mut changed = false;
+        for (function_name, obligations) in function_obligations {
+            let target = &mut program
+                .functions
+                .get_mut(&function_name)
+                .expect("checked function should still exist")
+                .signature
+                .rng_clone_safe_type_params;
+            let before = target.len();
+            target.extend(obligations);
+            changed |= target.len() != before;
+        }
+        for ((class_name, method_name), obligations) in class_method_obligations {
+            let target = &mut program
+                .classes
+                .get_mut(&class_name)
+                .expect("checked class should still exist")
+                .methods
+                .get_mut(&method_name)
+                .expect("checked class method should still exist")
+                .signature
+                .rng_clone_safe_type_params;
+            let before = target.len();
+            target.extend(obligations);
+            changed |= target.len() != before;
+        }
+        for ((trait_name, method_name), obligations) in trait_method_obligations {
+            let target = &mut program
+                .traits
+                .get_mut(&trait_name)
+                .expect("checked trait should still exist")
+                .methods
+                .get_mut(&method_name)
+                .expect("checked trait method should still exist")
+                .signature
+                .rng_clone_safe_type_params;
+            let before = target.len();
+            target.extend(obligations);
+            changed |= target.len() != before;
+        }
+        let body_impl_obligations = impl_method_obligations.clone();
+        for ((impl_index, method_name), obligations) in impl_method_obligations {
+            let target = &mut program.trait_impls[impl_index]
+                .methods
+                .get_mut(&method_name)
+                .expect("checked impl method should still exist")
+                .signature
+                .rng_clone_safe_type_params;
+            let before = target.len();
+            target.extend(obligations);
+            changed |= target.len() != before;
+        }
+
+        // A trait method's inferred requirements are part of its callable
+        // contract. Map them through each impl header so direct concrete
+        // dispatch observes the same contract as dispatch through a bound.
+        let mut mapped_impl_contracts = BTreeMap::<(usize, String), BTreeSet<String>>::new();
+        for (impl_index, trait_impl) in program.trait_impls.iter().enumerate() {
+            let trait_info = program.traits.get(&trait_impl.trait_name).ok_or_else(|| {
+                Diagnostic::at(
+                    trait_impl.decl.span,
+                    format!(
+                        "internal error: trait `{}` disappeared during clone-safety contract checking",
+                        trait_impl.trait_name
+                    ),
+                )
+            })?;
+            let substitutions = self_type_substitutions(
+                &trait_info.decl,
+                &trait_impl.trait_args,
+                trait_impl.for_type.clone(),
+            );
+            for (method_name, impl_method) in &trait_impl.methods {
+                let Some(trait_method) = trait_info.methods.get(method_name) else {
+                    continue;
+                };
+                let mut mapped = BTreeSet::new();
+                for requirement in &trait_method.signature.rng_clone_safe_type_params {
+                    let resolved =
+                        substitute_type(&Type::TypeParam(requirement.clone()), &substitutions);
+                    match rng_clone_safety_in_context_with_modules(
+                        &resolved,
+                        &program.classes,
+                        &program.enums,
+                        &program.imported_modules,
+                        &program.module_registry,
+                    ) {
+                        RngCloneSafety::Safe => {}
+                        RngCloneSafety::ContainsRng => {
+                            return Err(Diagnostic::coded_at(
+                                "AU3007",
+                                impl_method.decl.span,
+                                format!(
+                                    "impl method `{}` cannot satisfy the trait's clone-safety contract because `{}` contains non-cloneable `random.Rng` state",
+                                    method_name, resolved
+                                ),
+                            ));
+                        }
+                        RngCloneSafety::Unknown => {
+                            let params = rng_clone_obligation_params_in_context_with_modules(
+                                &resolved,
+                                &program.classes,
+                                &program.enums,
+                                &program.imported_modules,
+                                &program.module_registry,
+                            );
+                            if params.is_empty() {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3007",
+                                    impl_method.decl.span,
+                                    format!(
+                                        "impl method `{}` cannot prove the trait's clone-safety requirement for `{}`",
+                                        method_name, resolved
+                                    ),
+                                ));
+                            }
+                            mapped.extend(params);
+                        }
+                    }
+                }
+                mapped_impl_contracts.insert((impl_index, method_name.clone()), mapped);
+            }
+        }
+        for ((impl_index, method_name), obligations) in &mapped_impl_contracts {
+            let target = &mut program.trait_impls[*impl_index]
+                .methods
+                .get_mut(method_name)
+                .expect("contract-mapped impl method should still exist")
+                .signature
+                .rng_clone_safe_type_params;
+            let before = target.len();
+            target.extend(obligations.iter().cloned());
+            changed |= target.len() != before;
+        }
+        if !changed {
+            // An explicit impl may honor a trait clone-safety contract, but it
+            // may not silently strengthen it: bound-based callers can enforce
+            // only requirements declared by the trait method itself.
+            for ((impl_index, method_name), body_obligations) in body_impl_obligations {
+                let allowed = mapped_impl_contracts
+                    .get(&(impl_index, method_name.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let unsupported = body_obligations
+                    .difference(&allowed)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !unsupported.is_empty() {
+                    let method = &program.trait_impls[impl_index].methods[&method_name];
+                    return Err(Diagnostic::coded_at(
+                        "AU3007",
+                        method.decl.span,
+                        format!(
+                            "impl method `{}` would strengthen its trait's clone-safety contract for type parameter{} {}; put the clone-producing behavior in the trait default method so callers can enforce it",
+                            method_name,
+                            if unsupported.len() == 1 { "" } else { "s" },
+                            unsupported
+                                .iter()
+                                .map(|name| format!("`{}`", name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ));
+                }
+            }
+            break;
+        }
+    }
+
+    FunctionChecker::new(
         &program.module_name,
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &program.classes,
         &program.enums,
         &program.functions,
@@ -1785,72 +2473,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &program.trait_impls,
         &program.imported_modules,
         &program.module_registry,
-    );
-    for trait_info in program.traits.values() {
-        let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
-        let self_placeholder = Type::TypeParam("Self".to_string());
-        for method in trait_info.methods.values() {
-            let method_type_param_scope =
-                merged_type_param_scope(&trait_type_param_scope, &method.decl.type_params);
-            checker.check_param_defaults(
-                &method.decl.params,
-                &method_type_param_scope,
-                Some(&self_placeholder),
-                false,
-                "trait method",
-            )?;
-            checker
-                .with_module_name(&trait_info.module_name)
-                .check_trait_method(trait_info, method)?;
-        }
-    }
-    for function in program.functions.values() {
-        if function.module_name != program.module_name {
-            continue;
-        }
-        checker
-            .with_module_name(&function.module_name)
-            .check_function(function)?;
-    }
-
-    for class in program.classes.values() {
-        for method in class.methods.values() {
-            checker
-                .with_module_name(&class.module_name)
-                .check_method(&class.decl, method)?;
-        }
-    }
-
-    for trait_impl in &program.trait_impls {
-        checker
-            .with_module_name(&trait_impl.module_name)
-            .with_type_params(
-                type_param_scope(&trait_impl.type_params),
-                trait_impl.type_param_bounds.clone(),
-            )
-            .check_trait_impl_supertraits(trait_impl)?;
-        let explicit_method_names = trait_impl
-            .decl
-            .methods
-            .iter()
-            .map(|method| method.name.as_str())
-            .collect::<BTreeSet<_>>();
-        for method in trait_impl.methods.values() {
-            if !explicit_method_names.contains(method.decl.name.as_str()) {
-                continue;
-            }
-            checker
-                .with_module_name(&trait_impl.module_name)
-                .check_trait_impl_method(
-                    &trait_impl.for_type,
-                    &trait_impl.type_params,
-                    &trait_impl.type_param_bounds,
-                    method,
-                )?;
-        }
-    }
-
-    checker.check_top_level(&program.top_level_stmts)?;
+    )
+    .check_top_level(&program.top_level_stmts)?;
 
     Ok(program)
 }
@@ -1863,7 +2487,10 @@ fn reject_builtin_handle_trait_method_collisions(
     let Type::Named(handle_name, _) = for_type else {
         return Ok(());
     };
-    if !matches!(handle_name.as_str(), "Queue" | "Task" | "TaskGroup") {
+    if !matches!(
+        handle_name.as_str(),
+        "Queue" | "Task" | "TaskGroup" | "random.Rng"
+    ) {
         return Ok(());
     }
 
@@ -1904,15 +2531,24 @@ fn lower_type(
     type_ref: &TypeRef,
     type_names: &BTreeMap<String, crate::diag::Span>,
     type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
     type_params: &BTreeMap<String, ()>,
 ) -> Result<Type> {
-    lower_type_with_self(type_ref, type_names, type_arities, type_params, None)
+    lower_type_with_self(
+        type_ref,
+        type_names,
+        type_arities,
+        canonical_type_names,
+        type_params,
+        None,
+    )
 }
 
 fn lower_type_with_self(
     type_ref: &TypeRef,
     type_names: &BTreeMap<String, crate::diag::Span>,
     type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
     type_params: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<Type> {
@@ -1964,7 +2600,16 @@ fn lower_type_with_self(
     let args = type_ref
         .args
         .iter()
-        .map(|arg| lower_type_with_self(arg, type_names, type_arities, type_params, self_type))
+        .map(|arg| {
+            lower_type_with_self(
+                arg,
+                type_names,
+                type_arities,
+                canonical_type_names,
+                type_params,
+                self_type,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
 
     if type_name == "Option" {
@@ -2058,15 +2703,14 @@ fn lower_type_with_self(
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        let canonical_name = if preserves_qualified_builtin_type_name(type_name) {
-            type_name.to_string()
-        } else {
-            type_name
-                .rsplit_once('.')
-                .map(|(_, leaf)| leaf)
-                .unwrap_or(type_name)
-                .to_string()
-        };
+        let canonical_name =
+            if preserves_qualified_builtin_type_name(type_name) || type_name.contains('.') {
+                type_name.to_string()
+            } else if let Some(canonical_name) = canonical_type_names.get(type_name) {
+                canonical_name.clone()
+            } else {
+                type_name.to_string()
+            };
         Ok(Type::Named(canonical_name, args))
     } else {
         Err(Diagnostic::at(
@@ -2289,6 +2933,7 @@ fn lower_trait_bounds(
     traits: &BTreeMap<String, TraitInfo>,
     type_names: &BTreeMap<String, crate::diag::Span>,
     type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
 ) -> Result<BTreeMap<String, Vec<TraitBound>>> {
     lower_trait_bounds_with_self(
@@ -2296,6 +2941,7 @@ fn lower_trait_bounds(
         traits,
         type_names,
         type_arities,
+        canonical_type_names,
         type_param_scope,
         None,
     )
@@ -2306,6 +2952,7 @@ fn lower_supertraits(
     traits: &BTreeMap<String, TraitInfo>,
     type_names: &BTreeMap<String, crate::diag::Span>,
     type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<Vec<TraitBound>> {
@@ -2332,7 +2979,14 @@ fn lower_supertraits(
             .args
             .iter()
             .map(|arg| {
-                lower_type_with_self(arg, type_names, type_arities, type_param_scope, self_type)
+                lower_type_with_self(
+                    arg,
+                    type_names,
+                    type_arities,
+                    canonical_type_names,
+                    type_param_scope,
+                    self_type,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         lowered.push(TraitBound {
@@ -2348,6 +3002,7 @@ fn lower_trait_bounds_with_self(
     traits: &BTreeMap<String, TraitInfo>,
     type_names: &BTreeMap<String, crate::diag::Span>,
     type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<BTreeMap<String, Vec<TraitBound>>> {
@@ -2376,7 +3031,14 @@ fn lower_trait_bounds_with_self(
                 .args
                 .iter()
                 .map(|arg| {
-                    lower_type_with_self(arg, type_names, type_arities, type_param_scope, self_type)
+                    lower_type_with_self(
+                        arg,
+                        type_names,
+                        type_arities,
+                        canonical_type_names,
+                        type_param_scope,
+                        self_type,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             names.push(TraitBound {
@@ -2722,6 +3384,7 @@ fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {
             | "net.TlsListener"
             | "net.TlsStream"
             | "io.Error"
+            | "random.Rng"
     )
 }
 
@@ -2955,9 +3618,11 @@ struct ResolvedBinaryOperatorAccess {
 }
 
 struct FunctionChecker<'a> {
+    root_module_name: &'a str,
     module_name: &'a str,
     type_names: &'a BTreeMap<String, crate::diag::Span>,
     type_arities: &'a BTreeMap<String, usize>,
+    canonical_type_names: &'a BTreeMap<String, String>,
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
     functions: &'a BTreeMap<String, FunctionInfo>,
@@ -2972,6 +3637,7 @@ struct FunctionChecker<'a> {
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_mut_places: Rc<RefCell<Vec<PlacePath>>>,
+    rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -2979,6 +3645,7 @@ struct ResolvedTraitMethodInfo {
     decl: FunctionDecl,
     signature: FunctionSignature,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    rng_clone_safe_types: Vec<Type>,
 }
 
 #[derive(Clone)]
@@ -2987,6 +3654,7 @@ struct ResolvedCallableInfo {
     decl: FunctionDecl,
     signature: FunctionSignature,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    seed_substitutions: HashMap<String, Type>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3035,6 +3703,193 @@ impl<'a> FunctionChecker<'a> {
             self.imported_modules,
             self.module_registry,
         )
+    }
+
+    fn rng_clone_safety(&self, ty: &Type) -> RngCloneSafety {
+        rng_clone_safety_in_context_with_modules(
+            ty,
+            self.classes,
+            self.enums,
+            self.imported_modules,
+            self.module_registry,
+        )
+    }
+
+    fn reject_rng_duplication(
+        &self,
+        operation: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let operation = if operation.contains('`') {
+            operation.to_string()
+        } else {
+            format!("`{operation}`")
+        };
+        let qualifier = match self.rng_clone_safety(ty) {
+            RngCloneSafety::Safe => return Ok(()),
+            RngCloneSafety::ContainsRng => "contains",
+            RngCloneSafety::Unknown => {
+                let params = rng_clone_obligation_params_in_context_with_modules(
+                    ty,
+                    self.classes,
+                    self.enums,
+                    self.imported_modules,
+                    self.module_registry,
+                );
+                if !params.is_empty() {
+                    let foreign = params
+                        .iter()
+                        .filter(|name| {
+                            !self.type_params.contains_key(*name) && name.as_str() != "Self"
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !foreign.is_empty() {
+                        return Err(Diagnostic::coded_at(
+                            "AU3007",
+                            span,
+                            format!(
+                                "cannot prove clone safety for unresolved type parameter{} {} while checking {operation}",
+                                if foreign.len() == 1 { "" } else { "s" },
+                                foreign
+                                    .iter()
+                                    .map(|name| format!("`{}`", name))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ));
+                    }
+                    self.rng_clone_obligations.borrow_mut().extend(params);
+                    return Ok(());
+                }
+                "may contain"
+            }
+        };
+        Err(
+            Diagnostic::coded_at(
+                "AU3007",
+                span,
+                format!(
+                    "cannot use {operation} because `{ty}` {qualifier} non-cloneable `random.Rng` state"
+                ),
+            )
+            .with_help(
+                "move or remove the value so it has one owner, or construct an independent generator with an explicit seed",
+            ),
+        )
+    }
+
+    fn enforce_rng_clone_obligations(
+        &self,
+        operation: &str,
+        obligations: &BTreeSet<String>,
+        substitutions: &HashMap<String, Type>,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for type_param in obligations {
+            let resolved = substitutions
+                .get(type_param)
+                .cloned()
+                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+            self.reject_rng_duplication(operation, &resolved, span)?;
+        }
+        Ok(())
+    }
+
+    fn enforce_rng_clone_obligations_before_method_inference(
+        &self,
+        operation: &str,
+        obligations: &BTreeSet<String>,
+        substitutions: &HashMap<String, Type>,
+        method_type_params: &[String],
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for type_param in obligations {
+            if !substitutions.contains_key(type_param)
+                && method_type_params
+                    .iter()
+                    .any(|candidate| candidate == type_param)
+            {
+                continue;
+            }
+            let resolved = substitutions
+                .get(type_param)
+                .cloned()
+                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+            self.reject_rng_duplication(operation, &resolved, span)?;
+        }
+        Ok(())
+    }
+
+    fn enforce_resolved_rng_clone_obligations_before_method_inference(
+        &self,
+        operation: &str,
+        obligations: &[Type],
+        method_type_params: &[String],
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for ty in obligations {
+            if matches!(
+                ty,
+                Type::TypeParam(name)
+                    if method_type_params.iter().any(|candidate| candidate == name)
+            ) {
+                continue;
+            }
+            self.reject_rng_duplication(operation, ty, span)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn infer_method_type_substitutions(
+        &self,
+        operation: &str,
+        method_type_params: &[String],
+        param_types: &[Type],
+        type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
+        rng_clone_safe_type_params: &BTreeSet<String>,
+        actual_types: &[Type],
+        mut substitutions: HashMap<String, Type>,
+        span: crate::diag::Span,
+    ) -> Result<HashMap<String, Type>> {
+        for (expected, actual) in param_types.iter().zip(actual_types) {
+            if let Err(error) = unify_type_pattern(expected, actual, &mut substitutions) {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("argument type mismatch for {operation}: {}", error.message),
+                ));
+            }
+        }
+
+        for type_param in method_type_params {
+            if !substitutions.contains_key(type_param) {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("cannot infer type parameter `{type_param}` for {operation}"),
+                ));
+            }
+        }
+
+        for (type_param, bounds) in type_param_bounds {
+            let Some(resolved_ty) = substitutions.get(type_param) else {
+                continue;
+            };
+            let resolved_bounds = bounds
+                .iter()
+                .map(|bound| substitute_trait_bound(bound, &substitutions))
+                .collect::<Vec<_>>();
+            self.assert_type_satisfies_bounds(resolved_ty, &resolved_bounds, span)?;
+        }
+
+        self.enforce_rng_clone_obligations(
+            operation,
+            rng_clone_safe_type_params,
+            &substitutions,
+            span,
+        )?;
+        Ok(substitutions)
     }
 
     fn check_builtin_argument_type(
@@ -3147,6 +4002,7 @@ impl<'a> FunctionChecker<'a> {
         module_name: &'a str,
         type_names: &'a BTreeMap<String, crate::diag::Span>,
         type_arities: &'a BTreeMap<String, usize>,
+        canonical_type_names: &'a BTreeMap<String, String>,
         classes: &'a BTreeMap<String, ClassInfo>,
         enums: &'a BTreeMap<String, EnumInfo>,
         functions: &'a BTreeMap<String, FunctionInfo>,
@@ -3156,9 +4012,11 @@ impl<'a> FunctionChecker<'a> {
         module_registry: &'a BTreeMap<String, ModuleNamespace>,
     ) -> Self {
         Self {
+            root_module_name: module_name,
             module_name,
             type_names,
             type_arities,
+            canonical_type_names,
             classes,
             enums,
             functions,
@@ -3173,6 +4031,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_mut_places: Rc::new(RefCell::new(Vec::new())),
+            rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
         }
     }
 
@@ -3183,9 +4042,11 @@ impl<'a> FunctionChecker<'a> {
         return_borrow_source: Option<String>,
     ) -> Self {
         Self {
+            root_module_name: self.root_module_name,
             module_name: self.module_name,
             type_names: self.type_names,
             type_arities: self.type_arities,
+            canonical_type_names: self.canonical_type_names,
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
@@ -3200,6 +4061,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            rng_clone_obligations: self.rng_clone_obligations.clone(),
         }
     }
 
@@ -3209,9 +4071,11 @@ impl<'a> FunctionChecker<'a> {
         type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     ) -> Self {
         Self {
+            root_module_name: self.root_module_name,
             module_name: self.module_name,
             type_names: self.type_names,
             type_arities: self.type_arities,
+            canonical_type_names: self.canonical_type_names,
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
@@ -3226,14 +4090,17 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds,
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            rng_clone_obligations: self.rng_clone_obligations.clone(),
         }
     }
 
     fn with_module_name(&self, module_name: &'a str) -> Self {
         Self {
+            root_module_name: self.root_module_name,
             module_name,
             type_names: self.type_names,
             type_arities: self.type_arities,
+            canonical_type_names: self.canonical_type_names,
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
@@ -3248,6 +4115,32 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            rng_clone_obligations: self.rng_clone_obligations.clone(),
+        }
+    }
+
+    fn with_rng_clone_obligation_sink(&self, sink: Rc<RefCell<BTreeSet<String>>>) -> Self {
+        Self {
+            root_module_name: self.root_module_name,
+            module_name: self.module_name,
+            type_names: self.type_names,
+            type_arities: self.type_arities,
+            canonical_type_names: self.canonical_type_names,
+            classes: self.classes,
+            enums: self.enums,
+            functions: self.functions,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            imported_modules: self.imported_modules,
+            module_registry: self.module_registry,
+            current_return_type: self.current_return_type.clone(),
+            current_return_passing: self.current_return_passing,
+            current_return_borrow_source: self.current_return_borrow_source.clone(),
+            type_params: self.type_params.clone(),
+            type_param_bounds: self.type_param_bounds.clone(),
+            implicit_borrowed_params: self.implicit_borrowed_params.clone(),
+            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            rng_clone_obligations: sink,
         }
     }
 
@@ -3284,6 +4177,7 @@ impl<'a> FunctionChecker<'a> {
                     type_arg,
                     self.type_names,
                     self.type_arities,
+                    self.canonical_type_names,
                     &self.type_params,
                 )
             })
@@ -3413,24 +4307,39 @@ impl<'a> FunctionChecker<'a> {
         if self.is_copy_type(&binding.ty) {
             return Ok(());
         }
+        let clone_supported = self.type_supports_builtin_clone(&binding.ty);
         if binding.passing != ReceiverKind::Value {
             if let Some(ty) = self.implicit_borrowed_params.get(name) {
                 let mut diagnostic = Diagnostic::at(
                     span,
-                    format!(
-                        "parameter `{}` is borrowed; declare it as `own {}` to take ownership, or clone the value before consuming it",
-                        name, ty
-                    ),
+                    if clone_supported {
+                        format!(
+                            "parameter `{}` is borrowed; declare it as `own {}` to take ownership, or clone the value before consuming it",
+                            name, ty
+                        )
+                    } else {
+                        format!(
+                            "parameter `{}` is borrowed; declare it as `own {}` to take ownership",
+                            name, ty
+                        )
+                    },
                 );
                 if let Some(origin) = binding.borrowed_at {
                     diagnostic = diagnostic
                         .with_secondary(origin, format!("parameter `{}` is borrowed here", name));
                 }
-                diagnostic = diagnostic.with_help(format!(
-                    "declare the parameter as `own {}` when the function should consume it, or call `.clone()` to consume an independent copy",
-                    ty
-                ));
-                if Self::type_supports_builtin_clone(&binding.ty) {
+                diagnostic = diagnostic.with_help(if clone_supported {
+                    format!(
+                        "declare the parameter as `own {}` when the function should consume it, or call `.clone()` to consume an independent copy",
+                        ty
+                    )
+                } else {
+                    format!(
+                        "declare the parameter as `own {}` when the function should consume this non-cloneable value",
+                        ty
+                    )
+                });
+                if clone_supported {
                     let insertion = crate::diag::Span::new(
                         span.line,
                         span.column.saturating_add(name.chars().count()),
@@ -3444,11 +4353,18 @@ impl<'a> FunctionChecker<'a> {
             if let Some(origin) = binding.borrowed_at {
                 diagnostic = diagnostic.with_secondary(origin, "value is borrowed here");
             }
-            diagnostic = diagnostic.with_help(format!(
-                "take `{}` as `own {}` when ownership is required, or call `.clone()` to consume an independent copy",
-                name, binding.ty
-            ));
-            if Self::type_supports_builtin_clone(&binding.ty) {
+            diagnostic = diagnostic.with_help(if clone_supported {
+                format!(
+                    "take `{}` as `own {}` when ownership is required, or call `.clone()` to consume an independent copy",
+                    name, binding.ty
+                )
+            } else {
+                format!(
+                    "take `{}` as `own {}` when ownership of this non-cloneable value is required",
+                    name, binding.ty
+                )
+            });
+            if clone_supported {
                 let insertion = crate::diag::Span::new(
                     span.line,
                     span.column.saturating_add(name.chars().count()),
@@ -3464,35 +4380,40 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         if binding.moved {
-            return Err(Self::moved_value_diagnostic(name, span, binding));
+            return Err(self.moved_value_diagnostic(name, span, binding));
         }
         binding.moved = true;
         binding.moved_at = Some(span);
         Ok(())
     }
 
-    fn type_supports_builtin_clone(ty: &Type) -> bool {
+    fn type_supports_builtin_clone(&self, ty: &Type) -> bool {
         matches!(ty, Type::Named(name, _) if BuiltinMember::resolve(name, "clone").is_some())
+            && self.rng_clone_safety(ty) == RngCloneSafety::Safe
     }
 
     fn moved_value_diagnostic(
+        &self,
         name: &str,
         span: crate::diag::Span,
         binding: &LocalBinding,
     ) -> Diagnostic {
         let mut diagnostic = Diagnostic::at(span, format!("use of moved value `{}`", name));
         if let Some(origin) = binding.moved_at {
-            diagnostic = diagnostic
-                .with_secondary(origin, "value moved here")
-                .with_help(
+            diagnostic = diagnostic.with_secondary(origin, "value moved here");
+            if self.type_supports_builtin_clone(&binding.ty) {
+                diagnostic = diagnostic.with_help(
                     "pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
                 );
-            if Self::type_supports_builtin_clone(&binding.ty) {
                 let insertion = crate::diag::Span::new(
                     origin.line,
                     origin.column.saturating_add(name.chars().count()),
                 );
                 diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+            } else {
+                diagnostic = diagnostic.with_help(
+                    "pass a shared borrow when ownership is not needed, or transfer this non-cloneable value only once",
+                );
             }
         }
         diagnostic
@@ -3549,11 +4470,19 @@ impl<'a> FunctionChecker<'a> {
                             diagnostic = diagnostic
                                 .with_secondary(origin, format!("`{}` is borrowed here", name));
                         }
-                        diagnostic = diagnostic.with_help(format!(
-                            "take `{}` as `own {}` when the field should be moved, or call `.clone()` on the field to return an independent value",
-                            name, object_ty
-                        ));
-                        if Self::type_supports_builtin_clone(&member_ty) {
+                        let clone_supported = self.type_supports_builtin_clone(&member_ty);
+                        diagnostic = diagnostic.with_help(if clone_supported {
+                            format!(
+                                "take `{}` as `own {}` when the field should be moved, or call `.clone()` on the field to return an independent value",
+                                name, object_ty
+                            )
+                        } else {
+                            format!(
+                                "take `{}` as `own {}` when this non-cloneable field should be moved",
+                                name, object_ty
+                            )
+                        });
+                        if clone_supported {
                             let insertion = crate::diag::Span::new(
                                 expr.span.line,
                                 expr.span.column.saturating_add(field.chars().count()),
@@ -3755,12 +4684,7 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn module_enum_type_name(&self, module_path: &str, enum_info: &EnumInfo) -> String {
-        let builtin_qualified_name = format!("{}.{}", module_path, enum_info.decl.name);
-        if preserves_qualified_builtin_type_name(&builtin_qualified_name) {
-            builtin_qualified_name
-        } else {
-            enum_info.decl.name.clone()
-        }
+        format!("{}.{}", module_path, enum_info.decl.name)
     }
 
     fn reject_loop_carried_moves(
@@ -3831,6 +4755,7 @@ impl<'a> FunctionChecker<'a> {
                 &param.ty,
                 self.type_names,
                 self.type_arities,
+                self.canonical_type_names,
                 type_param_scope,
                 self_type,
             )?;
@@ -3991,12 +4916,14 @@ impl<'a> FunctionChecker<'a> {
             self.traits,
             self.type_names,
             self.type_arities,
+            self.canonical_type_names,
             &type_param_scope,
         )?;
         let return_type = lower_type(
             &function.return_type,
             self.type_names,
             self.type_arities,
+            self.canonical_type_names,
             &type_param_scope,
         )?;
         let checker = self
@@ -4084,6 +5011,7 @@ impl<'a> FunctionChecker<'a> {
                 self.traits,
                 self.type_names,
                 self.type_arities,
+                self.canonical_type_names,
                 &method_type_param_scope,
                 Some(&class_self_type),
             )?,
@@ -4092,6 +5020,7 @@ impl<'a> FunctionChecker<'a> {
             &method.return_type,
             self.type_names,
             self.type_arities,
+            self.canonical_type_names,
             &method_type_param_scope,
             Some(&class_self_type),
         )?;
@@ -4247,6 +5176,7 @@ impl<'a> FunctionChecker<'a> {
                 self.traits,
                 self.type_names,
                 self.type_arities,
+                self.canonical_type_names,
                 &type_param_scope,
                 Some(for_type),
             )?,
@@ -4255,6 +5185,7 @@ impl<'a> FunctionChecker<'a> {
             &method.return_type,
             self.type_names,
             self.type_arities,
+            self.canonical_type_names,
             &type_param_scope,
             Some(for_type),
         )?;
@@ -5095,6 +6026,7 @@ impl<'a> FunctionChecker<'a> {
                     annotation,
                     self.type_names,
                     self.type_arities,
+                    self.canonical_type_names,
                     &self.type_params,
                 )
             })
@@ -5418,7 +6350,7 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(binding) = locals.get(name) {
                     self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                     if binding.moved {
-                        return Err(Self::moved_value_diagnostic(name, expr.span, binding));
+                        return Err(self.moved_value_diagnostic(name, expr.span, binding));
                     }
                     if !binding.moved_fields.is_empty() {
                         let mut diagnostic = Diagnostic::at(
@@ -5440,10 +6372,10 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(function.signature.return_type.clone());
                 }
                 if let Some(class_info) = self.resolve_class_info(name) {
-                    return Ok(Type::named(class_info.decl.name.clone()));
+                    return Ok(Type::named(self.canonical_class_name(name, class_info)));
                 }
                 if let Some(enum_info) = self.resolve_enum_info(name) {
-                    return Ok(Type::named(enum_info.decl.name.clone()));
+                    return Ok(Type::named(self.canonical_enum_info_name(name, enum_info)));
                 }
                 match name.as_str() {
                     "True" => Err(Diagnostic::coded_at(
@@ -5695,7 +6627,7 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        Ok(Type::Named(name.clone(), lowered))
+                        Ok(Type::Named(self.canonical_class_name(name, class), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_enum_info(name).is_some() => {
                         let enum_info = self.resolve_enum_info(name).ok_or_else(|| {
@@ -5723,14 +6655,22 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        Ok(Type::Named(name.clone(), lowered))
+                        Ok(Type::Named(
+                            self.canonical_enum_info_name(name, enum_info),
+                            lowered,
+                        ))
                     }
                     _ => self.type_of_expr_hint(base, locals, expected),
                 }
             }
             ExprKind::Cast { expr: value, ty } => {
-                let target_ty =
-                    lower_type(ty, self.type_names, self.type_arities, &self.type_params)?;
+                let target_ty = lower_type(
+                    ty,
+                    self.type_names,
+                    self.type_arities,
+                    self.canonical_type_names,
+                    &self.type_params,
+                )?;
                 let source_ty = if is_float_type(&target_ty) && Self::is_integer_literal_expr(value)
                 {
                     // An explicit integer-to-float cast retains its exactness-
@@ -5852,7 +6792,7 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if inner_args[1] != return_args[1]
-                    && !self.has_from_conversion(&inner_args[1], &return_args[1])
+                    && !self.has_from_conversion(&inner_args[1], &return_args[1], expr.span)?
                 {
                     return Err(Diagnostic::at(
                         expr.span,
@@ -6112,7 +7052,10 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            return Ok(Type::Named(enum_info.decl.name.clone(), explicit_args));
+                            return Ok(Type::Named(
+                                self.canonical_enum_info_name(enum_name, enum_info),
+                                explicit_args,
+                            ));
                         }
                     }
                 }
@@ -6184,13 +7127,15 @@ impl<'a> FunctionChecker<'a> {
                                 == self.canonical_enum_name(enum_name)
                             {
                                 return Ok(Type::Named(
-                                    enum_info.decl.name.clone(),
+                                    self.canonical_enum_info_name(enum_name, enum_info),
                                     expected_args.clone(),
                                 ));
                             }
                         }
                         if enum_info.decl.type_params.is_empty() {
-                            return Ok(Type::named(enum_name));
+                            return Ok(Type::named(
+                                self.canonical_enum_info_name(enum_name, enum_info),
+                            ));
                         }
                         let missing = enum_info
                             .decl
@@ -6463,11 +7408,28 @@ impl<'a> FunctionChecker<'a> {
             else {
                 return Ok(None);
             };
+            let operation = format!("operator trait `{}.{}`", trait_name, method_name);
+            self.enforce_resolved_rng_clone_obligations_before_method_inference(
+                &operation,
+                &method.rng_clone_safe_types,
+                &method.decl.type_params,
+                span,
+            )?;
+            let substitutions = self.infer_method_type_substitutions(
+                &operation,
+                &method.decl.type_params,
+                &method.signature.params,
+                &method.type_param_bounds,
+                &method.signature.rng_clone_safe_type_params,
+                &[],
+                HashMap::new(),
+                span,
+            )?;
             let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
-            let return_type = method.signature.return_type;
+            let return_type = substitute_type(&method.signature.return_type, &substitutions);
             self.ensure_call_result_materializable(
                 span,
-                &format!("operator trait `{}.{}`", trait_name, method_name),
+                &operation,
                 &return_type,
                 method.signature.return_passing,
             )?;
@@ -6481,11 +7443,28 @@ impl<'a> FunctionChecker<'a> {
         else {
             return Ok(None);
         };
+        let operation = format!("operator trait `{}.{}`", trait_name, method_name);
+        self.enforce_resolved_rng_clone_obligations_before_method_inference(
+            &operation,
+            &method.rng_clone_safe_types,
+            &method.decl.type_params,
+            span,
+        )?;
+        let substitutions = self.infer_method_type_substitutions(
+            &operation,
+            &method.decl.type_params,
+            &method.signature.params,
+            &method.type_param_bounds,
+            &method.signature.rng_clone_safe_type_params,
+            &[],
+            substitutions,
+            span,
+        )?;
         let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
         let return_type = substitute_type(&method.signature.return_type, &substitutions);
         self.ensure_call_result_materializable(
             span,
-            &format!("operator trait `{}.{}`", trait_name, method_name),
+            &operation,
             &return_type,
             method.signature.return_passing,
         )?;
@@ -6515,6 +7494,23 @@ impl<'a> FunctionChecker<'a> {
             else {
                 return Ok(None);
             };
+            let operation = format!("operator trait `{}.{}`", trait_name, method_name);
+            self.enforce_resolved_rng_clone_obligations_before_method_inference(
+                &operation,
+                &method.rng_clone_safe_types,
+                &method.decl.type_params,
+                span,
+            )?;
+            let substitutions = self.infer_method_type_substitutions(
+                &operation,
+                &method.decl.type_params,
+                &method.signature.params,
+                &method.type_param_bounds,
+                &method.signature.rng_clone_safe_type_params,
+                std::slice::from_ref(right_ty),
+                HashMap::new(),
+                span,
+            )?;
             let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
             let rhs_passing = method
                 .signature
@@ -6522,10 +7518,10 @@ impl<'a> FunctionChecker<'a> {
                 .first()
                 .copied()
                 .unwrap_or(ReceiverKind::Value);
-            let return_type = method.signature.return_type;
+            let return_type = substitute_type(&method.signature.return_type, &substitutions);
             self.ensure_call_result_materializable(
                 span,
-                &format!("operator trait `{}.{}`", trait_name, method_name),
+                &operation,
                 &return_type,
                 method.signature.return_passing,
             )?;
@@ -6545,6 +7541,23 @@ impl<'a> FunctionChecker<'a> {
         else {
             return Ok(None);
         };
+        let operation = format!("operator trait `{}.{}`", trait_name, method_name);
+        self.enforce_resolved_rng_clone_obligations_before_method_inference(
+            &operation,
+            &method.rng_clone_safe_types,
+            &method.decl.type_params,
+            span,
+        )?;
+        let substitutions = self.infer_method_type_substitutions(
+            &operation,
+            &method.decl.type_params,
+            &method.signature.params,
+            &method.type_param_bounds,
+            &method.signature.rng_clone_safe_type_params,
+            std::slice::from_ref(right_ty),
+            substitutions,
+            span,
+        )?;
         let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
         let rhs_passing = method
             .signature
@@ -6555,7 +7568,7 @@ impl<'a> FunctionChecker<'a> {
         let return_type = substitute_type(&method.signature.return_type, &substitutions);
         self.ensure_call_result_materializable(
             span,
-            &format!("operator trait `{}.{}`", trait_name, method_name),
+            &operation,
             &return_type,
             method.signature.return_passing,
         )?;
@@ -6631,11 +7644,27 @@ impl<'a> FunctionChecker<'a> {
                         ),
                         return_passing: method.signature.return_passing,
                         return_borrow_source: method.signature.return_borrow_source.clone(),
+                        rng_clone_safe_type_params: method
+                            .signature
+                            .rng_clone_safe_type_params
+                            .iter()
+                            .filter(|name| method.decl.type_params.contains(name))
+                            .cloned()
+                            .collect(),
                     },
                     type_param_bounds: substitute_trait_bounds(
                         &method.type_param_bounds,
                         &trait_substitutions,
                     ),
+                    rng_clone_safe_types: method
+                        .signature
+                        .rng_clone_safe_type_params
+                        .iter()
+                        .filter(|name| !method.decl.type_params.contains(name))
+                        .map(|name| {
+                            substitute_type(&Type::TypeParam(name.clone()), &trait_substitutions)
+                        })
+                        .collect(),
                 });
             }
         }
@@ -6728,11 +7757,25 @@ impl<'a> FunctionChecker<'a> {
                         return_type: substitute_type(&method.signature.return_type, &substitutions),
                         return_passing: method.signature.return_passing,
                         return_borrow_source: method.signature.return_borrow_source.clone(),
+                        rng_clone_safe_type_params: method
+                            .signature
+                            .rng_clone_safe_type_params
+                            .iter()
+                            .filter(|name| method.decl.type_params.contains(name))
+                            .cloned()
+                            .collect(),
                     },
                     type_param_bounds: substitute_trait_bounds(
                         &method.type_param_bounds,
                         &substitutions,
                     ),
+                    rng_clone_safe_types: method
+                        .signature
+                        .rng_clone_safe_type_params
+                        .iter()
+                        .filter(|name| !method.decl.type_params.contains(name))
+                        .map(|name| substitute_type(&Type::TypeParam(name.clone()), &substitutions))
+                        .collect(),
                 },
                 substitutions,
             ));
@@ -6761,6 +7804,300 @@ impl<'a> FunctionChecker<'a> {
                 ),
             )),
         }
+    }
+
+    fn type_check_builtin_class_constructor(
+        &self,
+        constructor: BuiltinClassConstructor,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        has_explicit_type_args: bool,
+        result_type: Type,
+    ) -> Result<Type> {
+        if has_explicit_type_args {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "`{}` does not take explicit type arguments",
+                    constructor.qualified_name()
+                ),
+            ));
+        }
+        let ordered_args = constructor.bind_args(args, span)?;
+        let seed_arg = required_ordered_arg(
+            &ordered_args,
+            0,
+            span,
+            "internal error: random.Rng should bind one seed argument",
+        )?;
+        let actual =
+            self.type_of_expr_hint(&seed_arg.value, locals, Some(&Type::named("int64")))?;
+        if actual != Type::named("int64") {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                seed_arg.span,
+                format!(
+                    "`{}` expects `int64` for `seed`, found `{}`",
+                    constructor.qualified_name(),
+                    actual
+                ),
+            ));
+        }
+        Ok(result_type)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn type_check_user_class_constructor(
+        &self,
+        class: &ClassInfo,
+        surface_name: &str,
+        constructor_name: &str,
+        class_type_name: String,
+        explicit_type_args: Option<&[TypeRef]>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let mut substitutions = if let Some(type_args) = explicit_type_args {
+            self.explicit_type_substitutions(
+                &class.decl.type_params,
+                type_args,
+                span,
+                &format!("class constructor `{}`", constructor_name),
+            )?
+        } else {
+            match expected {
+                Some(Type::Named(expected_name, expected_args))
+                    if expected_name == &class_type_name
+                        && expected_args.len() == class.decl.type_params.len() =>
+                {
+                    substitutions_from_decl_type_args(&class.decl.type_params, expected_args)
+                }
+                _ => HashMap::new(),
+            }
+        };
+        let mut provided = HashMap::new();
+        let mut next_positional_field = 0usize;
+        let mut saw_named = false;
+        for argument in args {
+            let field_name = if let Some(field_name) = argument.name.as_ref() {
+                saw_named = true;
+                field_name
+            } else {
+                if saw_named {
+                    return Err(Diagnostic::at(
+                        argument.span,
+                        "positional class constructor arguments must come before named arguments",
+                    ));
+                }
+                let Some(field_decl) = class.decl.fields.get(next_positional_field) else {
+                    return Err(Diagnostic::at(
+                        argument.span,
+                        format!(
+                            "class constructor `{}` received too many positional arguments",
+                            surface_name
+                        ),
+                    ));
+                };
+                next_positional_field += 1;
+                &field_decl.name
+            };
+            let Some(field_info) = class.fields.get(field_name) else {
+                return Err(Diagnostic::at(
+                    argument.span,
+                    format!(
+                        "class `{}` has no field named `{}`",
+                        surface_name, field_name
+                    ),
+                ));
+            };
+            if self.is_external_module(&class.module_name) && !field_info.public {
+                return Err(Diagnostic::at(
+                    argument.span,
+                    format!("field `{}` is private on `{}`", field_name, class.decl.name),
+                ));
+            }
+            if provided.insert(field_name.clone(), ()).is_some() {
+                return Err(Diagnostic::at(
+                    argument.span,
+                    format!("field `{}` was provided more than once", field_name),
+                ));
+            }
+
+            let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
+            let actual =
+                match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_field_ty)) {
+                    Ok(actual) => actual,
+                    Err(error)
+                        if has_unresolved_type_params(&hinted_field_ty)
+                            && !self.expr_can_use_partial_expected_hint(&argument.value) =>
+                    {
+                        match self.type_of_expr(&argument.value, locals) {
+                            Ok(actual) => actual,
+                            Err(_) => return Err(error),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+            if let Err(error) = unify_type_pattern(&field_info.ty, &actual, &mut substitutions) {
+                return Err(Diagnostic::at(
+                    argument.span,
+                    format!(
+                        "field `{}` expects `{}`, found `{}` ({})",
+                        field_name, hinted_field_ty, actual, error.message
+                    ),
+                ));
+            }
+            if !self.is_copy_type(&actual) {
+                self.consume_value_expr(&argument.value, locals)?;
+            }
+        }
+
+        for field in &class.decl.fields {
+            if !provided.contains_key(&field.name) && field.default.is_none() {
+                if self.is_external_module(&class.module_name) && !field.public {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class constructor `{}` cannot initialize private field `{}` from another module",
+                            class.decl.name, field.name
+                        ),
+                    ));
+                }
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "class constructor `{}` is missing required field `{}`",
+                        surface_name, field.name
+                    ),
+                ));
+            }
+        }
+
+        let mut resolved_args = Vec::with_capacity(class.decl.type_params.len());
+        for type_param in &class.decl.type_params {
+            let Some(resolved) = substitutions.get(type_param).cloned() else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "cannot infer type parameter `{}` for class constructor `{}`",
+                        type_param, constructor_name
+                    ),
+                ));
+            };
+            resolved_args.push(resolved);
+        }
+        let resolved_substitutions =
+            substitutions_from_decl_type_args(&class.decl.type_params, &resolved_args);
+        for (index, type_param) in class.decl.type_params.iter().enumerate() {
+            let Some(bounds) = class.type_param_bounds.get(type_param) else {
+                continue;
+            };
+            let mut resolved_bounds = Vec::with_capacity(bounds.len());
+            for bound in bounds {
+                resolved_bounds.push(substitute_trait_bound(bound, &resolved_substitutions));
+            }
+            self.assert_type_satisfies_bounds(&resolved_args[index], &resolved_bounds, span)?;
+        }
+
+        Ok(Type::Named(class_type_name, resolved_args))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn type_check_user_enum_variant_constructor(
+        &self,
+        enum_info: &EnumInfo,
+        enum_name: &str,
+        enum_type_name: String,
+        variant_name: &str,
+        explicit_type_args: Option<&[TypeRef]>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let Some(variant) = enum_info.variants.get(variant_name) else {
+            return Err(Diagnostic::at(
+                span,
+                format!("enum `{}` has no variant `{}`", enum_name, variant_name),
+            ));
+        };
+        let mut substitutions = if let Some(type_args) = explicit_type_args {
+            self.explicit_type_substitutions(
+                &enum_info.decl.type_params,
+                type_args,
+                span,
+                &format!("enum `{}`", enum_name),
+            )?
+        } else {
+            match expected {
+                Some(Type::Named(expected_name, expected_args))
+                    if expected_name == &enum_type_name
+                        && expected_args.len() == enum_info.decl.type_params.len() =>
+                {
+                    substitutions_from_decl_type_args(&enum_info.decl.type_params, expected_args)
+                }
+                _ => HashMap::new(),
+            }
+        };
+        let ordered_args = self.variant_payload_arguments(
+            args,
+            span,
+            variant_name,
+            enum_name,
+            &variant.payloads,
+            variant.named_payloads,
+        )?;
+        for (argument, payload) in ordered_args.iter().zip(variant.payloads.iter()) {
+            let hinted_payload_ty = substitute_type(&payload.ty, &substitutions);
+            let actual = if has_unresolved_type_params(&hinted_payload_ty) {
+                self.type_of_expr(&argument.value, locals)?
+            } else {
+                self.type_of_expr_hint(&argument.value, locals, Some(&hinted_payload_ty))?
+            };
+            if let Err(error) = unify_type_pattern(&payload.ty, &actual, &mut substitutions) {
+                return Err(Diagnostic::at(
+                    argument.span,
+                    format!(
+                        "variant `{}` of enum `{}` expects `{}`, found `{}` ({})",
+                        variant_name, enum_name, hinted_payload_ty, actual, error.message
+                    ),
+                ));
+            }
+            if !self.is_copy_type(&actual) {
+                self.consume_value_expr(&argument.value, locals)?;
+            }
+        }
+
+        let mut resolved_args = Vec::with_capacity(enum_info.decl.type_params.len());
+        for type_param in &enum_info.decl.type_params {
+            let Some(resolved) = substitutions.get(type_param).cloned() else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "cannot infer type parameter `{}` for enum variant `{}.{}`",
+                        type_param, enum_name, variant_name
+                    ),
+                ));
+            };
+            resolved_args.push(resolved);
+        }
+        let resolved_substitutions =
+            substitutions_from_decl_type_args(&enum_info.decl.type_params, &resolved_args);
+        for (index, type_param) in enum_info.decl.type_params.iter().enumerate() {
+            let Some(bounds) = enum_info.type_param_bounds.get(type_param) else {
+                continue;
+            };
+            let mut resolved_bounds = Vec::with_capacity(bounds.len());
+            for bound in bounds {
+                resolved_bounds.push(substitute_trait_bound(bound, &resolved_substitutions));
+            }
+            self.assert_type_satisfies_bounds(&resolved_args[index], &resolved_bounds, span)?;
+        }
+
+        Ok(Type::Named(enum_type_name, resolved_args))
     }
 
     fn type_of_call(
@@ -7050,6 +8387,7 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        self.reject_rng_duplication(builtin.name(), &task_args[0], span)?;
                         if let Some(timeout_arg) = ordered_args[1] {
                             let actual = self.type_of_expr_hint(
                                 &timeout_arg.value,
@@ -7267,6 +8605,7 @@ impl<'a> FunctionChecker<'a> {
                     &function.signature.return_type,
                     function.signature.return_passing,
                     &function.type_param_bounds,
+                    &function.signature.rng_clone_safe_type_params,
                     args,
                     span,
                     locals,
@@ -7275,178 +8614,31 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
-                let class = self.resolve_class_info(name).ok_or_else(|| {
-                    Diagnostic::at(
+                let class = self
+                    .resolve_class_info(name)
+                    .expect("class constructor guard should retain the resolved class");
+                let class_type_name = self.canonical_class_name(name, class);
+                if let Some(constructor) = class.builtin_constructor() {
+                    return self.type_check_builtin_class_constructor(
+                        constructor,
+                        args,
                         span,
-                        format!(
-                            "internal error: class `{}` disappeared during constructor checking",
-                            name
-                        ),
-                    )
-                })?;
-                let mut provided = HashMap::new();
-                let mut substitutions = if let Some(type_args) = explicit_type_args {
-                    self.explicit_type_substitutions(
-                        &class.decl.type_params,
-                        type_args,
-                        span,
-                        &format!("class constructor `{}`", name),
-                    )?
-                } else {
-                    match expected {
-                        Some(Type::Named(expected_name, expected_args))
-                            if expected_name == name
-                                && expected_args.len() == class.decl.type_params.len() =>
-                        {
-                            substitutions_from_decl_type_args(
-                                &class.decl.type_params,
-                                expected_args,
-                            )
-                        }
-                        _ => HashMap::new(),
-                    }
-                };
-                let mut next_positional_field = 0usize;
-                let mut saw_named = false;
-                for argument in args {
-                    let field_name = if let Some(field_name) = argument.name.as_ref() {
-                        saw_named = true;
-                        field_name
-                    } else {
-                        if saw_named {
-                            return Err(Diagnostic::at(
-                                argument.span,
-                                "positional class constructor arguments must come before named arguments",
-                            ));
-                        }
-                        let Some(field_decl) = class.decl.fields.get(next_positional_field) else {
-                            return Err(Diagnostic::at(
-                                argument.span,
-                                format!(
-                                    "class constructor `{}` received too many positional arguments",
-                                    name
-                                ),
-                            ));
-                        };
-                        next_positional_field += 1;
-                        &field_decl.name
-                    };
-                    let Some(field_info) = class.fields.get(field_name) else {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!("class `{}` has no field named `{}`", name, field_name),
-                        ));
-                    };
-                    if self.is_external_module(&class.module_name) && !field_info.public {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!("field `{}` is private on `{}`", field_name, class.decl.name),
-                        ));
-                    }
-                    if provided.insert(field_name.clone(), ()).is_some() {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!("field `{}` was provided more than once", field_name),
-                        ));
-                    }
-
-                    let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
-                    let actual = match self.type_of_expr_hint(
-                        &argument.value,
                         locals,
-                        Some(&hinted_field_ty),
-                    ) {
-                        Ok(actual) => actual,
-                        Err(error)
-                            if has_unresolved_type_params(&hinted_field_ty)
-                                && !self.expr_can_use_partial_expected_hint(&argument.value) =>
-                        {
-                            match self.type_of_expr(&argument.value, locals) {
-                                Ok(actual) => actual,
-                                Err(_) => return Err(error),
-                            }
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    if let Err(error) =
-                        unify_type_pattern(&field_info.ty, &actual, &mut substitutions)
-                    {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!(
-                                "field `{}` expects `{}`, found `{}` ({})",
-                                field_name, hinted_field_ty, actual, error.message
-                            ),
-                        ));
-                    }
-                    if !self.is_copy_type(&actual) {
-                        self.consume_value_expr(&argument.value, locals)?;
-                    }
+                        explicit_type_args.is_some(),
+                        Type::named(constructor.qualified_name()),
+                    );
                 }
-
-                for field in &class.decl.fields {
-                    if !provided.contains_key(&field.name) && field.default.is_none() {
-                        if self.is_external_module(&class.module_name) && !field.public {
-                            return Err(Diagnostic::at(
-                                span,
-                                format!(
-                                    "class constructor `{}` cannot initialize private field `{}` from another module",
-                                    class.decl.name, field.name
-                                ),
-                            ));
-                        }
-                        return Err(Diagnostic::at(
-                            span,
-                            format!(
-                                "class constructor `{}` is missing required field `{}`",
-                                name, field.name
-                            ),
-                        ));
-                    }
-                }
-
-                let resolved_args = class
-                    .decl
-                    .type_params
-                    .iter()
-                    .map(|type_param| {
-                        substitutions.get(type_param).cloned().ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!(
-                                    "cannot infer type parameter `{}` for class constructor `{}`",
-                                    type_param, name
-                                ),
-                            )
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                for (type_param, bounds) in &class.type_param_bounds {
-                    let type_param_index = class
-                        .decl
-                        .type_params
-                        .iter()
-                        .position(|name| name == type_param)
-                        .ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!(
-                                    "internal error: class `{}` is missing declared type parameter `{}` during bound checking",
-                                    name, type_param
-                                ),
-                            )
-                        })?;
-                    let resolved_ty = resolved_args[type_param_index].clone();
-                    let substitutions =
-                        substitutions_from_decl_type_args(&class.decl.type_params, &resolved_args);
-                    let resolved_bounds = bounds
-                        .iter()
-                        .map(|bound| substitute_trait_bound(bound, &substitutions))
-                        .collect::<Vec<_>>();
-                    self.assert_type_satisfies_bounds(&resolved_ty, &resolved_bounds, span)?;
-                }
-
-                Ok(Type::Named(name.clone(), resolved_args))
+                self.type_check_user_class_constructor(
+                    class,
+                    name,
+                    name,
+                    class_type_name,
+                    explicit_type_args,
+                    args,
+                    span,
+                    locals,
+                    expected,
+                )
             }
             ExprKind::Name(name) if self.is_builtin_enum_variant_name(name) => {
                 let Some(expected_ty) = expected else {
@@ -7486,6 +8678,17 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 if method.decl.receiver.is_none() {
+                                    let seed_substitutions =
+                                        if let Some(type_args) = object_type_args {
+                                            self.explicit_type_substitutions(
+                                                &class_info.decl.type_params,
+                                                type_args,
+                                                object.span,
+                                                &format!("class `{}`", item_name),
+                                            )?
+                                        } else {
+                                            HashMap::new()
+                                        };
                                     return self.type_check_callable_args(
                                         &format!("method `{}`", field),
                                         &method.decl.type_params,
@@ -7495,54 +8698,30 @@ impl<'a> FunctionChecker<'a> {
                                         &method.signature.return_type,
                                         method.signature.return_passing,
                                         &method.type_param_bounds,
+                                        &method.signature.rng_clone_safe_type_params,
                                         args,
                                         span,
                                         locals,
                                         expected,
-                                        HashMap::new(),
+                                        seed_substitutions,
                                     );
                                 }
                             }
                         }
                         if let Some(enum_info) = namespace.enums.get(&item_name) {
-                            let variant = enum_info.variants.get(field).ok_or_else(|| {
-                                Diagnostic::at(
-                                    span,
-                                    format!("enum `{}` has no variant `{}`", item_name, field),
-                                )
-                            })?;
-                            let ordered_args = self.variant_payload_arguments(
+                            let enum_type_name =
+                                self.module_enum_type_name(&module_path, enum_info);
+                            return self.type_check_user_enum_variant_constructor(
+                                enum_info,
+                                &item_name,
+                                enum_type_name,
+                                field,
+                                object_type_args,
                                 args,
                                 span,
-                                field,
-                                &item_name,
-                                &variant.payloads,
-                                variant.named_payloads,
-                            )?;
-                            for (argument, payload) in
-                                ordered_args.iter().zip(variant.payloads.iter())
-                            {
-                                let actual = self.type_of_expr_hint(
-                                    &argument.value,
-                                    locals,
-                                    Some(&payload.ty),
-                                )?;
-                                if actual != payload.ty {
-                                    return Err(Diagnostic::at(
-                                        argument.span,
-                                        format!(
-                                            "variant `{}` of enum `{}` expects `{}`, found `{}`",
-                                            field, item_name, payload.ty, actual
-                                        ),
-                                    ));
-                                }
-                                if !self.is_copy_type(&actual) {
-                                    self.consume_value_expr(&argument.value, locals)?;
-                                }
-                            }
-                            return Ok(Type::named(
-                                self.module_enum_type_name(&module_path, enum_info),
-                            ));
+                                locals,
+                                expected,
+                            );
                         }
                     }
                 }
@@ -7558,6 +8737,16 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
+                            let seed_substitutions = if let Some(type_args) = object_type_args {
+                                self.explicit_type_substitutions(
+                                    &class_info.decl.type_params,
+                                    type_args,
+                                    object.span,
+                                    &format!("class `{}`", class_name),
+                                )?
+                            } else {
+                                HashMap::new()
+                            };
                             return self.type_check_callable_args(
                                 &format!("method `{}`", field),
                                 &method.decl.type_params,
@@ -7567,11 +8756,12 @@ impl<'a> FunctionChecker<'a> {
                                 &method.signature.return_type,
                                 method.signature.return_passing,
                                 &method.type_param_bounds,
+                                &method.signature.rng_clone_safe_type_params,
                                 args,
                                 span,
                                 locals,
                                 expected,
-                                HashMap::new(),
+                                seed_substitutions,
                             );
                         }
                     }
@@ -7671,144 +8861,18 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     if let Some(enum_info) = self.resolve_enum_info(enum_name) {
-                        let variant = enum_info.variants.get(field).ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!("enum `{}` has no variant `{}`", enum_name, field),
-                            )
-                        })?;
-                        if variant.payloads.is_empty() && args.is_empty() {
-                            if let Some(Type::Named(expected_name, expected_args)) = expected {
-                                if self.canonical_enum_name(expected_name)
-                                    == self.canonical_enum_name(enum_name)
-                                {
-                                    return Ok(Type::Named(
-                                        enum_info.decl.name.clone(),
-                                        expected_args.clone(),
-                                    ));
-                                }
-                            }
-                            if enum_info.decl.type_params.is_empty() {
-                                return Ok(Type::named(enum_name));
-                            }
-                            let missing = enum_info
-                                .decl
-                                .type_params
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "T".to_string());
-                            return Err(Diagnostic::at(
-                                span,
-                                format!(
-                                    "cannot infer type parameter `{}` for enum variant `{}.{}`",
-                                    missing, enum_name, field
-                                ),
-                            ));
-                        }
-                        let mut substitutions = if let Some(type_args) = object_type_args {
-                            self.explicit_type_substitutions(
-                                &enum_info.decl.type_params,
-                                type_args,
-                                span,
-                                &format!("enum `{}`", enum_name),
-                            )?
-                        } else {
-                            match expected {
-                                Some(Type::Named(expected_name, expected_args))
-                                    if expected_name == enum_name
-                                        && expected_args.len()
-                                            == enum_info.decl.type_params.len() =>
-                                {
-                                    substitutions_from_decl_type_args(
-                                        &enum_info.decl.type_params,
-                                        expected_args,
-                                    )
-                                }
-                                _ => HashMap::new(),
-                            }
-                        };
-                        let ordered_args = self.variant_payload_arguments(
+                        let enum_type_name = self.canonical_enum_info_name(enum_name, enum_info);
+                        return self.type_check_user_enum_variant_constructor(
+                            enum_info,
+                            enum_name,
+                            enum_type_name,
+                            field,
+                            object_type_args,
                             args,
                             span,
-                            field,
-                            enum_name,
-                            &variant.payloads,
-                            variant.named_payloads,
-                        )?;
-                        for (argument, payload) in ordered_args.iter().zip(variant.payloads.iter())
-                        {
-                            let hinted_payload_ty = substitute_type(&payload.ty, &substitutions);
-                            let actual = if has_unresolved_type_params(&hinted_payload_ty) {
-                                self.type_of_expr(&argument.value, locals)?
-                            } else {
-                                self.type_of_expr_hint(
-                                    &argument.value,
-                                    locals,
-                                    Some(&hinted_payload_ty),
-                                )?
-                            };
-                            if let Err(error) =
-                                unify_type_pattern(&payload.ty, &actual, &mut substitutions)
-                            {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!(
-                                        "variant `{}` of enum `{}` expects `{}`, found `{}` ({})",
-                                        field, enum_name, hinted_payload_ty, actual, error.message
-                                    ),
-                                ));
-                            }
-                            if !self.is_copy_type(&actual) {
-                                self.consume_value_expr(&argument.value, locals)?;
-                            }
-                        }
-                        let resolved_args = enum_info
-                            .decl
-                            .type_params
-                            .iter()
-                            .map(|type_param| {
-                                substitutions.get(type_param).cloned().ok_or_else(|| {
-                                    Diagnostic::at(
-                                        span,
-                                        format!(
-                                            "cannot infer type parameter `{}` for enum variant `{}.{}`",
-                                            type_param, enum_name, field
-                                        ),
-                                    )
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        for (type_param, bounds) in &enum_info.type_param_bounds {
-                            let resolved_index = enum_info
-                                .decl
-                                .type_params
-                                .iter()
-                                .position(|name| name == type_param)
-                                .ok_or_else(|| {
-                                    Diagnostic::at(
-                                        span,
-                                        format!(
-                                            "internal error: enum `{}` is missing declared type parameter `{}` during bound checking",
-                                            enum_name, type_param
-                                        ),
-                                    )
-                                })?;
-                            let resolved_ty = resolved_args[resolved_index].clone();
-                            let substitutions = substitutions_from_decl_type_args(
-                                &enum_info.decl.type_params,
-                                &resolved_args,
-                            );
-                            let resolved_bounds = bounds
-                                .iter()
-                                .map(|bound| substitute_trait_bound(bound, &substitutions))
-                                .collect::<Vec<_>>();
-                            self.assert_type_satisfies_bounds(
-                                &resolved_ty,
-                                &resolved_bounds,
-                                span,
-                            )?;
-                        }
-                        return Ok(Type::Named(enum_name.clone(), resolved_args));
+                            locals,
+                            expected,
+                        );
                     }
                 }
 
@@ -7848,6 +8912,7 @@ impl<'a> FunctionChecker<'a> {
                             &function.signature.return_type,
                             function.signature.return_passing,
                             &function.type_param_bounds,
+                            &function.signature.rng_clone_safe_type_params,
                             args,
                             span,
                             locals,
@@ -7856,6 +8921,16 @@ impl<'a> FunctionChecker<'a> {
                         );
                     }
                     if let Some(class) = namespace.classes.get(field) {
+                        if let Some(constructor) = class.builtin_constructor() {
+                            return self.type_check_builtin_class_constructor(
+                                constructor,
+                                args,
+                                span,
+                                locals,
+                                explicit_type_args.is_some(),
+                                Type::named(constructor.qualified_name()),
+                            );
+                        }
                         if matches!(
                             (namespace.path.as_str(), class.decl.name.as_str()),
                             ("fs", "File")
@@ -7881,100 +8956,21 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        let mut provided = HashMap::new();
-                        let mut next_positional_field = 0usize;
-                        let mut saw_named = false;
-                        for argument in args {
-                            let field_name = if let Some(field_name) = argument.name.as_ref() {
-                                saw_named = true;
-                                field_name
-                            } else {
-                                if saw_named {
-                                    return Err(Diagnostic::at(
-                                        argument.span,
-                                        "positional class constructor arguments must come before named arguments",
-                                    ));
-                                }
-                                let Some(field_decl) = class.decl.fields.get(next_positional_field)
-                                else {
-                                    return Err(Diagnostic::at(
-                                        argument.span,
-                                        format!(
-                                            "class constructor `{}` received too many positional arguments",
-                                            class.decl.name
-                                        ),
-                                    ));
-                                };
-                                next_positional_field += 1;
-                                &field_decl.name
-                            };
-                            let Some(field_info) = class.fields.get(field_name) else {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!(
-                                        "class `{}` has no field named `{}`",
-                                        class.decl.name, field_name
-                                    ),
-                                ));
-                            };
-                            if !field_info.public {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!(
-                                        "field `{}` is private on `{}`",
-                                        field_name, class.decl.name
-                                    ),
-                                ));
-                            }
-                            if provided.insert(field_name.clone(), ()).is_some() {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!("field `{}` was provided more than once", field_name),
-                                ));
-                            }
-                            let actual = self.type_of_expr_hint(
-                                &argument.value,
-                                locals,
-                                Some(&field_info.ty),
-                            )?;
-                            if actual != field_info.ty {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!(
-                                        "field `{}` expects `{}`, found `{}`",
-                                        field_name, field_info.ty, actual
-                                    ),
-                                ));
-                            }
-                            if !self.is_copy_type(&actual) {
-                                self.consume_value_expr(&argument.value, locals)?;
-                            }
-                        }
-
-                        for field in &class.decl.fields {
-                            if !provided.contains_key(&field.name) && field.default.is_none() {
-                                if !field.public {
-                                    return Err(Diagnostic::at(
-                                        span,
-                                        format!(
-                                            "class constructor `{}` cannot initialize private field `{}` from another module",
-                                            class.decl.name, field.name
-                                        ),
-                                    ));
-                                }
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!(
-                                        "class constructor `{}` is missing required field `{}`",
-                                        class.decl.name, field.name
-                                    ),
-                                ));
-                            }
-                        }
-
-                        return Ok(Type::named(class.decl.name.clone()));
+                        let class_type_name = format!("{}.{}", namespace.path, class.decl.name);
+                        return self.type_check_user_class_constructor(
+                            class,
+                            &class.decl.name,
+                            &class_type_name,
+                            class_type_name.clone(),
+                            explicit_type_args,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                        );
                     }
-                    return Err(Diagnostic::at(
+                    return Err(Diagnostic::coded_at(
+                        "AU2001",
                         span,
                         format!(
                             "module `{}` has no callable member `{}`",
@@ -7983,13 +8979,84 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 if let Type::Named(receiver_name, receiver_args) = &receiver_ty {
+                    if receiver_name == "random.Rng" && receiver_args.is_empty() {
+                        if field == "clone" {
+                            return self
+                                .reject_rng_duplication("random.Rng.clone", &receiver_ty, span)
+                                .map(|()| Type::Unit);
+                        }
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            self.require_mutable_receiver(object, field, span, locals)?;
+                            return match builtin_member {
+                                BuiltinMember::RngNextInt => {
+                                    for (index, label) in [(0, "lo"), (1, "hi")] {
+                                        let argument = self.bound_argument(
+                                            &ordered_args,
+                                            index,
+                                            span,
+                                            format!("`next_int` requires a `{label}` argument"),
+                                        )?;
+                                        let actual = self.type_of_expr_hint(
+                                            &argument.value,
+                                            locals,
+                                            Some(&Type::named("int64")),
+                                        )?;
+                                        if actual != Type::named("int64") {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU2002",
+                                                argument.span,
+                                                format!(
+                                                    "`next_int` expects `int64` for `{label}`, found `{actual}`"
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    Ok(Type::named("int64"))
+                                }
+                                BuiltinMember::RngNextFloat => Ok(Type::named("float64")),
+                                BuiltinMember::RngShuffle => {
+                                    let values = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`shuffle` requires a `values` argument",
+                                    )?;
+                                    let actual = self.type_of_expr(&values.value, locals)?;
+                                    if !matches!(
+                                        &actual,
+                                        Type::Named(name, args)
+                                            if name == "Vec" && args.len() == 1
+                                    ) {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            values.span,
+                                            format!("`shuffle` expects `Vec[T]`, found `{actual}`"),
+                                        ));
+                                    }
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        values,
+                                        locals,
+                                    )?;
+                                    Ok(Type::Unit)
+                                }
+                                _ => unreachable!("unexpected random.Rng builtin member"),
+                            };
+                        }
+                    }
+
                     if receiver_name == "Vec" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::VecLen => Ok(Type::named("int32")),
                                 BuiltinMember::VecIsEmpty => Ok(Type::named("bool")),
-                                BuiltinMember::VecClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::VecClone => {
+                                    self.reject_rng_duplication("Vec.clone", &receiver_ty, span)?;
+                                    Ok(receiver_ty.clone())
+                                }
                                 BuiltinMember::VecPush => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     let push_arg = self.bound_argument(
@@ -8038,6 +9105,11 @@ impl<'a> FunctionChecker<'a> {
                                         &index_arg.value,
                                         index_arg.span,
                                         locals,
+                                    )?;
+                                    self.reject_rng_duplication(
+                                        "Vec.get",
+                                        &receiver_args[0],
+                                        span,
                                     )?;
                                     Ok(Type::Named(
                                         "Option".to_string(),
@@ -8397,7 +9469,10 @@ impl<'a> FunctionChecker<'a> {
                             return match builtin_member {
                                 BuiltinMember::MapLen => Ok(Type::named("int32")),
                                 BuiltinMember::MapIsEmpty => Ok(Type::named("bool")),
-                                BuiltinMember::MapClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::MapClone => {
+                                    self.reject_rng_duplication("Map.clone", &receiver_ty, span)?;
+                                    Ok(receiver_ty.clone())
+                                }
                                 BuiltinMember::MapGet => {
                                     let key_arg = self.bound_argument(
                                         &ordered_args,
@@ -8419,6 +9494,11 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
+                                    self.reject_rng_duplication(
+                                        "Map.get",
+                                        &receiver_args[1],
+                                        span,
+                                    )?;
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[1].clone()],
@@ -8533,25 +9613,43 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                     Ok(Type::named("bool"))
                                 }
-                                BuiltinMember::MapKeys => Ok(Type::Named(
-                                    "Vec".to_string(),
-                                    vec![receiver_args[0].clone()],
-                                )),
-                                BuiltinMember::MapValues => Ok(Type::Named(
-                                    "Vec".to_string(),
-                                    vec![receiver_args[1].clone()],
-                                )),
-                                BuiltinMember::MapItems | BuiltinMember::MapEntries => {
+                                BuiltinMember::MapKeys => {
+                                    self.reject_rng_duplication(
+                                        "Map.keys",
+                                        &receiver_args[0],
+                                        span,
+                                    )?;
                                     Ok(Type::Named(
                                         "Vec".to_string(),
-                                        vec![Type::Named(
-                                            "MapEntry".to_string(),
-                                            vec![
-                                                receiver_args[0].clone(),
-                                                receiver_args[1].clone(),
-                                            ],
-                                        )],
+                                        vec![receiver_args[0].clone()],
                                     ))
+                                }
+                                BuiltinMember::MapValues => {
+                                    self.reject_rng_duplication(
+                                        "Map.values",
+                                        &receiver_args[1],
+                                        span,
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Vec".to_string(),
+                                        vec![receiver_args[1].clone()],
+                                    ))
+                                }
+                                BuiltinMember::MapItems | BuiltinMember::MapEntries => {
+                                    let entry_type = Type::Named(
+                                        "MapEntry".to_string(),
+                                        vec![receiver_args[0].clone(), receiver_args[1].clone()],
+                                    );
+                                    self.reject_rng_duplication(
+                                        if matches!(builtin_member, BuiltinMember::MapItems) {
+                                            "Map.items"
+                                        } else {
+                                            "Map.entries"
+                                        },
+                                        &entry_type,
+                                        span,
+                                    )?;
+                                    Ok(Type::Named("Vec".to_string(), vec![entry_type]))
                                 }
                                 BuiltinMember::MapClear => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -8598,7 +9696,10 @@ impl<'a> FunctionChecker<'a> {
                             return match builtin_member {
                                 BuiltinMember::SetLen => Ok(Type::named("int32")),
                                 BuiltinMember::SetIsEmpty => Ok(Type::named("bool")),
-                                BuiltinMember::SetClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::SetClone => {
+                                    self.reject_rng_duplication("Set.clone", &receiver_ty, span)?;
+                                    Ok(receiver_ty.clone())
+                                }
                                 BuiltinMember::SetContains => {
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
@@ -8802,6 +9903,11 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "Task" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
+                            self.reject_rng_duplication(
+                                &format!("Task.{field}"),
+                                &receiver_args[0],
+                                span,
+                            )?;
                             return match builtin_member {
                                 BuiltinMember::TaskResult | BuiltinMember::TaskResultOrNone => {
                                     if let Some(timeout_arg) = ordered_args[0] {
@@ -8921,11 +10027,12 @@ impl<'a> FunctionChecker<'a> {
                                     &callable.signature.return_type,
                                     callable.signature.return_passing,
                                     &callable.type_param_bounds,
+                                    &callable.signature.rng_clone_safe_type_params,
                                     spawn_args,
                                     span,
                                     locals,
                                     None,
-                                    HashMap::new(),
+                                    callable.seed_substitutions,
                                 )?;
                                 return Ok(if field == "start" {
                                     Type::Named(
@@ -10359,6 +11466,7 @@ impl<'a> FunctionChecker<'a> {
                                 &method.signature.return_type,
                                 method.signature.return_passing,
                                 &method.type_param_bounds,
+                                &method.signature.rng_clone_safe_type_params,
                                 args,
                                 span,
                                 locals,
@@ -10374,6 +11482,12 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if let Type::TypeParam(type_param_name) = &receiver_ty {
                     if let Ok(method) = self.trait_method_from_type_param(type_param_name, field) {
+                        self.enforce_resolved_rng_clone_obligations_before_method_inference(
+                            &format!("method `{}`", field),
+                            &method.rng_clone_safe_types,
+                            &method.decl.type_params,
+                            span,
+                        )?;
                         let receiver_borrows = self.prepare_method_receiver_borrows(
                             field,
                             method.decl.receiver,
@@ -10390,6 +11504,7 @@ impl<'a> FunctionChecker<'a> {
                             &method.signature.return_type,
                             method.signature.return_passing,
                             &method.type_param_bounds,
+                            &method.signature.rng_clone_safe_type_params,
                             args,
                             span,
                             locals,
@@ -10402,6 +11517,13 @@ impl<'a> FunctionChecker<'a> {
                 if let Some((_trait_impl, method, impl_substitutions)) =
                     self.trait_method_for_concrete_type(&receiver_ty, field, span)?
                 {
+                    self.enforce_rng_clone_obligations_before_method_inference(
+                        &format!("method `{}`", field),
+                        &method.signature.rng_clone_safe_type_params,
+                        &impl_substitutions,
+                        &method.decl.type_params,
+                        span,
+                    )?;
                     let substituted_params = method
                         .signature
                         .params
@@ -10426,11 +11548,12 @@ impl<'a> FunctionChecker<'a> {
                         &substituted_return_type,
                         method.signature.return_passing,
                         &method.type_param_bounds,
+                        &method.signature.rng_clone_safe_type_params,
                         args,
                         span,
                         locals,
                         expected,
-                        HashMap::new(),
+                        impl_substitutions,
                         receiver_borrows,
                     );
                 }
@@ -13281,7 +14404,7 @@ impl<'a> FunctionChecker<'a> {
                     .get(name)
                     .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
                 if binding.moved {
-                    return Err(Self::moved_value_diagnostic(name, expr.span, binding));
+                    return Err(self.moved_value_diagnostic(name, expr.span, binding));
                 }
                 Ok(binding.ty.clone())
             }
@@ -13309,7 +14432,7 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
-        if self.module_name == "<main>" {
+        if self.module_name == self.root_module_name {
             None
         } else {
             self.module_registry.get(self.module_name)
@@ -13463,25 +14586,49 @@ impl<'a> FunctionChecker<'a> {
             .or_else(|| self.imported_enum_info(name))
     }
 
-    fn canonical_enum_name(&self, name: &str) -> String {
-        if let Some((module_path, item_name)) = name.rsplit_once('.') {
-            if let Some(namespace) = self.module_namespace(module_path) {
-                if let Some(enum_info) = namespace
-                    .enums
-                    .get(item_name)
-                    .or_else(|| namespace.all_enums.get(item_name))
-                {
-                    return self.module_enum_type_name(module_path, enum_info);
-                }
-            }
-        }
-        self.resolve_enum_info(name)
-            .map(|enum_info| enum_info.decl.name.clone())
+    fn canonical_nominal_type_name(
+        &self,
+        surface_name: &str,
+        owner_module: &str,
+        declared_name: &str,
+    ) -> String {
+        self.canonical_type_names
+            .get(surface_name)
+            .cloned()
             .unwrap_or_else(|| {
-                name.rsplit_once('.')
-                    .map(|(_, leaf)| leaf.to_string())
-                    .unwrap_or_else(|| name.to_string())
+                if !surface_name.contains('.') {
+                    // Unqualified names without an explicit imported-binding
+                    // mapping are local lexical names. Production import
+                    // contexts always provide that mapping; this fallback
+                    // also keeps direct checker construction honest.
+                    surface_name.to_string()
+                } else if owner_module == self.module_name {
+                    declared_name.to_string()
+                } else {
+                    format!("{}.{}", owner_module, declared_name)
+                }
             })
+    }
+
+    fn canonical_class_name(&self, surface_name: &str, class_info: &ClassInfo) -> String {
+        self.canonical_nominal_type_name(
+            surface_name,
+            &class_info.module_name,
+            &class_info.decl.name,
+        )
+    }
+
+    fn canonical_enum_info_name(&self, surface_name: &str, enum_info: &EnumInfo) -> String {
+        self.canonical_nominal_type_name(surface_name, &enum_info.module_name, &enum_info.decl.name)
+    }
+
+    fn canonical_enum_name(&self, name: &str) -> String {
+        if let Some(enum_info) = self.resolve_enum_info(name) {
+            return self.canonical_enum_info_name(name, enum_info);
+        }
+        name.rsplit_once('.')
+            .map(|(_, leaf)| leaf.to_string())
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn is_external_module(&self, owner_module: &str) -> bool {
@@ -13664,11 +14811,29 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                                 return_passing: method.signature.return_passing,
                                 return_borrow_source: method.signature.return_borrow_source.clone(),
+                                rng_clone_safe_type_params: method
+                                    .signature
+                                    .rng_clone_safe_type_params
+                                    .iter()
+                                    .filter(|name| method.decl.type_params.contains(name))
+                                    .cloned()
+                                    .collect(),
                             },
                             type_param_bounds: substitute_trait_bounds(
                                 &method.type_param_bounds,
                                 &trait_substitutions,
                             ),
+                            rng_clone_safe_types: method
+                                .signature
+                                .rng_clone_safe_type_params
+                                .iter()
+                                .map(|name| {
+                                    substitute_type(
+                                        &Type::TypeParam(name.clone()),
+                                        &trait_substitutions,
+                                    )
+                                })
+                                .collect(),
                         });
                     }
                 }
@@ -13736,19 +14901,48 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn has_from_conversion(&self, source_ty: &Type, target_ty: &Type) -> bool {
-        self.trait_impls_in_scope().any(|trait_impl| {
+    fn has_from_conversion(
+        &self,
+        source_ty: &Type,
+        target_ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<bool> {
+        for trait_impl in self.trait_impls_in_scope() {
             if trait_impl.trait_name != "From" || trait_impl.trait_args.len() != 1 {
-                return false;
+                continue;
             }
-            if !trait_impl.methods.contains_key("from") {
-                return false;
-            }
-            let Some(substitutions) = self.trait_impl_substitutions(trait_impl, target_ty) else {
-                return false;
+            let Some(method) = trait_impl.methods.get("from") else {
+                continue;
             };
-            substitute_type(&trait_impl.trait_args[0], &substitutions) == *source_ty
-        })
+            let Some(mut substitutions) = self.trait_impl_substitutions(trait_impl, target_ty)
+            else {
+                continue;
+            };
+            if substitute_type(&trait_impl.trait_args[0], &substitutions) != *source_ty {
+                continue;
+            }
+            let operation = "implicit `From.from` conversion";
+            self.enforce_rng_clone_obligations_before_method_inference(
+                operation,
+                &method.signature.rng_clone_safe_type_params,
+                &substitutions,
+                &method.decl.type_params,
+                span,
+            )?;
+            substitutions = self.infer_method_type_substitutions(
+                operation,
+                &method.decl.type_params,
+                &method.signature.params,
+                &method.type_param_bounds,
+                &method.signature.rng_clone_safe_type_params,
+                std::slice::from_ref(source_ty),
+                substitutions,
+                span,
+            )?;
+            let _ = substitutions;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn resolve_spawn_callable(&self, callee: &Expr) -> Result<ResolvedCallableInfo> {
@@ -13773,19 +14967,33 @@ impl<'a> FunctionChecker<'a> {
                     decl: function.decl.clone(),
                     signature: function.signature.clone(),
                     type_param_bounds: function.type_param_bounds.clone(),
+                    seed_substitutions: HashMap::new(),
                 })
             }
             ExprKind::Member { object, field } => {
+                let (base_object, object_type_args) = self.peel_specialization(object);
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 if method.decl.receiver.is_none() {
+                                    let seed_substitutions = if let Some(type_args) = object_type_args
+                                    {
+                                        self.explicit_type_substitutions(
+                                            &class_info.decl.type_params,
+                                            type_args,
+                                            object.span,
+                                            &format!("class `{}`", item_name),
+                                        )?
+                                    } else {
+                                        HashMap::new()
+                                    };
                                     return Ok(ResolvedCallableInfo {
                                         display_name: format!("{}.{}", item_name, field),
                                         decl: method.decl.clone(),
                                         signature: method.signature.clone(),
                                         type_param_bounds: method.type_param_bounds.clone(),
+                                        seed_substitutions,
                                     });
                                 }
                             }
@@ -13805,24 +15013,32 @@ impl<'a> FunctionChecker<'a> {
                                 decl: function.decl.clone(),
                                 signature: function.signature.clone(),
                                 type_param_bounds: function.type_param_bounds.clone(),
+                                seed_substitutions: HashMap::new(),
                             });
                         }
                     }
                 }
 
-                let base_object = match &object.kind {
-                    ExprKind::Specialize { expr, .. } => &**expr,
-                    _ => &**object,
-                };
                 if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_none() {
+                                let seed_substitutions = if let Some(type_args) = object_type_args {
+                                    self.explicit_type_substitutions(
+                                        &class_info.decl.type_params,
+                                        type_args,
+                                        object.span,
+                                        &format!("class `{}`", class_name),
+                                    )?
+                                } else {
+                                    HashMap::new()
+                                };
                                 return Ok(ResolvedCallableInfo {
                                     display_name: format!("{}.{}", class_name, field),
                                     decl: method.decl.clone(),
                                     signature: method.signature.clone(),
                                     type_param_bounds: method.type_param_bounds.clone(),
+                                    seed_substitutions,
                                 });
                             }
                         }
@@ -13852,6 +15068,7 @@ impl<'a> FunctionChecker<'a> {
         return_type: &Type,
         return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
+        callee_rng_clone_safe_type_params: &BTreeSet<String>,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
@@ -13867,6 +15084,7 @@ impl<'a> FunctionChecker<'a> {
             return_type,
             return_passing,
             callee_type_param_bounds,
+            callee_rng_clone_safe_type_params,
             args,
             span,
             locals,
@@ -13887,6 +15105,7 @@ impl<'a> FunctionChecker<'a> {
         return_type: &Type,
         return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
+        callee_rng_clone_safe_type_params: &BTreeSet<String>,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
@@ -14036,6 +15255,13 @@ impl<'a> FunctionChecker<'a> {
                 .collect::<Vec<_>>();
             self.assert_type_satisfies_bounds(resolved_ty, &resolved_bounds, span)?;
         }
+
+        self.enforce_rng_clone_obligations(
+            callee_name,
+            callee_rng_clone_safe_type_params,
+            &substitutions,
+            span,
+        )?;
 
         let resolved_return_type = substitute_type(return_type, &substitutions);
         self.ensure_call_result_materializable(

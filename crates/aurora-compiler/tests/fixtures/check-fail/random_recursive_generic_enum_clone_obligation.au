@@ -1,0 +1,11 @@
+import random
+
+enum Chain[T]:
+    End(T)
+    Link(indirect Chain[Vec[T]])
+
+def duplicate[T](values: borrow Vec[Chain[T]]) -> Vec[Chain[T]]:
+    return values.clone()
+
+def reject(values: borrow Vec[Chain[random.Rng]]) -> Vec[Chain[random.Rng]]:
+    return duplicate(values)

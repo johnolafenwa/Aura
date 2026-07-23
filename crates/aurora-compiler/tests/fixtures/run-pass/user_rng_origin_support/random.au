@@ -1,0 +1,8 @@
+public class Rng:
+    public value: int64
+
+    public def label(borrow self) -> String:
+        return f"imported:{self.value}"
+
+    public def clone(borrow self) -> Rng:
+        return Rng(value=self.value)

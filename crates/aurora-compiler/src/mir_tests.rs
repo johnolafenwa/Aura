@@ -154,6 +154,141 @@ def main() -> int32:
 }
 
 #[test]
+fn random_rng_constructor_and_projected_shuffle_lower_with_mutable_writeback() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import random
+
+class Item:
+    label: String
+
+class Holder:
+    values: Vec[Item]
+
+def main() -> int32:
+    mut rng = random.Rng(seed=42)
+    mut holder = Holder([Item("a"), Item("b"), Item("c")])
+    rng.shuffle(values=holder.values)
+    return 0
+"#,
+    )
+    .expect("Randomness constructor and projected shuffle should lower to MIR");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    assert!(
+        main.local_types
+            .iter()
+            .any(|local| local.ty == Type::named("random.Rng")),
+        "random.Rng constructor temporaries must retain canonical module provenance"
+    );
+    assert!(
+        main.local_types
+            .iter()
+            .all(|local| local.ty != Type::named("Rng")),
+        "random.Rng must never be lowered as a bare-name builtin type"
+    );
+
+    assert!(main.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+                    ..
+                } if name == "random::Rng"
+            )
+        })
+    }));
+
+    let shuffle = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Member {
+                                field,
+                                receiver_place,
+                                ..
+                            },
+                        args,
+                    },
+                ..
+            } if field == "shuffle" => Some((receiver_place, args)),
+            _ => None,
+        })
+        .expect("shuffle call should lower");
+    assert_eq!(shuffle.0.as_deref(), Some("rng"));
+    assert_eq!(shuffle.1.len(), 1);
+    assert_eq!(shuffle.1[0].name.as_deref(), Some("values"));
+    assert_eq!(
+        shuffle.1[0].writeback_place.as_deref(),
+        Some("holder.values")
+    );
+}
+
+#[test]
+fn path_named_random_keeps_local_and_imported_user_rng_classes_out_of_builtin_lowering() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass/random.au");
+    let program = crate::check_path(&path)
+        .expect("a user Rng in an entry module named random should type check normally");
+    assert!(!program.classes["Rng"].is_builtin);
+
+    let module = crate::lower_path_to_mir(&path)
+        .expect("local and imported user Rng classes should lower as ordinary classes");
+    assert!(module.classes.iter().any(|class| class.name == "Rng"));
+    assert!(module
+        .classes
+        .iter()
+        .any(|class| class.name == "user_rng_origin_support.random.Rng"));
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("fixture main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .collect::<Vec<_>>();
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Construct { class_name, .. },
+            ..
+        } if class_name == "Rng"
+    )));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Construct { class_name, .. },
+            ..
+        } if class_name == "user_rng_origin_support.random.Rng"
+    )));
+    assert!(!instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Name(name),
+                ..
+            },
+            ..
+        } if name == "random::Rng"
+    )));
+}
+
+#[test]
 fn duration_builtin_operator_matrix_takes_precedence_over_traits() {
     let duration = Type::named("Duration");
     let int64 = Type::named("int64");
@@ -394,7 +529,14 @@ def helper() -> int32:
 "#;
 
     let mut program = checked_program(main_source);
-    let imported = checked_program(imported_source);
+    let imported = crate::sema::check_with_context(
+        crate::parse_source(imported_source).expect("imported helper source should parse"),
+        crate::sema::ModuleContext {
+            module_name: "pkg.helpers".to_string(),
+            ..crate::sema::ModuleContext::default()
+        },
+    )
+    .expect("imported helper source should type check in its owning module");
     let helpers = namespace_from_program("helpers", "pkg.helpers", &imported);
     let mut reexport = helpers.clone();
     reexport.name = "reexport".to_string();
@@ -817,7 +959,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             },
             None,
         ),
-        "Status"
+        "pkg.helpers.Status"
     );
     assert_eq!(
         lowerer.render_assign_target(&crate::ast::AssignTarget::Name("value".to_string())),
@@ -860,7 +1002,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             )),
             args: Vec::new(),
         })),
-        Some(Type::named("Thing"))
+        Some(Type::named("pkg.helpers.Thing"))
     );
     assert_eq!(
         lowerer.infer_expr_type(&expr(ExprKind::Call {
@@ -870,7 +1012,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             )),
             args: Vec::new(),
         })),
-        Some(Type::named("Status"))
+        Some(Type::named("pkg.helpers.Status"))
     );
     for (builtin_name, args) in [
         ("Option", vec![type_ref("int32")]),
@@ -942,7 +1084,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     let local_static_target = lowerer
         .resolve_task_start_target(&member_expr(name_expr("Thing"), "zero"))
         .expect("unqualified imported class static methods should resolve");
-    assert_eq!(local_static_target.0, "Thing.zero");
+    assert_eq!(local_static_target.0, "pkg.helpers::Thing.zero");
     let module_static_target = lowerer
         .resolve_task_start_target(&member_expr(
             member_expr(member_expr(name_expr("pkg"), "helpers"), "Thing"),
@@ -993,7 +1135,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             .resolve_task_start_target(&specialized_static_target)
             .expect("specialized static methods should resolve as task targets")
             .0,
-        "Thing.zero"
+        "pkg.helpers::Thing.zero"
     );
     let specialized_class_object = expr(ExprKind::Specialize {
         expr: Box::new(name_expr("Thing")),
@@ -1004,7 +1146,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             .resolve_task_start_target(&member_expr(specialized_class_object, "zero"))
             .expect("static methods on specialized class objects should resolve")
             .0,
-        "Thing.zero"
+        "pkg.helpers::Thing.zero"
     );
 
     let static_call = expr(ExprKind::Call {
@@ -1090,7 +1232,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
                 fields,
             },
             ..
-        } if class_name == "Thing"
+        } if class_name == "pkg.helpers.Thing"
             && fields.iter().any(|field| field.name == "value")
             && fields.iter().any(|field| field.name == "flag")
     )));
@@ -1102,7 +1244,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
                 ..
             },
             ..
-        } if name == "Thing.zero"
+        } if name == "pkg.helpers::Thing.zero"
     )));
     assert!(current_instructions.iter().any(|instruction| matches!(
         instruction,
@@ -2548,12 +2690,160 @@ fn lower_path_to_mir_covers_imported_module_surface() {
         .functions
         .iter()
         .any(|function| function.name == "show"));
-    assert!(module.classes.iter().any(|class| class.name == "User"));
+    assert!(module
+        .classes
+        .iter()
+        .any(|class| class.name == "pkg.user.User"));
     assert!(module
         .trait_impls
         .iter()
         .any(|impl_info| impl_info.trait_name == "Named"));
     assert!(module.top_level.is_none());
+}
+
+#[test]
+fn imported_generic_rng_holders_keep_distinct_canonical_mir_identities() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/imported_same_leaf_class_identity.au");
+    let module = crate::lower_path_to_mir(&path)
+        .expect("same-leaf generic Rng holders should lower with module provenance");
+
+    let rng = Type::named("random.Rng");
+    let local_holder = Type::Named("Holder".to_string(), vec![rng.clone()]);
+    let remote_holder = Type::Named(
+        "same_leaf_support.remote.Holder".to_string(),
+        vec![rng.clone()],
+    );
+    let local_envelope = Type::Named("Envelope".to_string(), vec![Type::named("random.Rng")]);
+    let remote_envelope = Type::Named(
+        "same_leaf_support.remote.Envelope".to_string(),
+        vec![Type::named("random.Rng")],
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("fixture main should lower");
+
+    assert!(
+        main.local_types
+            .iter()
+            .any(|local| local.ty == local_holder),
+        "local types: {:#?}",
+        main.local_types
+    );
+    assert!(
+        main.local_types
+            .iter()
+            .any(|local| local.ty == remote_holder),
+        "local types: {:#?}",
+        main.local_types
+    );
+    assert!(main
+        .local_types
+        .iter()
+        .any(|local| local.ty == local_envelope));
+    assert!(main
+        .local_types
+        .iter()
+        .any(|local| local.ty == remote_envelope));
+    assert_eq!(
+        main.local_types
+            .iter()
+            .find(|local| local.name == "bridge_holder")
+            .map(|local| &local.ty),
+        Some(&remote_holder)
+    );
+    assert_eq!(
+        main.local_types
+            .iter()
+            .find(|local| local.name == "bridge_envelope")
+            .map(|local| &local.ty),
+        Some(&remote_envelope)
+    );
+    assert_eq!(
+        main.local_types
+            .iter()
+            .find(|local| local.name == "bridge_empty_envelope")
+            .map(|local| &local.ty),
+        Some(&remote_envelope)
+    );
+    assert!(module.classes.iter().any(|class| class.name == "Holder"));
+    assert!(module
+        .classes
+        .iter()
+        .any(|class| class.name == "same_leaf_support.remote.Holder"));
+    assert!(module
+        .trait_impls
+        .iter()
+        .any(|trait_impl| trait_impl.for_type
+            == Type::Named(
+                "same_leaf_support.remote.Holder".to_string(),
+                vec![Type::TypeParam("T".to_string())],
+            )));
+    assert!(module
+        .functions
+        .iter()
+        .any(|function| function.name == "same_leaf_support.remote::Holder.source"));
+
+    let bridge_holder = module
+        .functions
+        .iter()
+        .find(|function| function.name == "same_leaf_support.bridge::make_holder")
+        .expect("transitive holder factory should lower");
+    assert_eq!(bridge_holder.return_type, remote_holder);
+    assert!(bridge_holder.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Construct { class_name, .. },
+                    ..
+                } if class_name == "same_leaf_support.remote.Holder"
+            )
+        })
+    }));
+
+    for function_name in ["make_envelope", "make_empty_envelope"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == format!("same_leaf_support.bridge::{function_name}"))
+            .expect("transitive enum factory should lower");
+        assert_eq!(function.return_type, remote_envelope);
+        assert!(function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::EnumVariant { enum_name, .. },
+                        ..
+                    } if enum_name == "same_leaf_support.remote.Envelope"
+                )
+            })
+        }));
+    }
+
+    let enum_names = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::EnumVariant { enum_name, .. },
+                ..
+            } => Some(enum_name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        enum_names.contains(&"Envelope"),
+        "enum names: {enum_names:?}"
+    );
+    assert!(
+        enum_names.contains(&"same_leaf_support.remote.Envelope"),
+        "enum names: {enum_names:?}"
+    );
 }
 
 #[test]

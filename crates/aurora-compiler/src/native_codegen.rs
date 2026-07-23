@@ -264,6 +264,12 @@ struct NativeCodegen<'a> {
     duration_literal: FuncId,
     duration_from_i64: FuncId,
     duration_to_float: FuncId,
+    rng_new: FuncId,
+    rng_next_int: FuncId,
+    rng_next_float: FuncId,
+    rng_shuffle: FuncId,
+    random_secure_int: FuncId,
+    random_secure_bytes: FuncId,
     range_new: FuncId,
     range_current: FuncId,
     range_end: FuncId,
@@ -723,6 +729,12 @@ impl<'a> NativeCodegen<'a> {
             duration_literal => ("aurora_direct_duration_literal", [types::I64, types::I64], Some(types::I64)),
             duration_from_i64 => ("aurora_direct_duration_from_i64", [types::I64, types::I64], Some(types::I64)),
             duration_to_float => ("aurora_direct_duration_to_float", [types::I64, types::I64], Some(types::F64)),
+            rng_new => ("aurora_direct_rng_new", [types::I64], Some(types::I64)),
+            rng_next_int => ("aurora_direct_rng_next_int", [types::I64, types::I64, types::I64], Some(types::I64)),
+            rng_next_float => ("aurora_direct_rng_next_float", [types::I64], Some(types::F64)),
+            rng_shuffle => ("aurora_direct_rng_shuffle", [types::I64, types::I64], None),
+            random_secure_int => ("aurora_direct_random_secure_int", [types::I64, types::I64], Some(types::I64)),
+            random_secure_bytes => ("aurora_direct_random_secure_bytes", [types::I64], Some(types::I64)),
             range_new => ("aurora_direct_range_new", [types::I64, types::I64], Some(types::I64)),
             range_current => ("aurora_direct_range_current", [types::I64], Some(types::I64)),
             range_end => ("aurora_direct_range_end", [types::I64], Some(types::I64)),
@@ -1097,6 +1109,12 @@ impl<'a> NativeCodegen<'a> {
             duration_literal,
             duration_from_i64,
             duration_to_float,
+            rng_new,
+            rng_next_int,
+            rng_next_float,
+            rng_shuffle,
+            random_secure_int,
+            random_secure_bytes,
             range_new,
             range_current,
             range_end,
@@ -1753,6 +1771,22 @@ impl<'a> NativeCodegen<'a> {
         let duration_to_float = self
             .object
             .declare_func_in_func(self.duration_to_float, builder.func);
+        let rng_new = self.object.declare_func_in_func(self.rng_new, builder.func);
+        let rng_next_int = self
+            .object
+            .declare_func_in_func(self.rng_next_int, builder.func);
+        let rng_next_float = self
+            .object
+            .declare_func_in_func(self.rng_next_float, builder.func);
+        let rng_shuffle = self
+            .object
+            .declare_func_in_func(self.rng_shuffle, builder.func);
+        let random_secure_int = self
+            .object
+            .declare_func_in_func(self.random_secure_int, builder.func);
+        let random_secure_bytes = self
+            .object
+            .declare_func_in_func(self.random_secure_bytes, builder.func);
         let range_new = self
             .object
             .declare_func_in_func(self.range_new, builder.func);
@@ -2516,6 +2550,12 @@ impl<'a> NativeCodegen<'a> {
             duration_literal,
             duration_from_i64,
             duration_to_float,
+            rng_new,
+            rng_next_int,
+            rng_next_float,
+            rng_shuffle,
+            random_secure_int,
+            random_secure_bytes,
             range_new,
             range_current,
             range_end,
@@ -3169,6 +3209,12 @@ struct FunctionCompiler<'a> {
     duration_literal: cranelift_codegen::ir::FuncRef,
     duration_from_i64: cranelift_codegen::ir::FuncRef,
     duration_to_float: cranelift_codegen::ir::FuncRef,
+    rng_new: cranelift_codegen::ir::FuncRef,
+    rng_next_int: cranelift_codegen::ir::FuncRef,
+    rng_next_float: cranelift_codegen::ir::FuncRef,
+    rng_shuffle: cranelift_codegen::ir::FuncRef,
+    random_secure_int: cranelift_codegen::ir::FuncRef,
+    random_secure_bytes: cranelift_codegen::ir::FuncRef,
     range_new: cranelift_codegen::ir::FuncRef,
     range_current: cranelift_codegen::ir::FuncRef,
     range_end: cranelift_codegen::ir::FuncRef,
@@ -4659,6 +4705,50 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
+        if name == "random::Rng" {
+            let ordered = ordered_named_args(&["seed"], args)?;
+            let argument = ordered[0];
+            let seed =
+                self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+            let seed = self.coerce_value(seed, &DirectType::Scalar(ScalarKind::Int64))?;
+            let inst = self.builder.ins().call(self.rng_new, &[seed.values[0]]);
+            return Ok(self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("random.Rng"),
+            ));
+        }
+        if name == "random::secure_int" {
+            let ordered = ordered_named_args(&["lo", "hi"], args)?;
+            let lo =
+                self.load_operand_with_integer_hint(&ordered[0].value, Some(ScalarKind::Int64))?;
+            let lo = self.coerce_value(lo, &DirectType::Scalar(ScalarKind::Int64))?;
+            let hi =
+                self.load_operand_with_integer_hint(&ordered[1].value, Some(ScalarKind::Int64))?;
+            let hi = self.coerce_value(hi, &DirectType::Scalar(ScalarKind::Int64))?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.random_secure_int, &[lo.values[0], hi.values[0]]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            });
+        }
+        if name == "random::secure_bytes" {
+            let ordered = ordered_named_args(&["n"], args)?;
+            let argument = ordered[0];
+            let count =
+                self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+            let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.random_secure_bytes, &[count.values[0]]);
+            return Ok(self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            ));
+        }
         if let Some(associated) = name
             .strip_prefix("Duration.")
             .and_then(|field| BuiltinAssociatedFunction::resolve("Duration", field))
@@ -7116,6 +7206,21 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if let Type::Named(name, _) = object_ty {
+            let has_declared_class_method = find_method(self.classes.get(name), field).is_some();
+            let has_noncolliding_trait_method = BuiltinMember::resolve(name, field).is_none()
+                && self.find_trait_method(object_ty, field).is_some();
+            if has_declared_class_method || has_noncolliding_trait_method {
+                return self.compile_class_member_call(
+                    name,
+                    Some(object_ty.clone()),
+                    object,
+                    field,
+                    receiver_place,
+                    args,
+                );
+            }
+        }
         if field == "to_float"
             && matches!(
                 object_ty,
@@ -7371,6 +7476,67 @@ impl<'a> FunctionCompiler<'a> {
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("String"),
                         ))
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "random.Rng" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "next_int" => {
+                        let ordered = ordered_named_args(&["lo", "hi"], args)?;
+                        let lo_arg = ordered[0];
+                        let hi_arg = ordered[1];
+                        let lo = self.load_operand_with_integer_hint(
+                            &lo_arg.value,
+                            Some(ScalarKind::Int64),
+                        )?;
+                        let lo = self.coerce_value(lo, &DirectType::Scalar(ScalarKind::Int64))?;
+                        let hi = self.load_operand_with_integer_hint(
+                            &hi_arg.value,
+                            Some(ScalarKind::Int64),
+                        )?;
+                        let hi = self.coerce_value(hi, &DirectType::Scalar(ScalarKind::Int64))?;
+                        let inst = self.builder.ins().call(
+                            self.rng_next_int,
+                            &[object.values[0], lo.values[0], hi.values[0]],
+                        );
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
+                        })
+                    }
+                    "next_float" => {
+                        ordered_named_args(&[], args)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.rng_next_float, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Float64),
+                        })
+                    }
+                    "shuffle" => {
+                        let ordered = ordered_named_args(&["values"], args)?;
+                        let argument = ordered[0];
+                        let vector = self.load_operand(&argument.value)?;
+                        let vector = self.ensure_opaque(vector)?;
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.rng_shuffle, &[object.values[0], vector.values[0]]);
+                        let Some(place) = &argument.writeback_place else {
+                            return Err(
+                                "direct backend expected `shuffle()` to carry a mutable argument writeback place"
+                                    .to_string(),
+                            );
+                        };
+                        self.store_place(place, vector)?;
+                        Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -11498,6 +11664,9 @@ fn direct_type_inner(
         Type::Named(name, args) if args.is_empty() && name == "float64" => {
             Some(DirectType::Scalar(ScalarKind::Float64))
         }
+        Type::Named(name, args) if args.is_empty() && name == "random.Rng" => {
+            Some(DirectType::Opaque(Type::named(name)))
+        }
         Type::Named(name, args) if args.is_empty() => {
             if let Some(class) = classes.get(name) {
                 if !visiting.insert(name.clone()) {
@@ -11617,6 +11786,15 @@ fn infer_rvalue_type(
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if name == "random::Rng" => {
+                Some(DirectType::Opaque(Type::named("random.Rng")))
+            }
+            CallTarget::Name(name) if name == "random::secure_int" => {
+                Some(DirectType::Scalar(ScalarKind::Int64))
+            }
+            CallTarget::Name(name) if name == "random::secure_bytes" => Some(DirectType::Opaque(
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            )),
             CallTarget::Name(name) if name == "range" => {
                 Some(DirectType::Opaque(Type::named("Range")))
             }
@@ -12111,6 +12289,9 @@ fn builtin_opaque_member_return_type(
         return Some(DirectType::Opaque(Type::named("String")));
     }
     match (name.as_str(), field) {
+        ("random.Rng", "next_int") => Some(DirectType::Scalar(ScalarKind::Int64)),
+        ("random.Rng", "next_float") => Some(DirectType::Scalar(ScalarKind::Float64)),
+        ("random.Rng", "shuffle") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("String", "len") | ("String", "byte_len") => direct_type(&Type::named("int32"), classes),
         ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
             Some(DirectType::Scalar(ScalarKind::Bool))

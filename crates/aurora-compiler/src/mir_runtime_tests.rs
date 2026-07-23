@@ -11,6 +11,7 @@ use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm,
     MirMethod, MirModule, MirParam, MirTraitImpl, Operand, Rvalue, Terminator,
 };
+use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
     MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
@@ -46,6 +47,26 @@ fn mir_arg(name: Option<&str>, value: Operand) -> MirArg {
         name: name.map(str::to_string),
         value,
         writeback_place: None,
+    }
+}
+
+#[test]
+fn mir_rng_dispatches_nonbuiltin_traits_and_opaque_user_clone_methods() {
+    for (name, source, expected) in [
+        (
+            "Rng trait dispatch",
+            include_str!("../tests/fixtures/run-pass/random_rng_trait_dispatch.au"),
+            include_str!("../tests/fixtures/run-pass/random_rng_trait_dispatch.stdout"),
+        ),
+        (
+            "opaque Holder clone dispatch",
+            include_str!("../tests/fixtures/run-pass/random_opaque_user_clone_dispatch.au"),
+            include_str!("../tests/fixtures/run-pass/random_opaque_user_clone_dispatch.stdout"),
+        ),
+    ] {
+        let output = crate::run_source(source)
+            .unwrap_or_else(|error| panic!("{name} should execute through MIR: {error}"));
+        assert_eq!(output.stdout, expected, "{name}");
     }
 }
 
@@ -90,6 +111,97 @@ fn call_name(
     env: &mut Env,
 ) -> crate::diag::Result<Value> {
     runtime.evaluate_call(&crate::mir::CallTarget::Name(name.to_string()), args, env)
+}
+
+#[test]
+fn mir_secure_bytes_rejects_unrepresentable_vec_length_with_au4005() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let requested = i32::MAX as u128 + 1;
+
+    let error = call_name(
+        &mut runtime,
+        "random::secure_bytes",
+        &[mir_arg(Some("n"), Operand::Int(requested))],
+        &mut env,
+    )
+    .expect_err("secure byte counts above the Vec length domain must fail before allocation");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "`random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`"
+    );
+}
+
+#[test]
+fn mir_secure_random_diagnostics_preserve_validation_and_host_failures() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    let invalid_bounds = call_name(
+        &mut runtime,
+        "random::secure_int",
+        &[
+            mir_arg(Some("lo"), Operand::Int(8)),
+            mir_arg(Some("hi"), Operand::Int(8)),
+        ],
+        &mut env,
+    )
+    .expect_err("secure random bounds must be validated before requesting entropy");
+    assert_eq!(invalid_bounds.code, "AU4003");
+    assert_eq!(
+        invalid_bounds.message,
+        "random bounds require `lo < hi`, found `8 >= 8`"
+    );
+
+    env.define_typed(
+        "negative_count",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_signed(-1)),
+    );
+    let negative_count = call_name(
+        &mut runtime,
+        "random::secure_bytes",
+        &[mir_arg(
+            Some("n"),
+            Operand::Place("negative_count".to_string()),
+        )],
+        &mut env,
+    )
+    .expect_err("negative secure byte counts must fail before allocation or entropy");
+    assert_eq!(negative_count.code, "AU4003");
+    assert_eq!(
+        negative_count.message,
+        "`random.secure_bytes(n)` requires a non-negative byte count, found `-1`"
+    );
+
+    let allocation = Vec::<u8>::new()
+        .try_reserve_exact(usize::MAX)
+        .expect_err("an impossible byte allocation should fail");
+    let allocation =
+        super::random_resource_error_to_diagnostic(SecureRandomError::Allocation(allocation), None);
+    assert_eq!(allocation.code, "AU4005");
+    assert!(
+        allocation
+            .message
+            .starts_with("secure random allocation failed: "),
+        "unexpected allocation diagnostic: {}",
+        allocation.message
+    );
+
+    let entropy = super::random_resource_error_to_diagnostic(
+        SecureRandomError::Entropy(getrandom::Error::UNSUPPORTED),
+        None,
+    );
+    assert_eq!(entropy.code, "AU4005");
+    assert_eq!(
+        entropy.message,
+        format!(
+            "operating-system random source failed: {}",
+            getrandom::Error::UNSUPPORTED
+        )
+    );
 }
 
 fn string_vec_value(items: &[&str]) -> Value {

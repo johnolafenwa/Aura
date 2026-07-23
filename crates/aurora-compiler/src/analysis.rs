@@ -8,8 +8,8 @@ use crate::ast::{
     Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
 };
 use crate::call::{
-    BuiltinAssociatedFunction, BuiltinFunction, BuiltinMember, ALL_BUILTIN_ASSOCIATED_FUNCTIONS,
-    ALL_BUILTIN_FUNCTIONS,
+    BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
+    ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::parser;
@@ -514,7 +514,7 @@ impl<'a> AnalysisBuilder<'a> {
         let binding_ty = assign
             .annotation
             .as_ref()
-            .map(lower_type_ref)
+            .map(|ty| self.lower_analysis_type_ref(ty))
             .or_else(|| self.infer_expr_type(&assign.value, scope))
             .unwrap_or(Type::Unit);
         let definition = self
@@ -636,7 +636,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let base_name = base_type_name(receiver_type);
 
-        if let Some(class_info) = self.program.classes.get(base_name) {
+        if let Some(class_info) = self.class_info_for_type_name(base_name) {
             for (name, field) in &class_info.fields {
                 completions.push(AnalysisCompletion {
                     name: name.clone(),
@@ -835,6 +835,22 @@ impl<'a> AnalysisBuilder<'a> {
             namespace = namespace.modules.get(segment)?;
         }
         Some(namespace)
+    }
+
+    fn class_info_for_type_name(&self, name: &str) -> Option<&ClassInfo> {
+        self.program.classes.get(name).or_else(|| {
+            let (module_path, item_name) = name.rsplit_once('.')?;
+            self.program
+                .module_registry
+                .get(module_path)
+                .or_else(|| self.module_namespace(module_path))
+                .and_then(|namespace| {
+                    namespace
+                        .classes
+                        .get(item_name)
+                        .or_else(|| namespace.all_classes.get(item_name))
+                })
+        })
     }
 
     fn current_source_path(&self) -> Option<String> {
@@ -1471,7 +1487,11 @@ impl<'a> AnalysisBuilder<'a> {
                 return Some(ResolvedMember {
                     hover: format_class_hover(class_info),
                     definition: Some(self.class_definition(class_info)),
-                    ty: Some(Type::named(&class_info.decl.name)),
+                    ty: Some(self.analysis_class_type(
+                        &format!("{}.{}", namespace.path, class_info.decl.name),
+                        class_info,
+                        Vec::new(),
+                    )),
                 });
             }
             if let Some(enum_info) = namespace.enums.get(field) {
@@ -1495,7 +1515,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         let base_name = base_type_name(receiver_type);
-        if let Some(class_info) = self.program.classes.get(base_name) {
+        if let Some(class_info) = self.class_info_for_type_name(base_name) {
             if let Some(field_info) = class_info.fields.get(field) {
                 return Some(ResolvedMember {
                     hover: format_value_hover("field", field, &field_info.ty),
@@ -1872,6 +1892,9 @@ impl<'a> AnalysisBuilder<'a> {
                 )),
                 BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
+                BuiltinMember::RngNextInt => Some(Type::named("int64")),
+                BuiltinMember::RngNextFloat => Some(Type::named("float64")),
+                BuiltinMember::RngShuffle => Some(Type::Unit),
                 BuiltinMember::FileReadAll => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -2249,6 +2272,58 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
+        if ty.name == "None" {
+            return Type::Unit;
+        }
+        let name = match ty.name.as_str() {
+            "str" => "String",
+            "int" => "int64",
+            name => name,
+        };
+        let args = ty
+            .args
+            .iter()
+            .map(|arg| self.lower_analysis_type_ref(arg))
+            .collect::<Vec<_>>();
+        self.program
+            .classes
+            .get(name)
+            .map(|class_info| self.analysis_class_type(name, class_info, args.clone()))
+            .unwrap_or_else(|| {
+                Type::Named(
+                    self.program
+                        .canonical_type_names
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| name.to_string()),
+                    args,
+                )
+            })
+    }
+
+    fn analysis_class_type(
+        &self,
+        surface_name: &str,
+        class_info: &ClassInfo,
+        args: Vec<Type>,
+    ) -> Type {
+        let name = class_info
+            .builtin_constructor()
+            .map(|constructor| constructor.qualified_name().to_string())
+            .or_else(|| self.program.canonical_type_names.get(surface_name).cloned())
+            .unwrap_or_else(|| {
+                if surface_name.contains('.') {
+                    surface_name.to_string()
+                } else if class_info.module_name == self.program.module_name {
+                    class_info.decl.name.clone()
+                } else {
+                    format!("{}.{}", class_info.module_name, class_info.decl.name)
+                }
+            });
+        Type::Named(name, args)
+    }
+
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
             ExprKind::Int(_) => Some(Type::named("int64")),
@@ -2301,15 +2376,24 @@ impl<'a> AnalysisBuilder<'a> {
                                 | "Task"
                         ) =>
                 {
-                    Some(Type::Named(
-                        name.clone(),
-                        type_args.iter().map(lower_type_ref).collect(),
-                    ))
+                    let args = type_args
+                        .iter()
+                        .map(|ty| self.lower_analysis_type_ref(ty))
+                        .collect::<Vec<_>>();
+                    Some(
+                        self.program
+                            .classes
+                            .get(name)
+                            .map(|class_info| {
+                                self.analysis_class_type(name, class_info, args.clone())
+                            })
+                            .unwrap_or_else(|| Type::Named(name.clone(), args)),
+                    )
                 }
                 _ => self.infer_expr_type(expr, scope),
             },
             ExprKind::Group(inner) => self.infer_expr_type(inner, scope),
-            ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
+            ExprKind::Cast { ty, .. } => Some(self.lower_analysis_type_ref(ty)),
             ExprKind::Unary { op, expr } => {
                 let inner_ty = self.infer_expr_type(expr, scope)?;
                 match op {
@@ -2333,8 +2417,10 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(namespace) = self.program.imported_modules.get(name) {
                     return Some(Type::Module(namespace.path.clone()));
                 }
-                if self.program.classes.contains_key(name)
-                    || self.program.enums.contains_key(name)
+                if let Some(class_info) = self.program.classes.get(name) {
+                    return Some(self.analysis_class_type(name, class_info, Vec::new()));
+                }
+                if self.program.enums.contains_key(name)
                     || matches!(
                         name.as_str(),
                         "Option"
@@ -2416,8 +2502,8 @@ impl<'a> AnalysisBuilder<'a> {
                 if name == "TaskGroup" {
                     return Some(Type::named("TaskGroup"));
                 }
-                if self.program.classes.contains_key(name) {
-                    return Some(Type::named(name));
+                if let Some(class_info) = self.program.classes.get(name) {
+                    return Some(self.analysis_class_type(name, class_info, Vec::new()));
                 }
                 match BuiltinFunction::from_name(name)? {
                     BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
@@ -2500,10 +2586,19 @@ impl<'a> AnalysisBuilder<'a> {
                     if self.program.classes.contains_key(name)
                         || matches!(name.as_str(), "Queue" | "Vec" | "Set" | "Map" | "Task") =>
                 {
-                    Some(Type::Named(
-                        name.clone(),
-                        type_args.iter().map(lower_type_ref).collect(),
-                    ))
+                    let args = type_args
+                        .iter()
+                        .map(|ty| self.lower_analysis_type_ref(ty))
+                        .collect::<Vec<_>>();
+                    Some(
+                        self.program
+                            .classes
+                            .get(name)
+                            .map(|class_info| {
+                                self.analysis_class_type(name, class_info, args.clone())
+                            })
+                            .unwrap_or_else(|| Type::Named(name.clone(), args)),
+                    )
                 }
                 _ => self.infer_call_type(expr, args, scope),
             },
@@ -2996,6 +3091,14 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
 }
 
 fn format_class_hover(class_info: &ClassInfo) -> String {
+    if let Some(constructor) = class_info.builtin_constructor() {
+        return match constructor {
+            BuiltinClassConstructor::RandomRng => format!(
+                "```aurora\nclass Rng(seed: int64)\n```\n{}",
+                constructor.docs()
+            ),
+        };
+    }
     let mut fields = class_info
         .fields
         .iter()
@@ -3014,6 +3117,11 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
 }
 
 fn format_class_detail(class_info: &ClassInfo) -> String {
+    if let Some(constructor) = class_info.builtin_constructor() {
+        return match constructor {
+            BuiltinClassConstructor::RandomRng => "Rng(seed: int64)".to_string(),
+        };
+    }
     let fields = class_info
         .decl
         .fields
@@ -3563,6 +3671,9 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::TaskGroupStart,
         BuiltinMember::TaskGroupStartSoon,
         BuiltinMember::TaskGroupCancel,
+        BuiltinMember::RngNextInt,
+        BuiltinMember::RngNextFloat,
+        BuiltinMember::RngShuffle,
     ] {
         if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin) {
             completions.push(AnalysisCompletion {

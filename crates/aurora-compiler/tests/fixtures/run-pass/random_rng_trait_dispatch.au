@@ -1,0 +1,14 @@
+import random
+
+trait Describe:
+    def describe(borrow self) -> String
+
+impl Describe for random.Rng:
+    def describe(borrow self) -> String:
+        return "trait rng"
+
+def main() -> int32:
+    mut rng = random.Rng(42)
+    print(rng.describe())
+    print(rng.next_int(0, 10))
+    return 0

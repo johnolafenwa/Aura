@@ -1,0 +1,21 @@
+import user_rng_origin_support.random
+
+class Rng:
+    value: int64
+
+    def label(borrow self) -> String:
+        return f"entry:{self.value}"
+
+    def clone(borrow self) -> Rng:
+        return Rng(value=self.value)
+
+def main() -> int32:
+    local = Rng(value=7)
+    local_copy = local.clone()
+    imported = user_rng_origin_support.random.Rng(value=11)
+    imported_copy = imported.clone()
+    print(local.label())
+    print(local_copy.label())
+    print(imported.label())
+    print(imported_copy.label())
+    return 0

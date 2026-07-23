@@ -1,0 +1,10 @@
+from random import Rng
+
+def make(seed: int64) -> Rng:
+    return Rng(seed=seed)
+
+def main() -> int32:
+    mut rng = make(42)
+    print(rng.next_int(lo=0, hi=10))
+    print(rng.next_float())
+    return 0

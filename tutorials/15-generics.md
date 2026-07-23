@@ -98,6 +98,29 @@ as a shared borrow when this declaration is checked and stays shared even if a
 call later uses a copy type. Use `own T` when the body returns, stores, or
 otherwise consumes the value.
 
+## Inferred Clone-Safety
+
+A generic body may clone values without rejecting the declaration merely
+because `T` is unresolved:
+
+```python
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def forward[T](values: borrow Vec[T]) -> Vec[T]:
+    return duplicate(values)
+```
+
+Aurora infers that `T` must be clone-safe. A call with `int32` or `String`
+works. A call with `random.Rng`, including through a class, enum, or collection
+wrapper, is rejected with `AU3007`. `forward` receives the same requirement
+through its generic-to-generic call. The inferred contract also survives a
+module import; callers do not gain a clone route by moving the helper to
+another file.
+
+Copying `Task[random.Rng]` or `Queue[random.Rng]` handles remains valid because
+that duplicates a synchronization handle rather than the generator value.
+
 ## Current Limits
 
 The implemented generic surface supports:
@@ -110,5 +133,7 @@ The implemented generic surface supports:
 - method calls on generic instances inside generic functions
 - generic enum unit variants with explicit type arguments such as `Maybe[int32].Nothing`
 - generic trait impl headers like `impl Mapper[T] for Box[T]:`
+- inferred clone-safety obligations with generic-to-generic and imported
+  propagation
 
-See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), [examples/generics/generic_constructor_specialization.au](../examples/generics/generic_constructor_specialization.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).
+See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), [examples/generics/generic_constructor_specialization.au](../examples/generics/generic_constructor_specialization.au), [examples/generics/bounded_types.au](../examples/generics/bounded_types.au), and [examples/generics/clone_safety_obligations.au](../examples/generics/clone_safety_obligations.au).

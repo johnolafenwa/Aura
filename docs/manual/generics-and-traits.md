@@ -70,6 +70,27 @@ ok = Result[int32, String].Ok(7)
 
 Explicit arguments must have exact arity and satisfy all substituted bounds. Specialization and indexing share bracket syntax; the parser rules that distinguish them are specified in [Grammar](/manual/grammar#explicit-specialization).
 
+## Inferred Clone-Safety Obligations
+
+Generic clone-safety obligations are inferred from clone-producing operations in callable bodies.
+An operation over an unresolved type parameter is accepted when the checker can
+record which declared parameters must be safe to clone. A concrete call
+discharges those obligations after substitution. A type is safe for this
+purpose when duplicating it cannot duplicate `random.Rng` state through an
+ordinary class, enum, or collection path; `Task[T]` and `Queue[T]` handles stop
+that traversal because copying a handle does not observe or copy `T`.
+
+A generic-to-generic call propagates the obligation to the caller. Inference
+continues to a fixed point independent of declaration order, and the resulting
+contract is retained by imported functions and methods. The same rules apply
+to ordinary, inherent, associated, task-target, trait, operator, and `From`
+calls. There is no source annotation for this obligation in Aurora 0.1.
+
+When a type is concrete, a substitution containing `random.Rng` is rejected
+with `AU3007`. A concrete type whose clone safety cannot be proved is rejected
+conservatively. Moving, removing, receiving, or rearranging one owned value is
+not clone-producing and introduces no such obligation.
+
 ## Trait Declarations
 
 A trait declares a nominal method contract:
@@ -104,6 +125,11 @@ trait Mapper[T]:
 ```
 
 Bounds may appear on a trait method's own generic parameters. Ordinary trait method parameters cannot have defaults.
+
+An obligation inferred from a trait default body is part of the trait method's
+contract. It is substituted through `Self`, trait arguments, and method type
+arguments for every implementation and every form of dispatch. A
+signature-only trait method has no inferred clone-safety obligation.
 
 A trait is private to its defining module unless declared `public trait`. Implementation blocks have no independent exported name and cannot be prefixed with `public`; their methods become available through the implemented public trait/type context when the implementation is loaded.
 
@@ -168,6 +194,7 @@ For an explicitly implemented method, conformance compares:
 - each ordinary parameter's resolved owned/shared-borrow/mutable-borrow mode
 - return type and owned/shared-borrow/mutable-borrow mode
 - the semantic source slot of a borrowed return
+- the trait method's substituted clone-safety obligations
 
 Ordinary parameter names and borrow-label spellings may differ between the trait and implementation when they identify the same parameter position. Changing which parameter supplies a borrowed result is a signature mismatch.
 
@@ -175,11 +202,18 @@ Aurora 0.1 retains these borrowed-return conformance rules even though only copy
 
 Implementation methods cannot add default ordinary arguments. Extra methods, missing required methods, receiver mismatches, and signature mismatches are rejected before body execution.
 
-An `impl` targeting `Queue[T]`, `Task[T]`, or `TaskGroup` MUST NOT explicitly
-define or inherit a trait method whose name is a builtin member of that handle.
-Builtin handle names are reserved for their runtime operation; a collision
-reports `AU2006` and the trait method must be renamed. This rule is applied
-after default trait methods are inherited.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract.
+Its body may rely on obligations already inferred by the trait method, but it
+cannot introduce a requirement that bound-based callers cannot see. Because
+Aurora 0.1 has no explicit clone-safety annotation, generic clone-producing
+behavior belongs in a trait default body. An implementation that adds such a
+requirement is rejected with `AU3007`.
+
+An `impl` targeting `Queue[T]`, `Task[T]`, `TaskGroup`, or `random.Rng` MUST
+NOT explicitly define or inherit a trait method whose name is a builtin member
+of that target. Builtin member names are reserved for their runtime operation;
+a collision reports `AU2006` and the trait method must be renamed. This rule is
+applied after default trait methods are inherited.
 
 ## Trait Method Dispatch
 
@@ -200,6 +234,9 @@ def apply[M: Mapper[int32]](mapper: borrow M, value: int32) -> int32:
 ```
 
 If multiple bounds or equally specific implementations expose an indistinguishable applicable method, the call is ambiguous and rejected.
+
+Concrete and bound-based dispatch enforce the same substituted clone-safety
+contract. Associated trait methods follow the same rule as receiver methods.
 
 Traits may also declare associated methods without `self`:
 
@@ -279,6 +316,9 @@ must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do not use an equality trait in Aurora 0.1. Builtin operations take precedence where their concrete scalar/string rule applies.
 
+When an operator selects a trait method, it also enforces that method's
+substituted clone-safety obligations.
+
 ## `From` And `try`
 
 When `try` propagates `Result[T, SourceError]` from a function returning `Result[U, TargetError]`, exact error-type equality needs no trait. Otherwise the checker looks for an applicable `impl From[SourceError] for TargetError` containing `from`.
@@ -292,6 +332,9 @@ trait From[Source]:
 
 The selected conversion runs before `Result.Err` is returned from the enclosing function. If no applicable conversion exists, `try` is rejected. See [Functions](/manual/functions#try-and-result-returns).
 
+The selected `From.from` method's clone-safety obligations are enforced before
+the conversion is accepted.
+
 ## Current Generic And Trait Boundaries
 
 - generic arguments are invariant and there is no general subtyping
@@ -302,6 +345,8 @@ The selected conversion runs before `Result.Err` is returned from the enclosing 
   resolved; default/shared and `own` targets use task-owned captures, while
   `borrow mut` targets are rejected
 - equal-specificity overlapping implementations remain an error at the use site
+- clone-safety obligations are inferred rather than written, and an explicit
+  implementation cannot strengthen the contract inferred by its trait method
 
 Observable syntax and implementation limits are collected in [Current Limits](/manual/current-limits), while cross-cutting type rules are in [Static Semantics](/manual/static-semantics#generics-traits-and-implementations).
 
@@ -321,7 +366,7 @@ contextual, must resolve every declared parameter, and must satisfy every
 substituted bound. Trait satisfaction is nominal through a visible applicable
 `impl`, never structural. Implementations must conform after substituting
 receiver mode, parameter modes and types, return mode and type, borrowed-return
-source, and supertrait requirements. Dispatch selects one unique
+source, clone-safety obligations, and supertrait requirements. Dispatch selects one unique
 greatest-specificity applicable implementation; equal-best matches are
 rejected. `Self` denotes the enclosing/implementing concrete specialization
 only in its supported declaration contexts.
@@ -345,6 +390,8 @@ implementation signatures must agree on that resolved mode. Receiver
 evaluation precedes ordinary arguments, selected methods keep their declared
 receiver/parameter behavior, and `From.from` owns its source error. No generic
 or trait boundary inserts a hidden clone, coercion, or ownership-mode change.
+Clone-producing bodies infer obligations, generic calls propagate them, and
+concrete dispatch discharges them after substitution.
 
 ## Diagnostics
 
@@ -362,7 +409,9 @@ generic/trait rejections. `AU3001` reports use after an owned generic or
 receiver move. `AU3002` reports borrow conflicts, storing through a
 default-borrowed generic parameter, or contained non-copy borrowed returns.
 `AU3003` reports a mutable receiver call through an immutable place, and
-`AU3004` reports an invalid ownership mode. A selected body retains its runtime
+`AU3004` reports an invalid ownership mode. `AU3007` reports an unsafe concrete
+clone specialization, an unprovable concrete requirement, or an implementation
+that would strengthen its trait method's clone-safety contract. A selected body retains its runtime
 diagnostic: `AU4001` for a general trap, `AU4002` for arithmetic overflow or
 underflow, `AU4003` for a bounds or lookup violation, `AU4004` for a zero
 divisor, and `AU4005` for a resource or I/O failure.
@@ -372,11 +421,11 @@ divisor, and `AU4005` for a resource or I/O failure.
 Generic functions, classes, enums, methods, traits, supertraits, default trait
 bodies, generic and specialized implementations, operator dispatch, `Self`,
 and `From` conversion are implemented for MIR execution and direct native
-generation. User-trait dispatch on builtin `Queue[T]`, `Task[T]`, and
-`TaskGroup` handles is maintained for noncolliding method names on both
-backends; builtin handle members always retain builtin dispatch. The checker
+generation. User-trait dispatch on builtin `Queue[T]`, `Task[T]`, `TaskGroup`,
+and `random.Rng` values is maintained for noncolliding method names on both
+backends; builtin target members always retain builtin dispatch. The checker
 supplies one resolved specialization and implementation target to lowering,
-analysis, and the LSP; the parity gate rejects backend-specific dispatch
+analysis, and the LSP, including inferred clone-safety obligations; the parity gate rejects backend-specific dispatch
 behavior.
 
 ## Limits And Implementation-Defined Behavior
@@ -396,7 +445,103 @@ choice.
 Invariant generics, local/contextual inference, explicit specialization,
 nominal traits and bounds, supertraits, default methods, generic and specialized
 implementations, unique-most-specific dispatch, operator traits, `Self`, and
-`From`-based `try` conversion are implemented for the post-Phase 1.5 surface.
+`From`-based `try` conversion plus inferred clone-safety contracts are implemented for the post-Phase 1.5 surface.
 Live non-copy borrowed results are reserved for the Phase 6 alias work. Trait
 objects, dynamic dispatch, associated types, higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.
+
+### Verified Clone-Safety Contracts
+
+The following blocks pin the observable boundary. A generic clone helper is
+valid for a safe specialization:
+
+```python
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def main() -> int32:
+    values = [1, 2]
+    print(duplicate(values))
+    return 0
+```
+
+The same callable rejects an unsafe concrete specialization:
+
+```python
+import random
+
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def reject(values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+    return duplicate(values)
+```
+
+The requirement also survives a generic-to-generic call:
+
+```python
+import random
+
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def forward[T](values: borrow Vec[T]) -> Vec[T]:
+    return duplicate(values)
+
+def reject(values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+    return forward(values)
+```
+
+A signature-only trait method does not let an implementation add a hidden
+requirement:
+
+```python
+trait Copier[T]:
+    def copy_values(borrow self) -> Vec[T]
+
+class Wrapper[T]:
+    values: Vec[T]
+
+impl[T] Copier[T] for Wrapper[T]:
+    def copy_values(borrow self) -> Vec[T]:
+        return self.values.clone()
+```
+
+A trait default body can establish the requirement for safe specializations:
+
+```python
+trait Duplicator[T]:
+    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+
+class Marker[T]:
+    value: T
+
+impl[T] Duplicator[T] for Marker[T]:
+    pass
+
+def main() -> int32:
+    marker = Marker(0)
+    values = [4, 5]
+    print(marker.duplicate(values))
+    return 0
+```
+
+Its unsafe specialization is rejected through the same contract:
+
+```python
+import random
+
+trait Duplicator[T]:
+    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+
+class Marker[T]:
+    value: T
+
+impl[T] Duplicator[T] for Marker[T]:
+    pass
+
+def reject(marker: borrow Marker[random.Rng], values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+    return marker.duplicate(values)
+```

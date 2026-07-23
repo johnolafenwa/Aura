@@ -113,7 +113,7 @@ More precisely:
 - vectors compare element-by-element in order
 - maps and sets compare by contents and ignore insertion order
 - floating equality follows IEEE behavior, so a NaN value is not equal to itself
-- queue/task handles and live file, process, listener, stream, exchange, supervisor, and WebSocket values compare by shared runtime identity
+- queue/task handles, random generators, and live file, process, listener, stream, exchange, supervisor, and WebSocket values compare by shared runtime identity
 
 Equality is defined only after static typing has established compatible operand types.
 
@@ -121,7 +121,7 @@ Equality is defined only after static typing has established compatible operand 
 
 `print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is Provisional under ADR-0019.
 
-Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
+Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. A deterministic random generator renders exactly `<rng>` without exposing or advancing its state. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
 
 ## Assignment And Mutation
 
@@ -275,6 +275,12 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 - process identifiers, exit timing, and host scheduling
 - network arrival order and peer behavior
 - filesystem enumeration supplied by the host
+- operating-system secure random output
 - the exact wording of host operating-system errors
 
-Aurora converts these effects into typed values and ordering primitives where practical, but does not pretend the host environment is deterministic.
+An explicitly seeded `random.Rng` is deterministic rather than part of that
+list: its xoshiro256** sequence, integer/float mapping, and shuffle order are
+fixed for Aurora 0.1.x and specified in [Randomness Module](/manual/randomness).
+Secure random calls are external effects and never draw from that stream.
+Aurora converts host effects into typed values and ordering primitives where
+practical, but does not pretend the host environment is deterministic.

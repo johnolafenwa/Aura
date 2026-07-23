@@ -181,7 +181,9 @@ def choose_positive(left: borrow[shared] int32, right: borrow[shared] int32) -> 
     return right
 ```
 
-Aurora 0.1 rejects calls producing non-copy borrowed results. For `String`, collections, resources, and ordinary classes, return an owned clone or expose an owner method. Live borrowed aliases are reserved for Phase 6.
+Aurora 0.1 rejects calls producing non-copy borrowed results. Return an owned
+clone when the value is clone-safe, consume an owner, or expose an owner
+method. Live borrowed aliases are reserved for Phase 6.
 
 See [examples/basics/borrowed_returns.au](../examples/basics/borrowed_returns.au) and [examples/basics/borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au).
 

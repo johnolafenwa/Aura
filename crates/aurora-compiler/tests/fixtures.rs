@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use aurora_compiler::{check_source, parse_source, run_source};
+use aurora_compiler::{check_path, check_source, parse_source, run_path, run_source};
 
 #[test]
 fn parse_pass_fixtures_parse() {
@@ -61,6 +61,33 @@ fn check_fail_fixtures_match_expected_diagnostics() {
 }
 
 #[test]
+fn check_path_pass_fixtures_type_check_with_imports() {
+    for fixture in fixture_files("check-path-pass") {
+        check_path(&fixture)
+            .unwrap_or_else(|error| panic!("{} should type-check: {}", fixture.display(), error));
+    }
+}
+
+#[test]
+fn check_path_fail_fixtures_match_expected_diagnostics() {
+    for fixture in fixture_files("check-path-fail") {
+        let source = read(&fixture);
+        let error = match check_path(&fixture) {
+            Ok(_) => panic!("{} should fail to type-check", fixture.display()),
+            Err(error) => error,
+        };
+        let expected = read_expected(&fixture, "diag");
+        let rendered = error.render_with_source(&display_path(&fixture), &source);
+        assert_eq!(
+            normalize_newlines(&normalize_workspace_path(&rendered)),
+            normalize_newlines(&expected),
+            "unexpected diagnostic for {}",
+            fixture.display()
+        );
+    }
+}
+
+#[test]
 fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
     for fixture in fixture_files("python-hints") {
         let source = read(&fixture);
@@ -86,8 +113,7 @@ fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
 #[test]
 fn run_pass_fixtures_match_expected_stdout() {
     for fixture in fixture_files("run-pass") {
-        let source = read(&fixture);
-        let output = run_source_on_large_stack(source.clone())
+        let output = run_path_on_large_stack(fixture.clone())
             .unwrap_or_else(|error| panic!("{} should run: {}", fixture.display(), error));
         let expected = read_expected(&fixture, "stdout");
         assert_eq!(
@@ -165,6 +191,15 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
 }
 
+fn normalize_workspace_path(text: &str) -> String {
+    let prefix = format!(
+        "{}{}",
+        workspace_root().display(),
+        std::path::MAIN_SEPARATOR
+    );
+    text.replace(&prefix, "")
+}
+
 fn normalize_primary_runtime_diagnostic(text: &str) -> String {
     // Full MIR backtraces are pinned in `mir_backtraces.rs`. Legacy runtime
     // fixture oracles continue to pin the primary trap while the native
@@ -182,6 +217,15 @@ fn is_supplemental_mir_backtrace_note(line: &str) -> bool {
     line.starts_with("note: Aurora call chain")
         || line.starts_with("note: Aurora task entry")
         || line.starts_with("note: Aurora task ancestry")
+}
+
+fn run_path_on_large_stack(path: PathBuf) -> aurora_compiler::Result<aurora_compiler::RunOutput> {
+    thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || run_path(&path))
+        .unwrap_or_else(|error| panic!("failed to spawn runtime fixture thread: {}", error))
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 fn run_source_on_large_stack(

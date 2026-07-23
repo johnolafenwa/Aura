@@ -45,6 +45,24 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification remains Provisional under ADR-0019.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
 - JSON and TOML codecs currently support the typed `Map[String, String]` boundary, not nested dynamic trees or derived class/enum schemas.
+- `random.Rng` provides one fixed deterministic stream with integer, floating,
+  and mutable-Vec shuffle operations. There is no global generator, state
+  serialization, reseeding, jump/substream operation, distribution library,
+  choice helper, public direct or transitive clone route, secure floating
+  function, or `random.Error`. Clone-producing collection and task-result
+  observations are rejected with `AU3007` when their produced value contains
+  or may contain an `Rng`; copying a task/queue handle and transferring one
+  owned generator remain valid.
+  Generic clone-safety requirements are inferred from callable bodies,
+  propagated through generic calls and imports, and checked after
+  specialization; there is no source annotation for them. Trait defaults may
+  establish this contract, but an explicit implementation may not strengthen
+  it. Recursive nominal inspection terminates conservatively when safety cannot
+  be proved.
+  `secure_bytes` accepts at most 2,147,483,647 bytes so its result is always
+  representable by `Vec.len() -> int32`; larger counts fail with `AU4005`
+  before allocation or entropy. Within that limit, unsatisfied allocation or
+  OS entropy requests also trap with `AU4005`.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may currently become infinity; prefer `float64` when large literal validation matters.
@@ -53,7 +71,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
 - High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
-- Resource-bearing task results are single-observer-only in Aurora 0.1. This restriction is not yet enforced statically: each observation clones the stored runtime value and can alias one host resource through shared handles, so use exactly one designated observer. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
+- Resource-bearing task results are single-observer-only in Aurora 0.1. This restriction is not yet enforced statically for general resource types: each observation clones the stored runtime value and can alias one host resource through shared handles, so use exactly one designated observer. `random.Rng` is a stricter exception: clone-producing task-result observations are rejected statically with `AU3007`. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 - Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait, not an operating-system call already in progress. External side effects may still complete.
 - The process-wide blocking pool uses 2 through 8 host threads, selected from host parallelism, with no 0.1 configuration or queue backpressure. A timed-out or cancelled host job keeps its worker until the underlying call returns; enough slow or stuck DNS/filesystem jobs can occupy the whole pool and delay unrelated blocking operations queued behind them.
 - `WebSocketListener` has no explicit `close()` method, and WebSocket cancellation/error propagation is not yet fully aligned with TCP and UDP.

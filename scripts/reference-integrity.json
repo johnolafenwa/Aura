@@ -94,6 +94,9 @@
     "docs/manual/process.md": {
       "kind": "feature"
     },
+    "docs/manual/randomness.md": {
+      "kind": "feature"
+    },
     "docs/manual/statements.md": {
       "kind": "feature"
     },
@@ -696,6 +699,42 @@
       "stdout": "ok\n",
       "stderr": ""
     },
+    "docs/manual/generics-and-traits.md#aurora-21": {
+      "sha256": "56c17c3c25a8dc9118b0a04a1d4504de73998aa1a3012b823723b06d2d0b064c",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/generics-and-traits.md#aurora-22": {
+      "sha256": "6b6a356aea7c640da0b8c5ffd94805eb4ec62fe04664ca75507755745873b9ba",
+      "mode": "check-fail",
+      "exit_code": 1,
+      "stderr_contains": "AU3007"
+    },
+    "docs/manual/generics-and-traits.md#aurora-23": {
+      "sha256": "077c3ac3a9e4be35abe19fd965bfad5a11d00a6f746522b60c226a65473694f6",
+      "mode": "check-fail",
+      "exit_code": 1,
+      "stderr_contains": "AU3007"
+    },
+    "docs/manual/generics-and-traits.md#aurora-24": {
+      "sha256": "0ef32b09ce1a90af1f1b0413b5bf5dafb5fb443fb965597a5404aba88ccf6224",
+      "mode": "check-fail",
+      "exit_code": 1,
+      "stderr_contains": "AU3007"
+    },
+    "docs/manual/generics-and-traits.md#aurora-25": {
+      "sha256": "a1cc0f6270a233277f715f149a97bb4311973615784171f5eab978ae32500aba",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/generics-and-traits.md#aurora-26": {
+      "sha256": "64d03db8b7fd1d29454220f69591b5350467520361e29eaea005174fad7370ec",
+      "mode": "check-fail",
+      "exit_code": 1,
+      "stderr_contains": "AU3007"
+    },
     "docs/manual/io.md#aurora-1": {
       "sha256": "62cd3ae402970adfdc586f270368421b44d9ad2f06053e20c14a2a61cf3b310b",
       "mode": "check",
@@ -923,6 +962,12 @@
       "sha256": "7a4d7efda29807623eb980c050114eb2f448adfde44bb22af69fa8ecc860f30c",
       "mode": "illustrative",
       "reason": "Supervisor function fragment: it relies on process types and host process behavior from the surrounding page."
+    },
+    "docs/manual/randomness.md#aurora-1": {
+      "sha256": "fa4e80f7f7e9731df653ceaa84369500f065569f84bab3dd9667293d21c363da",
+      "mode": "run",
+      "stdout": "2\n2\n[3, 5, 4, 1, 2, 0]\n",
+      "stderr": ""
     },
     "docs/manual/statements.md#aurora-1": {
       "sha256": "e4a429e6ae04860507c727fab3b21a02dbdf611d1d27df4e9a0bc1f8d63d8b52",

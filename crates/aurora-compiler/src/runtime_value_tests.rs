@@ -21,7 +21,7 @@ use super::{
     HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
     ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, RecvValueResult, SetValue, TaskCancelledSignal, TaskExecutionResult,
+    RangeValue, RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult,
     UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
     MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
@@ -1394,6 +1394,16 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         }),
         "Status",
     );
+
+    let rng = RngValue::from_seed(42);
+    let same_rng = rng.clone();
+    let other_rng = RngValue::from_seed(42);
+    assert_eq!(format!("{rng:?}"), "RngValue(..)");
+    assert_eq!(rng, same_rng);
+    assert_ne!(rng, other_rng);
+    assert_value_equals_clone(Value::Rng(rng.clone()));
+    assert_eq!(Value::Rng(rng.clone()).render(), "<rng>");
+    assert_source_type(Value::Rng(rng), "random.Rng");
 
     let channel = ChannelValue::new();
     assert_eq!(format!("{channel:?}"), "ChannelValue(..)");

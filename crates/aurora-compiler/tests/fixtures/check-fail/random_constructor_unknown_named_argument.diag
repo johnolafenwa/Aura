@@ -1,0 +1,5 @@
+error[AU2004]: `random.Rng` has no parameter named `value`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/random_constructor_unknown_named_argument.au:4:22
+  |
+4 |     rng = random.Rng(value=1)
+  |                      ^

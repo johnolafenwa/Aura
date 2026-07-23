@@ -1,0 +1,6 @@
+import imported_generic_support.remote
+
+def main() -> int32:
+    value = imported_generic_support.remote.PlainBox[int64](value="wrong")
+    print(value)
+    return 0

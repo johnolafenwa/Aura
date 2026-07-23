@@ -1,0 +1,5 @@
+import random
+
+def main() -> int32:
+    print(random.secure_int(9, 2))
+    return 0

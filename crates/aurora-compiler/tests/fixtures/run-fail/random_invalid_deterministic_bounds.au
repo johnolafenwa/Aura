@@ -1,0 +1,6 @@
+import random
+
+def main() -> int32:
+    mut rng = random.Rng(42)
+    print(rng.next_int(4, 4))
+    return 0

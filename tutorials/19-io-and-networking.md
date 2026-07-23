@@ -185,8 +185,9 @@ When `restart` is `process.RestartPolicy.OnFailure` or `process.RestartPolicy.Al
 `Supervisor.start` retains the configuration it may need for a restart, so all
 of its configuration slots are explicit `own` parameters. This includes the
 copy-valued restart, backoff, count, and group settings; `own` is harmless for
-copy values and keeps the retention contract uniform. Clone a move value before
-the call only when the caller also needs an independent copy.
+copy values and keeps the retention contract uniform. Clone a clone-safe move
+value before the call only when the caller also needs an independent copy;
+otherwise ownership must transfer.
 
 `process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly. For grouped children it waits for the full child process group to disappear before returning.
 

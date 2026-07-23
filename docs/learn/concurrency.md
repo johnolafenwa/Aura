@@ -36,6 +36,11 @@ The `with` block defines the task's lifetime. Leaving the block waits for childr
 
 Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
 
+`random.Rng` has a stricter static rule. Task observations clone the stored
+result, so `Task.result`, `result_or_none`, and `result_or` reject a result that
+contains an `Rng` with `AU3007`. Copying the `Task[random.Rng]` handle itself is
+still valid because that does not inspect the result.
+
 The timeout is a signed nanosecond `Duration`. Literals cover integral `ms`,
 `s`, and `m` values; `Duration.ms(n)`, `Duration.seconds(n)`, checked
 arithmetic, and comparisons handle runtime-computed backoff. A negative or
@@ -62,7 +67,8 @@ Starting a task creates **owned captures**. Each argument moves or copies into
 task-owned storage before the child can outlive the caller. The target may then
 borrow that capture or consume it; it never borrows the caller's stack value.
 
-When both the parent and the child want the same move value, clone before starting:
+When both the parent and the child want the same clone-safe move value, clone
+before starting:
 
 ```python
 def worker(label: String):
@@ -196,6 +202,10 @@ match wait_all(tasks, timeout=1s):
 ```
 
 The `Error(index, message)` variant reports **which** task failed. That is usually more useful than a bare error.
+
+Both wait helpers observe and clone stored task results. They therefore require
+clone-safe `T` and reject a result containing `random.Rng`; Queue receive
+operations remain valid because they transfer one owned item instead.
 
 ## Cancellation Is Cooperative
 

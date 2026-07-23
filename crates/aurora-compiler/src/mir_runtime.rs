@@ -16,6 +16,7 @@ use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
+use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
@@ -38,7 +39,7 @@ use crate::runtime_value::{
     HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
     TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
     VecValue, WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
@@ -998,6 +999,7 @@ impl MirRuntime {
                 vec![map.key_type.clone(), map.value_type.clone()],
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
+            Value::Rng(_) => Some(Type::named("random.Rng")),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(_) => None,
             Value::Unit => Some(Type::Unit),
@@ -2055,6 +2057,45 @@ impl MirRuntime {
                     return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
                 }
 
+                if name == "random::Rng" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["seed"], values)?;
+                    let seed = expect_i64_value(&bound[0].value, "random.Rng(seed=...)")?;
+                    return Ok(Value::Rng(RngValue::from_seed(seed)));
+                }
+
+                if name == "random::secure_int" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["lo", "hi"], values)?;
+                    let lo = expect_i64_value(&bound[0].value, "random.secure_int(...)")?;
+                    let hi = expect_i64_value(&bound[1].value, "random.secure_int(...)")?;
+                    return randomness::secure_int(lo, hi)
+                        .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value))))
+                        .map_err(|error| {
+                            random_resource_error_to_diagnostic(error, Some((lo, hi)))
+                        });
+                }
+
+                if name == "random::secure_bytes" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["n"], values)?;
+                    let count = expect_i64_value(&bound[0].value, "random.secure_bytes(n)")?;
+                    if count < 0 {
+                        return Err(Diagnostic::coded(
+                            "AU4003",
+                            format!(
+                                "`random.secure_bytes(n)` requires a non-negative byte count, found `{count}`"
+                            ),
+                        ));
+                    }
+                    // Every supported Aurora release target is 64-bit, so a
+                    // validated non-negative int64 always fits usize.
+                    let count = count as usize;
+                    return randomness::secure_bytes(count)
+                        .map(bytes_vec_value)
+                        .map_err(|error| random_resource_error_to_diagnostic(error, None));
+                }
+
                 if let Some((type_name, member_name)) = name.split_once('.') {
                     if let Some(constructor) =
                         BuiltinAssociatedFunction::resolve(type_name, member_name)
@@ -2447,6 +2488,24 @@ impl MirRuntime {
                         }
                         Ok(Value::Float(duration_to_seconds(*value)))
                     }
+                    Value::Rng(rng) => {
+                        if BuiltinMember::resolve("random.Rng", field).is_none() {
+                            if let Some(value) = self.evaluate_resolved_trait_member_call(
+                                TraitMemberCallContext {
+                                    receiver: &receiver,
+                                    receiver_static_ty: receiver_static_ty.as_ref(),
+                                    field,
+                                    receiver_place: receiver_place.as_deref(),
+                                    args,
+                                    expected_return_type,
+                                },
+                                env,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        self.evaluate_rng_method(rng.clone(), field, args, env)
+                    }
                     Value::String(value) => {
                         self.evaluate_string_method(value.clone(), field, args, env)
                     }
@@ -2793,6 +2852,53 @@ impl MirRuntime {
             )));
         }
         Ok(())
+    }
+
+    fn evaluate_rng_method(
+        &mut self,
+        rng: RngValue,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "next_int" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["lo", "hi"], values)?;
+                let lo = expect_i64_value(&bound[0].value, "Rng.next_int(...)")?;
+                let hi = expect_i64_value(&bound[1].value, "Rng.next_int(...)")?;
+                rng.next_int(lo, hi)
+                    .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value))))
+                    .map_err(|_| invalid_random_bounds_diagnostic(lo, hi))
+            }
+            "next_float" => {
+                let values = evaluate_named_args(args, env)?;
+                bind_builtin_args(&[], values)?;
+                Ok(Value::Float(rng.next_float()))
+            }
+            "shuffle" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["values"], values)?;
+                let mut vector = match &bound[0].value {
+                    Value::Vec(vector) => vector.clone(),
+                    other => {
+                        return Err(Diagnostic::new(format!(
+                            "`Rng.shuffle(...)` expects `Vec[T]`, found `{}`",
+                            other.render()
+                        )))
+                    }
+                };
+                let place = bound[0].writeback_place.as_deref().ok_or_else(|| {
+                    Diagnostic::new("`Rng.shuffle(...)` requires a mutable vector place")
+                })?;
+                rng.shuffle(&mut vector.elements);
+                env.write_place(place, Value::Vec(vector))?;
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported Rng method `{field}` in MIR runtime"
+            ))),
+        }
     }
 
     fn evaluate_channel_method(
@@ -6141,6 +6247,51 @@ fn expect_i32_value(value: &Value, label: &str) -> Result<i32> {
             label,
             other.render()
         ))),
+    }
+}
+
+fn expect_i64_value(value: &Value, label: &str) -> Result<i64> {
+    match value {
+        Value::Int(number) => {
+            let value = number
+                .as_i128()
+                .ok_or_else(|| Diagnostic::new(format!("`{label}` expects `int64`")))?;
+            i64::try_from(value).map_err(|_| Diagnostic::new(format!("`{label}` expects `int64`")))
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{label}` expects `int64`, found `{}`",
+            other.render()
+        ))),
+    }
+}
+
+fn invalid_random_bounds_diagnostic(lo: i64, hi: i64) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4003",
+        format!("random bounds require `lo < hi`, found `{lo} >= {hi}`"),
+    )
+}
+
+fn random_resource_error_to_diagnostic(
+    error: SecureRandomError,
+    bounds: Option<(i64, i64)>,
+) -> Diagnostic {
+    match error {
+        SecureRandomError::InvalidRange => match bounds {
+            Some((lo, hi)) => invalid_random_bounds_diagnostic(lo, hi),
+            None => Diagnostic::coded("AU4003", "random bounds require `lo < hi`"),
+        },
+        error @ SecureRandomError::LengthExceedsVec { .. } => {
+            Diagnostic::coded("AU4005", error.to_string())
+        }
+        SecureRandomError::Allocation(error) => Diagnostic::coded(
+            "AU4005",
+            format!("secure random allocation failed: {error}"),
+        ),
+        SecureRandomError::Entropy(error) => Diagnostic::coded(
+            "AU4005",
+            format!("operating-system random source failed: {error}"),
+        ),
     }
 }
 

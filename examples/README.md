@@ -273,6 +273,10 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `aurora`
     - `empty`
+- `clone_safety_obligations.au`
+  - inferred clone-safety obligations on a generic clone helper and a
+    generic-to-generic forwarding helper
+  - prints `[1, 2, 3]` twice
 
 ### `traits/`
 
@@ -338,6 +342,10 @@ The examples are organized by topic so they can serve both as quick references a
 - `trait_associated_factory.au`
   - associated trait methods called through the implementing type name
   - prints `7`
+- `clone_safety_contract.au`
+  - an inferred clone-safety contract from a generic trait default method,
+    preserved through a bounded generic call
+  - prints `[4, 5]` twice
 
 ### `modules/`
 
@@ -544,6 +552,16 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     comparison, and floating unit conversion
   - prints `375ms`, `0.333333ms`, `2500ms`, `true`, `2000.0`, and `1.5`
 
+### `randomness/`
+
+- `deterministic_rng.au`
+  - a seeded `random.Rng`, unbiased half-open integer calls, and in-place
+    Fisher-Yates shuffle
+  - prints:
+    - `2`
+    - `2`
+    - `[3, 5, 4, 1, 2, 0]`
+
 ### `numbers/`
 
 - `float_sqrt.au`
@@ -674,10 +692,12 @@ cargo run -p aura -- run examples/enums/wildcard_match.au
 cargo run -p aura -- run examples/generics/box_and_wrapper.au
 cargo run -p aura -- run examples/generics/generic_method_calls.au
 cargo run -p aura -- run examples/generics/bounded_types.au
+cargo run -p aura -- run examples/generics/clone_safety_obligations.au
 cargo run -p aura -- run examples/traits/greeter.au
 cargo run -p aura -- run examples/traits/multiple_bounds.au
 cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
+cargo run -p aura -- run examples/traits/clone_safety_contract.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/io/read_text_file.au

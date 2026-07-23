@@ -45,6 +45,7 @@ use std::os::unix::process::CommandExt;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
+use crate::randomness::{DeterministicRng, InvalidRandomRange};
 use crate::sema::Type;
 
 type HttpHeaders = Vec<(String, String)>;
@@ -203,6 +204,7 @@ pub enum Value {
     Set(SetValue),
     Map(MapValue),
     Duration(i128),
+    Rng(RngValue),
     Range(RangeValue),
     ModuleNamespace(ModuleNamespaceValue),
     Unit,
@@ -306,6 +308,35 @@ pub struct RangeValue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModuleNamespaceValue {
     pub path: String,
+}
+
+#[derive(Clone)]
+pub struct RngValue {
+    inner: Arc<Mutex<DeterministicRng>>,
+}
+
+impl RngValue {
+    pub(crate) fn from_seed(seed: i64) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DeterministicRng::from_seed(seed))),
+        }
+    }
+
+    pub(crate) fn next_int(
+        &self,
+        lo: i64,
+        hi: i64,
+    ) -> std::result::Result<i64, InvalidRandomRange> {
+        lock_mutex(&self.inner).next_int(lo, hi)
+    }
+
+    pub(crate) fn next_float(&self) -> f64 {
+        lock_mutex(&self.inner).next_float()
+    }
+
+    pub(crate) fn shuffle(&self, values: &mut [Value]) {
+        lock_mutex(&self.inner).shuffle(values);
+    }
 }
 
 #[derive(Clone)]
@@ -759,6 +790,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::Set(_) => "Set".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::Duration(_) => "Duration".to_string(),
+            Value::Rng(_) => "random.Rng".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
             Value::Unit => "None".to_string(),
@@ -919,6 +951,12 @@ impl fmt::Debug for ChannelValue {
     }
 }
 
+impl fmt::Debug for RngValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RngValue(..)")
+    }
+}
+
 impl fmt::Debug for TaskValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("TaskValue(..)")
@@ -1028,6 +1066,12 @@ impl fmt::Debug for TlsStreamValue {
 }
 
 impl PartialEq for ChannelValue {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for RngValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -2130,6 +2174,7 @@ impl PartialEq for Value {
             (Value::Vec(left), Value::Vec(right)) => left == right,
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
+            (Value::Rng(left), Value::Rng(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
             (Value::Unit, Value::Unit) => true,
@@ -2204,6 +2249,7 @@ impl Value {
                 rendered
             }
             Value::Duration(value) => render_duration(*value),
+            Value::Rng(_) => "<rng>".to_string(),
             Value::Range(range) => format!("range({}, {})", range.start, range.end),
             Value::ModuleNamespace(namespace) => format!("<module {}>", namespace.path),
             Value::Unit => String::new(),

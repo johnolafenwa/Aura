@@ -1,0 +1,15 @@
+import random
+
+class Item:
+    label: String
+
+class Holder:
+    values: Vec[Item]
+
+def main() -> int32:
+    mut rng = random.Rng(42)
+    mut holder = Holder([Item("a"), Item("b"), Item("c"), Item("d"), Item("e"), Item("f")])
+    rng.shuffle(holder.values)
+    for item in borrow holder.values:
+        print(item.label)
+    return 0

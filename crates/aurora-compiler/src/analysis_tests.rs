@@ -188,6 +188,160 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
 }
 
 #[test]
+fn random_analysis_exposes_single_rng_binding_and_stateful_members() {
+    let module_source = "import random\n\ndef main() -> int32:\n    random.\n    return 0\n";
+    let module_items = complete_source(module_source, 3, 11, Some('.'))
+        .expect("random module completion should recover");
+    let rng_entries = module_items
+        .iter()
+        .filter(|item| item.name == "Rng")
+        .collect::<Vec<_>>();
+    assert_eq!(rng_entries.len(), 1, "Rng must have one completion entry");
+    assert_eq!(rng_entries[0].kind, "class");
+    assert_eq!(rng_entries[0].detail, "Rng(seed: int64)");
+    assert!(module_items.iter().any(|item| item.name == "secure_int"));
+    let secure_bytes = module_items
+        .iter()
+        .find(|item| item.name == "secure_bytes")
+        .expect("secure_bytes completion");
+    assert_eq!(secure_bytes.detail, "secure_bytes(n: int64) -> Vec[uint8]");
+    assert!(!module_items.iter().any(|item| item.name == "secure_float"));
+
+    let random_namespace =
+        crate::builtin_modules::builtin_module_namespace(&["random".to_string()])
+            .expect("random namespace");
+    let rng_hover = format_class_hover(&random_namespace.classes["Rng"]);
+    assert!(rng_hover.contains("class Rng(seed: int64)"));
+    assert!(rng_hover.contains("deterministic"));
+
+    let member_source = "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    rng.\n    return 0\n";
+    let members = complete_source(member_source, 4, 8, Some('.'))
+        .expect("Rng member completion should recover");
+    for (name, detail) in [
+        ("next_int", "next_int(lo: int64, hi: int64) -> int64"),
+        ("next_float", "next_float() -> float64"),
+        ("shuffle", "shuffle(values: borrow mut Vec[T]) -> None"),
+    ] {
+        let matches = members
+            .iter()
+            .filter(|item| item.name == name)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "{name} should complete exactly once");
+        assert_eq!(matches[0].kind, "method");
+        assert_eq!(matches[0].detail, detail);
+    }
+
+    let imported_source = "from random import Rng\n\ndef main() -> int32:\n    mut rng: Rng = Rng(seed=1)\n    return 0\n";
+    let top_level = complete_source(imported_source, 1, 0, None)
+        .expect("imported Rng should participate in top-level completion");
+    assert_eq!(
+        top_level.iter().filter(|item| item.name == "Rng").count(),
+        1,
+        "an imported Rng class must not be duplicated by constructor metadata"
+    );
+
+    let imported_member_source = "from random import Rng\n\ndef main() -> int32:\n    mut rng: Rng = Rng(seed=1)\n    rng.\n    return 0\n";
+    let imported_members = complete_source(imported_member_source, 4, 8, Some('.'))
+        .expect("an imported Rng annotation should retain random-module provenance");
+    for name in ["next_int", "next_float", "shuffle"] {
+        assert_eq!(
+            imported_members
+                .iter()
+                .filter(|item| item.name == name)
+                .count(),
+            1,
+            "imported random.Rng should complete `{name}` exactly once"
+        );
+    }
+
+    let result_source = r#"import random
+
+def main() -> int32:
+    mut rng = random.Rng(seed=1)
+    roll = rng.next_int(lo=0, hi=10)
+    fraction = rng.next_float()
+    mut values = [1, 2]
+    rng.shuffle(values)
+    print(roll)
+    print(fraction)
+    return 0
+"#;
+    let result_analysis = analyze_source(result_source);
+    assert!(
+        result_analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        result_analysis.diagnostics
+    );
+    for expected_hover in ["binding roll: int64", "binding fraction: float64"] {
+        assert!(
+            result_analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing Rng result hover `{expected_hover}`"
+        );
+    }
+}
+
+#[test]
+fn user_defined_rng_completion_uses_only_its_declared_surface() {
+    let source = r#"import random
+
+class Rng:
+    value: int64
+
+    def next_int(borrow self) -> String:
+        return "local"
+
+def main() -> int32:
+    rng = Rng(5)
+    rng.
+    return 0
+"#;
+    let members = complete_source(source, 10, 8, Some('.'))
+        .expect("a user-defined Rng member completion should recover");
+
+    let next_int = members
+        .iter()
+        .filter(|item| item.name == "next_int")
+        .collect::<Vec<_>>();
+    assert_eq!(next_int.len(), 1, "the local method must not be duplicated");
+    assert_eq!(next_int[0].detail, "next_int(self) -> String");
+    assert!(!members.iter().any(|item| item.name == "next_float"));
+    assert!(!members.iter().any(|item| item.name == "shuffle"));
+}
+
+#[test]
+fn path_named_random_keeps_user_rng_analysis_distinct_from_the_builtin() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass/random.au");
+    let source = fs::read_to_string(&path).expect("path-level user Rng fixture should be readable");
+    let program = crate::check_path(&path).expect("path-level user Rng fixture should type check");
+    let hover = format_class_hover(&program.classes["Rng"]);
+    assert!(hover.contains("value: int64"));
+    assert!(!hover.contains("seed: int64"));
+
+    let analysis = analyze_path_source(&path, &source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("binding local: Rng")));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence
+            .hover
+            .contains("binding imported: user_rng_origin_support.random.Rng")
+    }));
+    assert!(!analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("class Rng(seed: int64)")));
+}
+
+#[test]
 fn d6_analysis_renders_source_parameter_and_transfer_ownership() {
     let source = r#"
 class Box:
@@ -2710,6 +2864,84 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
 }
 
 #[test]
+fn path_aware_analysis_preserves_same_leaf_imported_generic_class_identity() {
+    let temp_dir = TempDir::new("aurora-analysis-imported-generic-identity");
+    let remote_path = temp_dir.path().join("remote.au");
+    let main_path = temp_dir.path().join("main.au");
+    fs::write(
+        &remote_path,
+        r#"public class Holder[T]:
+    public value: T
+"#,
+    )
+    .expect("failed to write imported generic class");
+    let source = r#"import remote
+
+class Holder[T]:
+    value: T
+
+def main() -> int32:
+    local = Holder[int64](1)
+    imported: remote.Holder[String] = remote.Holder[String]("remote")
+    print(local.value)
+    print(imported.value)
+    return 0
+"#;
+    fs::write(&main_path, source).expect("failed to write same-leaf analysis source");
+
+    let analysis = analyze_path_source(&main_path, source);
+    let canonical_remote_path = fs::canonicalize(&remote_path)
+        .expect("remote path should canonicalize")
+        .display()
+        .to_string();
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence
+            .hover
+            .contains("binding imported: remote.Holder[String]")
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.hover.contains("field value: T")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_remote_path.as_str())
+    }));
+
+    let completion_source = source.replace("    print(imported.value)\n", "    imported.\n");
+    let completion_line = completion_source
+        .lines()
+        .position(|line| line.contains("imported."))
+        .expect("completion source should contain imported receiver");
+    let completion_character = completion_source
+        .lines()
+        .nth(completion_line)
+        .expect("completion line should exist")
+        .len();
+    let completions = complete_path_source(
+        &main_path,
+        &completion_source,
+        completion_line,
+        completion_character,
+        Some('.'),
+    )
+    .expect("qualified imported generic member completion should recover");
+    assert_eq!(
+        completions
+            .iter()
+            .filter(|completion| completion.name == "value")
+            .count(),
+        1,
+        "the imported Holder field should complete exactly once"
+    );
+}
+
+#[test]
 fn analysis_records_variant_occurrences_inside_match_patterns() {
     let source = [
         "enum Status:",
@@ -2893,6 +3125,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
 
     let class_info = ClassInfo {
         module_name: "<test>".to_string(),
+        is_builtin: false,
         decl: ClassDecl {
             public: true,
             copy: false,
@@ -3200,6 +3433,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             return_type: Type::Unit,
             return_passing: ReceiverKind::Value,
             return_borrow_source: None,
+            rng_clone_safe_type_params: Default::default(),
         },
         type_param_bounds: Default::default(),
     };

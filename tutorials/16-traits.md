@@ -92,6 +92,27 @@ impl Mapper[T] for Box[T]:
         return value
 ```
 
+## Clone-Safety Is Part Of The Trait Contract
+
+When a generic trait default method performs a clone-producing operation,
+Aurora infers a clone-safety obligation as part of that method's contract:
+
+```python
+trait Duplicator[T]:
+    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+```
+
+The requirement follows `T` and `Self` through every implementation, concrete
+call, associated call, and bounded generic call. A safe specialization works;
+one containing `random.Rng` is rejected with `AU3007`.
+
+A signature-only trait method has no inferred obligation. An explicit `impl`
+may satisfy the trait contract but may not strengthen it by adding hidden
+generic clone-producing behavior. Aurora 0.1 has no written clone-safety bound,
+so put that behavior in a default trait body when it is part of the intended
+contract.
+
 ## Trait Bounds On Generic Functions
 
 Generic functions can require that a type parameter implements a trait using inline bounds:
@@ -235,6 +256,9 @@ def add_all[T: Add[T, T]](left: T, right: T) -> T:
 
 See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
+Operator dispatch enforces the selected trait method's inferred clone-safety
+contract. The `From.from` method selected by `try` does the same.
+
 Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
 
 ```python
@@ -272,3 +296,7 @@ The implemented trait surface supports:
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
 - operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`
+- inferred clone-safety contracts from trait defaults, with explicit impls
+  forbidden from strengthening them
+
+See [examples/traits/clone_safety_contract.au](../examples/traits/clone_safety_contract.au) for a runnable default-method contract.

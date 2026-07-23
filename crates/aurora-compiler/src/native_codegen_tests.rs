@@ -115,6 +115,127 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_random_api_uses_dedicated_borrowed_runtime_symbols() {
+    let source = r#"
+import random
+
+class Item:
+    label: String
+
+class Holder:
+    values: Vec[Item]
+
+def main() -> int32:
+    mut rng = random.Rng(seed=42)
+    print(rng.next_int(lo=0, hi=10))
+    print(rng.next_float())
+    mut holder = Holder([Item("a"), Item("b"), Item("c")])
+    rng.shuffle(values=holder.values)
+    print(random.secure_int(5, 6))
+    print(random.secure_bytes(0).len())
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("Randomness API source should lower to MIR");
+    let object = emit_host_object(&mir).expect("Randomness API should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for required in [
+        "aurora_direct_rng_new",
+        "aurora_direct_rng_next_int",
+        "aurora_direct_rng_next_float",
+        "aurora_direct_rng_shuffle",
+        "aurora_direct_random_secure_int",
+        "aurora_direct_random_secure_bytes",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "Randomness direct code should reference `{required}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_opaque_user_clone_dispatches_to_the_declared_trait_method() {
+    let source = include_str!("../tests/fixtures/run-pass/random_opaque_user_clone_dispatch.au");
+    let mir = lower_source_to_mir(source).expect("opaque Holder clone source should lower to MIR");
+    let object = emit_host_object(&mir).expect("opaque Holder clone should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .all(|symbol| !symbol.contains("aurora_direct_clone_value")),
+        "the user-declared clone method must not fall through to opaque runtime cloning: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_rng_nonbuiltin_trait_dispatch_preserves_builtin_member_dispatch() {
+    let source = include_str!("../tests/fixtures/run-pass/random_rng_trait_dispatch.au");
+    let mir = lower_source_to_mir(source).expect("Rng trait source should lower to MIR");
+    let object = emit_host_object(&mir).expect("Rng trait source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_rng_next_int")),
+        "the builtin Rng.next_int call must retain its dedicated runtime dispatch: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_user_defined_rng_does_not_reference_random_runtime_symbols() {
+    let source = r#"
+class Rng:
+    value: int64
+
+    def next_int(borrow self, lo: int64, hi: int64) -> int64:
+        return self.value
+
+    def next_float(borrow self) -> String:
+        return "local"
+
+    def shuffle(borrow self, value: int64) -> int64:
+        return value
+
+def main() -> int32:
+    rng = Rng(5)
+    print(rng.next_int(0, 10))
+    print(rng.next_float())
+    print(rng.shuffle(7))
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the local Rng class should lower to MIR");
+    let object = emit_host_object(&mir).expect("the local Rng class should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_rng_")),
+        "a user class named Rng must not reference the random.Rng runtime: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass/random.au");
+    let mir = crate::lower_path_to_mir(&path)
+        .expect("path-level user Rng fixture should lower with source provenance");
+    let object = emit_host_object(&mir)
+        .expect("path-level local and imported user Rng classes should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_rng_")),
+        "user classes named Rng must not reference the random.Rng runtime: {referenced:?}"
+    );
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",

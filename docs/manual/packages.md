@@ -202,6 +202,12 @@ Package and module resolution completes before static checking. An import binds 
 
 Imports do not erase types or ownership modes. Calls to imported functions and methods are checked against their original signatures, and trait implementations retain defining-module identities for coherence and dispatch. A package manifest does not create an Aurora value, implicit export, prelude, or relationship between workspace members.
 
+Clone-safety obligations survive module imports as part of the callable contract.
+Namespace-qualified and directly imported calls enforce the same inferred
+requirements after specialization. User-defined nominal types retain their
+defining module identity during structural clone-safety analysis, so an
+unrelated same-leaf type in the importing module cannot replace them.
+
 ## Runtime Semantics
 
 Resolution discovers the nearest package, any exact containing workspace, the transitive path/git graph, and the applicable lockfile before loading source. Imported modules contribute declarations only: top-level executable statements in an imported file are not run as module initialization. The selected entry module alone supplies program execution.
@@ -216,7 +222,7 @@ Package traversal order cannot introduce initialization side effects. Lockfile a
 
 ## Diagnostics
 
-`AU1101` means invalid syntax in a loaded Aurora module or malformed TOML syntax in a manifest or lockfile. `AU2001` means module, import, package, or name resolution failed. `AU2002` means a cross-module type mismatch. `AU2004` means imported-call argument binding failed. `AU2999` means a manifest, lockfile, package-graph, source-root, cycle, limit, or dependency-safety rejection without a narrower code. Through imported declarations, `AU3001` means use of a moved value, `AU3002` means a borrow violation, `AU3003` means a mutability violation, and `AU3004` means an invalid ownership mode.
+`AU1101` means invalid syntax in a loaded Aurora module or malformed TOML syntax in a manifest or lockfile. `AU2001` means module, import, package, or name resolution failed. `AU2002` means a cross-module type mismatch. `AU2004` means imported-call argument binding failed. `AU2999` means a manifest, lockfile, package-graph, source-root, cycle, limit, or dependency-safety rejection without a narrower code. Through imported declarations, `AU3001` means use of a moved value, `AU3002` means a borrow violation, `AU3003` means a mutability violation, and `AU3004` means an invalid ownership mode. `AU3007` means an imported callable's clone-safety obligation was not satisfied or an imported nominal value would duplicate non-cloneable `random.Rng` state.
 
 File-backed `check`, `run`, and `build` render package-loading diagnostics through the normal compiler diagnostic path. `aura deps update` renders compiler-owned resolver failures in human form with the same stable `error[AU####]` code and exit status `1`; structured `--format` output is limited to `check`, `run`, and `build`. Malformed `deps` invocation is a command-usage error with status `2`, not a language diagnostic.
 

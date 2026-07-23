@@ -1,0 +1,8 @@
+import imported_generic_support.remote
+
+def main() -> int32:
+    boxed = imported_generic_support.remote.BoundBox(value=imported_generic_support.remote.NamedValue(label="class-bound"))
+    envelope: imported_generic_support.remote.BoundEnvelope[imported_generic_support.remote.NamedValue] = imported_generic_support.remote.BoundEnvelope.Value(imported_generic_support.remote.NamedValue(label="enum-bound"))
+    print(boxed.value.name())
+    print(envelope)
+    return 0

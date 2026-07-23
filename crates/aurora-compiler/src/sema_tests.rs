@@ -5,6 +5,12 @@ use crate::ast::{
 use crate::diag::Span;
 use crate::integer::IntegerValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::OnceLock;
+
+fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
+    static NAMES: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    NAMES.get_or_init(BTreeMap::new)
+}
 
 fn type_ref(name: &str) -> TypeRef {
     TypeRef {
@@ -370,6 +376,1297 @@ def keep_after_write(file: borrow mut fs.File, text: String):
 }
 
 #[test]
+fn random_static_surface_supports_qualified_and_imported_rng_use() {
+    let qualified = crate::check_source(
+        r#"
+import random
+
+def sample(rng: borrow mut random.Rng, values: borrow mut Vec[String]) -> int64:
+    rng.shuffle(values=values)
+    fraction: float64 = rng.next_float()
+    print(fraction)
+    return rng.next_int(hi=10, lo=0)
+
+def main() -> int32:
+    mut rng: random.Rng = random.Rng(seed=42)
+    mut values = ["a", "b", "c"]
+    print(sample(rng, values))
+    chosen: int64 = random.secure_int(lo=0, hi=10)
+    bytes: Vec[uint8] = random.secure_bytes(n=4)
+    print(chosen)
+    print(bytes)
+    return 0
+"#,
+    )
+    .expect("qualified random APIs should type check");
+    assert_eq!(
+        qualified.functions["sample"].signature.params,
+        vec![
+            Type::named("random.Rng"),
+            Type::Named("Vec".to_string(), vec![Type::named("String")])
+        ]
+    );
+
+    let imported = crate::check_source(
+        r#"
+from random import Rng, secure_bytes
+
+def make() -> Rng:
+    return Rng(seed=7)
+
+def main() -> int32:
+    mut rng: Rng = make()
+    print(rng.next_int(lo=-5, hi=6))
+    bytes: Vec[uint8] = secure_bytes(n=0)
+    print(bytes)
+    return 0
+"#,
+    )
+    .expect("from-imported Rng should remain a single constructible type binding");
+    assert_eq!(
+        imported.functions["make"].signature.return_type,
+        Type::named("random.Rng")
+    );
+}
+
+#[test]
+fn random_static_surface_rejects_wrong_types_and_immutable_places() {
+    for (source, expected) in [
+        (
+            "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=true)\n    return 0\n",
+            "`random.Rng` expects `int64` for `seed`, found `bool`",
+        ),
+        (
+            "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    print(rng.next_int(lo=0, hi=1.5))\n    return 0\n",
+            "`next_int` expects `int64` for `hi`, found `float64`",
+        ),
+        (
+            "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    rng.shuffle(values=3)\n    return 0\n",
+            "`shuffle` expects `Vec[T]`, found `int64`",
+        ),
+        (
+            "import random\n\ndef main() -> int32:\n    print(random.secure_int(lo=0, hi=false))\n    return 0\n",
+            "argument type mismatch for function `secure_int`: expected `int64`, found `bool`",
+        ),
+        (
+            "import random\n\ndef main() -> int32:\n    print(random.secure_bytes(n=false))\n    return 0\n",
+            "argument type mismatch for function `secure_bytes`: expected `int64`, found `bool`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("wrong random API types should fail");
+        assert_eq!(error.code, "AU2002", "unexpected code for `{expected}`");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}` in `{}`",
+            error.message
+        );
+    }
+
+    let immutable_rng = crate::check_source(
+        "import random\n\ndef main() -> int32:\n    rng = random.Rng(seed=1)\n    print(rng.next_float())\n    return 0\n",
+    )
+    .expect_err("stateful Rng methods require a mutable receiver");
+    assert_eq!(immutable_rng.code, "AU3003");
+    assert!(immutable_rng
+        .message
+        .contains("method `next_float` requires a mutable receiver"));
+
+    let immutable_values = crate::check_source(
+        "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    values = [1, 2, 3]\n    rng.shuffle(values=values)\n    return 0\n",
+    )
+    .expect_err("shuffle requires a mutable vector place");
+    assert_eq!(immutable_values.code, "AU3002");
+    assert!(immutable_values
+        .message
+        .contains("builtin method `shuffle` argument is declared `borrow mut`"));
+
+    let explicit_type_args = crate::check_source(
+        "import random\n\ndef main() -> int32:\n    mut rng = random.Rng[int64](seed=1)\n    return 0\n",
+    )
+    .expect_err("opaque Rng construction must not accept type arguments");
+    assert!(explicit_type_args
+        .message
+        .contains("`random.Rng` does not take explicit type arguments"));
+}
+
+#[test]
+fn random_rng_is_non_copy_and_builtin_methods_cannot_be_shadowed() {
+    let moved = crate::check_source(
+        r#"
+import random
+
+def consume(value: own random.Rng):
+    pass
+
+def main() -> int32:
+    mut rng = random.Rng(seed=1)
+    consume(rng)
+    print(rng.next_float())
+    return 0
+"#,
+    )
+    .expect_err("Rng ownership should move rather than copy");
+    assert_eq!(moved.code, "AU3001");
+    assert!(moved.message.contains("use of moved value `rng`"));
+
+    let collision = crate::check_source(
+        r#"
+import random
+
+trait CounterfeitRandom:
+    def next_int(borrow mut self, lo: int64, hi: int64) -> int64
+
+impl CounterfeitRandom for random.Rng:
+    def next_int(borrow mut self, lo: int64, hi: int64) -> int64:
+        return lo
+"#,
+    )
+    .expect_err("traits must not shadow stateful builtin Rng members");
+    assert_eq!(collision.code, "AU2006");
+    assert!(collision.message.contains("random.Rng.next_int"));
+}
+
+#[test]
+fn random_unavailable_secure_float_is_an_unknown_member() {
+    let error = crate::check_source(
+        "import random\n\ndef main() -> int32:\n    print(random.secure_float())\n    return 0\n",
+    )
+    .expect_err("random.secure_float is intentionally unavailable");
+    assert_eq!(error.code, "AU2001");
+    assert!(error
+        .message
+        .contains("module `random` has no callable member `secure_float`"));
+}
+
+#[test]
+fn random_rng_cannot_be_publicly_cloned_through_containers_or_user_types() {
+    for (label, source) in [
+        (
+            "direct generator",
+            r#"
+import random
+
+def main() -> int32:
+    mut rng = random.Rng(seed=1)
+    copy = rng.clone()
+    print(copy)
+    return 0
+"#,
+        ),
+        (
+            "direct vector element",
+            r#"
+import random
+
+def main() -> int32:
+    generators = [random.Rng(seed=1)]
+    copies = generators.clone()
+    print(copies)
+    return 0
+"#,
+        ),
+        (
+            "nested user field",
+            r#"
+import random
+
+class Holder:
+    generator: random.Rng
+
+def main() -> int32:
+    holders = [Holder(random.Rng(seed=1))]
+    copies = holders.clone()
+    print(copies)
+    return 0
+"#,
+        ),
+        (
+            "nested map value",
+            r#"
+import random
+
+def main() -> int32:
+    generators = {"main": random.Rng(seed=1)}
+    copies = generators.clone()
+    print(copies)
+    return 0
+"#,
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("nested random.Rng values must not become publicly cloneable");
+        assert_eq!(error.code, "AU3007", "unexpected code for {label}");
+        assert!(
+            error.message.contains("non-cloneable `random.Rng`") && error.message.contains("clone"),
+            "unexpected diagnostic for {label}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
+    let cases = [
+        (
+            "Vec.get",
+            "import random\n\ndef observe(values: borrow Vec[random.Rng]):\n    print(values.get(0))\n",
+        ),
+        (
+            "Map.get",
+            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.get(\"main\"))\n",
+        ),
+        (
+            "Map.keys",
+            "import random\n\ndef observe(values: borrow Map[random.Rng, String]):\n    print(values.keys())\n",
+        ),
+        (
+            "Map.values",
+            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.values())\n",
+        ),
+        (
+            "Map.items",
+            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.items())\n",
+        ),
+        (
+            "Map.entries",
+            "import random\n\ndef observe(values: borrow Map[random.Rng, String]):\n    print(values.entries())\n",
+        ),
+        (
+            "Task.result",
+            "import random\n\ndef observe(task: Task[random.Rng]):\n    print(task.result())\n",
+        ),
+        (
+            "Task.result_or_none",
+            "import random\n\ndef observe(task: Task[random.Rng]):\n    print(task.result_or_none())\n",
+        ),
+        (
+            "Task.result_or",
+            "import random\n\ndef observe(task: Task[random.Rng], fallback: own random.Rng):\n    print(task.result_or(fallback))\n",
+        ),
+        (
+            "wait_any",
+            "import random\n\ndef observe(tasks: borrow Vec[Task[random.Rng]]):\n    print(wait_any(tasks))\n",
+        ),
+        (
+            "wait_all",
+            "import random\n\ndef observe(tasks: borrow Vec[Task[random.Rng]]):\n    print(wait_all(tasks))\n",
+        ),
+    ];
+
+    for (operation, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err("clone-producing observations of random.Rng must be rejected");
+        assert_eq!(error.code, "AU3007", "unexpected code for {operation}");
+        assert!(
+            error.message.contains(operation)
+                && error.message.contains("non-cloneable `random.Rng`"),
+            "unexpected diagnostic for {operation}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn random_rng_clone_safety_defers_generic_obligations_to_use_sites() {
+    crate::check_source(
+        r#"
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def main() -> int32:
+    values = [1, 2]
+    copies = duplicate(values)
+    print(copies)
+    return 0
+"#,
+    )
+    .expect("generic clone-producing definitions must accept clone-safe instantiations");
+
+    for (label, source) in [
+        (
+            "direct generic instantiation",
+            r#"
+import random
+
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def main() -> int32:
+    values = [random.Rng(seed=1)]
+    copies = duplicate(values)
+    print(copies)
+    return 0
+"#,
+        ),
+        (
+            "generic-to-generic propagation",
+            r#"
+import random
+
+def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def forward[T](values: borrow Vec[T]) -> Vec[T]:
+    return duplicate(values)
+
+def main() -> int32:
+    values = [random.Rng(seed=1)]
+    copies = forward(values)
+    print(copies)
+    return 0
+"#,
+        ),
+    ] {
+        let generic = crate::check_source(source)
+            .expect_err("Rng-containing generic instantiations must fail at the use site");
+        assert_eq!(generic.code, "AU3007", "unexpected code for {label}");
+        assert!(
+            generic.message.contains("non-cloneable `random.Rng`"),
+            "unexpected diagnostic for {label}: {}",
+            generic.message
+        );
+    }
+
+    crate::check_source(
+        r#"
+import random
+
+def clone_task_handles(values: borrow Vec[Task[random.Rng]]) -> Vec[Task[random.Rng]]:
+    return values.clone()
+
+def clone_queue_handles(values: borrow Vec[Queue[random.Rng]]) -> Vec[Queue[random.Rng]]:
+    return values.clone()
+
+def pop_generator(values: borrow mut Vec[random.Rng]) -> Option[random.Rng]:
+    return values.pop()
+
+def remove_generator(values: borrow mut Vec[random.Rng]) -> Option[random.Rng]:
+    return values.remove(0)
+
+def remove_mapped_generator(values: borrow mut Map[String, random.Rng]) -> Option[random.Rng]:
+    return values.remove("main")
+
+def shuffle_generators(rng: borrow mut random.Rng, values: borrow mut Vec[random.Rng]):
+    rng.shuffle(values)
+"#,
+    )
+    .expect("copying handles and transferring or shuffling Rng values must remain valid");
+
+    let moved = crate::check_source(
+        r#"
+import random
+
+def consume(values: own Vec[random.Rng]):
+    pass
+
+def main() -> int32:
+    generators = [random.Rng(seed=1)]
+    consume(generators)
+    print(generators)
+    return 0
+"#,
+    )
+    .expect_err("a moved RNG container must not receive an unavailable clone suggestion");
+    assert_eq!(moved.code, "AU3001");
+    assert!(moved.help.iter().all(|help| !help.contains("`.clone()`")));
+    assert!(moved.edits.is_empty());
+}
+
+#[test]
+fn rng_clone_safety_seeds_inherent_associated_method_class_type_arguments() {
+    let surface = r#"
+class Factory[T]:
+    def probe() -> int32:
+        values = Vec[T]()
+        copies = values.clone()
+        print(copies)
+        return 0
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    print(Factory[int64].probe())\n    with group = TaskGroup():\n        group.start_soon(Factory[int64].probe)\n    return 0\n"
+    ))
+    .expect("an inherent associated method should use its safe class specialization");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef main() -> int32:\n    print(Factory[random.Rng].probe())\n    return 0\n"
+    ))
+    .expect_err("an inherent associated method must reject an unsafe class specialization");
+    assert_eq!(error.code, "AU3007");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+
+    let task_error = crate::check_source(&format!(
+        "import random\n{surface}\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start_soon(Factory[random.Rng].probe)\n    return 0\n"
+    ))
+    .expect_err("task targets must retain an inherent associated method's class specialization");
+    assert_eq!(task_error.code, "AU3007");
+    assert!(task_error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn rng_clone_safety_trait_contracts_cover_direct_and_bound_dispatch() {
+    let trait_surface = r#"
+trait Copier[Item]:
+    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+        return values.clone()
+
+class Wrapper[Element]:
+    marker: Element
+
+impl[Element] Copier[Element] for Wrapper[Element]:
+    pass
+
+def through[Value, C: Copier[Value]](copier: borrow C, values: borrow Vec[Value]) -> Vec[Value]:
+    return copier.duplicate(values)
+"#;
+
+    crate::check_source(&format!(
+        "{trait_surface}\ndef main() -> int32:\n    wrapper = Wrapper(1)\n    values = [2, 3]\n    direct = wrapper.duplicate(values)\n    via_bound = through(wrapper, values)\n    print(direct)\n    print(via_bound)\n    return 0\n"
+    ))
+    .expect("safe concrete direct and bound-based trait dispatch should type-check");
+
+    for (label, call) in [
+        ("direct trait dispatch", "wrapper.duplicate(values)"),
+        ("bound-based trait dispatch", "through(wrapper, values)"),
+    ] {
+        let error = crate::check_source(&format!(
+            "import random\n{trait_surface}\ndef main() -> int32:\n    wrapper = Wrapper(random.Rng(seed=1))\n    values = [random.Rng(seed=2)]\n    copies = {call}\n    print(copies)\n    return 0\n"
+        ))
+        .expect_err("trait clone-safety contracts must reject Rng instantiations");
+        assert_eq!(error.code, "AU3007", "unexpected code for {label}");
+        assert!(
+            error.message.contains("non-cloneable `random.Rng`"),
+            "unexpected diagnostic for {label}: {}",
+            error.message
+        );
+    }
+
+    let strengthened = crate::check_source(
+        r#"
+trait Copier[T]:
+    def duplicate(borrow self) -> Vec[T]
+
+class Wrapper[T]:
+    values: Vec[T]
+
+impl[T] Copier[T] for Wrapper[T]:
+    def duplicate(borrow self) -> Vec[T]:
+        return self.values.clone()
+"#,
+    )
+    .expect_err("an impl may not strengthen an abstract trait clone-safety contract");
+    assert_eq!(strengthened.code, "AU3007");
+    assert!(strengthened.message.contains("would strengthen"));
+}
+
+#[test]
+fn rng_clone_safety_trait_method_generics_wait_for_call_inference() {
+    let instance_surface = r#"
+trait Copier:
+    def duplicate[T](borrow self, values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+
+class Marker:
+    value: int64
+
+impl Copier for Marker:
+    pass
+"#;
+
+    crate::check_source(&format!(
+        "{instance_surface}\ndef main() -> int32:\n    marker = Marker(0)\n    values = [1, 2]\n    copies = marker.duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect("instance trait dispatch should infer a clone-safe method type argument");
+
+    let instance_rng = crate::check_source(&format!(
+        "import random\n{instance_surface}\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = marker.duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect_err("instance trait dispatch must reject an inferred Rng method type argument");
+    assert_eq!(instance_rng.code, "AU3007");
+    assert!(instance_rng.message.contains("non-cloneable `random.Rng`"));
+
+    let bound_rng = crate::check_source(&format!(
+        "import random\n{instance_surface}\ndef forward[T, U, C: Copier](marker: borrow C, values: borrow Vec[U]) -> Vec[U]:\n    return marker.duplicate(values)\n\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = forward[int64, random.Rng, Marker](marker, values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect_err(
+        "bound dispatch must propagate the inferred method obligation to the matching caller parameter",
+    );
+    assert_eq!(bound_rng.code, "AU3007");
+    assert!(bound_rng.message.contains("non-cloneable `random.Rng`"));
+
+    let associated_surface = r#"
+trait Factory:
+    def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+        return values.clone()
+
+class Marker:
+    value: int64
+
+impl Factory for Marker:
+    pass
+"#;
+
+    crate::check_source(&format!(
+        "{associated_surface}\ndef main() -> int32:\n    values = [1, 2]\n    copies = Marker.duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect("associated trait dispatch should infer a clone-safe method type argument");
+
+    let associated_rng = crate::check_source(&format!(
+        "import random\n{associated_surface}\ndef main() -> int32:\n    values = [random.Rng(seed=1)]\n    copies = Marker.duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect_err("associated trait dispatch must reject an inferred Rng method type argument");
+    assert_eq!(associated_rng.code, "AU3007");
+    assert!(associated_rng
+        .message
+        .contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn rng_clone_safety_method_inference_preserves_general_diagnostics() {
+    let surface = r#"
+trait Display:
+    def text(borrow self) -> String
+
+trait Factory:
+    def choose[T](borrow self, left: own T, right: own T) -> T:
+        return left
+
+    def empty[T](borrow self) -> Option[T]:
+        return Option.None
+
+    def display[T: Display](borrow self, value: own T) -> T:
+        return value
+
+class Marker:
+    value: int64
+
+class Plain:
+    value: int64
+
+impl Factory for Marker:
+    pass
+"#;
+
+    let mismatch = crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    marker = Marker(0)\n    value = marker.choose(1, \"different\")\n    return 0\n"
+    ))
+    .expect_err("generic trait methods must reject conflicting inferred argument types");
+    assert!(
+        mismatch
+            .message
+            .contains("argument type mismatch for method `choose`"),
+        "unexpected mismatch diagnostic: {}",
+        mismatch.message
+    );
+
+    let uninferred = crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    marker = Marker(0)\n    value = marker.empty()\n    return 0\n"
+    ))
+    .expect_err("generic trait methods must diagnose type parameters with no inference source");
+    assert!(
+        uninferred
+            .message
+            .contains("cannot infer type parameter `T` for method `empty`"),
+        "unexpected inference diagnostic: {}",
+        uninferred.message
+    );
+
+    let missing_bound = crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    marker = Marker(0)\n    value = marker.display(Plain(1))\n    return 0\n"
+    ))
+    .expect_err("generic trait methods must enforce inferred type-parameter bounds");
+    assert!(
+        missing_bound
+            .message
+            .contains("type `Plain` does not implement trait `Display`"),
+        "unexpected bound diagnostic: {}",
+        missing_bound.message
+    );
+}
+
+#[test]
+fn rng_clone_safety_operator_inference_preserves_general_diagnostics() {
+    let conflict = crate::check_source(
+        r#"
+class Pair[A, B]:
+    first: A
+    second: B
+
+trait Add[Rhs, Out]:
+    def add[T](borrow self, rhs: Pair[T, T]) -> Out
+
+def combine[X: Add[Pair[int64, String], int64]](left: borrow X, right: Pair[int64, String]) -> int64:
+    return left + right
+"#,
+    )
+    .expect_err("operator methods must reject conflicting inferred argument types");
+    assert_eq!(conflict.code, "AU2002");
+    assert!(
+        conflict.message.contains(
+            "argument type mismatch for operator trait `Add.add`: conflicting inferred types for `T`: `int64` and `String`"
+        ),
+        "unexpected mismatch diagnostic: {}",
+        conflict.message
+    );
+
+    let uninferred = crate::check_source(
+        r#"
+trait Neg[Out]:
+    def neg[T](borrow self) -> Out
+
+def invert[X: Neg[int64]](value: borrow X) -> int64:
+    return -value
+"#,
+    )
+    .expect_err("operator methods must diagnose type parameters with no inference source");
+    assert_eq!(uninferred.code, "AU2002");
+    assert!(
+        uninferred
+            .message
+            .contains("cannot infer type parameter `T` for operator trait `Neg.neg`"),
+        "unexpected inference diagnostic: {}",
+        uninferred.message
+    );
+
+    let missing_bound = crate::check_source(
+        r#"
+trait Display:
+    def text(borrow self) -> String
+
+class Plain:
+    value: int64
+
+trait Add[Rhs, Out]:
+    def add[T: Display](borrow self, rhs: T) -> Out
+
+def combine[X: Add[Plain, int64]](left: borrow X, right: Plain) -> int64:
+    return left + right
+"#,
+    )
+    .expect_err("operator methods must enforce inferred type-parameter bounds");
+    assert_eq!(missing_bound.code, "AU2002");
+    assert!(
+        missing_bound
+            .message
+            .contains("type `Plain` does not implement trait `Display`"),
+        "unexpected bound diagnostic: {}",
+        missing_bound.message
+    );
+}
+
+#[test]
+fn rng_clone_safety_ignores_handle_payloads_and_ambiguous_nominal_fallbacks() {
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+
+    assert_eq!(
+        rng_clone_safety_in_context_with_modules(
+            &Type::named("random.Rng"),
+            &classes,
+            &enums,
+            &imported_modules,
+            &module_registry,
+        ),
+        RngCloneSafety::ContainsRng,
+        "the canonical builtin type remains non-cloneable in reduced checker contexts",
+    );
+    for handle in ["Queue", "Task"] {
+        let ty = Type::Named(
+            handle.to_string(),
+            vec![Type::TypeParam("Payload".to_string())],
+        );
+        assert_eq!(
+            rng_clone_safety_in_context_with_modules(
+                &ty,
+                &classes,
+                &enums,
+                &imported_modules,
+                &module_registry,
+            ),
+            RngCloneSafety::Safe,
+            "cloning a {handle} copies only its handle",
+        );
+        assert!(
+            rng_clone_obligation_params_in_context_with_modules(
+                &ty,
+                &classes,
+                &enums,
+                &imported_modules,
+                &module_registry,
+            )
+            .is_empty(),
+            "a {handle} payload must not create clone-safety obligations",
+        );
+    }
+
+    let mut first_class = class_info("Shared", false, Vec::new());
+    first_class.module_name = "first".to_string();
+    let mut second_class = first_class.clone();
+    second_class.module_name = "second".to_string();
+    let mut first_enum = enum_info("Choice", None);
+    first_enum.module_name = "first".to_string();
+    let mut second_enum = first_enum.clone();
+    second_enum.module_name = "second".to_string();
+
+    let mut first = namespace("first");
+    first
+        .classes
+        .insert("Shared".to_string(), first_class.clone());
+    first.enums.insert("Choice".to_string(), first_enum.clone());
+    let mut duplicate = namespace("duplicate");
+    duplicate
+        .classes
+        .insert("Shared".to_string(), first_class.clone());
+    duplicate
+        .enums
+        .insert("Choice".to_string(), first_enum.clone());
+    let same_identity = BTreeMap::from([
+        ("duplicate".to_string(), duplicate),
+        ("first".to_string(), first.clone()),
+    ]);
+    assert_eq!(
+        copy_class_info_from_modules("Shared", &same_identity, &module_registry)
+            .map(|info| info.module_name.as_str()),
+        Some("first"),
+        "the same nominal class re-exported twice is not ambiguous",
+    );
+    assert_eq!(
+        copy_enum_info_from_modules("Choice", &same_identity, &module_registry)
+            .map(|info| info.module_name.as_str()),
+        Some("first"),
+        "the same nominal enum re-exported twice is not ambiguous",
+    );
+
+    let mut second = namespace("second");
+    second.classes.insert("Shared".to_string(), second_class);
+    second.enums.insert("Choice".to_string(), second_enum);
+    let ambiguous = BTreeMap::from([("first".to_string(), first), ("second".to_string(), second)]);
+    assert!(
+        copy_class_info_from_modules("Shared", &ambiguous, &module_registry).is_none(),
+        "unqualified same-leaf classes from different modules must remain ambiguous",
+    );
+    assert!(
+        copy_enum_info_from_modules("Choice", &ambiguous, &module_registry).is_none(),
+        "unqualified same-leaf enums from different modules must remain ambiguous",
+    );
+}
+
+#[test]
+fn rng_clone_safety_terminates_for_expanding_recursive_generics() {
+    let surface = r#"
+class Grow[T]:
+    next: indirect Grow[Vec[T]]
+    value: T
+
+def duplicate[T](values: borrow Vec[Grow[T]]) -> Vec[Grow[T]]:
+    return values.clone()
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef accept_safe(values: borrow Vec[Grow[int64]]) -> Vec[Grow[int64]]:\n    return duplicate(values)\n\ndef main() -> int32:\n    return 0\n"
+    ))
+    .expect("an expanding recursive generic clone obligation should terminate and accept a safe concrete instantiation");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef reject(values: borrow Vec[Grow[random.Rng]]) -> Vec[Grow[random.Rng]]:\n    return duplicate(values)\n"
+    ))
+    .expect_err("the recursive generic must still reject an Rng instantiation");
+    assert_eq!(error.code, "AU3007");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn rng_clone_safety_defers_obligations_through_generic_enum_payloads() {
+    let surface = r#"
+enum Envelope[T]:
+    Empty
+    Value(T)
+
+def duplicate[T](values: borrow Vec[Envelope[T]]) -> Vec[Envelope[T]]:
+    return values.clone()
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef accept(values: borrow Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:\n    return duplicate(values)\n"
+    ))
+    .expect("an enum payload obligation should accept a clone-safe specialization");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef reject(values: borrow Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:\n    return duplicate(values)\n"
+    ))
+    .expect_err("an enum payload obligation must reject an Rng specialization");
+    assert_eq!(error.code, "AU3007");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+    assert!(error.message.contains("duplicate"));
+}
+
+#[test]
+fn rng_clone_safety_terminates_for_recursive_generic_enums() {
+    let surface = r#"
+enum Chain[T]:
+    End(T)
+    Link(indirect Chain[Vec[T]])
+
+def duplicate[T](values: borrow Vec[Chain[T]]) -> Vec[Chain[T]]:
+    return values.clone()
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef accept(values: borrow Vec[Chain[int64]]) -> Vec[Chain[int64]]:\n    return duplicate(values)\n"
+    ))
+    .expect("a recursive enum obligation should terminate for a safe specialization");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef reject(values: borrow Vec[Chain[random.Rng]]) -> Vec[Chain[random.Rng]]:\n    return duplicate(values)\n"
+    ))
+    .expect_err("a recursive enum obligation must terminate and reject an Rng specialization");
+    assert_eq!(error.code, "AU3007");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn qualified_imported_generic_constructors_preserve_substitutions_and_nominal_identity() {
+    let mut remote_holder = class_info(
+        "Holder",
+        false,
+        vec![("value", Type::TypeParam("T".to_string()), false)],
+    );
+    remote_holder.module_name = "pkg.remote".to_string();
+    remote_holder.decl.type_params = vec!["T".to_string()];
+
+    let mut remote_envelope = enum_info("Envelope", Some(Type::TypeParam("T".to_string())));
+    remote_envelope.module_name = "pkg.remote".to_string();
+    remote_envelope.decl.type_params = vec!["T".to_string()];
+
+    let mut remote = namespace("pkg.remote");
+    remote
+        .classes
+        .insert("Holder".to_string(), remote_holder.clone());
+    remote
+        .all_classes
+        .insert("Holder".to_string(), remote_holder);
+    remote
+        .enums
+        .insert("Envelope".to_string(), remote_envelope.clone());
+    remote
+        .all_enums
+        .insert("Envelope".to_string(), remote_envelope);
+    let random = crate::builtin_modules::builtin_module_namespace(&["random".to_string()])
+        .expect("random namespace should exist");
+
+    let context = || ModuleContext {
+        module_name: "app".to_string(),
+        imported_bindings: BTreeMap::from([
+            (
+                "remote".to_string(),
+                ImportedBinding::Module(remote.clone()),
+            ),
+            (
+                "random".to_string(),
+                ImportedBinding::Module(random.clone()),
+            ),
+        ]),
+        module_registry: BTreeMap::from([
+            ("pkg.remote".to_string(), remote.clone()),
+            ("random".to_string(), random.clone()),
+        ]),
+        is_entry_module: true,
+    };
+
+    check_with_context(
+        crate::parser::parse(
+            r#"
+class Holder[T]:
+    value: T
+
+enum Envelope[T]:
+    Value(T)
+
+def accept():
+    local_holder = Holder[random.Rng](random.Rng(seed=1))
+    remote_holder: pkg.remote.Holder[random.Rng] = remote.Holder[random.Rng](random.Rng(seed=2))
+    local_envelope: Envelope[random.Rng] = Envelope.Value(random.Rng(seed=3))
+    remote_envelope: pkg.remote.Envelope[random.Rng] = remote.Envelope.Value(random.Rng(seed=4))
+    print(local_holder)
+    print(remote_holder)
+    print(local_envelope)
+    print(remote_envelope)
+"#,
+        )
+        .expect("same-leaf generic constructors should parse"),
+        context(),
+    )
+    .expect("qualified imported generic constructors should honor their concrete substitutions");
+
+    for (label, source) in [
+        (
+            "class field",
+            "def reject():\n    value = remote.Holder[int64](random.Rng(seed=1))\n",
+        ),
+        (
+            "enum payload",
+            "def reject():\n    value: pkg.remote.Envelope[int64] = remote.Envelope.Value(random.Rng(seed=1))\n",
+        ),
+    ] {
+        let error = check_with_context(
+            crate::parser::parse(source).expect("mismatched constructor should parse"),
+            context(),
+        )
+        .expect_err("explicit imported generic substitutions must reject mismatched values");
+        assert!(
+            error.message.contains("expects `int64`, found `random.Rng`"),
+            "unexpected diagnostic for {label}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn qualified_imported_generic_constructor_inference_and_substituted_bounds_are_enforced() {
+    let mut accepts = trait_info("Accepts", vec!["Other"]);
+    accepts.module_name = "contracts".to_string();
+
+    let mut phantom = class_info(
+        "Phantom",
+        false,
+        vec![("marker", Type::named("int64"), false)],
+    );
+    phantom.module_name = "pkg.remote".to_string();
+    phantom.decl.type_params = vec!["T".to_string()];
+
+    let mut phantom_choice = enum_info("PhantomChoice", Some(Type::named("int64")));
+    phantom_choice.module_name = "pkg.remote".to_string();
+    phantom_choice.decl.type_params = vec!["T".to_string()];
+
+    let bound = TraitBound {
+        trait_name: "Accepts".to_string(),
+        trait_args: vec![Type::TypeParam("A".to_string())],
+    };
+    let mut bounded = class_info(
+        "Bounded",
+        false,
+        vec![
+            ("first", Type::TypeParam("A".to_string()), false),
+            ("second", Type::TypeParam("B".to_string()), false),
+        ],
+    );
+    bounded.module_name = "pkg.remote".to_string();
+    bounded.decl.type_params = vec!["A".to_string(), "B".to_string()];
+    bounded
+        .type_param_bounds
+        .insert("B".to_string(), vec![bound.clone()]);
+
+    let mut bounded_choice = enum_info("BoundedChoice", Some(Type::TypeParam("B".to_string())));
+    bounded_choice.module_name = "pkg.remote".to_string();
+    bounded_choice.decl.type_params = vec!["A".to_string(), "B".to_string()];
+    bounded_choice
+        .type_param_bounds
+        .insert("B".to_string(), vec![bound]);
+
+    let mut remote = namespace("pkg.remote");
+    for (name, info) in [("Phantom", phantom), ("Bounded", bounded)] {
+        remote.classes.insert(name.to_string(), info.clone());
+        remote.all_classes.insert(name.to_string(), info);
+    }
+    for (name, info) in [
+        ("PhantomChoice", phantom_choice),
+        ("BoundedChoice", bounded_choice),
+    ] {
+        remote.enums.insert(name.to_string(), info.clone());
+        remote.all_enums.insert(name.to_string(), info);
+    }
+
+    let context = || ModuleContext {
+        module_name: "app".to_string(),
+        imported_bindings: BTreeMap::from([
+            (
+                "remote".to_string(),
+                ImportedBinding::Module(remote.clone()),
+            ),
+            (
+                "Accepts".to_string(),
+                ImportedBinding::Trait(accepts.clone()),
+            ),
+        ]),
+        module_registry: BTreeMap::from([("pkg.remote".to_string(), remote.clone())]),
+        is_entry_module: true,
+    };
+    let local_surface = r#"
+class Accepted:
+    marker: int64
+
+impl Accepts[int64] for Accepted:
+    pass
+"#;
+
+    check_with_context(
+        crate::parser::parse(&format!(
+            "{local_surface}\ndef accept():\n    pair = remote.Bounded[int64, Accepted](1, Accepted(2))\n    choice = remote.BoundedChoice[int64, Accepted].Value(Accepted(3))\n    print(pair)\n    print(choice)\n"
+        ))
+        .expect("bounded imported constructors should parse"),
+        context(),
+    )
+    .expect("substituted imported class and enum bounds should accept a matching impl");
+
+    for (label, statement, expected) in [
+        (
+            "phantom class parameter",
+            "value = remote.Phantom(1)",
+            "cannot infer type parameter `T` for class constructor `pkg.remote.Phantom`",
+        ),
+        (
+            "phantom enum parameter",
+            "value = remote.PhantomChoice.Value(1)",
+            "cannot infer type parameter `T` for enum variant `PhantomChoice.Value`",
+        ),
+        (
+            "substituted class bound",
+            "value = remote.Bounded[String, Accepted](\"x\", Accepted(1))",
+            "does not implement trait `Accepts[String]`",
+        ),
+        (
+            "substituted enum bound",
+            "value = remote.BoundedChoice[String, Accepted].Value(Accepted(1))",
+            "does not implement trait `Accepts[String]`",
+        ),
+    ] {
+        let source = format!("{local_surface}\ndef reject():\n    {statement}\n");
+        let error = check_with_context(
+            crate::parser::parse(&source).expect("constructor diagnostic case should parse"),
+            context(),
+        )
+        .expect_err("the imported constructor should report the requested diagnostic");
+        assert!(
+            error.message.contains(expected),
+            "unexpected diagnostic for {label}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn rng_clone_safety_covers_associated_operator_and_specialized_trait_routes() {
+    let associated = r#"
+trait Factory[Item]:
+    def duplicate(values: borrow Vec[Item]) -> Vec[Item]:
+        return values.clone()
+
+class Wrapper[Element]:
+    marker: Element
+
+impl[Element] Factory[Element] for Wrapper[Element]:
+    pass
+"#;
+    crate::check_source(&format!(
+        "{associated}\ndef main() -> int32:\n    values = [1, 2]\n    copies = Wrapper[int64].duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect("a safe associated default-trait instantiation should type-check");
+    let associated_rng = crate::check_source(&format!(
+        "import random\n{associated}\ndef main() -> int32:\n    values = [random.Rng(seed=1)]\n    copies = Wrapper[random.Rng].duplicate(values)\n    print(copies)\n    return 0\n"
+    ))
+    .expect_err("associated trait dispatch must enforce clone-safety obligations");
+    assert_eq!(associated_rng.code, "AU3007");
+
+    let specialized_safe = crate::check_source(
+        r#"
+trait Copier[Item]:
+    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+        return values.clone()
+
+class Fixed:
+    value: int64
+
+impl Copier[int64] for Fixed:
+    pass
+
+def main() -> int32:
+    fixed = Fixed(1)
+    values = [2, 3]
+    print(fixed.duplicate(values))
+    return 0
+"#,
+    )
+    .expect("a concrete safe inherited default method should type-check");
+    assert!(specialized_safe.trait_impls[0]
+        .methods
+        .contains_key("duplicate"));
+
+    let specialized_rng = crate::check_source(
+        r#"
+import random
+
+trait Copier[Item]:
+    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+        return values.clone()
+
+class Fixed:
+    value: int64
+
+impl Copier[random.Rng] for Fixed:
+    pass
+"#,
+    )
+    .expect_err("a concrete Rng specialization cannot satisfy the default contract");
+    assert_eq!(specialized_rng.code, "AU3007");
+    assert!(specialized_rng.message.contains("cannot satisfy"));
+
+    let operator = r#"
+trait Add[Item, Out]:
+    def add(borrow self, rhs: own Item) -> Vec[Item]:
+        values = [rhs]
+        return values.clone()
+
+class Wrapper[Element]:
+    marker: Element
+
+impl[Element] Add[Element, Vec[Element]] for Wrapper[Element]:
+    pass
+"#;
+    crate::check_source(&format!(
+        "{operator}\ndef main() -> int32:\n    wrapper = Wrapper(1)\n    print(wrapper + 2)\n    return 0\n"
+    ))
+    .expect("safe operator dispatch should type-check");
+    let operator_rng = crate::check_source(&format!(
+        "import random\n{operator}\ndef main() -> int32:\n    wrapper = Wrapper(random.Rng(seed=1))\n    print(wrapper + random.Rng(seed=2))\n    return 0\n"
+    ))
+    .expect_err("operator dispatch must enforce clone-safety obligations");
+    assert_eq!(operator_rng.code, "AU3007");
+}
+
+#[test]
+fn rng_clone_safety_operator_method_generics_bind_the_actual_rhs() {
+    let surface = r#"
+trait Add[Rhs]:
+    def add[T](borrow self, rhs: own T):
+        values = [rhs]
+        copies = values.clone()
+        print(copies)
+
+class Marker:
+    value: int64
+
+impl[Rhs] Add[Rhs] for Marker:
+    pass
+
+def combine[T, U](marker: borrow Marker, rhs: own U):
+    marker + rhs
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    marker = Marker(0)\n    combine[int64, int64](marker, 1)\n    return 0\n"
+    ))
+    .expect("operator method inference should accept a clone-safe int64 RHS");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef main() -> int32:\n    marker = Marker(0)\n    combine[int64, random.Rng](marker, random.Rng(seed=1))\n    return 0\n"
+    ))
+    .expect_err(
+        "operator method inference must attach clone safety to the actual RHS, not a same-named caller parameter",
+    );
+    assert_eq!(error.code, "AU3007", "unexpected diagnostic: {error:?}");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn rng_clone_safety_is_enforced_when_try_selects_a_from_impl() {
+    let surface = r#"
+class Target[Element]:
+    values: Vec[Element]
+
+trait From[Item]:
+    def from(value: own Item) -> Target[Item]:
+        values = [value]
+        return Target(values.clone())
+
+impl[Item] From[Item] for Target[Item]:
+    pass
+"#;
+    crate::check_source(&format!(
+        "{surface}\ndef read() -> Result[int32, int64]:\n    return Result.Err(1)\n\ndef load() -> Result[int32, Target[int64]]:\n    return Result.Ok(try read())\n"
+    ))
+    .expect("try should accept a clone-safe From instantiation");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef read() -> Result[int32, random.Rng]:\n    return Result.Err(random.Rng(seed=1))\n\ndef load() -> Result[int32, Target[random.Rng]]:\n    return Result.Ok(try read())\n"
+    ))
+    .expect_err("try must enforce the selected From method's clone obligation");
+    assert_eq!(error.code, "AU3007", "unexpected diagnostic: {error:?}");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn rng_clone_safety_from_method_generics_bind_the_actual_source() {
+    let surface = r#"
+class Target[Source]:
+    value: int64
+
+trait From[Source]:
+    def from[T](value: own T) -> Target[Source]:
+        values = [value]
+        copies = values.clone()
+        print(copies)
+        return Target(0)
+
+impl[Source] From[Source] for Target[Source]:
+    pass
+
+def convert[T, U](value: own Result[int32, U]) -> Result[int32, Target[U]]:
+    return Result.Ok(try value)
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef main() -> int32:\n    input: Result[int32, int64] = Result.Err(1)\n    converted = convert[int64, int64](input)\n    return 0\n"
+    ))
+    .expect("implicit From inference should accept a clone-safe int64 source");
+
+    let error = crate::check_source(&format!(
+        "import random\n{surface}\ndef main() -> int32:\n    input: Result[int32, random.Rng] = Result.Err(random.Rng(seed=1))\n    converted = convert[int64, random.Rng](input)\n    return 0\n"
+    ))
+    .expect_err(
+        "implicit From inference must attach clone safety to the actual source, not a same-named caller parameter",
+    );
+    assert_eq!(error.code, "AU3007", "unexpected diagnostic: {error:?}");
+    assert!(error.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn user_defined_rng_class_does_not_acquire_random_module_semantics() {
+    crate::check_source(
+        r#"
+class Rng:
+    value: int64
+
+    def next_int(borrow self, lo: int64, hi: int64) -> int64:
+        return self.value
+
+    def next_float(borrow self) -> String:
+        return "local"
+
+    def shuffle(borrow self, value: int64) -> int64:
+        return value
+
+trait LocalShuffle:
+    def rearrange(borrow self) -> String
+
+impl LocalShuffle for Rng:
+    def rearrange(borrow self) -> String:
+        return self.next_float()
+
+def main() -> int32:
+    rng = Rng(5)
+    print(rng.next_int(0, 10))
+    print(rng.next_float())
+    print(rng.shuffle(7))
+    print(rng.rearrange())
+    return 0
+"#,
+    )
+    .expect("an ordinary class named Rng must keep its own methods and shared receivers");
+}
+
+#[test]
 fn d3_int_alias_canonicalizes_across_signatures_generics_and_casts() {
     let source = r#"
 def identity[T](value: own T) -> T:
@@ -402,6 +1699,7 @@ def main() -> int32:
     assert_eq!(
         lower_type(
             &type_ref("int"),
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -655,6 +1953,7 @@ fn function_signature(params: Vec<Type>, return_type: Type) -> FunctionSignature
         return_type,
         return_passing: ReceiverKind::Value,
         return_borrow_source: None,
+        rng_clone_safe_type_params: BTreeSet::new(),
     }
 }
 
@@ -755,6 +2054,7 @@ fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> C
         .collect();
     ClassInfo {
         module_name: "<test>".to_string(),
+        is_builtin: false,
         decl: class_decl(name, copy, decl_fields),
         type_param_bounds: BTreeMap::new(),
         fields,
@@ -847,6 +2147,7 @@ fn checker<'a>(
         module_name,
         type_names,
         type_arities,
+        empty_canonical_type_names(),
         classes,
         enums,
         functions,
@@ -1082,6 +2383,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         &program.module_name,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &program.classes,
         &program.enums,
         &program.functions,
@@ -1097,6 +2399,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
             &type_ref("TaskGroup"),
             &type_names,
             &type_arities,
+            empty_canonical_type_names(),
             &empty_type_params
         )
         .expect("TaskGroup should lower without type arguments"),
@@ -1107,6 +2410,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
             &type_ref("Duration"),
             &type_names,
             &type_arities,
+            empty_canonical_type_names(),
             &empty_type_params
         )
         .expect("Duration should lower without type arguments"),
@@ -1327,6 +2631,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         &program.module_name,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &program.classes,
         &program.enums,
         &program.functions,
@@ -6998,7 +8303,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
         checker
             .resolve_member_type(&Type::Module("pkg".to_string()), "Status", Span::new(1, 1))
             .expect("module enums should resolve to enum types for qualified variant access"),
-        Type::Named("Status".to_string(), Vec::new())
+        Type::Named("pkg.Status".to_string(), Vec::new())
     );
     assert!(checker
         .resolve_member_type(&Type::Module("pkg".to_string()), "missing", Span::new(1, 1))
@@ -7032,7 +8337,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
                 None,
             )
             .expect("module class constructors should type check"),
-        Type::named("Widget")
+        Type::named("pkg.Widget")
     );
     for (args, expected) in [
         (
@@ -7710,6 +9015,7 @@ fn default_argument_and_trait_bound_helpers_cover_nested_expression_cases() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &type_param_scope(&["T".to_string()]),
     )
     .expect("trait bounds should lower");
@@ -8238,6 +9544,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
                 return_type: Type::named("String"),
                 return_passing: ReceiverKind::Borrow,
                 return_borrow_source: Some("self".to_string()),
+                rng_clone_safe_type_params: BTreeSet::new(),
             },
             type_param_bounds: BTreeMap::new(),
         },
@@ -8267,6 +9574,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
                 return_type: Type::named("String"),
                 return_passing: ReceiverKind::Borrow,
                 return_borrow_source: Some("source".to_string()),
+                rng_clone_safe_type_params: BTreeSet::new(),
             },
             type_param_bounds: BTreeMap::new(),
         },
@@ -8582,10 +9890,17 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         ("pkg.Counter".to_string(), 0usize),
     ]);
     let type_params = type_param_scope(&["T".to_string()]);
+    let canonical_type_names = BTreeMap::new();
 
     assert_eq!(
-        lower_type(&type_ref("str"), &type_names, &type_arities, &type_params)
-            .expect("str should canonicalize to String"),
+        lower_type(
+            &type_ref("str"),
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &type_params,
+        )
+        .expect("str should canonicalize to String"),
         Type::named("String")
     );
     assert_eq!(
@@ -8593,6 +9908,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &nested_type_ref("Option", vec![type_ref("int32")]),
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_params,
         )
         .expect("Option should lower"),
@@ -8603,6 +9919,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &nested_type_ref("Map", vec![type_ref("String"), type_ref("int32")]),
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_params,
         )
         .expect("Map should lower"),
@@ -8616,6 +9933,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &nested_type_ref("Box", vec![type_ref("T")]),
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_params,
         )
         .expect("user generic should lower"),
@@ -8626,19 +9944,32 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &type_ref("pkg.Counter"),
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_params
         )
         .expect("qualified user type should lower"),
-        Type::named("Counter")
+        Type::named("pkg.Counter")
     );
     assert_eq!(
-        lower_type(&type_ref("T"), &type_names, &type_arities, &type_params)
-            .expect("type param should lower"),
+        lower_type(
+            &type_ref("T"),
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &type_params,
+        )
+        .expect("type param should lower"),
         Type::TypeParam("T".to_string())
     );
     assert_eq!(
-        lower_type(&type_ref("None"), &type_names, &type_arities, &type_params)
-            .expect("None should lower to unit"),
+        lower_type(
+            &type_ref("None"),
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &type_params,
+        )
+        .expect("None should lower to unit"),
         Type::Unit
     );
     assert_eq!(
@@ -8646,6 +9977,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &type_ref("Self"),
             &type_names,
             &type_arities,
+            &canonical_type_names,
             &type_params,
             Some(&Type::named("Counter"))
         )
@@ -8657,6 +9989,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &type_ref("Unknown"),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
     )
     .expect_err("unknown types should fail");
@@ -8665,6 +9998,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &nested_type_ref("Option", vec![]),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
     )
     .expect_err("Option arity mismatch should fail");
@@ -8675,6 +10009,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &nested_type_ref("TaskGroup", vec![type_ref("int32")]),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
     )
     .expect_err("TaskGroup should reject type args");
@@ -8685,6 +10020,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &nested_type_ref("Self", vec![type_ref("int32")]),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
         Some(&Type::named("Counter")),
     )
@@ -8696,6 +10032,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &type_ref("Self"),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
         None,
     )
@@ -8707,6 +10044,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         &nested_type_ref("T", vec![type_ref("int32")]),
         &type_names,
         &type_arities,
+        &canonical_type_names,
         &type_params,
     )
     .expect_err("type params should reject generic args");
@@ -8730,6 +10068,7 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
     )
     .expect_err("unknown traits should fail");
@@ -8740,6 +10079,7 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
     )
     .expect_err("trait arity mismatch should fail");
@@ -8764,6 +10104,7 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
         Some(&Type::named("Widget")),
     )
@@ -8775,6 +10116,7 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
         Some(&Type::named("Widget")),
     )
@@ -8791,6 +10133,7 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
         Some(&Type::named("Widget")),
     )
@@ -8814,6 +10157,7 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         &traits,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &scope,
         Some(&Type::named("Widget")),
     )
@@ -8952,6 +10296,7 @@ fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
         &program.module_name,
         &type_names,
         &type_arities,
+        empty_canonical_type_names(),
         &program.classes,
         &program.enums,
         &program.functions,
@@ -11412,7 +12757,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
                 None,
             )
             .expect("module class constructors should resolve"),
-        Type::named("Widget")
+        Type::named("pkg.tools.Widget")
     );
     assert_eq!(
         checker
@@ -11424,7 +12769,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
                 None,
             )
             .expect("module constructors should now accept positional arguments"),
-        Type::named("Widget")
+        Type::named("pkg.tools.Widget")
     );
     assert!(checker
         .type_of_call(
@@ -11511,7 +12856,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         checker
             .resolve_member_type(&Type::Module("pkg.tools".to_string()), "Status", span)
             .expect("module enums should resolve to enum types for qualified variant access"),
-        Type::Named("Status".to_string(), Vec::new())
+        Type::Named("pkg.tools.Status".to_string(), Vec::new())
     );
 
     let missing_error = checker
@@ -11814,7 +13159,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
                 None,
             )
             .expect("qualified enum constructors should accept `value=`"),
-        Type::named("Status")
+        Type::named("pkg.tools.Status")
     );
 
     let missing_payload = checker
@@ -11900,6 +13245,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
                 return_type: Type::Unit,
                 return_passing: ReceiverKind::Value,
                 return_borrow_source: None,
+                rng_clone_safe_type_params: BTreeSet::new(),
             },
             type_param_bounds: BTreeMap::new(),
         },
@@ -12096,7 +13442,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
                 None,
             )
             .expect("module-qualified class constructors should type check"),
-        Type::named("Widget")
+        Type::named("helpers.math.Widget")
     );
     assert!(root_checker
         .type_of_call(
@@ -12152,18 +13498,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     assert_eq!(borrowed_places[0].path, place_path("left"));
     assert_eq!(borrowed_places[1].path, place_path("right"));
 
-    let module_checker = checker(
-        "helpers.math",
-        &type_names,
-        &type_arities,
-        &classes,
-        &enums,
-        &functions,
-        &traits,
-        &[],
-        &imported_modules,
-        &module_registry,
-    );
+    let module_checker = root_checker.with_module_name("helpers.math");
     assert_eq!(
         module_checker
             .current_module_namespace()
@@ -12791,6 +14126,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &Type::TypeParam("T".to_string()),
             ReceiverKind::Value,
             &BTreeMap::new(),
+            &BTreeSet::new(),
             &[],
             span,
             &mut HashMap::new(),
@@ -12812,6 +14148,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &Type::TypeParam("T".to_string()),
             ReceiverKind::Value,
             &BTreeMap::new(),
+            &BTreeSet::new(),
             &[],
             span,
             &mut HashMap::new(),
@@ -13552,8 +14889,14 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
     let type_params = BTreeMap::from([("T".to_string(), ())]);
 
     assert_eq!(
-        lower_type(&type_ref("str"), &type_names, &type_arities, &type_params)
-            .expect("str should canonicalize"),
+        lower_type(
+            &type_ref("str"),
+            &type_names,
+            &type_arities,
+            empty_canonical_type_names(),
+            &type_params,
+        )
+        .expect("str should canonicalize"),
         Type::named("String")
     );
     assert_eq!(
@@ -13566,10 +14909,11 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
             },
             &type_names,
             &type_arities,
+            empty_canonical_type_names(),
             &BTreeMap::new(),
         )
         .expect("qualified imported type should lower"),
-        Type::named("Widget")
+        Type::named("pkg.tools.Widget")
     );
 
     for (invalid_type, expected) in [
@@ -13620,8 +14964,14 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
         ),
         (type_ref("Missing"), "unknown type `Missing`"),
     ] {
-        let error = lower_type(&invalid_type, &type_names, &type_arities, &type_params)
-            .expect_err("invalid type should fail lowering");
+        let error = lower_type(
+            &invalid_type,
+            &type_names,
+            &type_arities,
+            empty_canonical_type_names(),
+            &type_params,
+        )
+        .expect_err("invalid type should fail lowering");
         assert!(
             error.message.contains(expected),
             "expected `{expected}` in `{}`",

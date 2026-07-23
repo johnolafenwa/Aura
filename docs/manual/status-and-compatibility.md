@@ -27,6 +27,12 @@ the maintained language.
 
 Compiler coverage is held at the current non-regression floor rather than being pushed to 100%. New behavior still requires focused tests; the freeze only ends marginal coverage work that does not reduce product risk.
 
+Seeded randomness has an additional observable-data promise: the algorithm,
+seed mapping, integer and floating mappings, and shuffle order documented in
+[Randomness Module](/manual/randomness) remain stable throughout Aurora 0.1.x.
+A later compatibility series may change them only with an explicit decision
+and new conformance vectors. OS-secure outputs are intentionally not stable.
+
 ## Maintained Concurrency Surface
 
 Aurora 0.1 uses structured concurrency:

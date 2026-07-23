@@ -11,8 +11,8 @@ Programs in Aurora tend to be easier to read when three questions are answered n
 **Who owns this value?**
 Numbers, booleans, durations, queue handles, and task handles are copy values:
 binding one to a new name is cheap and both names remain valid. Strings,
-collections, class instances, file handles, process resources, task groups,
-and network resources are move values: assignment or an explicit `own`
+collections, deterministic random generators, class instances, file handles,
+process resources, task groups, and network resources are move values: assignment or an explicit `own`
 position transfers ownership, while a bare non-copy parameter borrows. This
 rule is visible in the type and signature.
 

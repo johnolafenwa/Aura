@@ -1,4 +1,4 @@
-use super::{builtin_imported_binding, host_builtin_metadata};
+use super::{builtin_imported_binding, builtin_module_namespace, host_builtin_metadata};
 use crate::ast::ReceiverKind;
 use crate::diag::Span;
 use crate::sema::ImportedBinding;
@@ -103,6 +103,73 @@ fn host_builtin_metadata_is_derived_from_function_namespaces() {
     assert_eq!(increment.params[1].passing, ReceiverKind::Value);
     assert_eq!(increment.return_type, crate::sema::Type::Unit);
 
+    let secure_int =
+        host_builtin_metadata("random::secure_int").expect("random.secure_int metadata");
+    assert_eq!(secure_int.params.len(), 2);
+    assert!(secure_int
+        .params
+        .iter()
+        .all(|param| param.ty == crate::sema::Type::named("int64") && param.required));
+    assert_eq!(secure_int.return_type, crate::sema::Type::named("int64"));
+
+    let secure_bytes =
+        host_builtin_metadata("random::secure_bytes").expect("random.secure_bytes metadata");
+    assert_eq!(secure_bytes.params.len(), 1);
+    assert_eq!(secure_bytes.params[0].ty, crate::sema::Type::named("int64"));
+    assert_eq!(
+        secure_bytes.return_type,
+        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+    );
+
     assert!(host_builtin_metadata("fs::exists").is_none());
     assert!(host_builtin_metadata("missing::function").is_none());
+}
+
+#[test]
+fn random_namespace_exposes_one_opaque_rng_type_and_secure_functions() {
+    let namespace = builtin_module_namespace(&["random".to_string()])
+        .expect("random should be a builtin module");
+
+    assert_eq!(namespace.classes.len(), 1);
+    let rng = namespace.classes.get("Rng").expect("random.Rng class");
+    assert!(!rng.decl.copy, "Rng state must be non-copy");
+    assert!(rng.decl.fields.is_empty(), "Rng must remain host-opaque");
+    assert!(
+        rng.fields.is_empty(),
+        "Rng must not expose a fake seed field"
+    );
+    assert!(
+        !namespace.functions.contains_key("Rng"),
+        "Rng must have one class binding, not a duplicate function binding"
+    );
+
+    let secure_int = &namespace.functions["secure_int"];
+    assert_eq!(
+        secure_int.signature.params,
+        vec![
+            crate::sema::Type::named("int64"),
+            crate::sema::Type::named("int64")
+        ]
+    );
+    assert_eq!(
+        secure_int.signature.return_type,
+        crate::sema::Type::named("int64")
+    );
+
+    let secure_bytes = &namespace.functions["secure_bytes"];
+    assert_eq!(
+        secure_bytes.signature.params,
+        vec![crate::sema::Type::named("int64")]
+    );
+    assert_eq!(
+        secure_bytes.signature.return_type,
+        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+    );
+    assert!(!namespace.functions.contains_key("secure_float"));
+
+    assert!(matches!(
+        builtin_imported_binding(&["random".to_string()], "Rng", Span::new(1, 1))
+            .expect("Rng should import"),
+        ImportedBinding::Class(_)
+    ));
 }

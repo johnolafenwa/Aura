@@ -90,7 +90,8 @@ Receiver forms:
 | `own self` | Consume the instance. |
 | no receiver | Associated method called on the type, not an instance. |
 
-A borrowed method cannot move an owned field out of `self`. Clone when you need to return an owned copy:
+A borrowed method cannot move an owned field out of `self`. When the field type
+supports cloning, clone when you need to return an owned copy:
 
 ```python
 class User:

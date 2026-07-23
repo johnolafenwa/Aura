@@ -3,8 +3,8 @@ use crate::ast::{
     MatchStmt, Param, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction, BuiltinMember,
-    CallConvention,
+    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
+    BuiltinClassConstructor, BuiltinMember, CallConvention,
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
@@ -485,6 +485,7 @@ pub fn lower(program: &Program) -> MirModule {
 
     let mut classes = Vec::new();
     for class in program.classes.values() {
+        let class_name = mir_runtime_class_name(program, class);
         let fields = class
             .decl
             .fields
@@ -501,14 +502,14 @@ pub fn lower(program: &Program) -> MirModule {
             .collect::<Vec<_>>();
         let mut methods = Vec::new();
         for method in class.methods.values() {
-            let qualified_name = format!("{}.{}", class.decl.name, method.decl.name);
+            let qualified_name = mir_class_method_name(program, class, &method.decl.name);
             functions.push(lower_function(
                 program,
                 &qualified_name,
                 &class.module_name,
                 method.decl.receiver,
                 Some(Type::Named(
-                    class.decl.name.clone(),
+                    class_name.clone(),
                     class
                         .decl
                         .type_params
@@ -530,7 +531,7 @@ pub fn lower(program: &Program) -> MirModule {
             });
         }
         classes.push(MirClass {
-            name: class.decl.name.clone(),
+            name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
@@ -625,7 +626,8 @@ fn push_imported_module_classes_from_namespace(
     seen_class_names: &mut BTreeSet<String>,
 ) {
     for class in namespace.classes.values() {
-        if !seen_class_names.insert(class.decl.name.clone()) {
+        let class_name = mir_runtime_class_name(program, class);
+        if !seen_class_names.insert(class_name.clone()) {
             continue;
         }
         let fields = class
@@ -655,7 +657,7 @@ fn push_imported_module_classes_from_namespace(
                     &class.module_name,
                     method.decl.receiver,
                     Some(Type::Named(
-                        class.decl.name.clone(),
+                        class_name.clone(),
                         class
                             .decl
                             .type_params
@@ -678,7 +680,7 @@ fn push_imported_module_classes_from_namespace(
             });
         }
         classes.push(MirClass {
-            name: class.decl.name.clone(),
+            name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
@@ -1075,6 +1077,27 @@ impl<'a> Lowerer<'a> {
             .or_else(|| self.find_imported_enum_info(name))
     }
 
+    fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
+        let Type::Named(source_name, _) = lower_type_ref(type_ref) else {
+            return Type::Unit;
+        };
+        let name = if let Some(class) = self.resolve_class_info(&source_name) {
+            mir_class_type_name(self.program, class, &source_name)
+        } else if let Some(enum_info) = self.resolve_enum_info(&source_name) {
+            mir_runtime_enum_name(self.program, enum_info)
+        } else {
+            source_name
+        };
+        Type::Named(
+            name,
+            type_ref
+                .args
+                .iter()
+                .map(|arg| self.lower_type_ref_with_provenance(arg))
+                .collect(),
+        )
+    }
+
     fn infer_class_constructor_type(
         &self,
         class_name: &str,
@@ -1082,14 +1105,18 @@ impl<'a> Lowerer<'a> {
         explicit_type_args: Option<&[crate::ast::TypeRef]>,
     ) -> Option<Type> {
         let class = self.resolve_class_info(class_name)?;
+        let result_name = mir_class_type_name(self.program, class, class_name);
         if let Some(type_args) = explicit_type_args {
             return Some(Type::Named(
-                class_name.to_string(),
-                type_args.iter().map(lower_type_ref).collect(),
+                result_name.clone(),
+                type_args
+                    .iter()
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
+                    .collect(),
             ));
         }
         if class.decl.type_params.is_empty() {
-            return Some(Type::named(class_name));
+            return Some(Type::named(result_name));
         }
 
         let mut next_positional_field = 0usize;
@@ -1108,7 +1135,7 @@ impl<'a> Lowerer<'a> {
                 field_name.clone()
             } else {
                 if saw_named {
-                    return Some(Type::named(class_name));
+                    return Some(Type::named(result_name.clone()));
                 }
                 let field = class.decl.fields.get(next_positional_field)?;
                 next_positional_field += 1;
@@ -1122,7 +1149,7 @@ impl<'a> Lowerer<'a> {
                 &type_params,
                 &mut substitutions,
             ) {
-                return Some(Type::named(class_name));
+                return Some(Type::named(result_name.clone()));
             }
         }
 
@@ -1133,8 +1160,8 @@ impl<'a> Lowerer<'a> {
             .map(|type_param| substitutions.get(type_param).cloned())
             .collect::<Option<Vec<_>>>();
         resolved_args
-            .map(|resolved_args| Type::Named(class_name.to_string(), resolved_args))
-            .or_else(|| Some(Type::named(class_name)))
+            .map(|resolved_args| Type::Named(result_name.clone(), resolved_args))
+            .or_else(|| Some(Type::named(result_name)))
     }
 
     fn infer_module_path(&self, expr: &Expr) -> Option<String> {
@@ -1163,18 +1190,6 @@ impl<'a> Lowerer<'a> {
                 .map(|path| (path, field.clone())),
             ExprKind::Group(inner) => self.qualified_module_item(inner),
             _ => None,
-        }
-    }
-
-    fn module_enum_type_name(
-        &self,
-        module_path: &str,
-        enum_info: &crate::sema::EnumInfo,
-    ) -> String {
-        let qualified_name = format!("{}.{}", module_path, enum_info.decl.name);
-        match qualified_name.as_str() {
-            "io.Error" | "process.Error" => qualified_name,
-            _ => enum_info.decl.name.clone(),
         }
     }
 
@@ -1397,9 +1412,10 @@ impl<'a> Lowerer<'a> {
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
         if let (AssignTarget::Name(name), Some(annotation)) = (&assign.target, &assign.annotation) {
+            let annotation_type = self.lower_type_ref_with_provenance(annotation);
             self.local_types
                 .entry(name.clone())
-                .or_insert_with(|| lower_type_ref(annotation));
+                .or_insert(annotation_type);
         } else if let AssignTarget::Name(name) = &assign.target {
             if let Some(inferred) = self.infer_expr_type(&assign.value) {
                 self.local_types.entry(name.clone()).or_insert(inferred);
@@ -2500,7 +2516,7 @@ impl<'a> Lowerer<'a> {
                     target: temp.clone(),
                     value: Rvalue::Cast {
                         value,
-                        ty: lower_type_ref(ty),
+                        ty: self.lower_type_ref_with_provenance(ty),
                         span: expr.span,
                     },
                 });
@@ -2591,7 +2607,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::EnumVariant {
-                                    enum_name: self.module_enum_type_name(&module_path, &enum_info),
+                                    enum_name: mir_runtime_enum_name(self.program, &enum_info),
                                     variant_name: field.clone(),
                                     payloads: Vec::new(),
                                 },
@@ -2605,12 +2621,18 @@ impl<'a> Lowerer<'a> {
                     _ => object,
                 };
                 if let ExprKind::Name(enum_name) = &base_object.kind {
-                    if is_known_enum_name(self.program, enum_name) {
+                    let runtime_enum_name = self
+                        .resolve_enum_info(enum_name)
+                        .map(|enum_info| mir_runtime_enum_name(self.program, enum_info))
+                        .or_else(|| {
+                            is_known_enum_name(self.program, enum_name).then(|| enum_name.clone())
+                        });
+                    if let Some(runtime_enum_name) = runtime_enum_name {
                         let temp = self.new_temp_for_expr(expr);
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
                             value: Rvalue::EnumVariant {
-                                enum_name: enum_name.clone(),
+                                enum_name: runtime_enum_name,
                                 variant_name: field.clone(),
                                 payloads: Vec::new(),
                             },
@@ -2997,7 +3019,7 @@ impl<'a> Lowerer<'a> {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_none() {
                                 return Some((
-                                    format!("{}.{}", class_name, field),
+                                    mir_class_method_name(self.program, class_info, field),
                                     method.decl.params.clone(),
                                     method.signature.return_type.clone(),
                                     format!("method `{}.{}`", class_name, field),
@@ -3023,9 +3045,9 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
             .unwrap_or_else(|| self.new_temp_for_expr(expr));
-        let base_callee = match &callee.kind {
-            ExprKind::Specialize { expr, .. } => &**expr,
-            _ => callee,
+        let (base_callee, explicit_type_args) = match &callee.kind {
+            ExprKind::Specialize { expr, type_args } => (&**expr, Some(type_args.as_slice())),
+            _ => (callee, None),
         };
 
         match &base_callee.kind {
@@ -3034,10 +3056,21 @@ impl<'a> Lowerer<'a> {
                     .resolve_class_info(name)
                     .expect("class should exist during MIR lowering")
                     .clone();
-                let explicit_type_args = match &callee.kind {
-                    ExprKind::Specialize { type_args, .. } => Some(type_args.as_slice()),
-                    _ => None,
-                };
+                if let Some(constructor) = class.builtin_constructor() {
+                    let lowered_args =
+                        self.lower_builtin_class_constructor_args(constructor, args, callee.span);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(imported_module_function_name(
+                                &class.module_name,
+                                &class.decl.name,
+                            )),
+                            args: lowered_args,
+                        },
+                    });
+                    return Operand::Place(temp);
+                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -3135,7 +3168,7 @@ impl<'a> Lowerer<'a> {
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Construct {
-                        class_name: name.clone(),
+                        class_name: mir_runtime_class_name(self.program, &class),
                         fields,
                     },
                 });
@@ -3209,7 +3242,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let element_type = type_args
                     .first()
-                    .map(lower_type_ref)
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
                     .unwrap_or_else(|| Type::named("Unknown"));
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -3229,11 +3262,11 @@ impl<'a> Lowerer<'a> {
                 };
                 let key_type = type_args
                     .first()
-                    .map(lower_type_ref)
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
                     .unwrap_or_else(|| Type::named("Unknown"));
                 let value_type = type_args
                     .get(1)
-                    .map(lower_type_ref)
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
                     .unwrap_or_else(|| Type::named("Unknown"));
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -3297,8 +3330,8 @@ impl<'a> Lowerer<'a> {
                                     target: temp.clone(),
                                     value: Rvalue::Call {
                                         callee: CallTarget::Name(format!(
-                                            "{}.{}",
-                                            class.decl.name, field
+                                            "{}::{}.{}",
+                                            module_path, item_name, field
                                         )),
                                         args: lowered_args,
                                     },
@@ -3307,7 +3340,7 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                         if let Some(enum_info) = namespace.enums.get(&item_name).cloned() {
-                            let enum_name = self.module_enum_type_name(&module_path, &enum_info);
+                            let enum_name = mir_runtime_enum_name(self.program, &enum_info);
                             let payloads = self.lower_enum_variant_payloads(
                                 expr, &enum_name, field, args, expected,
                             );
@@ -3325,6 +3358,28 @@ impl<'a> Lowerer<'a> {
                 }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(constructor) = namespace
+                            .classes
+                            .get(field)
+                            .and_then(crate::sema::ClassInfo::builtin_constructor)
+                        {
+                            let lowered_args = self.lower_builtin_class_constructor_args(
+                                constructor,
+                                args,
+                                callee.span,
+                            );
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::Call {
+                                    callee: CallTarget::Name(imported_module_function_name(
+                                        &module_path,
+                                        field,
+                                    )),
+                                    args: lowered_args,
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
                         if let Some(function) = namespace.functions.get(field).cloned() {
                             let lowered_args = self.lower_user_args(
                                 &format!("function `{}`", function.decl.name),
@@ -3346,6 +3401,29 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
+                            let runtime_class_name = mir_runtime_class_name(self.program, &class);
+                            let qualified_class_name = format!("{}.{}", module_path, field);
+                            let constructor_type = expected
+                                .filter(|expected| {
+                                    matches!(expected, Type::Named(expected_name, _) if expected_name == &runtime_class_name)
+                                })
+                                .cloned()
+                                .or_else(|| {
+                                    self.infer_class_constructor_type(
+                                        &qualified_class_name,
+                                        args,
+                                        explicit_type_args,
+                                    )
+                                });
+                            let substitutions = match constructor_type {
+                                Some(Type::Named(_, type_args)) => {
+                                    substitutions_from_decl_type_args(
+                                        &class.decl.type_params,
+                                        &type_args,
+                                    )
+                                }
+                                _ => std::collections::HashMap::new(),
+                            };
                             let field_names = class
                                 .decl
                                 .fields
@@ -3372,11 +3450,9 @@ impl<'a> Lowerer<'a> {
                                     field_name
                                 };
                                 let field_type = class
-                                    .decl
                                     .fields
-                                    .iter()
-                                    .find(|field_decl| field_decl.name == field_name)
-                                    .map(|field_decl| lower_type_ref(&field_decl.ty));
+                                    .get(&field_name)
+                                    .map(|field| substitute_type(&field.ty, &substitutions));
                                 let value = self.lower_expr_at_sequence_point(
                                     &argument.value,
                                     field_type.as_ref(),
@@ -3387,10 +3463,17 @@ impl<'a> Lowerer<'a> {
                                     .iter()
                                     .find(|field_decl| field_decl.name == field_name)
                                 {
-                                    self.retarget_operand_place(
-                                        &value,
-                                        &lower_type_ref(&field_decl.ty),
+                                    let field_type = substitute_type(
+                                        &class
+                                            .fields
+                                            .get(&field_decl.name)
+                                            .expect(
+                                                "checked class field should have a semantic type",
+                                            )
+                                            .ty,
+                                        &substitutions,
                                     );
+                                    self.retarget_operand_place(&value, &field_type);
                                 }
                                 provided.insert(field_name, value);
                             }
@@ -3406,15 +3489,21 @@ impl<'a> Lowerer<'a> {
                                         })
                                     } else {
                                         field_decl.default.as_ref().map(|default| {
-                                            let field_type = lower_type_ref(&field_decl.ty);
+                                            let field_type = substitute_type(
+                                                &class
+                                                    .fields
+                                                    .get(&field_decl.name)
+                                                    .expect(
+                                                        "checked class field should have a semantic type",
+                                                    )
+                                                    .ty,
+                                                &substitutions,
+                                            );
                                             let value = self.lower_expr_with_expected(
                                                 default,
                                                 Some(&field_type),
                                             );
-                                            self.retarget_operand_place(
-                                                &value,
-                                                &lower_type_ref(&field_decl.ty),
-                                            );
+                                            self.retarget_operand_place(&value, &field_type);
                                             MirFieldInit {
                                                 name: field_decl.name.clone(),
                                                 value,
@@ -3426,7 +3515,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Construct {
-                                    class_name: class.decl.name.clone(),
+                                    class_name: runtime_class_name,
                                     fields,
                                 },
                             });
@@ -3478,7 +3567,11 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
-                                    callee: CallTarget::Name(format!("{}.{}", class_name, field)),
+                                    callee: CallTarget::Name(mir_class_method_name(
+                                        self.program,
+                                        &class,
+                                        field,
+                                    )),
                                     args: lowered_args,
                                 },
                             });
@@ -3524,14 +3617,23 @@ impl<'a> Lowerer<'a> {
                     if is_known_enum_name(self.program, enum_name)
                         || self.resolve_enum_info(enum_name).is_some()
                     {
+                        let runtime_enum_name = self
+                            .resolve_enum_info(enum_name)
+                            .map(|enum_info| mir_runtime_enum_name(self.program, enum_info))
+                            .unwrap_or_else(|| enum_name.clone());
                         let inferred_type = self.infer_expr_type(expr);
                         let enum_type = expected.or(inferred_type.as_ref());
-                        let payloads = self
-                            .lower_enum_variant_payloads(expr, enum_name, field, args, enum_type);
+                        let payloads = self.lower_enum_variant_payloads(
+                            expr,
+                            &runtime_enum_name,
+                            field,
+                            args,
+                            enum_type,
+                        );
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
                             value: Rvalue::EnumVariant {
-                                enum_name: enum_name.clone(),
+                                enum_name: runtime_enum_name,
                                 variant_name: field.clone(),
                                 payloads,
                             },
@@ -3565,8 +3667,10 @@ impl<'a> Lowerer<'a> {
                 let contextual_param_types = resolved_function.as_ref().map(|function_info| {
                     let substitutions = match &callee.kind {
                         ExprKind::Specialize { type_args, .. } => {
-                            let type_args =
-                                type_args.iter().map(lower_type_ref).collect::<Vec<_>>();
+                            let type_args = type_args
+                                .iter()
+                                .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                .collect::<Vec<_>>();
                             substitutions_from_decl_type_args(
                                 &function_info.decl.type_params,
                                 &type_args,
@@ -3786,6 +3890,43 @@ impl<'a> Lowerer<'a> {
                     );
                 }
             }
+
+            if let Some(builtin_member) = BuiltinMember::resolve(class_name, field) {
+                let ordered_args = builtin_member
+                    .bind_args(args, span)
+                    .expect("type-checked builtin member call should bind during MIR lowering");
+                let mut lowered_by_param = (0..ordered_args.len())
+                    .map(|_| None)
+                    .collect::<Vec<Option<MirArg>>>();
+
+                // Preserve source evaluation order, then place the evaluated
+                // operands in their declaration slots. This is observable for
+                // reversed named arguments and required for mutable writeback.
+                for argument in args {
+                    let index = ordered_args
+                        .iter()
+                        .position(
+                            |bound| matches!(bound, Some(bound) if std::ptr::eq(*bound, argument)),
+                        )
+                        .expect("bound builtin argument should retain its declaration slot");
+                    let passing = builtin_member
+                        .argument_passing(index)
+                        .expect("fixed builtin argument should declare a passing mode");
+                    let expected = self.infer_expr_type(&argument.value);
+                    let value =
+                        self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing);
+                    let writeback_place = (passing == ReceiverKind::BorrowMut)
+                        .then(|| self.render_place_expr_option(&argument.value))
+                        .flatten();
+                    lowered_by_param[index] = Some(MirArg {
+                        name: argument.name.clone(),
+                        value,
+                        writeback_place,
+                    });
+                }
+
+                return lowered_by_param.into_iter().flatten().collect();
+            }
         }
 
         let trait_method =
@@ -3815,6 +3956,43 @@ impl<'a> Lowerer<'a> {
         }
 
         self.lower_args(args)
+    }
+
+    fn lower_builtin_class_constructor_args(
+        &mut self,
+        constructor: BuiltinClassConstructor,
+        args: &[Argument],
+        span: Span,
+    ) -> Vec<MirArg> {
+        let ordered_args = constructor
+            .bind_args(args, span)
+            .expect("type-checked builtin class constructor should bind during MIR lowering");
+        let mut lowered_by_param = (0..ordered_args.len())
+            .map(|_| None)
+            .collect::<Vec<Option<MirArg>>>();
+
+        for argument in args {
+            let index = ordered_args
+                .iter()
+                .position(|bound| matches!(bound, Some(bound) if std::ptr::eq(*bound, argument)))
+                .expect("bound builtin constructor argument should retain its declaration slot");
+            let expected = match constructor {
+                BuiltinClassConstructor::RandomRng => Type::named("int64"),
+            };
+            let value = self.lower_expr_at_sequence_point(&argument.value, Some(&expected));
+            lowered_by_param[index] = Some(MirArg {
+                name: argument.name.clone(),
+                value,
+                writeback_place: None,
+            });
+        }
+
+        lowered_by_param
+            .into_iter()
+            .map(|argument| {
+                argument.expect("required builtin constructor parameter should be supplied")
+            })
+            .collect()
     }
 
     fn user_member_receiver_passing(
@@ -3880,7 +4058,7 @@ impl<'a> Lowerer<'a> {
             let expected = expected_param_types
                 .and_then(|types| types.get(index))
                 .cloned()
-                .unwrap_or_else(|| lower_type_ref(&param.ty));
+                .unwrap_or_else(|| self.lower_type_ref_with_provenance(&param.ty));
             let passing = param_passings
                 .and_then(|passings| passings.get(index))
                 .copied();
@@ -3918,7 +4096,7 @@ impl<'a> Lowerer<'a> {
             let expected = expected_param_types
                 .and_then(|types| types.get(index))
                 .cloned()
-                .unwrap_or_else(|| lower_type_ref(&param.ty));
+                .unwrap_or_else(|| self.lower_type_ref_with_provenance(&param.ty));
             let passing = param_passings
                 .and_then(|passings| passings.get(index))
                 .copied();
@@ -3999,15 +4177,23 @@ impl<'a> Lowerer<'a> {
                             .get(name)
                             .map(|namespace| Type::Module(namespace.path.clone()))
                     })
-                    .or_else(|| self.resolve_class_info(name).map(|_| Type::named(name)))
-                    .or_else(|| self.resolve_enum_info(name).map(|_| Type::named(name)))
+                    .or_else(|| {
+                        self.resolve_class_info(name).map(|class| {
+                            Type::named(mir_class_type_name(self.program, class, name))
+                        })
+                    })
+                    .or_else(|| {
+                        self.resolve_enum_info(name).map(|enum_info| {
+                            Type::named(mir_runtime_enum_name(self.program, enum_info))
+                        })
+                    })
                     .or_else(|| {
                         self.resolve_function_info(name)
                             .map(|function| function.signature.return_type.clone())
                     })
             }
             ExprKind::Group(inner) => self.infer_expr_type(inner),
-            ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
+            ExprKind::Cast { ty, .. } => Some(self.lower_type_ref_with_provenance(ty)),
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
@@ -4049,7 +4235,10 @@ impl<'a> Lowerer<'a> {
                 {
                     Some(Type::Named(
                         name.clone(),
-                        type_args.iter().map(lower_type_ref).collect(),
+                        type_args
+                            .iter()
+                            .map(|ty| self.lower_type_ref_with_provenance(ty))
+                            .collect(),
                     ))
                 }
                 _ => self.infer_expr_type(expr),
@@ -4165,7 +4354,10 @@ impl<'a> Lowerer<'a> {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "Queue".to_string(),
-                                    type_args.iter().map(lower_type_ref).collect(),
+                                    type_args
+                                        .iter()
+                                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                        .collect(),
                                 )
                             });
                         }
@@ -4176,7 +4368,10 @@ impl<'a> Lowerer<'a> {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "Vec".to_string(),
-                                    type_args.iter().map(lower_type_ref).collect(),
+                                    type_args
+                                        .iter()
+                                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                        .collect(),
                                 )
                             });
                         }
@@ -4184,7 +4379,10 @@ impl<'a> Lowerer<'a> {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "Set".to_string(),
-                                    type_args.iter().map(lower_type_ref).collect(),
+                                    type_args
+                                        .iter()
+                                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                        .collect(),
                                 )
                             });
                         }
@@ -4192,7 +4390,10 @@ impl<'a> Lowerer<'a> {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "Map".to_string(),
-                                    type_args.iter().map(lower_type_ref).collect(),
+                                    type_args
+                                        .iter()
+                                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                        .collect(),
                                 )
                             });
                         }
@@ -4213,7 +4414,11 @@ impl<'a> Lowerer<'a> {
                                     .type_params
                                     .iter()
                                     .cloned()
-                                    .zip(type_args.iter().map(lower_type_ref))
+                                    .zip(
+                                        type_args
+                                            .iter()
+                                            .map(|ty| self.lower_type_ref_with_provenance(ty)),
+                                    )
                                     .collect();
                                 substitute_type(&function.signature.return_type, &substitutions)
                             } else {
@@ -4267,7 +4472,10 @@ impl<'a> Lowerer<'a> {
                                 };
                                 Some(Type::Named(
                                     inner_name.clone(),
-                                    type_args.iter().map(lower_type_ref).collect(),
+                                    type_args
+                                        .iter()
+                                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                        .collect(),
                                 ))
                             }
                             _ => self.infer_expr_type(object),
@@ -4281,7 +4489,10 @@ impl<'a> Lowerer<'a> {
                                 }
                                 if let Some(enum_info) = namespace.enums.get(&item_name) {
                                     if enum_info.variants.contains_key(field) {
-                                        return Some(Type::named(enum_info.decl.name.clone()));
+                                        return Some(Type::named(mir_runtime_enum_name(
+                                            self.program,
+                                            enum_info,
+                                        )));
                                     }
                                 }
                             }
@@ -4294,11 +4505,18 @@ impl<'a> Lowerer<'a> {
                                 if let Some(function) = namespace.functions.get(field) {
                                     return Some(function.signature.return_type.clone());
                                 }
-                                if let Some(class) = namespace.classes.get(field) {
-                                    return Some(Type::named(class.decl.name.clone()));
+                                if namespace.classes.contains_key(field) {
+                                    return self.infer_class_constructor_type(
+                                        &format!("{}.{}", module_path, field),
+                                        args,
+                                        explicit_type_args,
+                                    );
                                 }
                                 if let Some(enum_info) = namespace.enums.get(field) {
-                                    return Some(Type::named(enum_info.decl.name.clone()));
+                                    return Some(Type::named(mir_runtime_enum_name(
+                                        self.program,
+                                        enum_info,
+                                    )));
                                 }
                             }
                         }
@@ -4316,7 +4534,7 @@ impl<'a> Lowerer<'a> {
                             if let Some(enum_info) = self.resolve_enum_info(class_name) {
                                 if enum_info.variants.contains_key(field) {
                                     return Some(Type::Named(
-                                        enum_info.decl.name.clone(),
+                                        mir_runtime_enum_name(self.program, enum_info),
                                         class_args.clone(),
                                     ));
                                 }
@@ -4368,7 +4586,10 @@ impl<'a> Lowerer<'a> {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(enum_info) = namespace.enums.get(&item_name) {
                             if enum_info.variants.contains_key(field) {
-                                return Some(Type::named(enum_info.decl.name.clone()));
+                                return Some(Type::named(mir_runtime_enum_name(
+                                    self.program,
+                                    enum_info,
+                                )));
                             }
                         }
                     }
@@ -4383,7 +4604,10 @@ impl<'a> Lowerer<'a> {
                         };
                         Type::Named(
                             inner_name.clone(),
-                            type_args.iter().map(lower_type_ref).collect(),
+                            type_args
+                                .iter()
+                                .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                .collect(),
                         )
                     }
                     _ => self.infer_expr_type(object)?,
@@ -4396,7 +4620,10 @@ impl<'a> Lowerer<'a> {
                 };
                 if let Some(enum_info) = self.resolve_enum_info(&class_name) {
                     if enum_info.variants.contains_key(field) {
-                        return Some(Type::Named(enum_info.decl.name.clone(), class_args));
+                        return Some(Type::Named(
+                            mir_runtime_enum_name(self.program, enum_info),
+                            class_args,
+                        ));
                     }
                 }
                 let class = self.resolve_class_info(&class_name)?;
@@ -4731,13 +4958,13 @@ impl<'a> Lowerer<'a> {
                         .get(item_name)
                         .or_else(|| namespace.all_enums.get(item_name))
                     {
-                        return self.module_enum_type_name(module_path, enum_info);
+                        return mir_runtime_enum_name(self.program, enum_info);
                     }
                 }
             }
             return self
                 .resolve_enum_info(enum_name)
-                .map(|enum_info| enum_info.decl.name.clone())
+                .map(|enum_info| mir_runtime_enum_name(self.program, enum_info))
                 .unwrap_or_else(|| enum_name.to_string());
         }
         match scrutinee_ty {
@@ -5435,6 +5662,69 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
         name.to_string(),
         type_ref.args.iter().map(lower_type_ref).collect(),
     )
+}
+
+fn is_builtin_class(class: &crate::sema::ClassInfo) -> bool {
+    class.is_builtin
+}
+
+fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> String {
+    if class.module_name == program.module_name || is_builtin_class(class) {
+        class.decl.name.clone()
+    } else {
+        format!("{}.{}", class.module_name, class.decl.name)
+    }
+}
+
+fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -> String {
+    if enum_info.module_name == program.module_name {
+        return enum_info.decl.name.clone();
+    }
+
+    let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
+    if matches!(qualified_name.as_str(), "io.Error" | "process.Error") {
+        return qualified_name;
+    }
+
+    let module_path = enum_info
+        .module_name
+        .split('.')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if crate::builtin_modules::builtin_module_namespace(&module_path).is_some() {
+        enum_info.decl.name.clone()
+    } else {
+        qualified_name
+    }
+}
+
+fn mir_class_method_name(
+    program: &Program,
+    class: &crate::sema::ClassInfo,
+    method_name: &str,
+) -> String {
+    if class.module_name == program.module_name || is_builtin_class(class) {
+        format!("{}.{}", class.decl.name, method_name)
+    } else {
+        format!("{}::{}.{}", class.module_name, class.decl.name, method_name)
+    }
+}
+
+fn mir_class_type_name(
+    program: &Program,
+    class: &crate::sema::ClassInfo,
+    fallback: &str,
+) -> String {
+    class
+        .builtin_constructor()
+        .map(|constructor| constructor.qualified_name().to_string())
+        .unwrap_or_else(|| {
+            if class.module_name == program.module_name || is_builtin_class(class) {
+                fallback.to_string()
+            } else {
+                format!("{}.{}", class.module_name, class.decl.name)
+            }
+        })
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ required_pages=(
   names-and-scopes
   static-semantics
   execution-model
+  randomness
   diagnostics
   conformance
 )
@@ -62,6 +63,31 @@ grep -Fq 'Deadline overflow never' docs/manual/execution-model.md
 grep -Fq 'Omitting `process.run(timeout=...)` uses an internal absence marker' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
 grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
 grep -Fq '0019-duration-conversion-and-timer-policy.md' architecture_docs/decisions/README.md
+grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' docs/manual/api-index.md
+grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
+grep -Fq 'threshold = 2^64 mod span' docs/manual/randomness.md
+grep -Fq 'secure_bytes(0)' docs/manual/randomness.md
+grep -Fq 'stable throughout the Aurora 0.1.x' docs/manual/randomness.md
+grep -Fq '3321214725393783201' docs/manual/randomness.md
+grep -Fq 'The no-clone rule is transitive.' docs/manual/randomness.md
+grep -Fq '`AU3007` rejects an operation that would duplicate non-cloneable state.' docs/manual/diagnostics.md
+grep -Fq 'Generic clone-safety obligations are inferred from clone-producing operations in callable bodies.' docs/manual/generics-and-traits.md
+grep -Fq 'A generic-to-generic call propagates the obligation to the caller.' docs/manual/generics-and-traits.md
+grep -Fq "An explicit implementation MUST NOT strengthen its trait method's clone-safety contract." docs/manual/generics-and-traits.md
+grep -Fq 'Clone-safety obligations survive module imports as part of the callable contract.' docs/manual/packages.md
+grep -Fq 'Task and Queue handles are clone barriers' docs/manual/randomness.md
+grep -Fq 'unsafe concrete specialization' docs/manual/diagnostics.md
+grep -Fq 'code: "AU3007"' crates/aurora-compiler/src/diag.rs
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
+grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
+test -s examples/randomness/deterministic_rng.au
+grep -Fq 'shuffle_rng.shuffle(values)' examples/randomness/deterministic_rng.au
+grep -Fq '`deterministic_rng.au`' examples/README.md
+test -s examples/generics/clone_safety_obligations.au
+grep -Fq '`clone_safety_obligations.au`' examples/README.md
+test -s examples/traits/clone_safety_contract.au
+grep -Fq '`clone_safety_contract.au`' examples/README.md
+grep -Fq '[20-randomness.md]' tutorials/README.md
 test -s examples/concurrency/duration_arithmetic.au
 grep -Fq 'Duration.minutes(-1) < 0ms' examples/concurrency/duration_arithmetic.au
 grep -Fq 'Duration.seconds(2).to_ms()' examples/concurrency/duration_arithmetic.au
@@ -91,8 +117,8 @@ grep -Fq '`value: T` | Shared borrow when `T` is non-copy' docs/manual/functions
 grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
 grep -Fq 'caller-invisible temporary' docs/manual/functions.md
 grep -Fq 'declaration-stable' docs/manual/generics-and-traits.md
-grep -Fq 'define or inherit a trait method whose name is a builtin member of that handle.' docs/manual/generics-and-traits.md
-grep -Fq 'builtin handle members always retain builtin dispatch' docs/manual/generics-and-traits.md
+grep -Fq 'NOT explicitly define or inherit a trait method whose name is a builtin member' docs/manual/generics-and-traits.md
+grep -Fq 'builtin target members always retain builtin dispatch' docs/manual/generics-and-traits.md
 grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
 grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md
@@ -185,6 +211,15 @@ if rg -n 'There is no `FloorDiv`|has no `FloorDiv`|no `FloorDiv` operator trait|
   exit 1
 fi
 
+if rg -n 'secure_float' \
+  architecture_docs \
+  docs/manual \
+  tutorials \
+  examples; then
+  echo "reference exposes the unapproved secure_float API" >&2
+  exit 1
+fi
+
 if rg -U -n '`//`[^\n]*has no\s+operator trait|`//` is deliberately absent' \
   docs/manual \
   tutorials; then
@@ -224,6 +259,14 @@ if rg -n 'for x in expr:` consumes|for value in vec:` \| Consumes|`for value in 
   docs/aurora_language_proposal.md \
   docs/aurora_language_proposal.html; then
   echo "reference still describes retired parameter, loop, lookup, or task-capture ownership behavior" >&2
+  exit 1
+fi
+
+if rg -U -n 'rejects an unconstrained clone-producing generic operation|A polymorphic\s+clone-producing operation[^.]*is rejected|`\.clone\(\)` produces an explicit independent copy of a move type|Use `get\([^`]*\)` for an explicit cloned optional read or `remove\([^`]*\)` to transfer' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes the retired eager generic rejection or blanket clone/get behavior" >&2
   exit 1
 fi
 

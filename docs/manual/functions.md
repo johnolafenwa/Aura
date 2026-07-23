@@ -1,6 +1,9 @@
 # Functions
 
-Functions are module-level declarations introduced by `def`. Their signatures fix the parameter names, parameter passing modes, parameter types, generic parameters and bounds, and return contract used at every call site.
+Functions are module-level declarations introduced by `def`. Their callable
+contracts fix the parameter names, parameter passing modes, parameter types,
+generic parameters and bounds, return behavior, and any inferred clone-safety
+obligations used at every call site.
 
 ```python
 def add(left: int32, right: int32) -> int32:
@@ -210,7 +213,7 @@ def choose(left: borrow[left_source] int32, right: borrow[right_source] int32) -
     return left
 ```
 
-A borrowed return of a copy type is materialized as an ordinary copy value. A call producing a borrowed `String`, collection, resource, ordinary class, or other non-copy value fails during checking with guidance to return an owned clone or expose an owner method. Non-copy borrowed-return declarations remain checked so source and trait contracts are reserved consistently for Phase 6. Trait implementations must preserve the trait method's parameter passing, return passing, and semantic return-source slot; parameter names and labels themselves may be renamed. See [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-returns-and-provenance).
+A borrowed return of a copy type is materialized as an ordinary copy value. A call producing a borrowed `String`, collection, resource, ordinary class, or other non-copy value fails during checking with guidance to return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Non-copy borrowed-return declarations remain checked so source and trait contracts are reserved consistently for Phase 6. Trait implementations must preserve the trait method's parameter passing, return passing, and semantic return-source slot; parameter names and labels themselves may be renamed. See [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-returns-and-provenance).
 
 ## Generic Functions
 
@@ -238,6 +241,14 @@ answer = identity[int64](42)
 ```
 
 Every type parameter must resolve, all bounds must hold, and explicit type arguments must have the declared arity. See [Generics And Traits](/manual/generics-and-traits#inference-and-specialization).
+
+A clone-producing operation over an unresolved type parameter does not make the
+generic declaration invalid. The checker infers a clone-safety obligation for
+that parameter. Calls discharge the obligation after substitution, and a
+generic caller propagates an unresolved obligation as part of its own callable
+contract. The requirement also applies when the callable is imported or used
+as a maintained task target. See [Generics And
+Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 
 ## Callable Targets And Task Starts
 
@@ -289,7 +300,8 @@ not accepted.
 Every ordinary parameter has one declared type and declaration-stable passing
 mode. Calls bind positional then named arguments, substitute inferred or
 explicit generic arguments, enforce bounds and exact types, and fill only legal
-defaults. Every reachable non-`None` path returns the declared type. Borrowed
+defaults. They also enforce inferred clone-safety obligations after
+substitution. Every reachable non-`None` path returns the declared type. Borrowed
 return provenance is checked at the declaration and call; non-copy results are
 contained until live aliases exist.
 
@@ -321,7 +333,9 @@ means focused migration guidance for an unavailable callable spelling.
 `AU2999` means a callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
-parameter, receiver, return, or task-capture ownership mode. `AU4001` means a
+parameter, receiver, return, or task-capture ownership mode. `AU3007` means a
+call specialization would duplicate non-cloneable `random.Rng` state or could
+not satisfy a callable clone-safety obligation. `AU4001` means a
 call-depth or general call trap. A callee's `AU4002` means arithmetic overflow
 or underflow, `AU4003` means bounds or lookup violation, `AU4004` means zero divisor, and
 `AU4005` means a trapping resource or I/O failure; each retains its MIR
@@ -333,7 +347,7 @@ Ordinary, generic, imported, associated, trait-dispatched, and maintained task
 target calls are implemented for MIR execution and direct native builds.
 Shared semantic checking and the forced parity matrix require identical call
 results and primary failures. Compiler analysis and the LSP use the same
-resolved signature metadata.
+resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
@@ -346,7 +360,7 @@ order are otherwise not implementation-defined.
 ## Status
 
 The function, method, generic, default-argument, named-argument, borrowed-return
-containment, task-target, and entrypoint contracts described above are
+containment, inferred clone-safety, task-target, and entrypoint contracts described above are
 implemented. Supplied/default evaluation and argument capture follow
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
 which is **Accepted**. The rules are pinned

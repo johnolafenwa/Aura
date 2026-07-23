@@ -154,6 +154,55 @@ fn unique_temp_path(name: &str) -> String {
 }
 
 #[test]
+fn direct_random_ffi_symbols_preserve_the_public_runtime_contract() {
+    unsafe {
+        let integers = aurora_direct_rng_new(42);
+        assert_eq!(aurora_direct_rng_next_int(integers, 0, 10), 2);
+        assert_eq!(aurora_direct_rng_next_int(integers, -5, 6), 2);
+        assert_eq!(
+            aurora_direct_rng_next_int(integers, i64::MIN, i64::MAX),
+            3_321_214_725_393_783_201
+        );
+        release(integers);
+
+        let floats = aurora_direct_rng_new(42);
+        assert_eq!(
+            aurora_direct_rng_next_float(floats),
+            0.083_862_971_059_882_16
+        );
+        release(floats);
+
+        let shuffle_rng = aurora_direct_rng_new(42);
+        let values = string_vec(&["a", "b", "c", "d", "e", "f"]);
+        aurora_direct_rng_shuffle(shuffle_rng, values);
+        match cloned_value(values) {
+            Value::Vec(vector) => assert_eq!(
+                vector
+                    .elements
+                    .into_iter()
+                    .map(|value| value.render())
+                    .collect::<Vec<_>>(),
+                ["d", "f", "e", "b", "c", "a"]
+            ),
+            other => panic!("expected shuffled vector, found {other:?}"),
+        }
+        release(values);
+        release(shuffle_rng);
+
+        assert_eq!(aurora_direct_random_secure_int(5, 6), 5);
+        let bytes = aurora_direct_random_secure_bytes(0);
+        match cloned_value(bytes) {
+            Value::Vec(vector) => {
+                assert_eq!(vector.element_type.to_string(), "uint8");
+                assert!(vector.elements.is_empty());
+            }
+            other => panic!("expected secure byte vector, found {other:?}"),
+        }
+        release(bytes);
+    }
+}
+
+#[test]
 fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
     unsafe {
         let negated = aurora_direct_unary_value(0, int_value(7));

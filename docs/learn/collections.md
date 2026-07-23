@@ -24,6 +24,9 @@ match names.get(1):
         print("missing")
 ```
 
+`get` creates a cloned owned element, so the element type must be clone-safe.
+For a value containing `random.Rng`, use `remove` to transfer ownership instead.
+
 Negative indexes count from the end across the whole Vec surface:
 
 ```python
@@ -70,7 +73,9 @@ values.swap(0, 2)       # ok: swaps two indices
 # values.swap(0, 99)    # runtime error: index out of bounds
 ```
 
-The short practical rule: use `get` when absence is normal; use the mutating methods when an invalid index is a program bug you want to catch.
+The short practical rule: use `get` when absence is normal and the element is
+clone-safe; use `remove` to transfer a non-cloneable element; use the other
+mutating methods when an invalid index is a program bug you want to catch.
 
 `insert` accepts normalized indexes from `0` through `len`: `insert(len,
 value)` appends. Aurora deliberately does not copy Python's clamping behavior
@@ -156,6 +161,7 @@ for entry in counts.entries():
 ```
 
 `MapEntry[K, V]` is a small owned record with `.key` and `.value` fields.
+These projection methods clone both fields, so both types must be clone-safe.
 
 ## `Set[T]`: Membership
 

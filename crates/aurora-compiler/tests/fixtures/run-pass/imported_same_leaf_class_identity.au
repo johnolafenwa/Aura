@@ -1,0 +1,62 @@
+from same_leaf_support.remote import Named
+from same_leaf_support.remote import Describe
+import same_leaf_support.remote
+import same_leaf_support.bridge
+import random
+
+class User:
+    label: String
+
+    def associated() -> String:
+        return "local-associated"
+
+    def inherent(borrow self) -> String:
+        return f"local-inherent:{self.label}"
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return f"local:{self.label}"
+
+class Holder[T]:
+    value: T
+
+    def source(borrow self) -> String:
+        return "local-holder"
+
+impl[T] Describe for Holder[T]:
+    def describe(borrow self) -> String:
+        return "local-generic-trait"
+
+def describe[T: Describe](value: borrow T) -> String:
+    return value.describe()
+
+enum Envelope[T]:
+    Value(T)
+
+def main() -> int32:
+    local = User(label="L")
+    imported = same_leaf_support.remote.User(label="R")
+    print(User.associated())
+    print(same_leaf_support.remote.User.associated())
+    print(local.inherent())
+    print(imported.inherent())
+    print(local.name())
+    print(imported.name())
+    local_holder = Holder[random.Rng](random.Rng(seed=1))
+    remote_holder = same_leaf_support.remote.Holder[random.Rng](random.Rng(seed=2))
+    print(local_holder.source())
+    print(remote_holder.source())
+    print(describe(local_holder))
+    print(describe(remote_holder))
+    local_envelope: Envelope[random.Rng] = Envelope.Value(random.Rng(seed=3))
+    remote_envelope: same_leaf_support.remote.Envelope[random.Rng] = same_leaf_support.remote.Envelope.Value(random.Rng(seed=4))
+    print(local_envelope)
+    print(remote_envelope)
+    bridge_holder = same_leaf_support.bridge.make_holder(random.Rng(seed=5))
+    print(bridge_holder.source())
+    print(describe(bridge_holder))
+    bridge_envelope = same_leaf_support.bridge.make_envelope(random.Rng(seed=6))
+    print(bridge_envelope)
+    bridge_empty_envelope = same_leaf_support.bridge.make_empty_envelope()
+    print(bridge_empty_envelope)
+    return 0

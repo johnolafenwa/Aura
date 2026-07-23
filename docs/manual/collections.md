@@ -90,10 +90,10 @@ normalization, each operation keeps its normal bounds contract.
 | literal | `[a, b, c]` | Creates a vector whose element type is inferred from the elements or expected type. |
 | `len` | `len() -> int32` | Returns the current number of elements. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when `len() == 0`. |
-| `clone` | `clone() -> Vec[T]` | Returns a new owned vector with cloned element values. |
+| `clone` | `clone() -> Vec[T]` | Returns a new owned vector with cloned element values; requires clone-safe `T`. |
 | `push` | `push(value: own T) -> None` | Moves `value` to the end of the vector. |
 | `pop` | `pop() -> Option[T]` | Removes and returns the final element, or `None` when empty. |
-| `get` | `get(index: int32) -> Option[T]` | Returns a cloned element after normalization, or `None` when the normalized index is out of bounds. |
+| `get` | `get(index: int32) -> Option[T]` | Returns a cloned element after normalization, or `None` when the normalized index is out of bounds; requires clone-safe `T`. |
 | `set` | `set(index: int32, value: own T) -> Option[T]` | Replaces the normalized index and returns the previous element. Out-of-bounds indices raise a runtime error. |
 | `remove` | `remove(index: int32) -> Option[T]` | Removes and returns the normalized index. Out-of-bounds indices raise a runtime error. |
 | `swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`. Out-of-bounds indices raise a runtime error. |
@@ -103,10 +103,12 @@ normalization, each operation keeps its normal bounds contract.
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
 
-`get` is the safe lookup primitive. Use it when absence is a normal condition.
+`get` is the safe lookup primitive when absence is a normal condition and `T`
+is clone-safe. Use `remove` when the stored value must be transferred instead.
 Direct indexed reads and compound indexed assignment require copy `T`; simple
-indexed assignment may store any `T`. For a non-copy read-modify-write, use an
-explicit `get` or `remove` followed by a simple write.
+indexed assignment may store any `T`. For a clone-safe non-copy
+read-modify-write, use an explicit `get`; use `remove` when ownership must be
+transferred, including for a value that contains `random.Rng`.
 
 ```python
 match values.get(index):
@@ -150,15 +152,15 @@ contract and returns `None`.
 | compound indexed assignment | `map[key] op= rhs` for copy `V` | Copies the stored value, applies `op` with `rhs`, and stores the result. A missing key traps with `AU4003`; non-copy `V` is rejected. |
 | `len` | `len() -> int32` | Returns the number of entries. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no entries. |
-| `clone` | `clone() -> Map[K, V]` | Returns a new owned map with cloned keys and values. |
-| `get` | `get(key: K) -> Option[V]` | Looks up `key` and returns a cloned value when present. |
+| `clone` | `clone() -> Map[K, V]` | Returns a new owned map with cloned keys and values; requires clone-safe `K` and `V`. |
+| `get` | `get(key: K) -> Option[V]` | Looks up `key` and returns a cloned value when present; requires clone-safe `V`. |
 | `set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces `key`, returning the previous value when present. |
 | `remove` | `remove(key: K) -> Option[V]` | Removes `key`, returning the previous value when present. |
 | `contains_key` | `contains_key(key: K) -> bool` | Returns `true` when `key` exists. |
-| `keys` | `keys() -> Vec[K]` | Returns cloned owned keys in insertion order. |
-| `values` | `values() -> Vec[V]` | Returns cloned owned values in their keys' insertion order. |
-| `items` | `items() -> Vec[MapEntry[K, V]]` | Returns key/value entries in insertion order. |
-| `entries` | `entries() -> Vec[MapEntry[K, V]]` | Same contract as `items()`. |
+| `keys` | `keys() -> Vec[K]` | Returns cloned owned keys in insertion order; requires clone-safe `K`. |
+| `values` | `values() -> Vec[V]` | Returns cloned owned values in their keys' insertion order; requires clone-safe `V`. |
+| `items` | `items() -> Vec[MapEntry[K, V]]` | Returns cloned key/value entries in insertion order; requires clone-safe `K` and `V`. |
+| `entries` | `entries() -> Vec[MapEntry[K, V]]` | Same clone-safety and ordering contract as `items()`. |
 | `clear` | `clear() -> None` | Removes all entries. |
 | `extend` | `extend(other: own Map[K, V]) -> None` | Moves entries from `other`; matching keys are replaced. |
 
@@ -190,8 +192,9 @@ still evaluated and pass through their owned literal positions.
 Direct `map[key]` is available only when `V` is copyable. Its lookup key uses
 the same retained mode: copy `K` is copied and non-copy `K` is shared-borrowed.
 The read returns the stored copy value; an absent key is a runtime `AU4003`
-trap. For non-copy values, use `get(key)` for an explicit cloned optional read
-or `remove(key)` to transfer the stored value out. Simple indexed assignment is
+trap. For clone-safe non-copy values, `get(key)` provides an explicit cloned
+optional read; `remove(key)` transfers any stored value out and is required for
+values containing `random.Rng`. Simple indexed assignment is
 the storing counterpart and accepts every `V`: its key and value are owned
 positions matching `set(key: own K, value: own V)`, so either is consumed when
 non-copy. The key evaluates and is captured before the right-hand value is
@@ -206,8 +209,8 @@ only for copy `V`, because it must first read the stored value and later write
 the operator result. A missing key traps with `AU4003` at that read. For
 non-copy `V`, Aurora neither inserts an implicit clone nor destructively removes
 the stored value before an operation that may fail.
-Use `get(key)` for an explicit cloned optional read, or `remove(key)` to take
-ownership and perform an explicit simple assignment.
+Use `get(key)` when `V` is clone-safe, or `remove(key)` to take ownership and
+perform an explicit simple assignment.
 
 ## Set[T]
 
@@ -219,7 +222,7 @@ ownership and perform an explicit simple assignment.
 | literal | `{a, b, c}` with expected `Set[T]` | Creates a set. Duplicate values collapse to one entry. |
 | `len` | `len() -> int32` | Returns the number of unique values. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no values. |
-| `clone` | `clone() -> Set[T]` | Returns a new owned set with cloned values. |
+| `clone` | `clone() -> Set[T]` | Returns a new owned set with cloned values; requires clone-safe `T`. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |
 | `insert` | `insert(value: own T) -> bool` | Inserts `value`; returns `true` only when it was not already present. |
 | `remove` | `remove(value: T) -> bool` | Removes `value`; returns `true` only when it was present. |
@@ -274,10 +277,16 @@ retaining APIs use the owned positions shown in the tables above, and every
 mutating method or indexed assignment requires a mutable collection place.
 Bare or explicit shared Vec/Set iteration borrows the collection, `own`
 consumes it, and `borrow mut` is supported only for a mutable Vec place. A
-direct Map read requires copy `V`; non-copy reads use `get` or `remove`. Simple
+direct Map read requires copy `V`; a cloned non-copy read uses `get` only when
+`V` is clone-safe, while `remove` transfers any `V`. Simple
 indexed assignment accepts any Vec element or Map value type and owns the
 assigned value; a Map also owns its key. Compound indexed assignment requires
 copy `T` for Vec and copy `V` for Map.
+
+Clone-producing APIs infer obligations when their relevant element, key, or
+value types are unresolved. The obligation is checked after specialization and
+propagates through generic callers; a produced type containing `random.Rng` is
+rejected with `AU3007`.
 
 ## Runtime Semantics
 
@@ -301,7 +310,8 @@ Collection literals, storing methods, and simple Map indexed assignment own
 every stored non-copy element, key, and value. In simple Map indexed assignment
 the key is fully evaluated and captured, then consumed when non-copy, before the
 assigned value is evaluated or consumed. Methods documented as cloned reads,
-including `get`, create an explicit new owned structural value; `pop` and
+including `get`, create an explicit new owned structural value only after their
+clone-safety obligations are satisfied; `pop` and
 `remove` transfer stored values out. A direct Map read returns only a copy
 `V`, so it never hides a clone. Bare/borrow iteration freezes the iterated
 place, own iteration moves once into a loop-private source, and mutable Vec
@@ -325,7 +335,9 @@ stored value, indexed-assignment key, or consuming collection. `AU3002`
 reports mutation/move while a collection or element is borrowed and invalid
 mutable iteration. `AU3003` reports mutation through an immutable collection
 place. `AU3005` rejects a non-copy direct Vec/Map indexed read, and `AU3006`
-rejects a non-copy Vec/Map indexed compound assignment. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
+rejects a non-copy Vec/Map indexed compound assignment. `AU3007` rejects a
+clone-producing collection operation whose result contains or may contain
+non-cloneable `random.Rng` state. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
 index or a missing direct Map key.
 Optional absence from `get` and Boolean absence from Set/Map membership or
 removal are typed values, not diagnostics.

@@ -1,0 +1,16 @@
+local-associated
+remote-associated
+local-inherent:L
+remote-inherent:R
+local:L
+remote:R
+local-holder
+remote-holder
+local-generic-trait
+remote-generic-trait
+Envelope.Value(<rng>)
+same_leaf_support.remote.Envelope.Value(<rng>)
+remote-holder
+remote-generic-trait
+same_leaf_support.remote.Envelope.Value(<rng>)
+same_leaf_support.remote.Envelope.Empty

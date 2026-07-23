@@ -1,0 +1,7 @@
+class Phantom[T]:
+    marker: int64
+
+def main() -> int32:
+    value = Phantom(marker=1)
+    print(value)
+    return 0
