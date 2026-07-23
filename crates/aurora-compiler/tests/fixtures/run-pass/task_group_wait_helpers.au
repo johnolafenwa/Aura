@@ -2,9 +2,16 @@ def worker_fast(value: int32) -> int32:
     sleep(1ms)
     return value * 2
 
-def worker_slow(value: int32) -> int32:
-    sleep(3ms)
-    return value * 2
+def worker_blocked(value: int32, release: Queue[int32]) -> int32:
+    match release.get():
+        case QueueReceive.Item(_):
+            return value * 2
+        case QueueReceive.Closed:
+            return value * 2
+        case QueueReceive.TimedOut:
+            return value * 2
+        case QueueReceive.Cancelled:
+            return value * 2
 
 def announce(queue: Queue[String]) -> None:
     queue.put("ready")
@@ -86,11 +93,13 @@ def main() -> int32:
 
     with TaskGroup() as group:
         group.start_soon(announce, started)
+        release = Queue[int32]()
         mut task_list = Vec[Task[int32]]()
-        task_list.push(group.start(worker_slow, 4))
+        task_list.push(group.start(worker_blocked, 4, release))
         task_list.push(group.start(worker_fast, 3))
         print_string_receive(started.get(timeout=20ms))
         print_any(wait_any(task_list, timeout=20ms))
+        release.put(1)
         print_all(wait_all(task_list, timeout=20ms))
         print_task_result(task_list[0].result(timeout=20ms))
 
