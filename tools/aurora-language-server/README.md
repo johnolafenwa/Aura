@@ -41,14 +41,36 @@ The recovery path deliberately has no semantic diagnostics or member inference. 
 
 From the repo root:
 
-- `npm install`
+- `npm ci`
+- `cargo build -p aura`
 - `npm run check:lsp`
 - `npm run test:lsp`
 - `npm run coverage:lsp`
 
-If you want the VS Code extension package to carry the current language server implementation, also run:
+The build command provides `target/debug/aura` while working in this checkout.
+To install the actual compiler-owned server binary on `PATH` for use from any
+Aurora workspace, run:
 
-- `npm run build:extension`
+```bash
+cargo install --path crates/aura --locked --force
+```
+
+That installs the `aura` executable; the editor launches its `aura lsp`
+subcommand over stdio. You do not need to run `aura lsp` separately.
+
+The VS Code extension bundles this package's JavaScript transport, which then
+starts `aura lsp` for compiler-owned semantic analysis. After installing or
+building `aura` as described above, rebuild, package, and force-install the
+transport so VS Code does not keep an older local VSIX:
+
+```bash
+npm run package:extension
+code --install-extension tools/vscode-aurora/aurora-language.vsix --force
+```
+
+Run **Developer: Reload Window** afterward. For a workspace outside this
+repository, put `aura` on `PATH` or set `AURORA_LSP_AURA_PATH` to its absolute
+path before launching VS Code.
 
 ## Architecture
 

@@ -243,22 +243,54 @@ Current `run` status:
 
 ## VS Code install
 
-Development install:
+The extension has two server pieces:
 
-1. Run `npm install` from the repo root.
-2. Run `npm run build:extension`.
-3. Run `npm run check:lsp`, `npm run test:lsp`, `npm run check:extension`, and `npm run test:extension`.
-4. Open the repo in VS Code.
-5. Open `tools/vscode-aurora`.
-6. Press `F5` to launch an Extension Development Host.
-7. Open an `.au` file such as `examples/classes/point_distance.au` in the Extension Development Host.
+- the JavaScript LSP transport bundled inside the VSIX
+- the compiler-owned semantic service started as `aura lsp`
 
-The language server keeps one persistent `aura lsp` compiler service for diagnostics, document symbols, hover, go-to-definition, and completions. Compiler diagnostics retain their stable `AU####` code, related spans, notes, help, and edits through the LSP bridge instead of being reimplemented in JavaScript. That compiler path understands local modules and cross-file definitions and recovers common incomplete buffers. If the compiler process itself is unavailable, a small lexical JavaScript layer recovers declarations and top-level names without duplicating Aurora semantics.
+Build both pieces before installing from this checkout. In particular, do not
+reuse an existing `tools/vscode-aurora/aurora-language.vsix` after the language
+server changes; that ignored local artifact may contain an older server bundle.
 
-Packaged install:
+Install the current server and extension:
 
-1. Run `npm install`.
-2. Run `npm run package:extension`.
-3. In VS Code, use `Install from VSIX...` and select `tools/vscode-aurora/aurora-language.vsix`.
+1. Run `npm ci` from the repo root.
+2. Build the repo-local compiler service with `cargo build -p aura`. To install
+   the actual `aura lsp` server binary on your `PATH` for every Aurora
+   workspace, also run:
+
+   ```bash
+   cargo install --path crates/aura --locked --force
+   ```
+
+   This installs the `aura` executable (normally under `~/.cargo/bin`); the
+   extension starts its `aura lsp` subcommand automatically. There is no second
+   semantic-server executable to install.
+3. Build and package the current JavaScript LSP transport with
+   `npm run package:extension`.
+4. Install that newly generated package:
+
+   ```bash
+   code --install-extension tools/vscode-aurora/aurora-language.vsix --force
+   ```
+
+   If the `code` shell command is unavailable, use **Extensions → … → Install
+   from VSIX…** and select the same file.
+5. Run **Developer: Reload Window** in VS Code, then reopen an `.au` file.
+
+The language server keeps one persistent `aura lsp` compiler service for
+diagnostics, document symbols, hover, go-to-definition, and completions. In
+this repository it discovers `target/debug/aura` or `target/release/aura`.
+For an Aurora workspace elsewhere, put `aura` on `PATH` or launch VS Code with
+`AURORA_LSP_AURA_PATH` set to the absolute compiler path:
+
+```bash
+AURORA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aurora-project
+```
+
+Compiler diagnostics retain their stable `AU####` code, related spans, notes,
+help, and edits through the LSP bridge instead of being reimplemented in
+JavaScript. If the compiler process is unavailable, a small lexical recovery
+layer provides basic declarations and top-level completions.
 
 Full extension install and packaging steps are documented in [tools/vscode-aurora/INSTALL.md](tools/vscode-aurora/INSTALL.md).

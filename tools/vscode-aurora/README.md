@@ -17,7 +17,9 @@ Current features:
 - go-to-definition for local and top-level symbols
 - document diagnostics for duplicate declarations and obvious unknown names/members
 
-The language intelligence currently comes from the in-repo `aurora-language-server` package.
+The language intelligence comes from the in-repo `aurora-language-server`
+package. The extension bundles its JavaScript LSP transport and that transport
+starts the compiler-owned semantic service as `aura lsp`.
 
 The VS Code extension now bundles its client and server entrypoints into `tools/vscode-aurora/dist/`, so packaged VSIX installs do not depend on sibling files outside the extension folder.
 
@@ -37,35 +39,59 @@ Current completion scope is intentionally lightweight. The language server under
 ### Development install from this repo
 
 1. Install dependencies from the repo root:
-   - `npm install`
-2. Build the extension bundle:
+   - `npm ci`
+2. Build the repo-local compiler server:
+   - `cargo build -p aura`
+3. Build the extension bundle:
    - `npm run build:extension`
-3. Verify the language server and extension packages:
+4. Verify the language server and extension packages:
    - `npm run check:lsp`
    - `npm run test:lsp`
    - `npm run check:extension`
    - `npm run test:extension`
-4. Open the repository in VS Code.
-5. Open the extension package folder:
+5. Open the repository in VS Code.
+6. Open the extension package folder:
    - `tools/vscode-aurora`
-6. Press `F5` in VS Code to launch an Extension Development Host.
-7. In the Extension Development Host, open an `.au` file such as:
+7. Press `F5` in VS Code to launch an Extension Development Host.
+8. In the Extension Development Host, open an `.au` file such as:
    - `examples/classes/point_distance.au`
 
-That will start the Aurora language server automatically and enable syntax highlighting, completions, and document symbols.
 That will start the Aurora language server automatically and enable syntax highlighting, completions, hover, go-to-definition, diagnostics, and document symbols.
 
-### Install as a packaged extension
+### Install the current server as a packaged extension
 
-1. From the repo root, install dependencies:
-   - `npm install`
-2. Package the extension:
-   - `npm run package:extension`
-3. In VS Code:
-   - open the Extensions view
-   - open the `...` menu
-   - choose `Install from VSIX...`
-   - select `tools/vscode-aurora/aurora-language.vsix`
+Always regenerate the VSIX after changing or updating the language server.
+`aurora-language.vsix` is an ignored local build artifact, so a file left from
+an earlier checkout may contain a stale server.
+
+From the repository root:
+
+```bash
+npm ci
+cargo build -p aura
+cargo install --path crates/aura --locked --force
+npm run package:extension
+code --install-extension tools/vscode-aurora/aurora-language.vsix --force
+```
+
+`cargo install` installs the actual compiler-owned server as the `aura`
+executable (normally under `~/.cargo/bin`); the extension starts its `aura lsp`
+subcommand automatically. The preceding `cargo build` also refreshes the
+repo-local `target/debug/aura`, which has priority while this repository is
+open.
+
+Then run **Developer: Reload Window** in VS Code and reopen an `.au` file. If
+the `code` shell command is unavailable, open the Extensions view, choose
+**… → Install from VSIX…**, select
+`tools/vscode-aurora/aurora-language.vsix`, and reload when prompted.
+
+Inside this repository the server finds `target/debug/aura` automatically.
+For a workspace elsewhere, put `aura` on `PATH` or launch VS Code with the
+compiler path made explicit:
+
+```bash
+AURORA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aurora-project
+```
 
 For a step-by-step guide inside the repo, see `tools/vscode-aurora/INSTALL.md`.
 

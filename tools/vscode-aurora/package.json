@@ -2,7 +2,7 @@
   "name": "vscode-aurora",
   "displayName": "Aurora Language",
   "description": "VS Code support for the Aurora programming language.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "aurora-lang",
   "private": true,
   "license": "MIT",
