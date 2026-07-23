@@ -160,7 +160,7 @@ Aurora has two kinds of borrows:
 - `borrow T` -- shared, read-only access
 - `borrow mut T` -- exclusive, mutable access
 
-### Shared borrows with `borrow`
+### Explicit shared borrows with `borrow`
 
 A shared borrow lets a function read a value without consuming it:
 
@@ -176,7 +176,11 @@ print(read(counter))       # 41
 print(counter.value)       # 41 -- counter still belongs to us
 ```
 
-The `borrow` keyword in the parameter type tells Aurora: this function is just looking, not taking. After the call returns, the borrow ends and the caller still owns the value.
+The `borrow` keyword makes the shared contract explicit: this function is just
+looking, not taking. A bare non-copy parameter such as `counter: Counter` has
+the same shared-borrow behavior; the explicit spelling is useful when you want
+that intent to stand out. After the call returns, the borrow ends and the
+caller still owns the value.
 
 You can have multiple shared borrows active at the same time because none of them can modify the value:
 
@@ -580,18 +584,23 @@ Queue and task handles are cheap copy-like values, so the maintained surface doe
 
 **Problem:**
 ```python
+def archive(doc: own Document):
+    print(doc.title)
+
 doc = Document(title="Report", pages=10)
 archive(doc)
 print(doc.title)       # COMPILE ERROR: use of moved value
 ```
 
-**Fix 1 -- borrow instead of move:**
+**Fix 1 -- remove `own` to use the bare shared-borrow default:**
 ```python
-def archive(doc: borrow Document):
+def archive(doc: Document):
     print(doc.title)
 ```
 
-**Fix 2 -- clone before passing:**
+Writing `doc: borrow Document` is an equivalent explicit shared spelling.
+
+**Fix 2 -- keep the owned parameter and clone before passing:**
 ```python
 archive(doc.clone())
 print(doc.title)       # doc still valid
@@ -663,7 +672,7 @@ Here is how to translate your Python intuition:
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
 | `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
-| `def f(x): ...` reads x | `def f(x: borrow T): ...` |
+| `def f(x): ...` reads x | `def f(x: T): ...` for non-copy `T`, or explicitly `def f(x: borrow T): ...` |
 | `def f(x): x.mutate()` | `def f(x: borrow mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
 | `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
@@ -677,7 +686,8 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, `random.Rng`, classes) transfer ownership.
 3. Use `.clone()` when you need an explicit independent copy and the move type
    supports clone; `random.Rng` and values containing it do not.
-4. Use `borrow T` to lend read-only access. Use `borrow mut T` to lend mutable access.
+4. Bare non-copy parameters are shared borrows. Use `borrow T` to make that
+   read-only contract explicit, and `borrow mut T` to lend mutable access.
 5. `borrow mut` is exclusive -- no other borrows of the same value can exist at the same time.
 6. Method receivers follow the same rules: `self` (or `borrow self`) reads, `borrow mut self` modifies, and `own self` consumes.
 7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in borrow mut collection` to modify elements.
