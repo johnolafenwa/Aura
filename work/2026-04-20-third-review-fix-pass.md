@@ -2,13 +2,6 @@
 
 Close the third-pass externally reviewed correctness, ownership, process/runtime, and networking defects end to end, with failing regressions first and full verification at the end.
 
-## Session
-
-- Start: 2026-04-20 15:59:32 BST
-- Stop: 2026-04-20 16:45:29 BST
-- Elapsed: 0h 45m 57s
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first regressions for the third-pass ownership and inference defects:

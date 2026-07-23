@@ -2,12 +2,6 @@
 
 Fix the remaining fifth-pass review findings around `match borrow mut` stale bindings, TLS accept-loop slowloris handling, and malformed HTTP listener recovery without regressing the maintained examples or CLI/runtime behavior.
 
-## Session
-
-- Start: 2026-04-21 10:10:00 BST
-- Stop: 2026-04-21 11:03:51 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added and kept the failing-first regressions for:

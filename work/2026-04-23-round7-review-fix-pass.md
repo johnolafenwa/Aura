@@ -1,12 +1,5 @@
 # April 23 Round 7 Review Fix Pass
 
-## Session
-
-- Start time: 2026-04-23 21:24:13 BST
-- Stop time: 2026-04-23 22:00:57 BST
-- Total elapsed: 0h 37m
-- Stop rule: Complete the Round 7 review fix pass or reach 12 continuous hours.
-
 ## Goal
 
 Validate Claude's Round 7 report, fix confirmed defects across the supported Aurora API, and clean up slop introduced or exposed by the pass.

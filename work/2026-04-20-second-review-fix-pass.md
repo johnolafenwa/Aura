@@ -2,13 +2,6 @@
 
 Close the second-pass externally reviewed correctness, ownership, process, and runtime defects end to end, with failing regressions first and full verification at the end.
 
-## Session
-
-- Start: 2026-04-20 13:34:52 BST
-- Stop: 2026-04-20 14:53:19 BST
-- Elapsed: 1h 18m
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Fixed the inferred-scrutinee enum `match` regression so unqualified variant arms now bind correctly when the scrutinee type is inferred, including namespace-qualified enum access through imported modules.

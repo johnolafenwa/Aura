@@ -4,11 +4,6 @@
 
 Review the current Aurora repo state against the v1-readiness objective, continue fixing concrete gaps, and keep verification tied to the actual checked-out artifacts.
 
-## Session
-
-- Started: 2026-05-18 08:45:19 BST.
-- Stop rule: continue until the full v1-readiness objective is actually complete, per the user's 2026-05-18 instruction to ignore the previous 12-hour cap.
-
 ## Work completed
 
 - Added maintained GitHub Actions workflows for the v1 release path:
@@ -1645,7 +1640,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added runtime-value coverage for Unix fd helper EOF/read/write-zero paths, TLS deadline min selection, future and expired wait-slice branches, bounded-channel full `try_send_result`, fail-fast full sends, timed-out full sends, cancelled full sends, and dead producer weak-reference cleanup.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.68/90.90/91.97`.
-- Updated active session tracking at 2026-05-20 05:43:42 BST with elapsed wall-clock time of 44h 58m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib fd_reads_check_deadline_and_size_before_ready_reads -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges -- --test-threads=1 --nocapture`
@@ -1662,7 +1656,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added runtime-value coverage for direct non-retryable read failures in Unix `read_line`, `read_exact`, `read_bytes`, and `read_all` fd helpers, plus direct non-retryable write failures in the Unix `write_all` fd helper.
 - Kept `coverage:compiler:check` at the current enforced lines/functions/regions gate `93.68/90.90/91.97`; the exact totals improved but do not safely round to the next package threshold yet.
-- Updated active session tracking at 2026-05-20 05:55:41 BST with elapsed wall-clock time of 45h 10m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib fd_reads_check_deadline_and_size_before_ready_reads -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib channel_runtime_helpers_cover_send_receive_and_close_paths -- --test-threads=1 --nocapture`
@@ -1679,7 +1672,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added runtime-value coverage for TLS server config validation when a certificate PEM is valid but the private-key PEM contains no key.
 - Added TLS root-store loading coverage with a local generated CA PEM.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.69/90.90/91.97`.
-- Updated active session tracking at 2026-05-20 06:07:15 BST with elapsed wall-clock time of 45h 21m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib unix_and_tls_helpers_cover_local_socket_and_tls_surface -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -1695,7 +1687,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added runtime-value coverage for HTTP bad-request classification, direct content-length conflict validation, HTTPS/WSS default-port host rendering, and no-host request rendering.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.70/90.90/91.98`.
-- Updated active session tracking at 2026-05-20 06:29:20 BST with elapsed wall-clock time of 45h 44m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib http_helper_parsing_covers_reason_phrases_and_header_errors -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib http_request_builder_covers_host_variants_and_header_overrides -- --test-threads=1 --nocapture`
@@ -1712,7 +1703,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused library helper coverage for the `exported_namespace(&[], ...)` root-namespace fallback, keeping the root namespace name tied to the program module name while preserving the empty path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.70/90.93/91.99`.
-- Updated active session tracking at 2026-05-20 06:44:09 BST with elapsed wall-clock time of 45h 59m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib module_loader_helper_functions_cover_namespace_and_export_paths -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -1729,7 +1719,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Reworked closure-heavy library/package helper paths so impossible internal invariants and local filesystem/system helper errors no longer leave synthetic missed closure functions in the compiler coverage denominator.
 - Kept the user-facing package diagnostics intact for path canonicalization, git checkout reset errors, symlink-tree inspection, atomic lockfile writes, and temporary-path clock errors while converting root-package invariants to direct `expect(...)` assertions consistent with nearby package invariants.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.70/91.27/92.02`.
-- Updated active session tracking at 2026-05-20 07:20:35 BST with elapsed wall-clock time of 46h 35m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib package::tests -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib module_loader_helper_functions_cover_namespace_and_export_paths -- --test-threads=1 --nocapture`
@@ -1748,7 +1737,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added analysis coverage for completion-scope walking after `if`/`else` and `while` bodies without leaking branch-local bindings into the outer scope.
 - Added MIR lowerer coverage for builtin `SendError[T]` variant type inference and trait-provided mutating member calls that write back through a receiver.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.71/91.34/92.05`.
-- Updated active session tracking at 2026-05-20 07:41:45 BST with elapsed wall-clock time of 46h 56m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib completion_scope_walks_past_if_else_and_while_blocks -- --test-threads=1 --nocapture`
@@ -1767,7 +1755,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added runtime-value coverage for a lightweight child task that observes `cancel_current_lightweight_task_boundary()` and wakes the parent through the cancelled wait-result path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.72/91.37/92.05`.
-- Updated active session tracking at 2026-05-20 08:00:38 BST with elapsed wall-clock time of 47h 15m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lightweight_task_cancel_boundary_marks_child_cancelled -- --test-threads=1 --nocapture`
@@ -1785,7 +1772,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added parser coverage for out-of-range negative integer literal match patterns and specialized f-string interpolation span offsets with nested type arguments.
 - Added runtime-value coverage for direct ready fd waits without a deadline and pre-cancelled lightweight fd waits returning through the scheduler cancelled wake reason.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.72/91.37/92.06`.
-- Updated active session tracking at 2026-05-20 08:39:42 BST with elapsed wall-clock time of 47h 54m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib parser_helper_functions_cover_assignment_targets_and_span_offsets -- --test-threads=1 --nocapture`
@@ -1804,7 +1790,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added `SendValueError::into_value()` so `ChannelValue::send()` can reuse the existing boxed send-error payload conversion instead of maintaining duplicate wrapper match arms.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.73/91.37/92.06`.
-- Updated active session tracking at 2026-05-20 09:03:53 BST with elapsed wall-clock time of 48h 18m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib channel_runtime_helpers_cover_send_receive_and_close_paths -- --test-threads=1 --nocapture`
@@ -1822,7 +1807,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added analysis completion-scope coverage for requests inside an `else` body so block-local bindings are visible inside the block without leaking following statements into that scope.
 - Added direct runtime-value helper assertions for all `SendValueError::into_value()` payload variants so the shared channel send-wrapper conversion is covered deterministically instead of relying on one wrapper path.
 - Kept `coverage:compiler:check` enforced at lines/functions/regions `93.73/91.37/92.06`; the exact run now has margin under that gate, but the next centile thresholds still need 2 more lines for `93.74` and 3 more regions for `92.07`.
-- Updated active session tracking at 2026-05-20 09:35:18 BST with elapsed wall-clock time of 48h 50m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib completion_scope_walks_past_if_else_and_while_blocks -- --test-threads=1 --nocapture`
@@ -1839,7 +1823,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added runtime-value helper coverage for expired empty TLS-listener wait deadlines and short non-empty Unix TLS-listener wait slices.
 - Kept `coverage:compiler:check` enforced at lines/functions/regions `93.73/91.37/92.06`; this pass preserved the same exact workspace totals while removing the expired TLS-listener deadline line from the missing-line report.
-- Updated active session tracking at 2026-05-20 09:47:42 BST with elapsed wall-clock time of 49h 02m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges -- --test-threads=1 --nocapture`
@@ -1856,7 +1839,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added analysis coverage for matching generic trait arguments in `trait_impl_substitutions_for_bound(...)`, complementing the existing mismatched-argument rejection path.
 - Added a direct analysis regression for member assignments whose source line no longer contains the resolved field name, keeping the occurrence path tolerant of stale or synthetic spans.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.74/91.37/92.06`.
-- Updated active session tracking at 2026-05-20 10:14:54 BST with elapsed wall-clock time of 49h 29m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_trait_impl_helpers_cover_generic_bound_resolution -- --test-threads=1 --nocapture`
@@ -1874,7 +1856,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added a focused sema regression table that drives top-level trait, enum, class, and function lowering errors through normal `check_source(...)`, covering unknown supertraits, unknown type annotations, invalid return-borrow labels, and unknown generic trait bounds at the user-facing checker surface.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.76/91.37/92.08`.
-- Updated active session tracking at 2026-05-20 10:37:36 BST with elapsed wall-clock time of 49h 52m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib check_reports_top_level_lowering_errors_from_source -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -1891,7 +1872,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended the same source-level sema regression table to cover function return-type lowering errors and impl-level lowering errors for impl generic bounds, plural trait-arity diagnostics, impl method generic bounds, impl method return types, and impl method return-borrow labels.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.77/91.37/92.09`.
-- Updated active session tracking at 2026-05-20 10:57:04 BST with elapsed wall-clock time of 50h 12m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib check_reports_top_level_lowering_errors_from_source -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -1912,7 +1892,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Fixed checker validation so default trait method bodies are checked in the trait's own scope, and so inherited default methods are not rechecked as explicit impl methods.
 - The first full compiler coverage rerun then exposed a maintained fixture failure: default trait methods could not call required same-trait or supertrait methods through `Self`, such as `self.name()` inside `label(...)`.
 - Fixed the trait default body checker to bind `Self` to the current trait during body checking and rely on the existing trait-bound closure for supertrait expansion, avoiding duplicate direct supertrait matches.
-- Updated active session tracking at 2026-05-20 11:25:58 BST with elapsed wall-clock time of 50h 40m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib check_lowers_generic_top_level_items_and_impls -- --test-threads=1 --nocapture`
@@ -1930,7 +1909,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added a source-level checker regression for a default trait method with a non-unit return type and no return statement, locking in the new body-validation diagnostic path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.78/91.37/92.09`.
-- Updated active session tracking at 2026-05-20 11:45:05 BST with elapsed wall-clock time of 50h 59m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib check_reports_top_level_lowering_errors_from_source -- --test-threads=1 --nocapture`
@@ -1950,7 +1928,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Ran the stricter Clippy gate after the checker changes; `npm run check:clippy` is clean under `-D warnings`.
 - The first full coverage rerun after that sema coverage addition exposed a flaky existing MIR runtime stream/HTTP/WebSocket helper assertion: one network operation returned `Result.Err` under coverage instrumentation while the isolated test passed.
 - Hardened that MIR runtime helper test by increasing its explicit TCP, Unix, WebSocket, and HTTP operation timeouts from 2 seconds / 1,000ms to 5 seconds / 5,000ms, while preserving the intentional short TCP no-data probe.
-- Updated active session tracking at 2026-05-20 12:09:47 BST with elapsed wall-clock time of 51h 24m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib check_lowers_generic_top_level_items_and_impls -- --test-threads=1 --nocapture`
@@ -1971,7 +1948,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 ### Full CI pass under ratcheted coverage gates
 
 - Ran the full repo `npm run ci` gate after the checker fix, associated-default regression, compiler coverage ratchet, and MIR runtime timeout hardening.
-- Updated active session tracking at 2026-05-20 12:36:15 BST with elapsed wall-clock time of 51h 51m.
 - Verified with:
   - `npm run ci`
 - The full CI pass included formatting, Rust unit/integration/doc tests, LSP tests, VS Code extension build/tests, compiler coverage, LSP coverage, docs build, npm audit, Clippy under `-D warnings`, and `git diff --check`.
@@ -1985,7 +1961,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended compiler-backed analysis coverage for completion scope after `if` / `else` blocks and for unqualified enum variants inside match patterns.
 - Extended MIR helper coverage for specialized expression lowering, builtin runtime member return-type cases across task groups, files, TCP/UDP/HTTP/WebSocket/Unix/TLS resources, and integer operand type inference.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.83/91.38/92.17`.
-- Updated active session tracking at 2026-05-20 13:30:07 BST with elapsed wall-clock time of 52h 45m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_records_variant_occurrences_inside_match_patterns -- --test-threads=1 --nocapture`
@@ -2006,7 +1981,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended direct MIR runtime collection helper coverage for additional Vec and Map success/error paths, including extra-argument validation, missing receiver-place validation, receiver-place mutation writeback, map overwrite behavior, map extension overwrite behavior, and unsupported member dispatch.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.88/91.38/92.19`.
-- Updated active session tracking at 2026-05-20 13:54:17 BST with elapsed wall-clock time of 53h 09m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_collection_string_and_task_helpers_cover_remaining_paths -- --test-threads=1 --nocapture`
@@ -2024,7 +1998,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused analysis helper coverage for no-else `if` scope accumulation and for member assignments whose receiver cannot resolve, closing two more analysis regions without changing user-visible behavior.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.88/91.38/92.20`.
-- Updated active session tracking at 2026-05-20 14:54:33 BST with elapsed wall-clock time of 54h 09m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_member_assignment_without_source_field_range_does_not_emit_occurrence -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_builtin_completion_and_statement_helpers_cover_remaining_branches -- --test-threads=1 --nocapture`
@@ -2043,7 +2016,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused package resolver coverage for dependency-resolution error paths: missing git dependency sources, cached git package-name mismatches, and syntactically valid but absent revision checkouts during git materialization.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.89/91.38/92.20`.
-- Updated active session tracking at 2026-05-20 15:29:40 BST with elapsed wall-clock time of 54h 44m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib package_resolver_reports_git_dependency_resolution_and_package_name_errors -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib package_git_resolution_and_checkout_helpers_cover_live_git_edges -- --test-threads=1 --nocapture`
@@ -2062,7 +2034,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused analysis coverage for source-range fallback closures in dangling-member recovery, assignment binding insertion, and reassignment occurrence recording when the source buffer no longer contains the expected identifier text.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.89/91.48/92.21`.
-- Updated active session tracking at 2026-05-20 15:51:05 BST with elapsed wall-clock time of 55h 05m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_recovery_helpers_cover_placeholders_and_receiver_extraction -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_builtin_completion_and_statement_helpers_cover_remaining_branches -- --test-threads=1 --nocapture`
@@ -2081,7 +2052,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused analysis coverage for method-scope `self` binding fallback ranges when the source buffer does not contain the expected receiver token.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.89/91.51/92.22`. The current exact line profile rounds to 93.90%, but the enforced line floor remains 93.89 until a non-noisy deterministic line is added.
-- Updated active session tracking at 2026-05-20 16:12:02 BST with elapsed wall-clock time of 55h 26m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_builtin_completion_and_statement_helpers_cover_remaining_branches -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2100,7 +2070,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused analysis coverage for resolving an unqualified user enum variant from an inferred match scrutinee type.
 - Added focused MIR helper coverage for detecting concrete mutating class methods through receiver mutation analysis, alongside the existing missing-receiver and unknown-member fallback paths.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.90/91.51/92.22` after first confirming the raw `93.90%` rounded line table was not enough to satisfy the exact `--fail-under-lines 93.90` gate.
-- Updated active session tracking at 2026-05-20 16:43:56 BST with elapsed wall-clock time of 55h 58m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_surfaces -- --test-threads=1 --nocapture`
@@ -2121,7 +2090,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR helper coverage for defensive builtin collection and queue return-type inference when `Vec`, `Map`, or `Queue` are missing generic type arguments and must fall back to `Unknown`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.92/91.83/92.24`.
-- Updated active session tracking at 2026-05-20 17:02:43 BST with elapsed wall-clock time of 56h 17m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_helper_functions_cover_builtin_ops_and_type_lowering -- --test-threads=1 --nocapture`
@@ -2140,7 +2108,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR helper coverage for unit variant pattern writeback with an unknown scrutinee, no-scrutinee negative literal fallback lowering, function-name return-type inference, and malformed specialized `Vec` / `Map` empty constructors that defensively fall back to `Unknown` element/key/value types.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.93/92.05/92.25`.
-- Updated active session tracking at 2026-05-20 17:33:32 BST with elapsed wall-clock time of 56h 48m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_helper_functions_cover_builtin_ops_and_type_lowering -- --test-threads=1 --nocapture`
@@ -2160,7 +2127,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused MIR coverage for imported namespaces whose direct public maps are empty but whose aggregate `all_functions`, `all_classes`, and `all_enums` maps expose re-exported items to class resolution, task-spawn target resolution, enum resolution, and pattern enum-name resolution.
 - Added focused MIR coverage for nested borrow-mut vector loop return redirection, where an inner borrow-mut `for` return writes back the current vector element and then jumps to an existing parent return redirect instead of returning directly.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.94/92.21/92.27`.
-- Updated active session tracking at 2026-05-20 18:03:24 BST with elapsed wall-clock time of 57h 18m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lowerer_module_resolution_and_rendering_helpers_cover_imported_paths -- --test-threads=1 --nocapture`
@@ -2179,7 +2145,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused runtime-value coverage for WebSocket host-header rendering with bracketed IPv6 hosts plus the hostless URL error path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.95/92.25/92.28`.
-- Updated active session tracking at 2026-05-20 18:25:02 BST with elapsed wall-clock time of 57h 40m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib http_request_builder_covers_host_variants_and_header_overrides -- --test-threads=1 --nocapture`
@@ -2197,7 +2162,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused runtime-value coverage for task-group wake-flag registration after tasks have already completed, including already-completed success tasks, already-completed unobserved failure tasks, duplicate wake-flag registration, and clearing completion wake flags while registered tasks are still running.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.97/92.31/92.30`.
-- Updated active session tracking at 2026-05-20 18:44:36 BST with elapsed wall-clock time of 57h 59m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib task_group_wake_flags_cover_already_completed_and_duplicate_registrations -- --test-threads=1 --nocapture`
@@ -2216,7 +2180,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused runtime-value coverage for `LightweightTaskScheduler::wait_for_external_events`, including the ready-queue short path, idle fd and non-fd waiters, and a ready Unix fd waiter that is moved back to the ready queue.
 - Extended the Unix networking helper coverage to exercise Rustls-backed WebSocket raw-fd extraction plus nonblocking flag toggling through `WebSocketStateKind::MaybeTls`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.98/92.31/92.31`.
-- Updated active session tracking at 2026-05-20 19:16:36 BST with elapsed wall-clock time of 58h 31m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lightweight_scheduler_external_event_paths_cover_ready_queue_and_fd_polling -- --test-threads=1 --nocapture`
@@ -2235,7 +2198,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused runtime-value coverage for lightweight scheduler completion helpers, including no-op resume for a missing task id, waiter promotion during task completion, already-completed task completion, and unbounded lightweight-task wait detection before and after the waiting task completes.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `93.99/92.31/92.33`.
-- Updated active session tracking at 2026-05-20 19:37:57 BST with elapsed wall-clock time of 58h 52m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lightweight_scheduler_completion_helpers_cover_waiters_and_unbounded_waits -- --test-threads=1 --nocapture`
@@ -2253,7 +2215,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused Unix runtime-value coverage for `process.Pipe` stderr line and byte reads plus closed-pipe errors for `read_all_bytes`, `read_line`, `read_bytes`, `write_bytes`, and `flush`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.01/92.31/92.35`.
-- Updated active session tracking at 2026-05-20 19:59:56 BST with elapsed wall-clock time of 59h 14m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib process_pipe_helpers_cover_stderr_reads_and_closed_edges -- --test-threads=1 --nocapture`
@@ -2271,7 +2232,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused runtime-value coverage for HTTP bad-request false classification, root-path HTTP request rendering, output-pipe no-op flushes, and successful split request/response body reads after headers have already been received.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.02/92.31/92.36`.
-- Updated active session tracking at 2026-05-20 20:31:29 BST with elapsed wall-clock time of 59h 46m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib http_helper_parsing_covers_reason_phrases_and_header_errors -- --test-threads=1 --nocapture`
@@ -2292,7 +2252,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for mutable class and trait member-call dispatch, including receiver writeback, borrowed parameter writeback, and diagnostics when method metadata claims `borrow mut` but the target MIR function does not return an updated receiver.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.04/92.37/92.38`.
-- Updated active session tracking at 2026-05-20 20:52:59 BST with elapsed wall-clock time of 60h 7m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_mutating_member_calls_write_back_receivers_and_params -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2311,7 +2270,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended the MIR runtime collection/string/task helper coverage to exercise queue `get_or_none` and `get_or` immediate item, empty, closed, and cancelled paths, plus the internal `__get_in_task_group` and `__get_with_registered_producers` member-helper arity, type, and closed-queue paths.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.07/92.37/92.40`; the function floor intentionally stayed unchanged because this pass improved line/region coverage only.
-- Updated active session tracking at 2026-05-20 21:13:10 BST with elapsed wall-clock time of 60h 28m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_collection_string_and_task_helpers_cover_remaining_paths -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2331,7 +2289,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Left `examples/io/process_pipes.au` out of that direct-codegen object-emission set after verifying the direct backend still rejects it with `direct backend does not know dynamic method .write_all on Unknown`.
 - Added focused native-runtime coverage for direct channel wrappers around closed `try_send`, closed `send_timeout`, closed `recv`, closed `recv_timeout`, and item delivery through `recv_timeout`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.09/92.37/92.42`; the function floor intentionally stayed unchanged because this pass improved line/region coverage only.
-- Updated active session tracking at 2026-05-20 21:54:39 BST with elapsed wall-clock time of 61h 9m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib direct_backend_emits_object_for_broad_maintained_example_surface -- --test-threads=1 --nocapture`
   - `cargo run -p aura -- build examples/io/process_pipes.au --backend direct -o /tmp/aurora_process_pipes_direct`
@@ -2352,7 +2309,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended the direct runtime helper-error matrix to cover invalid arg-buffer sizes and indices, invalid cleanup registration and refresh arguments, zero queue capacity, wrong queue/task-group receiver types, negative queue timeout conversions, and negative `wait_any` / `wait_all` timeout conversions.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.14/92.37/92.47`; the function floor intentionally stayed unchanged because this pass improved line/region coverage only.
-- Updated active session tracking at 2026-05-20 22:15:40 BST with elapsed wall-clock time of 61h 30m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib direct_runtime_helper_errors_surface_expected_diagnostics -- --test-threads=1 --nocapture`
@@ -2371,7 +2327,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused native-codegen coverage for `cleanup_place_type`, including nested receiver fields, parameter fields, local roots, inferred assignment roots, unknown root diagnostics, and unknown nested-field diagnostics.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.16/92.44/92.50`.
-- Updated active session tracking at 2026-05-20 22:34:53 BST with elapsed wall-clock time of 61h 50m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib cleanup_place_type_resolves_receivers_params_locals_and_inferred_values -- --test-threads=1 --nocapture`
@@ -2390,7 +2345,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Expanded the native-codegen opaque resource-member success matrix across file flushing/closing plus process child, pipe, completed-process, and supervisor member surfaces. The final full coverage run confirmed those direct-backend branches were already mostly covered through maintained examples, with one shared runtime-value line settling during the pass.
 - Added focused runtime-value coverage for the lightweight scheduler defensive path where a task yields `Exit` without publishing a result, covering the error returned by `TaskState::completed_result()`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.17/92.47/92.50`.
-- Updated active session tracking at 2026-05-20 23:07:24 BST with elapsed wall-clock time of 62h 22m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib direct_backend_resource_member_success_paths_cover_remaining_network_surfaces -- --test-threads=1 --nocapture`
@@ -2410,7 +2364,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for task `result_or_none()` and `result_or(default)` nonblocking shortcut paths, including cached ready task results, cached cancelled lightweight task results, and already-cancelled runtime contexts returning `Option.None` or the fallback without blocking.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.18/92.47/92.51`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-20 23:29:53 BST with elapsed wall-clock time of 62h 44m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts -- --test-threads=1 --nocapture`
@@ -2428,7 +2381,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for `process::start` and `process::run` error edges, including spawn failures for nonexistent commands, run timeouts, and cancelled-context execution returning structured `Result.Err(Error.*)` values.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.20/92.47/92.53`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-20 23:50:21 BST with elapsed wall-clock time of 63h 05m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges -- --test-threads=1 --nocapture`
@@ -2447,7 +2399,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for filesystem and network builtin error results, including non-string `fs::write_string` paths, write/write-bytes failures against directories, create-dir/read-dir/open failures, invalid TCP connect/listen/UDP bind addresses, non-string `net::listen` addresses, and Unix listen/connect/connect-timeout error paths.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.23/92.47/92.59`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-21 00:11:18 BST with elapsed wall-clock time of 63h 25m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges -- --test-threads=1 --nocapture`
@@ -2466,7 +2417,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for process-child timeout and cancellation handling, `wait_or_none` timeout fallback, `wait_ok` error results for nonzero exits, `kill`, `terminate`, `close`, and unsupported child-method diagnostics.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.28/92.47/92.65`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-21 00:31:37 BST with elapsed wall-clock time of 63h 46m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges -- --test-threads=1 --nocapture`
@@ -2484,7 +2434,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for process-supervisor start/default optional arguments, duplicate child-name errors, event waits, empty `wait_or_none` fallback behavior, `stop`, `close`, and cancelled wait paths for live supervised children.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.31/92.47/92.66`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-21 00:53:22 BST with elapsed wall-clock time of 64h 08m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges -- --test-threads=1 --nocapture`
@@ -2503,7 +2452,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended the focused MIR process-supervisor coverage to exercise missing required start arguments, explicit `cwd`, `env`, `stdin`, `stdout`, `stderr`, `restart`, `backoff`, `max_restarts`, and `group` bindings, plus the `wait_or_none` success path that returns `Option.Some(event)`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.33/92.53/92.70`.
-- Updated active session tracking at 2026-05-21 01:12:39 BST with elapsed wall-clock time of 64h 27m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges -- --test-threads=1 --nocapture`
@@ -2523,7 +2471,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added direct native-codegen coverage for `process.Supervisor.start(...)`, covering the missing-command argument diagnostic and a success path with explicit `name`, `command`, `cwd`, `env`, `stdin`, `stdout`, `stderr`, `restart`, `backoff`, `max_restarts`, and `group` arguments.
 - Added focused MIR runtime coverage for closed TCP streams/listeners, UDP sockets, HTTP listeners, and Unix listeners/streams; negative `read_bytes` / `recv` / `recv_from` / Unix `read_exact` size validation; non-string TCP `write_all`; closed UDP send/local/peer address wrappers; and invalid UTF-8 UDP datagram text decoding.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.47/92.66/92.87`.
-- Updated active session tracking at 2026-05-21 01:49:03 BST with elapsed wall-clock time of 65h 03m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib direct_backend_resource_member -- --test-threads=1 --nocapture`
@@ -2545,7 +2492,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for task-list validation plus `join_task`, `wait_any`, and `wait_all` ready, error, timeout, and cancellation result paths.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.51/92.66/92.90`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-21 02:09:56 BST with elapsed wall-clock time of 65h 24m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_paths -- --test-threads=1 --nocapture`
@@ -2563,7 +2509,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Added focused MIR runtime coverage for nonzero process-completed `check()` results, invalid UTF-8 completed stdout/stderr diagnostics, EOF `ProcessPipe.read_line` / `read_bytes` option results, closed-pipe `read_all`, `read_line`, `read_bytes`, `write_all`, `write_bytes`, and `flush` error results, negative process-pipe read-size validation, and unsupported process-pipe method diagnostics.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.55/92.76/92.95`.
-- Updated active session tracking at 2026-05-21 02:31:41 BST with elapsed wall-clock time of 65h 46m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges -- --test-threads=1 --nocapture`
@@ -2583,7 +2528,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 - Extended imported-module MIR lowering coverage to exercise imported receiver-method task rejection, specialized local function task targets, specialized imported static method task targets, specialized class-object static methods, and module-qualified enum unit variant lowering.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.56/92.76/92.96`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
-- Updated active session tracking at 2026-05-21 03:01:06 BST with elapsed wall-clock time of 66h 15m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lowerer_module_resolution_and_rendering_helpers_cover_imported_paths -- --test-threads=1 --nocapture`
@@ -2603,7 +2547,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended native-codegen helper coverage for alternate builtin call inference names across `io`, `fs`, `process`, and `net`, plus maintained collection and resource member return-type table entries for string, vec, map, set, queue, task group, file, process, TCP, UDP, HTTP, WebSocket, Unix, and TLS surfaces.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.59/92.76/93.01`; the function floor intentionally stayed unchanged because this pass improved line and region coverage only.
 - An accidental non-serialized `cargo llvm-cov --text --show-missing-lines` run timed out three direct-backend CLI cases under the default parallel test harness; the same three cases passed when rerun with `--test-threads=1`, matching the maintained coverage gate.
-- Updated active session tracking at 2026-05-21 03:40:28 BST with elapsed wall-clock time of 66h 55m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib infer_operand_and_rvalue_types_track_plain_classes -- --test-threads=1 --nocapture`
@@ -2630,7 +2573,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added a hidden `cfg(coverage)` re-export module for the direct native runtime surface and configured `cfg(coverage)` as an expected Rust cfg in `crates/aurora-compiler/Cargo.toml`.
 - Covered the exported unary, binary, cast, condition, IO, filesystem, map, instance, channel, wait, timeout, and sleep wrappers through the coverage-only integration target.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.80/93.40/93.09`.
-- Updated active session tracking at 2026-05-21 04:35:29 BST with elapsed wall-clock time of 67h 50m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --test native_runtime_ffi -- --test-threads=1 --nocapture`
@@ -2651,7 +2593,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended the coverage-only native-runtime FFI test to exercise exported Vec/Map/Set wrappers, direct file open/write/read/flush/close wrappers, and direct process completed status/stdout/stderr/bytes/check wrappers through the library/staticlib copy.
 - Used a temporary file under the test temp directory and a tiny `/bin/sh -c ...` process run with null stdio so the test avoids requiring an active lightweight task scheduler.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.85/93.56/93.11`.
-- Updated active session tracking at 2026-05-21 05:02:43 BST with elapsed wall-clock time of 68h 17m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --test native_runtime_ffi -- --test-threads=1 --nocapture`
@@ -2674,7 +2615,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added a hidden coverage-only value-clone helper so the FFI tests can inspect wrapper payloads without taking ownership away from subsequent direct-runtime wrapper calls.
 - Used a short `/tmp/a-nrf-...sock` Unix socket path to avoid platform path-length limits and an in-test `TcpListener` fixture for HTTP timeout/request/response coverage.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.10/94.23/93.20`.
-- Updated active session tracking at 2026-05-21 05:37:39 BST with elapsed wall-clock time of 68h 52m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --test native_runtime_ffi -- --test-threads=1 --nocapture`
@@ -2695,7 +2635,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added a direct-codegen diagnostic matrix for collection/runtime member argument errors across `String`, `Vec`, `Map`, `Set`, `Queue`, `Task`, and `TaskGroup` surfaces.
 - Fixed the expected strings for existing queue member diagnostics to match the current direct-backend messages exactly.
 - This pass locks in user-facing diagnostic behavior but did not move aggregate compiler coverage beyond the native-runtime FFI checkpoint.
-- Updated active session tracking at 2026-05-21 05:53:10 BST with elapsed wall-clock time of 69h 08m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib direct_backend_collection_member_argument_errors_cover_core_runtime_paths -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2708,7 +2647,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused native-codegen helper coverage for cleanup return metadata lookup, too-few return values, opaque release validation, incomplete writeback values, complete writeback release, and plain-class recursive release validation.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.14/94.27/93.22`; the line floor intentionally stays at `95.14` because one refreshed coverage report reached `95.1511%` lines while the immediately prior report was `95.1491%`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 06:12:31 BST with elapsed wall-clock time of 69h 27m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib native_codegen_release_helpers_cover_cleanup_error_paths -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2730,7 +2668,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused MIR runtime coverage for serialized-entrypoint stdout success, broken-pipe success, non-broken stdout write failure, runtime-error partial stdout broken-pipe handling, runtime-error partial stdout write failure, and rendered serialized-MIR diagnostics.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.15/94.27/93.22`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 06:33:23 BST with elapsed wall-clock time of 69h 48m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2751,7 +2688,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Removed the three unreachable `empty MIR place` branches in `Env::read_member`, `Env::read_place`, and `Env::write_place`; `split_place_segments` already rejects empty places before those helpers split the parsed segment list, and the existing env-place regression still covers empty, trailing, doubled, unknown, nested read, and nested write behavior.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.16/94.27/93.23`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 06:56:14 BST with elapsed wall-clock time of 70h 11m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib env_place_helpers_cover_nested_reads_and_writes -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2774,7 +2710,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added MIR runtime inferred resource-type coverage for WebSocket listener/stream values and TLS listener/stream values using the existing runtime resource constructors.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.17/94.27/93.24`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 07:39:41 BST with elapsed wall-clock time of 70h 54m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_resource_member_helpers_cover_io_process_and_network_paths -- --test-threads=1 --nocapture`
@@ -2798,7 +2733,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended the MIR runtime resource-type coverage through TLS listener and TLS stream dynamic member dispatch, covering `local_addr`, `accept`, `read_line`, `write_all`, `read_exact`, `close`, and unsupported-method diagnostics.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.19/94.27/93.24`; the function and region floors intentionally stay unchanged because the exact totals still sit below the next hundredth.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 08:01:52 BST with elapsed wall-clock time of 71h 16m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -2819,7 +2753,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended the MIR runtime helper coverage for command vector success and malformed element paths, byte vector overflow validation, optional string decoding and malformed options, i32 decoding, process and generic timeout validation, duration validation, supervisor `max_restarts`, header map decoding, named range construction, non-integer/too-many/missing-stop range errors, type-substitution fallbacks, direct type-parameter collection, float ordering, and oversized range starts.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.30/94.43/93.31`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 08:23:06 BST with elapsed wall-clock time of 71h 38m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths -- --test-threads=1 --nocapture`
@@ -2843,7 +2776,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended the MIR runtime argument-binding coverage for required positional arguments that skip pre-filled named slots and optional builtin arguments with unknown named parameters.
 - Raised `coverage:compiler:check` again to enforce safe lines/functions/regions `95.33/94.43/93.33`; a trial `93.34` region floor was too tight for the full instrumented run after scheduler-sensitive counters settled, so the final gate keeps the non-flaky `93.33` floor.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 09:35:02 BST with elapsed wall-clock time of 72h 49m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_argument_binding_helpers_cover_named_and_positional_cases -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_operator_and_task_helpers_cover_additional_branches -- --test-threads=1 --nocapture`
@@ -2865,7 +2797,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Extended native-runtime cleanup helper coverage for null cleanup-argument buffers, zero cleanup handles that must not be released, and the already-draining cleanup-stack guard path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.33/94.43/93.34`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 10:00:53 BST with elapsed wall-clock time of 73h 15m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib native_runtime_timeout_and_option_decoders_cover_error_edges -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths -- --test-threads=1 --nocapture`
@@ -2888,7 +2819,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Hardened Unix/TLS runtime-value tests to use short, collision-resistant `/tmp` socket paths with cleanup after the full compiler coverage run exposed stale process-id-only socket names. A first attempt to move sockets under the per-test `TempDir` failed on macOS `SUN_LEN` limits, so the final helper keeps paths short.
 - Tried raising the line coverage gate to `95.34`, but the clean full coverage run failed exact comparison even though the table rounded to `95.34%`; the stable gate remains lines/functions/regions `95.33/94.43/93.34`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt` from the latest coverage data.
-- Updated active session tracking at 2026-05-21 10:42:06 BST with elapsed wall-clock time of 73h 57m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib native_runtime_task_boundary_maps_task_signals_and_resumes_unrelated_panics -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib unix_and_tls_helpers_cover_local_socket_and_tls_surface -- --test-threads=1 --nocapture`
@@ -2912,7 +2842,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added coverage for the no-current-yielder fallback path by entering a lightweight task context with a null yielder and checking that `yield_current_lightweight_task(...)` returns `None`.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.34/94.43/93.34` after the exact full coverage artifact reached 95.3418% line coverage.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 11:07:31 BST with elapsed wall-clock time of 74h 22m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib lightweight_scheduler_completion_helpers_cover_waiters_and_unbounded_waits -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2933,7 +2862,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused package coverage for multi-member workspace updates, package graph module-name misses, bad lockfiles during package discovery, malformed package/workspace manifest propagation, missing package source roots, missing path dependencies, Unix cache marker absence, directory manifests, and cached-revision match/mismatch checks.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.34/94.43/93.36` after the exact full coverage artifact reached 93.3613% region coverage.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-21 11:55:17 BST with elapsed wall-clock time of 75h 10m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler package_ --lib -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -2954,7 +2882,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Simplified integer division and remainder helper code by removing unreachable checked-division and checked-remainder fallbacks after the existing zero-divisor guard.
 - Confirmed `integer.rs` now reports 100.00% regions, 100.00% functions, and 100.00% lines.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 14:16:06 BST with elapsed wall-clock time of 101h 30m.
 - Verified with:
   - `cargo fmt --all`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler integer_value_helpers_cover_division_remainder_comparisons_and_bounds --lib -- --test-threads=1 --nocapture`
@@ -2974,7 +2901,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Flattened native-codegen named builtin argument binding from iterator closures into explicit loops, reducing duplicated uncovered function entries in the coverage report.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.36/94.67/93.37`. A trial function floor of `94.68` was too tight for the exact value `94.6795`, so the final floor is the exact-safe `94.67`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 14:41:58 BST with elapsed wall-clock time of 101h 56m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler analysis_recovery_helpers_stop_when_replacement_makes_no_progress --lib -- --test-threads=1 --nocapture` before implementation failed with the expected unresolved helper
   - `cargo fmt --all`
@@ -3003,7 +2929,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Fixed a product checker bug exposed by the new coverage: `net.TcpStream.write_all(..., timeout=...)` now rejects non-`Duration` timeout arguments instead of silently accepting them.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.49/94.67/93.46`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 15:07:49 BST with elapsed wall-clock time of 102h 22m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfaces --lib -- --test-threads=1 --nocapture`
   - `cargo fmt --all`
@@ -3024,7 +2949,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Expanded direct checker helper coverage for literal float pattern rendering, recursive class reachability cycle guards, missing lowered-field defensive paths, `TaskGroup`/`Duration` lowering, module/unit substitution and unresolved-type-parameter helpers, module/unit type-pattern unification, imported namespace lookup through imported child modules, and the empty specialized `TaskGroup[]()` constructor success path.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.53/94.67/93.49`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 16:05:48 BST with elapsed wall-clock time of 103h 20m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges --lib -- --test-threads=1 --nocapture`
@@ -3052,7 +2976,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Expanded operator-trait helper coverage for missing trait metadata, missing operator methods, unrelated type-parameter bounds, mismatched RHS type patterns, binary/unary lookup-shape mismatches, skipped impls, and unbound generic impl bounds.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.59/94.67/93.55`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 16:39:55 BST with elapsed wall-clock time of 103h 54m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_expression_helper_paths_cover_collection_specialization_and_control_edges --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_function_default_loop_and_resource_validation_cover_additional_branches --lib -- --test-threads=1 --nocapture`
@@ -3075,7 +2998,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added helper coverage for receiver functions missing a `self` local and terminal `Unit`/module type-parameter collection paths.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.63/94.67/93.58`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 16:59:22 BST with elapsed wall-clock time of 104h 14m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_manual_wait_surface_compiles --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_builtin_call_surface_compiles_across_success_and_error_matrix --lib -- --test-threads=1 --nocapture`
@@ -3097,7 +3019,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added runtime-value coverage for Unix process-pipe `read_all` on stdout/stderr, output-pipe write rejection, stdin-pipe read rejection, stdin-pipe write/flush success, cached child wait success paths, post-exit no-op `terminate()`/`kill()`, duplicate queue-producer registration, and matching duplicate `Content-Length` plus identity transfer-encoding handling.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.64/94.67/93.59`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 17:20:58 BST with elapsed wall-clock time of 104h 35m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler process_pipe_helpers_cover_read_all_and_pipe_direction_errors --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler nested_queue_producer_registration_walks_collections_instances_and_variants --lib -- --test-threads=1 --nocapture`
@@ -3119,7 +3040,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added the final edge cases from this batch for WebSocket host-header fallback handling and multiple Git cache-root discovery.
 - Re-ran the full `npm run coverage:compiler:check` gate at the enforced lines/functions/regions floor `95.64/94.67/93.59`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt` from the completed coverage run.
-- Updated active session tracking at 2026-05-22 17:36:29 BST with elapsed wall-clock time of 104h 51m.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler package_path_cache_and_validation_helpers_cover_remaining_edges --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler http_request_builder_covers_host_variants_and_header_overrides --lib -- --test-threads=1 --nocapture`
@@ -3142,7 +3062,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added direct-backend entry thunk coverage for `Unit` parameters, which covered the thunk unboxing path and restored the exact region floor after the helper refactor.
 - Re-ran the full serialized `npm run coverage:compiler:check` gate at the enforced lines/functions/regions floor `95.64/94.67/93.59`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt` from the completed coverage run.
-- Updated active session tracking at 2026-05-22 18:22:03 BST with elapsed wall-clock time of 105h 36m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_wait_helpers_cover_unknown_task_payload_fallback --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_entry_thunk_handles_unit_parameters --lib -- --test-threads=1 --nocapture`
@@ -3166,7 +3085,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Expanded explicit builtin enum type helper coverage across the maintained one-argument builtin enum family.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.67/94.67/93.67`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 18:45:29 BST with elapsed wall-clock time of 106h 00m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler module_namespace_and_builtin_enum_helpers_cover_resolution_paths --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_operand_and_construct_error_surface_reports_expected_diagnostics --lib -- --test-threads=1 --nocapture`
@@ -3188,7 +3106,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Refactored repeated semantic builtin argument invariant diagnostics through `required_ordered_arg(...)` so `print`, `sleep`, `wait_any`, `wait_all`, `abs`, `min`, `max`, `sqrt`, and parsing builtins no longer add separate uncovered diagnostic closures for the same post-binding invariant.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.76/94.94/93.73`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 19:00:43 BST with elapsed wall-clock time of 106h 15m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_builtin_function_success_surface_infers_expected_types --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3207,7 +3124,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Preserved the existing direct-backend diagnostic strings while reducing `native_codegen.rs` missed functions from 40 to 4.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `95.85/96.04/93.80`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 19:16:55 BST with elapsed wall-clock time of 106h 31m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler direct_backend_operand_and_construct_error_surface_reports_expected_diagnostics --lib -- --test-threads=1 --nocapture`
@@ -3232,7 +3148,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Preserved the existing poison-recovery behavior and direct-runtime null/poisoned-lock diagnostics.
 - Raised only the function side of `coverage:compiler:check`; the enforced lines/functions/regions floor is now `95.85/96.23/93.80`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 19:30:58 BST with elapsed wall-clock time of 106h 45m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler channel_and_task_helpers_tolerate_poisoned_locks --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths --lib -- --test-threads=1 --nocapture`
@@ -3257,7 +3172,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Refactored MIR runtime stdout mutex poison recovery from an `unwrap_or_else(...)` closure to an explicit `match`, preserving the existing poison-tolerant behavior while removing another uncovered helper closure from the coverage denominator.
 - Kept the enforced compiler coverage gate at lines/functions/regions `95.85/96.23/93.80`; the exact totals are now 93.8017% regions, 96.2327% functions, and 95.8510% lines.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 19:48:12 BST with elapsed wall-clock time of 107h 02m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler parse_expression_reports_trailing_tokens_and_primary_errors --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler mir_runtime_print_tolerates_poisoned_stdout_lock --lib -- --test-threads=1 --nocapture`
@@ -3276,7 +3190,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused MIR runtime coverage for `expect_process_optional_timeout(...)` rejecting oversized process timeout durations before converting to `u64`.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.86/96.29/93.81`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 20:05:45 BST with elapsed wall-clock time of 107h 20m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler mir_runtime_builtin_error_surface_covers_additional_builtin_branches --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics --lib -- --test-threads=1 --nocapture`
@@ -3299,7 +3212,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Preserved the existing diagnostics and runtime behavior while reducing the remaining compiler-generated missed function count in `mir_runtime.rs`.
 - Raised only the function side of `coverage:compiler:check`; the enforced lines/functions/regions floor is now `95.86/96.42/93.81`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 20:20:14 BST with elapsed wall-clock time of 107h 34m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler env_place_helpers_cover_nested_reads_and_writes --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges --lib -- --test-threads=1 --nocapture`
@@ -3323,7 +3235,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added focused coverage for `wait_timeout_condvar(...)` recovering a poisoned mutex guard after a timed condition-variable wait.
 - Kept `coverage:compiler:check` at lines/functions/regions `95.86/96.42/93.81`; the region total improved, but not enough to safely raise the two-decimal floor.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 20:34:56 BST with elapsed wall-clock time of 107h 49m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler condvar_helpers_tolerate_poisoned_wait_guards --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3343,7 +3254,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added high-level checker coverage showing `while not false` remains treated as reachable and still rejects repeated non-copy field moves.
 - Kept `coverage:compiler:check` at lines/functions/regions `95.86/96.42/93.81`; the checker line/region totals improved, but the workspace totals did not move enough to raise a floor.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 20:49:54 BST with elapsed wall-clock time of 108h 04m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_loop_const_bool_conditions_cover_grouped_and_negated_forms --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3370,7 +3280,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
   - specialized named callables.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.89/96.48/93.83`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 21:07:11 BST with elapsed wall-clock time of 108h 21m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler spawn_callable_resolution_covers_module_and_associated_targets --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3390,7 +3299,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added direct checker coverage for member-object type resolution through grouped member objects, cast wrappers, specialize wrappers, indexed Vec objects, fallback expression typing, missing-name diagnostics, moved-name diagnostics, and retained moved-field paths.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.90/96.51/93.85`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-22 21:20:30 BST with elapsed wall-clock time of 108h 35m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler place_path_and_resource_helpers_cover_remaining_checker_paths --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3415,7 +3323,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
   - Missing module-qualified task-call diagnostics.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.92/96.61/93.87`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 06:57:51 BST with elapsed wall-clock time of 118h 12m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler module_namespace_and_builtin_enum_helpers_cover_resolution_paths --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler spawn_callable_resolution_covers_module_and_associated_targets --lib -- --test-threads=1 --nocapture`
@@ -3440,7 +3347,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Kept the new move/const-bool helper probes in the semantic coverage suite, including grouped borrowed-field match scrutinees, direct move-state merging with stale match-borrow places, and nested negated constant booleans.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.94/96.68/93.89`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 07:30:38 BST with elapsed wall-clock time of 118h 45m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_move_consumption_helpers_cover_managed_specialized_member_and_match_paths --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths --lib -- --test-threads=1 --nocapture`
@@ -3464,7 +3370,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
   - Qualified non-enum module members now cover the module-namespace fallthrough before normal member diagnostics.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.96/96.71/93.90`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 07:44:08 BST with elapsed wall-clock time of 118h 58m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_expression_helper_paths_cover_collection_specialization_and_control_edges --lib -- --test-threads=1 --nocapture`
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler module_namespace_and_builtin_enum_helpers_cover_resolution_paths --lib -- --test-threads=1 --nocapture`
@@ -3485,7 +3390,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Added direct checker coverage for plural class and enum specialization diagnostics by extending the helper program with `PairBox[A, B]` and `Pair[A, B]` and exercising under-applied explicit type argument lists.
 - Kept `coverage:compiler:check` at enforced lines/functions/regions `95.96/96.71/93.90`; exact coverage improved, but not enough to clear the next two-decimal floor.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 07:55:37 BST with elapsed wall-clock time of 119h 10m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_expression_helper_paths_cover_collection_specialization_and_control_edges --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3509,7 +3413,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
   - invalid `wait_any` and `wait_all` calls over `Vec[int32]` and `bool` return no type.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `95.97/96.71/93.91`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 08:09:02 BST with elapsed wall-clock time of 119h 23m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler lowerer_module_resolution_and_rendering_helpers_cover_imported_paths --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`
@@ -3536,7 +3439,6 @@ Review the current Aurora repo state against the v1-readiness objective, continu
   - `fs.File` read/write/flush/close member surfaces.
 - Raised `coverage:compiler:check` to enforce lines/functions/regions `96.01/96.71/93.94`.
 - Regenerated `target/compiler-coverage.json`, `target/compiler-coverage.txt`, `target/compiler-coverage.lcov`, and `target/compiler-coverage-missing.txt`.
-- Updated active session tracking at 2026-05-23 08:27:46 BST with elapsed wall-clock time of 119h 42m.
 - Verification:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfaces --lib -- --test-threads=1 --nocapture`
   - `npm run coverage:compiler:check`

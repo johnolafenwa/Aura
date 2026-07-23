@@ -1,12 +1,5 @@
 # April 24 Round 8 Review Fix Pass
 
-## Session
-
-- Start time: 2026-04-24 07:47:29 BST
-- Stop time: 2026-04-24 08:42:12 BST
-- Total elapsed wall-clock time: 0h 55m
-- Stop rule: Complete the Round 8 review fix pass or reach 12 continuous hours.
-
 ## Goal
 
 Validate Claude's Round 8 report, fix confirmed defects across the supported Aurora API, and keep tests/docs/work tracking aligned with behavior changes.

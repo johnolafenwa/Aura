@@ -1,12 +1,5 @@
 # April 24 VitePress Book Pass
 
-## Session
-
-- Start time: 2026-04-24 18:14:09 BST
-- Stop time: 2026-04-24 18:33:53 BST
-- Total elapsed wall-clock time: 0h 19m
-- Stop rule: Complete the VitePress book pass or reach 12 continuous hours.
-
 ## Goal
 
 Create a maintained VitePress documentation book for Aurora with a use-case-driven Learn track and a comprehensive manual/reference track for the currently supported language and API surface.

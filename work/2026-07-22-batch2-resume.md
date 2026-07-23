@@ -1,10 +1,15 @@
 # Batch 2 resume
 
-## Session
+## Continuation status
 
-- Started: 2026-07-22 16:10:25 BST.
-- Current elapsed: 11h 28m 51s as of 2026-07-23 03:39:16 BST.
-- Hard stop: 2026-07-23 04:10:25 BST after 12 continuous hours.
+- Current status: Phase 3 Duration is committed at `b268c72`, Randomness is
+  committed at `c3df960`, and the complete Phase 3 JSON ticket plus its
+  ownership/resource closure is committed at `5889227`. Bytes, `assert`, and
+  the retry-worker gate are next in the required Phase 3 order.
+- Continuation policy: continue the authorized Batch 2 work without a duration
+  cap until the scope is complete, the user redirects it, or a genuine
+  external, semantic-decision, destructive-action, or safety blocker requires
+  input. Elapsed time is not a stop condition.
 - Target: resume the preserved Batch 2 checkout, full-gate and commit the
   Phase 3 builtin-metadata foundation and fixed resource caps, then continue
   Phase 3, Phase 3.5, Phase 4, and V6 without entering Phase 5.
@@ -20,7 +25,7 @@
 
 ## Work completed
 
-- Reconciled the live checkout, commit history, worktrees, and active-session
+- Reconciled the live checkout, commit history, worktrees, and current status
   record before resuming implementation.
 - Centralized builtin receiver, fixed-parameter, variadic-parameter, and
   passing-mode metadata across semantic analysis and both execution backends.
@@ -295,6 +300,15 @@
   is in progress with an explicit `MovePlace` operand, destructive nested-field
   and variant-payload operations, and pointer-identity regressions. JSON will
   not be committed on top of a false ownership contract.
+- Added proposed ADR-0022 for the separately requested future syntax design:
+  bare parameters become a universal logical shared capability, `mut T` would
+  replace `borrow mut T`, and `own T` remains transfer. The ADR records the
+  resulting bare-copy snapshot migration, generic-trait representability,
+  scoped shared aliases, task-capture exception, two-phase consuming matches,
+  indexed mutable-place boundary, borrowed-return and callable-capture
+  disposition, resource protocol, edition/cache invalidation, tooling, and
+  verification decisions. It is explicitly not ratified or implemented during
+  Batch 2.
 - Completed the explicit-move and backend-adapter closure across MIR and direct
   execution, including destructive aggregate/field/payload transfer, consuming
   match backtracking, owned collection and queue paths, task captures, and
@@ -405,5 +419,5 @@
 
 ## Follow-up
 
-- Commit the exact full-gated JSON ticket alone. Then continue Bytes, `assert`,
-  and the retry-worker example in the required Phase 3 order.
+- JSON was committed alone at `5889227` after the exact full gate. Continue
+  Bytes, `assert`, and the retry-worker example in the required Phase 3 order.

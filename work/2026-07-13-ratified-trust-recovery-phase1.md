@@ -1,19 +1,11 @@
 # Ratified Trust-Recovery Phase 1
 
-## Session
-
-- Started: 2026-07-13 10:03:59 BST.
-- Completed: 2026-07-13 12:14:43 BST.
-- Elapsed: 2h 10m 44s.
-- Stop rule: complete authoritative work-order tickets 1-8, or reach 12 continuous hours.
-
 ## Goal
 
 Implement the first eight tickets from the ratified Aurora trust-recovery roadmap using failing-first regressions, forced-backend parity checks, and synchronized documentation updates.
 
 ## Work completed
 
-- Recorded the active substantial-work session before implementation began.
 - Recorded accepted ADRs for D1-D13 and linked the decision index from the architecture guide.
 - Added the forced-MIR/forced-direct runtime-fixture harness and fixed MIR `io.write` streaming exposed by it.
 - Implemented symmetric contextual `None`, unit equality, and the rejected-`is` migration diagnostic.

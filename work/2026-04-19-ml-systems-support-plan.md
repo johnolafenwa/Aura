@@ -1,7 +1,5 @@
 # 2026-04-19 ML Systems Support Plan
 
-- Session start: 2026-04-19 15:45:53 BST
-- Session complete: 2026-04-19 15:48:29 BST
 - Goal: Draft a concrete in-repo roadmap for turning Aurora into a strong ML systems language without trying to replace Python/PyTorch for model training.
 - Work completed: Added `docs/ml_systems_support_plan.md` as a forward-looking roadmap that defines Aurora's intended role in ML systems, scopes the work away from replacing Python training stacks, and lays out the required pillars for subprocess/process supervision, tensor/device handle interop, zero-copy/shared-memory transport, structured serialization, and observability. The roadmap also records the cross-cutting type-system, runtime, MIR, native-runtime, tooling, and testing implications, plus staged milestones from ML control-plane foundations through distributed runtime primitives. Updated the root `README.md` so the roadmap is discoverable from the repo entrypoint.
 - Verification: Verified the relative markdown links in `README.md` and `docs/ml_systems_support_plan.md` with a local Node-based link check. No compiler, runtime, CLI, or editor behavior changed in this pass, so no code-facing test suite was run.
@@ -9,8 +7,6 @@
 
 ## Follow-up Refinement
 
-- Session start: 2026-04-19 18:31:30 BST
-- Session complete: 2026-04-19 18:35:26 BST
 - Goal: Refocus the ML systems roadmap on near-term host-side array support for local numeric and data-processing work, while making full tensor, device, accelerator, and distributed support an explicit later phase.
 - Work completed: Reworked `docs/ml_systems_support_plan.md` so the near-term Aurora story now includes a maintained host-side array or tensor-lite layer for NumPy-style CPU-side preprocessing, postprocessing, evaluation helpers, and batch shaping. Reordered the roadmap and feature pillars so subprocess supervision, structured serialization, observability, and local numeric work come before zero-copy transport and tensor/device handle interop, and added a dedicated future-work section that scopes full tensor placement, accelerator execution, and distributed runtime primitives as later stages.
 - Verification: Verified the relative markdown links in `README.md` and `docs/ml_systems_support_plan.md` with a local Node-based link check. No compiler, runtime, CLI, or editor behavior changed in this refinement, so no code-facing test suite was run.

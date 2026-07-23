@@ -1,11 +1,5 @@
 # 2026-04-15 Git Dependencies
 
-## Session
-
-- Started: `2026-04-15 23:32:43 BST`
-- Completed: `2026-04-15 23:45:25 BST`
-- Total elapsed: `0h 13m`
-
 ## Goal
 
 Extend the Aurora package system from local path dependencies to git-backed dependencies with:

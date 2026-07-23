@@ -4,12 +4,6 @@ Add a small maintained convenience layer over the explicit queue/task/process re
 
 This pass should also update the maintained examples, tutorials, and editor/tooling metadata so the default documented style is more Pythonic.
 
-## Session
-
-- Start: 2026-04-19 20:25:12 BST
-- Stop: 2026-04-19 21:01:33 BST
-- Elapsed: 0h 36m
-
 ## Work Completed
 
 - Added a maintained convenience layer over the explicit queue/task/process wait enums:

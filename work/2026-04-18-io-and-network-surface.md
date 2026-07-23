@@ -1,9 +1,6 @@
 # 2026-04-18 IO And Network Surface
 
-- Session start: 2026-04-18 08:02:02 BST
 - Goal: implement maintained actual I/O and network I/O capabilities across Aurora, including any syntax or builtin-module support needed, plus full compiler/runtime/tooling/docs coverage.
-- Session completed: 2026-04-18 09:31:54 BST
-- Total elapsed: 1h 29m 52s
 - Work completed:
   - added maintained builtin `io`, `fs`, and `net` modules plus compiler-side builtin module registration
   - added checker, MIR lowering, MIR runtime, direct native codegen, and direct runtime support for blocking file and TCP I/O

@@ -2,13 +2,6 @@
 
 Validate and fix the latest review findings covering the remaining native bare-`None` coercion holes, wait-site inconsistencies, checker false positives, and the `fs.write_bytes(path, [])` run-vs-build divergence.
 
-## Session
-
-- Start: 2026-04-22 12:11:16 BST
-- Stop: 2026-04-22 13:16:10 BST
-- Elapsed: 01:04:54
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first regressions in [crates/aura/tests/cli.rs](/Users/johnolafenwa/source2/Aurora/crates/aura/tests/cli.rs) and [crates/aurora-compiler/src/sema_tests.rs](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/src/sema_tests.rs) for the latest review surface: native bare-`None` coercions through collections and nested option fields, no-timeout `Queue`/`Task` wait helpers, cancellation during `sleep(...)`, immediate `wait_any([])`, `fs.write_bytes(path, [])`, and move-type `Vec[...]` literal checking.

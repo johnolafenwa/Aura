@@ -2,13 +2,6 @@
 
 Validate and fix the newest review findings covering the remaining match-expression move-tracking false positive, queue-iteration cancellation hang, and the swap out-of-bounds message parity gap.
 
-## Session
-
-- Start: 2026-04-22 14:33:27 BST
-- Stop: 2026-04-22 15:38:34 BST
-- Elapsed: 01:05:07
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first coverage for the remaining Claude review issues:

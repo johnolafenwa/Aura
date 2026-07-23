@@ -1,13 +1,7 @@
 # Batch 2: Control Plane, Expression Kernel, Native Path, and V6
 
-## Session
+## Batch boundary
 
-- Started: 2026-07-14 17:18:17 BST.
-- Last confirmed elapsed: 7h 37m 37s as of 2026-07-15 00:55:54 BST.
-- Interrupted: the session ended before its completion condition or 12-hour
-  limit was recorded; the preserved checkout was resumed on 2026-07-22 in a
-  fresh active session.
-- Original hard stop: 2026-07-15 05:18:17 BST after 12 continuous hours.
 - Batch boundary: complete B2.0 and Phases 3, 3.5, and 4 plus V6; do not begin Phase 5.
 
 ## Goal
@@ -30,7 +24,6 @@ at the Batch 2 checkpoint with one coverage re-ratchet.
 
 ## Work completed
 
-- Recorded the completion-bound session before implementation.
 - Accepted the Batch 1 rulings: ADR-0014, ADR-0015, and ADR-0017 become
   Accepted; ADR-0016 text is accepted while B2.0-a closes its implementation
   defect.

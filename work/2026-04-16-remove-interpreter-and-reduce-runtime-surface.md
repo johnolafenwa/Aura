@@ -2,13 +2,6 @@
 
 Remove the interpreter completely, retain only the MIR runtime and native codegen execution paths, and align the maintained Aurora surface with the reduced architecture.
 
-## Session
-
-- Start time: 2026-04-16 10:51:15 BST
-- Stop time: 2026-04-16 11:06:51 BST
-- Total elapsed: 00:15:36
-- Stop rule: Complete the work or reach 12 continuous hours
-
 ## Plan
 
 1. Inventory every interpreter-backed API, runtime type, CLI command path, test dependency, and maintained doc/example reference.

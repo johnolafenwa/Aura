@@ -4,10 +4,6 @@ Add maintained process-group support to Aurora's shell-free `process` module so 
 
 This pass should cover the compiler, MIR runtime, direct runtime/backend, CLI-facing behavior, maintained examples/tutorials, and fallback editor metadata.
 
-## Session
-
-- Start: 2026-04-19 21:17:15 BST
-
 ## Work Completed
 
 - Added maintained `group=true` support to `process.start(...)` and `process.run(...)` in the builtin module surface.

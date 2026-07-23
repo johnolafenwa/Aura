@@ -2,18 +2,11 @@
 
 ## Goal
 
-Continue driving the compiler and language-server coverage to enforced 100%, starting from the post-stop baseline of `92.12%` lines / `90.59%` functions / `92.25%` regions for the compiler.
-
-## Session
-
-- Started: `2026-04-14 21:25 BST`
-- Stopped: `2026-04-15 09:25 BST`
-- Total elapsed: `12h 00m`
-- Stop rule: complete the work or reach 12 continuous hours
+Continue driving the compiler and language-server coverage to enforced 100%, starting from the baseline of `92.12%` lines / `90.59%` functions / `92.25%` regions for the compiler.
 
 ## Work Completed
 
-- Resumed the coverage push immediately after the prior 12-hour stop with a fresh active session and work note.
+- Continued the coverage push from the previously recorded compiler baseline.
 - Updated the compiler coverage baseline after a fresh full run to `92.29%` lines / `90.84%` functions / `92.15%` regions.
 - Updated the compiler coverage baseline again after the direct-backend builtin/spawn error sweep to `92.50%` lines / `91.06%` functions / `92.26%` regions.
 - Updated the compiler coverage baseline again after the direct-backend member-call sweep to `92.72%` lines / `91.09%` functions / `92.33%` regions.
@@ -43,7 +36,7 @@ Continue driving the compiler and language-server coverage to enforced 100%, sta
 
 ## Verification
 
-- Session resumed from a green baseline recorded in the previous coverage session note.
+- The previous coverage note recorded a green baseline.
 - `cargo test -p aurora-compiler --test coverage_surface -- --nocapture`
 - `cargo test -p aurora-compiler --test coverage_runtime_errors -- --nocapture`
 - `cargo test -p aurora-compiler native_codegen::tests::direct_backend_internal_collection_member -- --nocapture`
@@ -65,4 +58,4 @@ Continue driving the compiler and language-server coverage to enforced 100%, sta
 ## Follow-up
 
 - Continue targeting the remaining large uncovered ranges in `sema.rs`, `interpreter.rs`, `native_codegen.rs`, `mir_runtime.rs`, and `native_runtime.rs`, with the next pass focused on the highest-density helper functions still carrying large unexecuted region counts.
-- Stop reason: the session reached the mandatory 12-hour continuous-work limit before the 100% target was reached.
+- The 100% coverage target remained incomplete.

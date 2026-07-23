@@ -2,13 +2,6 @@
 
 Fix the 11 still-live defects confirmed from `/tmp/aurora_review`, covering `Option`-match inference, `aura run` stdout flushing on runtime errors, `TaskGroup` scope semantics, cooperative cancellation, task failure surfacing, literal-`match` and `with` move tracking, self-receiver false positives, and `Vec.insert` / `Vec.swap` out-of-bounds handling.
 
-## Session
-
-- Start: 2026-04-21 22:34:16 BST
-- Stop: 2026-04-22 00:27:33 BST
-- Elapsed: 01:53:17
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added or updated failing-first regressions for the still-live defects across CLI, checker fixtures, and runtime/native-runtime coverage.

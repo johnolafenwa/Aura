@@ -2,12 +2,6 @@
 
 Fix the remaining April 21 post-follow-up review findings around builtin module enum constructor lowering in MIR and the non-Unix TLS listener wait regression without regressing the maintained compiler/runtime behavior.
 
-## Session
-
-- Start: 2026-04-21 14:30:39 BST
-- Stop: 2026-04-21 14:46:59 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first regressions for:

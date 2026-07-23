@@ -1,11 +1,5 @@
 # 2026-04-15 Deps Update Command
 
-## Session
-
-- Started: `2026-04-15 23:49:03 BST`
-- Completed: `2026-04-15 23:57:27 BST`
-- Total elapsed: `0h 08m`
-
 ## Goal
 
 Add package-manager update commands for the implemented git dependency surface:

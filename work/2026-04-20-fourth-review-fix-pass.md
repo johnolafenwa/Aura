@@ -2,13 +2,6 @@
 
 Close the fourth-pass externally reviewed correctness, ownership, runtime, LSP, and documentation defects end to end, with failing regressions first and full verification at the end.
 
-## Session
-
-- Start: 2026-04-20 20:31:12 BST
-- Stop: 2026-04-20 22:19:08 BST
-- Elapsed: 1h 48m
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first compiler fixtures for indirect recursive enum construction, `match borrow mut` reassignment and nested aliasing, managed `with` resource field moves, nested missing-pattern diagnostics, `Option.Some(...)` / `Option.None` inference, expression-form `match` positions, unreachable enum arms, and supertrait syntax plus inherited obligations.

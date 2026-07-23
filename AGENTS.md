@@ -17,37 +17,32 @@ Do not treat examples and tutorials as passive documentation. They are part of t
 
 ## Persistence And Stop Conditions
 
-When the user gives an explicit completion condition such as:
+Treat explicit completion conditions literally. Agents may work for as long as
+needed to complete the authorized task. This repository imposes no duration
+cap, continuous-session limit, start-time requirement, elapsed-time tracking
+requirement, or timer-based stop condition.
 
-- "do not stop until it is fully done"
-- "keep going until X reaches 100%"
-- "take as much time as you need"
-- or any request that clearly authorizes multi-hour or multi-day work
+When the user specifies a completion target:
 
-then treat that condition literally.
+- do not stop at an internal milestone because the remaining work is large
+- do not substitute a "reasonable stopping point" for the stated target
+- do not pause only to report partial progress unless the user requests a checkpoint
+- do not split the remaining work into a separate project unless the user requests it
+- do not treat elapsed time, a date boundary, a turn boundary, or partial quantitative improvement as completion
 
-In those cases:
-
-- do not stop at an internal milestone just because the remaining work is large
-- do not substitute a "reasonable stopping point" for the user's stated target
-- do not pause only to report partial progress unless the user asked for a checkpoint
-- do not make a judgment call that the rest should be a separate project if the user explicitly asked to continue
-- for substantial work, record the session start time in `work/task-board.md` before deep implementation work begins
-- keep the active session entry updated with elapsed wall-clock time while the work is in progress
-- do not stop for time-budget reasons unless the session has reached 12 continuous hours of work
-
-Only stop before the stated target is reached if one of these is true:
+Only stop before the target is reached when:
 
 - the user redirects or cancels the work
-- there is a real blocker that cannot be resolved through normal implementation, testing, or local investigation
+- a genuine blocker cannot be resolved through normal implementation, testing, local investigation, or safe alternatives
+- required authorization, user input, or an external resource is unavailable and meaningful progress cannot continue
 - the next step would be destructive, irreversible, or otherwise unsafe without confirmation
-- the work session has reached 12 continuous hours without completion
 
-If you do hit a blocker, say exactly what the blocker is, what was attempted, and what decision or missing resource is preventing further progress.
+If blocked, report exactly what is blocked, what was attempted, what remains,
+and what decision, authorization, resource, or external-state change is needed.
 
-If the 12-hour limit is reached before completion, record the stop time, total elapsed time, remaining work, and exact stop reason in both `work/task-board.md` and the dated work note for that pass.
-
-For quantitative targets, partial improvement is not completion. For example, if the user says to reach 100% coverage, raising the coverage floor is useful progress but it is not the end state.
+For quantitative targets, partial improvement is not completion. For example,
+raising a coverage floor is progress, but it does not complete a request to
+reach 100% coverage.
 
 ## Required Updates When Behavior Changes
 
@@ -99,6 +94,30 @@ Use `npm run coverage:lsp` regularly and move the package toward enforced 100% c
 
 Keep the extension thin and test packaging/build behavior whenever the LSP surface changes.
 
+## Build Artifact Hygiene
+
+Rust test, coverage, benchmark, and alternate-flag profiles can make `target/`
+grow very quickly. Build outputs are disposable and must not be allowed to
+consume the workstation indefinitely.
+
+- Check `du -sh target` and available disk space before and after heavyweight
+  coverage, parity, benchmark, or full-CI runs.
+- If `target/` exceeds 20 GiB, available disk space falls below 25 GiB, or
+  repeated profiles are no longer needed, clean obsolete build artifacts before
+  continuing.
+- Prefer the narrowest sufficient cleanup while artifacts are still reusable.
+  Use `cargo llvm-cov clean --workspace` after coverage-only outputs are no
+  longer needed, and use `cargo clean` when the accumulated Rust build tree is
+  no longer worth preserving.
+- Remove stale Aurora-generated temporary linker/test artifacts after an
+  interrupted or failed gate. Do not remove a live process's files while the
+  process is still running.
+- After a broad cleanup, rebuild only the minimal binary or profile needed for
+  the next step. Do not immediately recreate every previous profile.
+- Never treat source files, fixtures, examples, user-created files,
+  `Cargo.lock`, `package-lock.json`, or dependency caches outside this
+  repository as disposable build output.
+
 ## Tutorials And Examples
 
 The `tutorials/` directory should track the implemented subset of Aurora, not just the proposal.
@@ -111,14 +130,19 @@ If a feature is not implemented in the compiler, do not teach it as if it exists
 
 Keep `work/task-board.md` current.
 
-For substantial work, use an active work-session entry in `work/task-board.md` while the work is live. That entry must include:
+For substantial work, maintain a status entry containing:
 
-- the exact local start time
-- the current elapsed wall-clock time
-- the current target or task being worked
-- the stop rule: complete the work or reach 12 continuous hours
+- the current target and authorized scope
+- material work completed
+- current verification state
+- remaining work and any genuine blockers
 
-When the work is complete, clear the active session entry from `work/task-board.md`. Do not leave stale active-timer information behind after completion.
+Do not require or maintain start times, elapsed-time counters, active-session
+timers, duration caps, or timer-based stop rules. Dates may be used for work-note
+names and historical context, but they are not stop conditions.
+
+When work is complete, mark the target complete and remove or update stale
+in-progress status.
 
 For substantial work, add a dated note under `work/` describing:
 
@@ -126,5 +150,3 @@ For substantial work, add a dated note under `work/` describing:
 - work completed
 - verification
 - follow-up
-
-When a substantial work session starts, the dated note for that pass should also capture the session start time. If the work stops because the 12-hour limit was reached, the dated note must record the stop time and total elapsed time as well.

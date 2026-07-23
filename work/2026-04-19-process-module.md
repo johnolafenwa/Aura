@@ -16,12 +16,6 @@ Add the first maintained Aurora `process` module as a narrow, explicit subproces
 
 This pass should stay shell-free and should not try to implement restart supervisors, PTYs, process groups, or higher-level orchestration helpers.
 
-## Session
-
-- Start: 2026-04-19 19:07:22 BST
-- Stop: 2026-04-19 20:15:06 BST
-- Elapsed: 1h 07m 44s
-
 ## Work Completed
 
 - Added the first maintained shell-free `process` builtin module with:

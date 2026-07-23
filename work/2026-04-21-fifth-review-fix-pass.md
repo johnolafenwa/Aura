@@ -2,12 +2,6 @@
 
 Validate the fifth-pass externally reviewed defects, fix the confirmed compiler/runtime/tooling issues end to end with failing regressions first, and reverify the maintained surface.
 
-## Session
-
-- Start: 2026-04-21 00:16:26 BST
-- Stop: 2026-04-21 01:30:37 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first compiler, runtime, and CLI regressions for the fifth-pass review defects around `match borrow mut` writeback suppression after dead-path scrutinee assignment, native direct-backend bare `None` matching, TLS accept-loop timeout skipping, HTTP `413`/`431` listener recovery, `Self` in trait/impl parameter positions, builtin-variant shadowing by user classes, and the expanded filesystem read-all cap.

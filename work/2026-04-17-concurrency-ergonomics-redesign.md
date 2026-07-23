@@ -2,12 +2,6 @@
 
 Redesign Aurora's public concurrency experience to feel lighter and more Python-friendly while keeping the existing thread-based runtime and compatibility surface working.
 
-## Session
-
-- Start time: 2026-04-17 22:23:55 BST
-- Stop time: 2026-04-17 22:56:19 BST
-- Elapsed: 0h 32m 24s
-
 ## Work Completed
 
 - Added a compatibility-first ergonomic concurrency layer over the existing runtime so the maintained public surface now centers on `Queue[T]`, `queue()`, `tasks()`, `Task.result()`, `TaskGroup.start(...)`, and `Queue.get(timeout=...)`.

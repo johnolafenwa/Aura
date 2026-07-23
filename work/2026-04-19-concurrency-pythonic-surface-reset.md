@@ -18,11 +18,6 @@ Remove the older spellings and model completely:
 - `queue[T]()`
 - `tasks()`
 
-## Session
-
-- Start: 2026-04-19 15:07:46 BST
-- Completed: 2026-04-19 18:44:09 BST
-
 ## Work Completed
 
 - Removed the legacy concurrency surface from the maintained language, compiler, tooling, examples, and docs: `spawn`, `spawn detached`, `select`, `after(...)`, `queue()`, `queue[T]()`, and `tasks()` are no longer part of the public Aurora model.

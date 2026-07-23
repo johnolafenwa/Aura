@@ -4,12 +4,6 @@ Add a maintained process supervisor layer to Aurora's `process` module so Aurora
 
 This pass should cover the compiler, MIR runtime, direct runtime/backend, CLI-facing behavior, maintained examples/tutorials, and fallback editor metadata.
 
-## Session
-
-- Start: 2026-04-19 21:38:31 BST
-- Stop: 2026-04-19 22:25:00 BST
-- Elapsed: 0h 46m
-
 ## Work Completed
 
 - Added the maintained `process.supervisor()` API and new builtin process types:

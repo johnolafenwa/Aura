@@ -2,12 +2,6 @@
 
 Fix the confirmed runtime and package-system security/correctness issues from the latest review, with priority on native direct-runtime ownership leaks, git dependency command hardening, import/package path validation, runtime FFI hygiene, and remaining production panic/validation gaps.
 
-## Session
-
-- Start time: 2026-04-16 21:47:13 BST
-- Stop time: 2026-04-16 22:50:06 BST
-- Elapsed: 1h 02m 53s
-
 ## Work Completed
 
 - Reworked the direct native runtime ownership model so opaque values are `Arc`-backed, with explicit `aurora_direct_retain_value(...)` / `aurora_direct_release_value(...)` hooks and direct-backend codegen that now emits retain/release traffic for opaque temporaries, locals, returns, spawned thunk arguments, and deadline cleanup.

@@ -2,12 +2,6 @@
 
 Validate Claude's external Aurora review corpus under `/tmp/aurora_review`, confirm which reported issues still reproduce on the current tree, and record any stale or already-fixed findings.
 
-## Session
-
-- Start: 2026-04-21 22:14:46 BST
-- Stop: 2026-04-21 22:35:58 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Replayed Claude's top critical repros directly from `/tmp/aurora_review` against the current `./target/debug/aura`.

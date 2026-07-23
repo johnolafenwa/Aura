@@ -2,11 +2,6 @@
 
 Follow up on the April 17 external security and quality review by fixing the reported remaining issues in the compiler, package manager, MIR runtime, native runtime, checker, parser, and CLI.
 
-## Session
-
-- Start time: 2026-04-17 12:59:22 BST
-- End time: 2026-04-17 13:15:12 BST
-- Elapsed: 0h 16m
 
 ## Planned Scope
 

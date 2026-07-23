@@ -2,13 +2,6 @@
 
 Validate and fix the latest follow-up review findings after the live eleven-defect pass, covering indirect bare-`None` matching, `match`-expression move tracking, unobserved task panic surfacing, remaining vector OOB holes, early-return ownership diagnostics, and the stale maintained concurrency example.
 
-## Session
-
-- Start: 2026-04-22 10:48:44 BST
-- Stop: 2026-04-22 11:20:05 BST
-- Elapsed: 00:31:21
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first regressions for the new follow-up defects in [crates/aura/tests/cli.rs](/Users/johnolafenwa/source2/Aurora/crates/aura/tests/cli.rs) and compiler fixtures under [crates/aurora-compiler/tests/fixtures/check-fail/match_expression_move_persists.au](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/tests/fixtures/check-fail/match_expression_move_persists.au) and [crates/aurora-compiler/tests/fixtures/check-pass/return_only_branches_do_not_leak_moves.au](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/tests/fixtures/check-pass/return_only_branches_do_not_leak_moves.au).

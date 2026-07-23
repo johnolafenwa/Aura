@@ -2,12 +2,6 @@
 
 Review the latest April 21 follow-up fixes for regressions or remaining gaps in the checker, MIR lowering, and TLS runtime path.
 
-## Session
-
-- Start: 2026-04-21 13:40:52 BST
-- Stop: 2026-04-21 13:50:00 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Reviewed the current diffs in `sema.rs`, `mir.rs`, `runtime_value.rs`, and the new regression tests.

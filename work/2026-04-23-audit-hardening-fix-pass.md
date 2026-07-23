@@ -1,12 +1,5 @@
 # April 23 Audit Hardening Fix Pass
 
-## Session
-
-- Start time: 2026-04-23 20:14:36 BST
-- Stop time: 2026-04-23 20:56:09 BST
-- Total elapsed wall-clock time: 0h 42m
-- Stop rule: Complete the audit hardening pass or reach 12 continuous hours.
-
 ## Goal
 
 Fix the April 23 review findings and make the currently supported Aurora API more solid and secure without changing unrelated project state.

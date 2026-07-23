@@ -1,7 +1,5 @@
 # 2026-04-19 Async File I/O And Bounded Queues
 
-- Session start: 2026-04-19 13:17:29 BST
-
 ## Goal
 
 - Implement async file I/O plus bounded queues across the maintained Aurora surface.

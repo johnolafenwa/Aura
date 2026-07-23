@@ -1,11 +1,5 @@
 # 2026-04-15 Package Manifests and Dependencies
 
-## Session
-
-- Started: `2026-04-15 23:07:29 BST`
-- Completed: `2026-04-15 23:25:57 BST`
-- Total elapsed: `0h 18m`
-
 ## Goal
 
 Implement the first Aurora package-system milestone:

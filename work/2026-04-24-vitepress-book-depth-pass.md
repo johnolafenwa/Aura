@@ -1,12 +1,5 @@
 # April 24 VitePress Book Depth Pass
 
-## Session
-
-- Start time: 2026-04-24 18:52:25 BST
-- Stop time: 2026-04-24 19:16:46 BST
-- Total elapsed wall-clock time: 0h 24m
-- Stop rule: Complete the VitePress book depth pass or reach 12 continuous hours.
-
 ## Goal
 
 Rewrite the Aurora book so it reads like serious language documentation: practical and humane in the Learn track, precise and complete in the Manual track, with Aurora-first wording and comprehensive API behavior.

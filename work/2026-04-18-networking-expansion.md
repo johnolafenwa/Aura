@@ -1,9 +1,6 @@
 # 2026-04-18 Networking Expansion
 
-- Session start: 2026-04-18 22:44:15 BST
 - Goal: expand the maintained Aurora networking surface beyond blocking TCP-only support, including binary I/O, timeout-aware and cancellation-aware socket operations, broader network protocols, maintained examples/tutorials, and full compiler/runtime/tooling verification.
-- Session completed: 2026-04-19 01:45:44 BST
-- Total elapsed: 3h 01m 29s
 - Work completed:
   - expanded the maintained `io` / `fs` / `net` surface from the initial blocking file/TCP subset to the richer blocking network stack now exercised by maintained examples and tests: byte-oriented file I/O, timeout-aware TCP operations, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
   - added and stabilized compiler-backed builtin-module analysis/completion coverage for the new file and network resource members, including the advanced `fs.File`, `net.Tcp*`, `net.Udp*`, `net.Http*`, `net.WebSocket*`, `net.Unix*`, and `net.Tls*` surfaces

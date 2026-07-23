@@ -1,7 +1,5 @@
 # 2026-04-19 Architecture Docs
 
-- Session start: 2026-04-19 09:28:53 BST
-- Session complete: 2026-04-19 09:41:20 BST
 - Goal: Review the Aurora monorepo end to end and create a comprehensive `architecture_docs/` folder that explains the system architecture and teaches each major component from first principles.
 - Work completed: Reviewed the root workspace layout, compiler crate, CLI crate, language-server package, VS Code extension package, examples/tutorials, and existing READMEs, then authored a new `architecture_docs/` documentation set with beginner-friendly chapters for the overall system architecture, AST/source model, lexer, parser, semantic analysis, MIR, MIR runtime, native codegen/runtime, package and module loading, CLI/build tooling, editor tooling, testing strategy, and a full end-to-end walkthrough. Added Mermaid diagrams throughout the docs and standalone SVG assets for the compiler pipeline, runtime layering, and tooling flow. Updated the root `README.md` so the new architecture guide is discoverable from the repo entrypoint.
 - Verification: Verified markdown links across `README.md` and all files in `architecture_docs/` with a local Node-based link check. Attempted `cargo test -p aurora-compiler --quiet`, but the workspace currently fails to compile because of pre-existing signature mismatches in unrelated runtime files (`crates/aurora-compiler/src/mir_runtime.rs`, `crates/aurora-compiler/src/native_runtime.rs`, and `crates/aurora-compiler/src/runtime_value_tests.rs`) that were already modified outside this docs pass.

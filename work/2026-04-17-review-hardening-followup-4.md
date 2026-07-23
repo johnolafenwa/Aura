@@ -2,12 +2,6 @@
 
 Follow up on the latest Aurora review by fixing the remaining package hardening, MIR runtime safety, IntegerValue ordering cleanup, and reviewed defense-in-depth issues.
 
-## Session
-
-- Start time: 2026-04-17 20:15:45 BST
-- Stop time: 2026-04-17 20:37:38 BST
-- Elapsed: 0h 22m
-
 ## Work Completed
 
 - harden git dependency fetches against symlinked checkouts and interactive credential hangs

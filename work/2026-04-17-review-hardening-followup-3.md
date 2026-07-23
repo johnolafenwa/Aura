@@ -2,10 +2,6 @@
 
 Follow up on the newest Aurora review by fixing the remaining FFI-safety annotations, git revision validation, MIR/runtime safety guards, and the final reviewed landmines in MIR lowering and pattern checking.
 
-## Session
-
-- Start time: 2026-04-17 19:55:03 BST
-
 ## Planned Scope
 
 - mark the remaining raw-pointer FFI entrypoints as `unsafe extern "C"`
@@ -35,11 +31,6 @@ Follow up on the newest Aurora review by fixing the remaining FFI-safety annotat
 - `npm run test:lsp`
 - `npm run check:extension`
 - `cargo clippy -p aurora-compiler -p aura -- -D clippy::correctness`
-
-## Session End
-
-- Stop time: 2026-04-17 20:03:39 BST
-- Elapsed: 0h 08m
 
 ## Follow-up
 

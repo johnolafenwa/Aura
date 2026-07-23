@@ -2,10 +2,6 @@
 
 Remove leftover redundant compiler/runtime surface after interpreter removal, with the immediate focus on deleting the `*_via_mir` compiler aliases and aligning internal tests and maintained docs with the reduced two-path model.
 
-## Session
-
-- Start time: 2026-04-16 21:22:00 BST
-
 ## Work Completed
 
 - Removed the redundant compiler-side `run_source_via_mir(...)`, `run_path_via_mir(...)`, and `run_path_with_source_via_mir(...)` aliases from `crates/aurora-compiler/src/lib.rs`.

@@ -1,12 +1,5 @@
 # April 24 Post-Round-8 Regression Fix Pass
 
-## Session
-
-- Start time: 2026-04-24 09:06:52 BST
-- Stop time: 2026-04-24 09:39:30 BST
-- Total elapsed wall-clock time: 0h 33m
-- Stop rule: Complete the post-Round-8 regression fix pass or reach 12 continuous hours.
-
 ## Goal
 
 Fix the confirmed post-Round-8 regressions in queue iteration and native direct-backend cleanup unwinding, keeping focused regression coverage and verification aligned.

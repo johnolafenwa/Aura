@@ -1,6 +1,5 @@
 # 2026-04-19 Evented Networking Runtime
 
-- Session start: 2026-04-19 08:29:43 BST
 - Goal: replace the maintained blocking networking runtime paths with an internal evented/non-blocking socket runtime across Aurora's MIR and direct backends, keeping the existing language surface aligned while updating tests, examples, tutorials, and work logs.
 - Work completed:
   - moved the maintained socket-backed runtime onto nonblocking descriptors plus poll-driven readiness waits in `runtime_value.rs`

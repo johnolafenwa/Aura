@@ -1,22 +1,11 @@
 # Phase 1.5 Semantic Re-defaults
 
-## Session
-
-- Started: 2026-07-13 13:58:22 BST.
-- Paused: 2026-07-13 15:16:57 BST after 1h 18m 35s.
-- Resumed: 2026-07-13 16:40:01 BST after S1-S4 ratification.
-- Paused for D3 gate escalation: 2026-07-13 18:10:47 BST after a further 1h 30m 46s (2h 49m 21s total active elapsed).
-- Resumed: 2026-07-13 19:50:02 BST after G1-G3 ratification.
-- Completed: 2026-07-14 06:26:58 BST after a final continuous 10h 36m 56s; total active time across the paused segments was 13h 26m 17s.
-- Stop rule: complete Phase 1.5 and report, stop immediately on a ratified-rule gate failure or unforeseen ambiguity, or reach 12 continuous hours.
-
 ## Goal
 
 Preserve accepted Phase 1 in logical commits, complete verification cleanup tickets V1-V5, unbox direct-backend int64/uint64 with measured parity, and execute the breaking Phase 1.5 migration in the ratified D3, D2, D4, D5, D6 order with a full gate and separate commit for every decision.
 
 ## Work completed
 
-- Recorded the substantial-work session before beginning commit surgery or implementation.
 - Preserved accepted Phase 1 as four logical commits: forced backend harness, semantic recovery, runtime hardening, and documentation/ADRs.
 - Completed V1 by restoring an exact check-fail pin for mutable binding of a shared borrowed value without tripping D9 borrowed-return containment first.
 - Completed V2 with a debug teardown assertion and failing-first regression that forbids suspended direct-generated tasks from reaching scheduler destruction with forced-exit cleanup still attached.

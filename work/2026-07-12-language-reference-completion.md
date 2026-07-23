@@ -1,12 +1,5 @@
 # Language Reference Completion Pass
 
-## Session
-
-- Started: 2026-07-12 23:04:44 BST.
-- Completed: 2026-07-13 00:02:18 BST.
-- Elapsed: 57m 34s.
-- Stop rule: complete the reference or reach 12 continuous hours.
-
 ## Goal
 
 Make the maintained Aurora reference authoritative and complete enough that a reader can derive an accurate understanding of the implemented language and use it as the source for a future language book.

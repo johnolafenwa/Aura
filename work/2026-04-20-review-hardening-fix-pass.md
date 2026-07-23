@@ -2,13 +2,6 @@
 
 Close the externally reviewed ownership, concurrency, parser/runtime, process, and I/O/networking defects end to end, with failing regressions first and full verification at the end.
 
-## Session
-
-- Start: 2026-04-20 09:19:53 BST
-- Stop: 2026-04-20 11:58:39 BST
-- Elapsed: 2h 38m 46s
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first compiler fixtures for consume-plus-borrow call arguments, borrowed-vector iteration mutation during iteration, explicit non-copy vector indexing, and ambiguous overlapping trait impls.

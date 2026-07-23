@@ -2,10 +2,6 @@
 
 Follow up on the post-hardening Aurora review by fixing the remaining parser recursion, temp-file cleanup, lock poison, git rev handling, refcount guard, SIGPIPE restoration, float division, and remaining internal-error findings.
 
-## Session
-
-- Start time: 2026-04-17 13:26:20 BST
-
 ## Planned Scope
 
 - extend parser recursion guards beyond expressions and raise the supported recursion limit
@@ -42,11 +38,6 @@ Follow up on the post-hardening Aurora review by fixing the remaining parser rec
 - `cargo test -p aura`
 - `npm run test:lsp`
 - `npm run check:extension`
-
-## Session End
-
-- Stop time: 2026-04-17 13:55:36 BST
-- Elapsed: 0h 29m
 
 ## Follow-up
 

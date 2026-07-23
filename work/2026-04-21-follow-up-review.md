@@ -2,12 +2,6 @@
 
 Review the current post-fix tree for remaining regressions and uncaught issues after the latest fifth-pass fix sweep.
 
-## Session
-
-- Start: 2026-04-21 11:05:59 BST
-- Stop: 2026-04-21 11:14:35 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Re-read the current checker and runtime changes in `sema.rs` and `runtime_value.rs`, with extra attention on the new `match borrow mut` invalidation logic, module-qualified enum handling, and the reworked TLS accept loop.

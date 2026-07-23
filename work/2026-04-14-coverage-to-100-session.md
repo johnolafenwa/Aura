@@ -2,15 +2,7 @@
 
 ## Goal
 
-Drive the compiler and language-server coverage to enforced 100%, continuing the work until either the target is reached or the session reaches the 12-hour stop rule.
-
-## Session
-
-- Started: `2026-04-14 09:23 BST`
-- Stopped: `2026-04-14 21:23:25 BST`
-- Total elapsed: `12h 00m 25s`
-- Stop rule: complete the work or reach 12 continuous hours
-- Stop reason: reached the 12 continuous-hour session limit before the 100% coverage target was met
+Drive the compiler and language-server coverage to enforced 100%.
 
 ## Work Completed
 
@@ -20,7 +12,7 @@ Drive the compiler and language-server coverage to enforced 100%, continuing the
 - Added targeted compiler helper coverage in `analysis.rs`, `mir_runtime.rs`, `native_runtime.rs`, `interpreter.rs`, `native_codegen.rs`, and `sema.rs`.
 - Added another focused helper sweep over `interpreter.rs`, `mir_runtime.rs`, `native_runtime.rs`, and `sema.rs` to cover collection/task/error-path helpers that were still unhit after the broader corpus sweep.
 - Added another focused helper sweep across `analysis.rs`, `native_codegen.rs`, `sema.rs`, `interpreter.rs`, and the JS fallback `analysis.js`, covering builtin variant inference, identifier boundary matching, direct backend member/select inference, explicit type-argument helpers, negative-literal validation, borrowed-binding consumption, and additional string/task runtime branches.
-- Raised compiler coverage in this session from the prior `80.02%` line baseline to `82.45%` lines / `81.35%` functions / `83.69%` regions.
+- Raised compiler coverage from the prior `80.02%` line baseline to `82.45%` lines / `81.35%` functions / `83.69%` regions.
 - Moved compiler coverage further to `83.75%` lines / `82.71%` functions / `84.95%` regions.
 - Kept the language-server package green while moving it to `93.34%` statements / `86.41%` branches / `100%` functions / `93.34%` lines.
 - Completed a fresh full compiler coverage run after the latest helper sweep, moving the compiler to `84.10%` lines / `82.87%` functions / `85.23%` regions.
@@ -180,6 +172,6 @@ Drive the compiler and language-server coverage to enforced 100%, continuing the
 
 ## Follow-up
 
-- Latest measured compiler coverage at stop: `92.12%` lines / `90.59%` functions / `92.25%` regions.
+- Latest measured compiler coverage: `92.12%` lines / `90.59%` functions / `92.25%` regions.
 - Continue targeting the remaining large uncovered ranges in `native_codegen.rs`, `interpreter.rs`, and `sema.rs`, with the next pass focused on the still-unhit direct backend helper/function surface first, then the remaining interpreter call/constructor/runtime helper branches, and finally more high-denominator checker branches in `sema.rs`.
-- The session stopped only because the 12-hour limit was reached; the 100% coverage target remains incomplete.
+- The 100% coverage target remains incomplete.

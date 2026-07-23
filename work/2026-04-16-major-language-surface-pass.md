@@ -1,8 +1,5 @@
 # 2026-04-16 Major Language Surface Pass
 
-## Session
-
-- Start: 2026-04-16 00:00:18 BST
 - Goal: Finish the remaining major language gaps across the trait system, richer pattern matching, advanced ownership, and call/construction ergonomics.
 
 ## Plan
@@ -20,7 +17,7 @@
 - Next slice in progress: richer enums and `match`, covering multi-payload variants, nested patterns, expression-form `match`, and the remaining enum construction ergonomics in one coherent pass.
 - Active focus is now the current rich enum/match regression path, with the next step being a fresh rerun of the targeted fixture after the checker/interpreter groundwork to determine the remaining MIR/runtime gaps.
 - Borrowed return-value checking is now partially wired in with explicit source syntax like `-> borrow[self] T` / `-> borrow[user] T`; the immediate next step is syncing the new check-fail diagnostics and rerunning the fixture harness before expanding the remaining trait/ownership surface.
-- Session elapsed time refreshed to 9h 40m. The immediate next step is rerunning the narrowed compiler failure clusters against the current in-flight tree, then clearing the remaining checker/interpreter/direct-backend regressions before the 12-hour stop rule.
+- The immediate next step is rerunning the narrowed compiler failure clusters against the current in-flight tree, then clearing the remaining checker/interpreter/direct-backend regressions.
 
 ## Completed
 

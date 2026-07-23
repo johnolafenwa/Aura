@@ -1,9 +1,5 @@
 # 2026-04-18 Concurrency Surface Removal
 
-Start time: 2026-04-18 06:44:09 BST
-Completion time: 2026-04-18 07:30:14 BST
-Elapsed: 0h 46m
-
 ## Goal
 
 Remove the old concurrency compatibility layer completely so the maintained Aurora surface only exposes:

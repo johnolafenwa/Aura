@@ -1,11 +1,7 @@
 # Batch 1: Pre-reference Punch List and Phase 2 Reference Freeze
 
-## Session
+## Batch boundary
 
-- Started: 2026-07-14 08:45:15 BST.
-- Completed: 2026-07-14 15:03:21 BST.
-- Elapsed: 6h 18m 06s.
-- Stop rule: complete Batch 1 and report its checkpoint, encounter a genuine stop under the provisional-decision protocol, or reach 12 continuous hours at 2026-07-14 20:45:15 BST.
 - Batch boundary: do not begin Batch 2 or Phase 3; V6 is deferred to Batch 2 with Phase 4.
 
 ## Goal
@@ -14,7 +10,6 @@ Complete P1-P5, introduce stable structured diagnostics and MIR runtime call/tas
 
 ## Work completed
 
-- Recorded the active completion-authorized session and hard stop before implementation.
 - Added the compiler-owned stable diagnostic model: append-only banded `AU####`
   codes, primary and labeled secondary spans, notes, help, and
   machine-applicable edits; human rendering now includes the code.

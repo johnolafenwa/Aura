@@ -2,13 +2,6 @@
 
 Validate and fix the latest review finding covering queue iteration hanging when a sibling task panics without closing the queue.
 
-## Session
-
-- Start: 2026-04-22 21:32:55 BST
-- Stop: 2026-04-22 23:20:56 BST
-- Elapsed: 01:48:01
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first coverage for the new sibling-task-panic queue-iteration hang in [crates/aura/tests/cli.rs](/Users/johnolafenwa/source2/Aurora/crates/aura/tests/cli.rs) and [crates/aurora-compiler/src/runtime_value_tests.rs](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/src/runtime_value_tests.rs).

@@ -2,12 +2,6 @@
 
 Fix the remaining April 21 follow-up review findings around `match borrow mut` stale bindings through `borrow mut` calls, module-qualified builtin enum constructor typing, and the non-Unix TLS listener accept path without regressing the maintained compiler/runtime behavior.
 
-## Session
-
-- Start: 2026-04-21 13:08:01 BST
-- Stop: 2026-04-21 13:34:49 BST
-- Stop rule: Complete the work or reach 12 continuous hours.
-
 ## Work Completed
 
 - Added failing-first regressions for:
@@ -32,4 +26,4 @@ Fix the remaining April 21 follow-up review findings around `match borrow mut` s
 
 ## Follow-up
 
-- The shared TLS accept logic is now source-aligned across platforms and fully reverified on Unix. The non-Unix branch was not runtime-executed locally in this session, so cross-platform CI coverage is still the next place to catch any Windows-specific socket behavior drift.
+- The shared TLS accept logic is now source-aligned across platforms and fully reverified on Unix. The non-Unix branch was not runtime-executed locally, so cross-platform CI coverage is still the next place to catch any Windows-specific socket behavior drift.

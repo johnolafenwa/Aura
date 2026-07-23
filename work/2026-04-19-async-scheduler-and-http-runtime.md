@@ -1,9 +1,5 @@
 # 2026-04-19 Async Scheduler And HTTP Runtime
 
-- Session start: 2026-04-19 09:24:09 BST
-- Session complete: 2026-04-19 10:07:40 BST
-- Elapsed: 0h 43m
-
 ## Goal
 
 - Replace the remaining polling/thread-blocking concurrency scheduling with a maintained async/event-loop scheduler path.
