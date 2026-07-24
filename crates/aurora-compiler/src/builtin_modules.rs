@@ -1761,6 +1761,115 @@ fn json_namespace() -> ModuleNamespace {
     }
 }
 
+fn bytes_vec_type_ref() -> TypeRef {
+    type_ref("Vec", vec![type_ref("uint8", Vec::new())])
+}
+
+fn bytes_error_enum_info() -> EnumInfo {
+    let named = |name: &str, ty| EnumPayloadFieldDecl {
+        name: Some(name.to_string()),
+        ty,
+        span: builtin_span(),
+    };
+    builtin_enum_info(
+        "bytes",
+        "Error",
+        vec![
+            (
+                "InvalidUtf8",
+                vec![named("index", type_ref("int32", Vec::new()))],
+                true,
+            ),
+            (
+                "InvalidHexLength",
+                vec![named("length", type_ref("int32", Vec::new()))],
+                true,
+            ),
+            (
+                "InvalidHexDigit",
+                vec![
+                    named("index", type_ref("int32", Vec::new())),
+                    named("byte", type_ref("uint8", Vec::new())),
+                ],
+                true,
+            ),
+            (
+                "InvalidBase64",
+                vec![named("index", type_ref("int32", Vec::new()))],
+                true,
+            ),
+        ],
+    )
+}
+
+fn bytes_namespace() -> ModuleNamespace {
+    let bytes_result = || {
+        type_ref(
+            "Result",
+            vec![bytes_vec_type_ref(), type_ref("bytes.Error", Vec::new())],
+        )
+    };
+    let functions = vec![
+        function_info(
+            "bytes",
+            "hex_encode",
+            vec![value_param("value", bytes_vec_type_ref())],
+            type_ref("String", Vec::new()),
+        ),
+        function_info(
+            "bytes",
+            "hex_decode",
+            vec![value_param("text", type_ref("String", Vec::new()))],
+            bytes_result(),
+        ),
+        function_info(
+            "bytes",
+            "base64_encode",
+            vec![value_param("value", bytes_vec_type_ref())],
+            type_ref("String", Vec::new()),
+        ),
+        function_info(
+            "bytes",
+            "base64_decode",
+            vec![value_param("text", type_ref("String", Vec::new()))],
+            bytes_result(),
+        ),
+        function_info(
+            "bytes",
+            "sha256",
+            vec![value_param("value", bytes_vec_type_ref())],
+            bytes_vec_type_ref(),
+        ),
+        function_info(
+            "bytes",
+            "sha256_string",
+            vec![value_param("text", type_ref("String", Vec::new()))],
+            bytes_vec_type_ref(),
+        ),
+    ]
+    .into_iter()
+    .map(|function| (function.decl.name.clone(), function))
+    .collect::<BTreeMap<_, _>>();
+    let error = bytes_error_enum_info();
+    let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
+    ModuleNamespace {
+        name: "bytes".to_string(),
+        path: "bytes".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        classes: BTreeMap::new(),
+        enums: enums.clone(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_classes: BTreeMap::new(),
+        all_enums: enums,
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    }
+}
+
 fn telemetry_namespace(name: &str) -> ModuleNamespace {
     let functions = match name {
         "metrics" => vec![
@@ -1818,6 +1927,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "random" => Some(random_namespace()),
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
+        "bytes" => Some(bytes_namespace()),
         "json" => Some(json_namespace()),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
@@ -1826,11 +1936,11 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "json", "toml", "metrics", "log", "trace", "random",
+    "sys", "path", "bytes", "json", "toml", "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
-    HOST_BUILTIN_MODULES
+    let mut metadata = HOST_BUILTIN_MODULES
         .iter()
         .flat_map(|module_name| {
             builtin_root_namespace(module_name)
@@ -1842,7 +1952,35 @@ fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
             let metadata = HostBuiltinMetadata::from_function_info(&function);
             (metadata.qualified_name.clone(), metadata)
         })
-        .collect()
+        .collect::<BTreeMap<_, _>>();
+    for associated in [
+        HostBuiltinMetadata {
+            qualified_name: "String.to_bytes".to_string(),
+            params: vec![HostBuiltinParamMetadata {
+                name: "value".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Borrow,
+                required: true,
+            }],
+            return_type: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        },
+        HostBuiltinMetadata {
+            qualified_name: "String.from_bytes".to_string(),
+            params: vec![HostBuiltinParamMetadata {
+                name: "bytes".to_string(),
+                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                passing: ReceiverKind::Borrow,
+                required: true,
+            }],
+            return_type: Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), Type::named("bytes.Error")],
+            ),
+        },
+    ] {
+        metadata.insert(associated.qualified_name.clone(), associated);
+    }
+    metadata
 }
 
 pub(crate) fn host_builtin_metadata(name: &str) -> Option<&'static HostBuiltinMetadata> {
@@ -1859,8 +1997,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "sys", "path", "json", "toml", "log", "metrics",
-        "trace",
+        "io", "fs", "net", "process", "random", "sys", "path", "bytes", "json", "toml", "log",
+        "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

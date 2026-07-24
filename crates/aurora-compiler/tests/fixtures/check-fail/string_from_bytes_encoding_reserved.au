@@ -1,0 +1,3 @@
+def main():
+    text = String.from_bytes(encoding="utf-8")
+    print(text)

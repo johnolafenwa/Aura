@@ -1,0 +1,7 @@
+class Decoder:
+    def from_bytes(self, value: int32) -> int32:
+        return value + 1
+
+def main():
+    String = Decoder()
+    print(String.from_bytes(7))

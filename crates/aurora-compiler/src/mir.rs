@@ -3579,33 +3579,72 @@ impl<'a> Lowerer<'a> {
                     _ => object,
                 };
                 if let ExprKind::Name(type_name) = &base_object.kind {
-                    if let Some(associated) = BuiltinAssociatedFunction::resolve(type_name, field) {
-                        let ordered_args = associated.bind_args(args, callee.span).expect(
-                            "checked builtin associated call should bind during MIR lowering",
-                        );
-                        let argument = ordered_args[0]
-                            .expect("Duration constructors require a value argument");
-                        let value = self.lower_expr_at_sequence_point(
-                            &argument.value,
-                            Some(&Type::named("int64")),
-                        );
-                        self.emit(Instruction::Assign {
-                            target: temp.clone(),
-                            value: Rvalue::Call {
-                                callee: CallTarget::Name(format!(
-                                    "{}.{}",
-                                    type_name,
-                                    associated.name()
-                                )),
-                                args: vec![MirArg {
-                                    name: argument.name.clone(),
-                                    value,
-                                    writeback_place: None,
-                                }],
-                            },
-                        });
-                        return Operand::Place(temp);
+                    if self.infer_expr_type(base_object).is_none() {
+                        if let Some(associated) =
+                            BuiltinAssociatedFunction::resolve(type_name, field)
+                        {
+                            let ordered_args = associated.bind_args(args, callee.span).expect(
+                                "checked builtin associated call should bind during MIR lowering",
+                            );
+                            let argument = ordered_args[0]
+                                .expect("builtin associated functions require one argument");
+                            let expected = match associated {
+                                BuiltinAssociatedFunction::DurationMilliseconds
+                                | BuiltinAssociatedFunction::DurationSeconds
+                                | BuiltinAssociatedFunction::DurationMinutes => {
+                                    Type::named("int64")
+                                }
+                                BuiltinAssociatedFunction::StringFromBytes => {
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")])
+                                }
+                            };
+                            let passing = associated
+                                .argument_passing(0)
+                                .expect("builtin associated argument should declare passing");
+                            let value = self.lower_expr_for_passing(
+                                &argument.value,
+                                Some(&expected),
+                                passing,
+                            );
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::Call {
+                                    callee: CallTarget::Name(format!(
+                                        "{}.{}",
+                                        associated.owner_name(),
+                                        associated.name()
+                                    )),
+                                    args: vec![MirArg {
+                                        name: argument.name.clone(),
+                                        value,
+                                        writeback_place: None,
+                                    }],
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
                     }
+                }
+                if field == "to_bytes"
+                    && self.infer_expr_type(object).as_ref() == Some(&Type::named("String"))
+                {
+                    let value = self.lower_expr_for_passing(
+                        object,
+                        Some(&Type::named("String")),
+                        ReceiverKind::Borrow,
+                    );
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name("String.to_bytes".to_string()),
+                            args: vec![MirArg {
+                                name: None,
+                                value,
+                                writeback_place: None,
+                            }],
+                        },
+                    });
+                    return Operand::Place(temp);
                 }
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
@@ -6032,7 +6071,7 @@ fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -
     let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
     if matches!(
         qualified_name.as_str(),
-        "io.Error" | "process.Error" | "json.Value" | "json.Error"
+        "io.Error" | "process.Error" | "bytes.Error" | "json.Value" | "json.Error"
     ) {
         return qualified_name;
     }

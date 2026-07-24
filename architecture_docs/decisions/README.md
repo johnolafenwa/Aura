@@ -29,3 +29,4 @@ test locations that must prove completion.
 20. [ADR-0020: Randomness algorithm and security boundary](0020-randomness-algorithm-and-security-boundary.md)
 21. [ADR-0021: JSON value model and codec policy](0021-json-value-model-and-codec-policy.md)
 22. [ADR-0022: Implicit shared, `mut`, and `own` capability syntax](0022-implicit-shared-mut-own-capability-syntax.md) — proposed; not yet ratified or implemented
+23. [ADR-0023: Byte-vector codecs and hashing policy](0023-byte-vector-codecs-and-hashing-policy.md)

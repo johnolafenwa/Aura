@@ -111,6 +111,11 @@ def copy_bytes(path: String) -> Result[Vec[uint8], io.Error]:
         return Result.Ok(bytes)
 ```
 
+When an application deliberately crosses between raw data and UTF-8 text, use
+`text.to_bytes()` or `String.from_bytes(payload)` rather than an implicit
+conversion. [22-bytes.md](22-bytes.md) covers those conversions plus strict
+hex/base64 codecs and SHA-256.
+
 See:
 
 - [examples/io/read_text_file.au](../examples/io/read_text_file.au)

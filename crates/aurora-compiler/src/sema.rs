@@ -8229,39 +8229,76 @@ impl<'a> FunctionChecker<'a> {
 
         if let ExprKind::Member { object, field } = &base_callee.kind {
             if let ExprKind::Name(type_name) = &object.kind {
-                if let Some(constructor) = BuiltinAssociatedFunction::resolve(type_name, field) {
-                    if explicit_type_args.is_some() {
-                        return Err(Diagnostic::at(
-                            span,
-                            format!(
-                                "`Duration.{}` does not take explicit type arguments",
-                                constructor.name()
-                            ),
-                        ));
+                if !locals.contains_key(type_name) {
+                    if let Some(constructor) = BuiltinAssociatedFunction::resolve(type_name, field)
+                    {
+                        if explicit_type_args.is_some() {
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "`{}.{}` does not take explicit type arguments",
+                                    constructor.owner_name(),
+                                    constructor.name()
+                                ),
+                            ));
+                        }
+                        let ordered_args = constructor.bind_args(args, span)?;
+                        match constructor {
+                            BuiltinAssociatedFunction::DurationMilliseconds
+                            | BuiltinAssociatedFunction::DurationSeconds
+                            | BuiltinAssociatedFunction::DurationMinutes => {
+                                let value_arg = required_ordered_arg(
+                                &ordered_args,
+                                0,
+                                span,
+                                "internal error: Duration constructor should bind one value argument",
+                            )?;
+                                let actual = self.type_of_expr_hint(
+                                    &value_arg.value,
+                                    locals,
+                                    Some(&Type::named("int64")),
+                                )?;
+                                if actual != Type::named("int64") {
+                                    return Err(Diagnostic::at(
+                                        value_arg.span,
+                                        format!(
+                                            "`Duration.{}` expects `int64`, found `{}`",
+                                            constructor.name(),
+                                            actual
+                                        ),
+                                    ));
+                                }
+                                return Ok(Type::named("Duration"));
+                            }
+                            BuiltinAssociatedFunction::StringFromBytes => {
+                                let bytes_arg = required_ordered_arg(
+                                &ordered_args,
+                                0,
+                                span,
+                                "internal error: String.from_bytes should bind one bytes argument",
+                            )?;
+                                let expected =
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                let actual = self.type_of_expr_hint(
+                                    &bytes_arg.value,
+                                    locals,
+                                    Some(&expected),
+                                )?;
+                                if actual != expected {
+                                    return Err(Diagnostic::at(
+                                        bytes_arg.span,
+                                        format!(
+                                        "`String.from_bytes` expects `Vec[uint8]`, found `{actual}`"
+                                    ),
+                                    ));
+                                }
+                                return Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::named("String"), Type::named("bytes.Error")],
+                                ));
+                            }
+                        }
                     }
-                    let ordered_args = constructor.bind_args(args, span)?;
-                    let value_arg = required_ordered_arg(
-                        &ordered_args,
-                        0,
-                        span,
-                        "internal error: Duration constructor should bind one value argument",
-                    )?;
-                    let actual = self.type_of_expr_hint(
-                        &value_arg.value,
-                        locals,
-                        Some(&Type::named("int64")),
-                    )?;
-                    if actual != Type::named("int64") {
-                        return Err(Diagnostic::at(
-                            value_arg.span,
-                            format!(
-                                "`Duration.{}` expects `int64`, found `{}`",
-                                constructor.name(),
-                                actual
-                            ),
-                        ));
-                    }
-                    return Ok(Type::named("Duration"));
                 }
             }
         }
@@ -9293,6 +9330,9 @@ impl<'a> FunctionChecker<'a> {
                             return match builtin_member {
                                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
                                     Ok(Type::named("int32"))
+                                }
+                                BuiltinMember::StringToBytes => {
+                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
                                 }
                                 BuiltinMember::StringContains
                                 | BuiltinMember::StringStartsWith
@@ -13120,12 +13160,46 @@ impl<'a> FunctionChecker<'a> {
                 Ok(())
             }
             ExprKind::Member { object, field } => {
-                if matches!(
-                    &object.kind,
-                    ExprKind::Name(type_name)
-                        if BuiltinAssociatedFunction::resolve(type_name, field).is_some()
-                ) {
-                    return Ok(());
+                if let ExprKind::Name(type_name) = &object.kind {
+                    if !locals.contains_key(type_name) {
+                        if let Some(associated) =
+                            BuiltinAssociatedFunction::resolve(type_name, field)
+                        {
+                            let ordered_args = associated.bind_args(args, callee.span)?;
+                            for (index, argument) in ordered_args.into_iter().enumerate() {
+                                let Some(argument) = argument else {
+                                    continue;
+                                };
+                                let Some(passing) = associated.argument_passing(index) else {
+                                    continue;
+                                };
+                                if let Some(path) = self.borrow_call_place(&argument.value) {
+                                    if passing == ReceiverKind::Value
+                                        && (!include_consumed
+                                            || self
+                                                .place_path_type(
+                                                    &path,
+                                                    locals,
+                                                    argument.value.span,
+                                                )?
+                                                .is_none_or(|ty| self.is_copy_type(&ty)))
+                                    {
+                                        continue;
+                                    }
+                                    places.push(BorrowedCallPlace {
+                                        path,
+                                        passing,
+                                        param_name: associated
+                                            .argument_name(index)
+                                            .unwrap_or("argument")
+                                            .to_string(),
+                                        origin_span: argument.value.span,
+                                    });
+                                }
+                            }
+                            return Ok(());
+                        }
+                    }
                 }
                 if self.is_enum_constructor_object(object) {
                     return Ok(());
@@ -13553,7 +13627,8 @@ impl<'a> FunctionChecker<'a> {
                 if matches!(
                     &object.kind,
                     ExprKind::Name(type_name)
-                        if BuiltinAssociatedFunction::resolve(type_name, field).is_some()
+                        if !locals.contains_key(type_name)
+                            && BuiltinAssociatedFunction::resolve(type_name, field).is_some()
                 ) {
                     return Ok(None);
                 }

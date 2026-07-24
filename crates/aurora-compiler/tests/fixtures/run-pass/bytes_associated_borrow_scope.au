@@ -1,0 +1,25 @@
+import bytes
+
+def consume_length(payload: own Vec[uint8]) -> int32:
+    return payload.len()
+
+def pair(decoded: own Result[String, bytes.Error], measured: int32) -> int32:
+    match decoded:
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+    return measured
+
+def main():
+    reusable: Vec[uint8] = [65, 66]
+    decoded = String.from_bytes(reusable)
+    print(reusable.len())
+    match decoded:
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+
+    nested: Vec[uint8] = [65, 117, 114, 111, 114, 97]
+    print(pair(String.from_bytes(nested), consume_length(nested)))

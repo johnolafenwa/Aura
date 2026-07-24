@@ -76,6 +76,7 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `process.SupervisorEvent`
 - `process.SupervisorWait`
 - `random.Rng`
+- `bytes.Error`
 - `json.Value`
 - `json.Error`
 
@@ -295,6 +296,7 @@ Current builtin module namespaces:
 - `fs`
 - `net`
 - `process`
+- `bytes`
 - `json`
 
 Current builtin `range(...)` notes:
@@ -312,6 +314,18 @@ Current dynamic JSON surface:
 - recursive Null, Boolean, Int, Float, String, Array, and Object variants
 - deterministic sorted-key compact or pretty output
 - typed parse failures plus fixed depth and byte limits
+
+Current bytes, text-codec, and hash surface:
+
+- `Vec[uint8]` as the bytes representation
+- `String.to_bytes()` and `String.from_bytes(...)` for strict UTF-8
+- lowercase `bytes.hex_encode(...)` and strict mixed-case
+  `bytes.hex_decode(...)`
+- canonical standard-alphabet `bytes.base64_encode(...)` and
+  `bytes.base64_decode(...)`
+- raw 32-byte `bytes.sha256(...)` and `bytes.sha256_string(...)`
+- typed `bytes.Error` malformed-input variants; unrepresentable or failed
+  allocations trap with `AU4005`
 
 Current builtin I/O, networking, and process surface:
 
@@ -460,6 +474,8 @@ Current builtin member methods include:
 - scalar and boolean `.to_string()`
 - `String.len()` (Unicode scalar values, O(n))
 - `String.byte_len()` (UTF-8 bytes, O(1))
+- `String.to_bytes()` (fresh `Vec[uint8]`)
+- `String.from_bytes(...)` (associated strict UTF-8 conversion)
 - `String.contains(...)`
 - `String.starts_with(...)`
 - `String.ends_with(...)`

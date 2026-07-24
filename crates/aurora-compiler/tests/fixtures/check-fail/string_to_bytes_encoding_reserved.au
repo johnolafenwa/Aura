@@ -1,0 +1,4 @@
+def main():
+    text = "abc"
+    payload = text.to_bytes("utf-8")
+    print(payload)

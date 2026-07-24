@@ -10,6 +10,7 @@ required_pages=(
   names-and-scopes
   static-semantics
   execution-model
+  bytes
   json
   randomness
   diagnostics
@@ -91,6 +92,18 @@ grep -Fq '0021-json-value-model-and-codec-policy.md' architecture_docs/decisions
 test -s examples/json/dynamic_values.au
 grep -Fq '`dynamic_values.au`' examples/README.md
 grep -Fq '[21-json.md]' tutorials/README.md
+grep -Fq '| `String.to_bytes` | `to_bytes() -> Vec[uint8]`' docs/manual/api-index.md
+grep -Fq '| `String.from_bytes` | `from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]`' docs/manual/api-index.md
+grep -Fq '| `bytes.base64_decode` | `base64_decode(text: String) -> Result[Vec[uint8], bytes.Error]`' docs/manual/api-index.md
+grep -Fq '| `bytes.sha256_string` | `sha256_string(text: String) -> Vec[uint8]`' docs/manual/api-index.md
+grep -Fq 'ordinary shared-borrow default' docs/manual/bytes.md
+grep -Fq 'standard alphabet and canonical padding' docs/manual/bytes.md
+grep -Fq 'InvalidHexDigit(index: int32, byte: uint8)' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq '0023-byte-vector-codecs-and-hashing-policy.md' architecture_docs/decisions/README.md
+test -s examples/bytes/codecs_and_hashing.au
+grep -Fq '`codecs_and_hashing.au`' examples/README.md
+grep -Fq '[22-bytes.md]' tutorials/README.md
 test -s examples/randomness/deterministic_rng.au
 grep -Fq 'shuffle_rng.shuffle(values)' examples/randomness/deterministic_rng.au
 grep -Fq '`deterministic_rng.au`' examples/README.md

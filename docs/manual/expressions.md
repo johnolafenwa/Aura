@@ -307,9 +307,10 @@ statement target and is covered by
 [Statements](/manual/statements#bindings-and-assignment).
 
 Aurora 0.1 does not define integer indexing or slicing for `String`. Use the
-maintained string methods for whole-string operations; scalar iteration and
-explicitly encoded String/bytes conversion arrive in Phase 3, while slicing
-waits for Phase 7.
+maintained string methods for whole-string operations. Phase 3 provides exact
+UTF-8 conversion through `text.to_bytes()` and
+`String.from_bytes(bytes=...)`; scalar iteration and slicing remain future
+work.
 
 ## Collection Literals
 

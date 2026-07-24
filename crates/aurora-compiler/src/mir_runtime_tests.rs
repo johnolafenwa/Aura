@@ -735,6 +735,215 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
 }
 
 #[test]
+fn mir_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
+    let mut env = Env::default();
+    env.define_typed(
+        "source",
+        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        bytes_vec_value(vec![0xab]),
+    );
+    let source_elements = match env.place_ref("source").expect("source should exist") {
+        Value::Vec(value) => value.elements.as_ptr(),
+        other => panic!("expected Vec[uint8], found {other:?}"),
+    };
+    let args = [mir_arg(None, Operand::Place("source".to_string()))];
+
+    let error = crate::runtime_value::with_bytes_runtime_allocation_budget(0, || {
+        super::evaluate_bytes_mir_host_call("bytes::hex_encode", &args, &env)
+            .expect("the MIR Bytes adapter should recognize bytes::hex_encode")
+    })
+    .expect_err("MIR byte materialization allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing byte data"
+    );
+    match env
+        .place_ref("source")
+        .expect("borrowed byte source should survive the trap")
+    {
+        Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
+        other => panic!("expected Vec[uint8], found {other:?}"),
+    }
+}
+
+#[test]
+fn mir_bytes_adapter_reports_binding_and_operand_diagnostics() {
+    let env = Env::default();
+    let missing_argument = super::evaluate_bytes_mir_host_call("bytes::hex_encode", &[], &env)
+        .expect("the MIR Bytes adapter should recognize bytes::hex_encode")
+        .expect_err("a missing argument must remain a diagnostic");
+    assert_eq!(missing_argument.code, "AU2004");
+    assert_eq!(missing_argument.message, "missing MIR argument");
+
+    let args = [mir_arg(None, Operand::Place("missing_bytes".to_string()))];
+    let missing_operand = super::evaluate_bytes_mir_host_call("bytes::hex_encode", &args, &env)
+        .expect("the MIR Bytes adapter should recognize bytes::hex_encode")
+        .expect_err("an unresolved borrowed operand must remain a diagnostic");
+    assert_eq!(missing_operand.message, "unknown MIR place `missing_bytes`");
+    assert_eq!(missing_operand.code, "AU2001");
+}
+
+#[test]
+fn mir_string_to_bytes_member_diagnostics_preserve_the_receiver() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let source = "still available".to_string();
+    let source_ptr = source.as_ptr();
+    env.define_typed("source", Type::named("Unknown"), Value::String(source));
+    let args = [mir_arg(None, Operand::Int(1))];
+
+    let error = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("source".to_string()),
+                field: "to_bytes".to_string(),
+                receiver_place: Some("source".to_string()),
+            },
+            &args,
+            &mut env,
+        )
+        .expect_err("String.to_bytes must reject arguments before moving its receiver");
+    assert_eq!(error.message, "`to_bytes` does not take arguments");
+    match env
+        .place_ref("source")
+        .expect("the rejected call must preserve its receiver")
+    {
+        Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+}
+
+#[test]
+fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let source = "dynamic-string-receiver-".repeat(64);
+    let source_ptr = source.as_ptr();
+    env.define_typed("source", Type::named("Unknown"), Value::String(source));
+    let clone_count = super::mir_value_clone_count();
+
+    let error = crate::runtime_value::with_bytes_runtime_allocation_budget(0, || {
+        runtime.evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("source".to_string()),
+                field: "to_bytes".to_string(),
+                receiver_place: Some("source".to_string()),
+            },
+            &[],
+            &mut env,
+        )
+    })
+    .expect_err("dynamic String.to_bytes allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing byte data"
+    );
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clone_count,
+        "dynamic String.to_bytes must borrow its receiver before entering the byte adapter"
+    );
+    match env
+        .place_ref("source")
+        .expect("borrowed String receiver should survive the trap")
+    {
+        Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
+        other => panic!("expected String, found {other:?}"),
+    }
+}
+
+#[test]
+fn mir_literal_string_to_bytes_avoids_snapshot_before_allocation_failure() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def make_text() -> String:
+    return "temporary"
+
+def literal_bytes() -> Vec[uint8]:
+    return "literal-string-receiver".to_bytes()
+
+def formatted_bytes() -> Vec[uint8]:
+    return f"formatted-temporary".to_bytes()
+
+def returned_bytes() -> Vec[uint8]:
+    return make_text().to_bytes()
+
+def main():
+    literal_bytes()
+"#,
+    )
+    .expect("literal and temporary String receivers should lower");
+
+    fn to_bytes_operand<'a>(module: &'a crate::mir::MirModule, function_name: &str) -> &'a Operand {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == function_name)
+            .unwrap_or_else(|| panic!("{function_name} should lower"));
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            args,
+                        },
+                    ..
+                } if name == "String.to_bytes" => args.first().map(|argument| &argument.value),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{function_name} should call String.to_bytes"))
+    }
+
+    let Operand::String(literal) = to_bytes_operand(&module, "literal_bytes") else {
+        panic!("a literal String receiver should remain a borrowed MIR literal");
+    };
+    assert_eq!(literal, "literal-string-receiver");
+    assert!(
+        matches!(
+            to_bytes_operand(&module, "formatted_bytes"),
+            Operand::Place(_)
+        ),
+        "a formatted String receiver should lower to a borrowed temporary place"
+    );
+    assert!(
+        matches!(
+            to_bytes_operand(&module, "returned_bytes"),
+            Operand::Place(_)
+        ),
+        "a returned String receiver should lower to a borrowed temporary place"
+    );
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let clone_count = super::mir_value_clone_count();
+
+    let error =
+        crate::runtime_value::with_bytes_runtime_allocation_budget(0, || runtime.run_main())
+            .expect_err("literal String.to_bytes allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing byte data"
+    );
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clone_count,
+        "literal String.to_bytes must borrow the MIR literal before entering the byte adapter"
+    );
+}
+
+#[test]
 fn mir_json_adapters_reject_inexact_runtime_metadata() {
     let mut runtime = test_runtime();
     let mut env = Env::default();

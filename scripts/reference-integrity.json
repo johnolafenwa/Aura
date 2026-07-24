@@ -15,6 +15,9 @@
       "kind": "structural",
       "reason": "Cross-feature API lookup table; normative contracts live on the linked feature pages."
     },
+    "docs/manual/bytes.md": {
+      "kind": "feature"
+    },
     "docs/manual/classes.md": {
       "kind": "feature"
     },
@@ -116,6 +119,12 @@
     }
   },
   "blocks": {
+    "docs/manual/bytes.md#aurora-1": {
+      "sha256": "1a4efcbd921db58aa09ccf19b1ccc02806eccb342d26ced59349590b5c5d31f1",
+      "mode": "run",
+      "stdout": "4175726f726120f09f8c8c\nAurora 🌌\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726f726120f09f8c8c\n",
+      "stderr": ""
+    },
     "docs/manual/json.md#aurora-1": {
       "sha256": "88718c7111b387f13524595c0f743a63752adc3a3007c5c632b8d0b885fc3863",
       "mode": "run",

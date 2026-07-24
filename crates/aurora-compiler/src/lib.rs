@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod ast;
 mod builtin_modules;
+pub(crate) mod bytes_codec;
 pub mod call;
 pub mod diag;
 pub mod integer;

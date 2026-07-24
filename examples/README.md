@@ -183,6 +183,21 @@ The examples are organized by topic so they can serve both as quick references a
     a mixed Object/Array tree, and dumps sorted compact and two-space-indented
     JSON
 
+### `bytes/`
+
+- `codecs_and_hashing.au`
+  - converts String to strict UTF-8 bytes and back, encodes and decodes binary
+    data with canonical base64, renders lowercase hex, computes raw SHA-256,
+    and demonstrates that shared inputs remain reusable
+  - prints:
+    - `4175726f726120f09f8c8c`
+    - `Aurora 🌌`
+    - `AAH+/w==`
+    - `0001feff`
+    - `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`
+    - `4175726f726120f09f8c8c`
+    - `[0, 1, 254, 255]`
+
 ### `control_flow/`
 
 - `boolean_logic.au`

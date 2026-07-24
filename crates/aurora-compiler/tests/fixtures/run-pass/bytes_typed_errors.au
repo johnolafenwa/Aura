@@ -1,0 +1,53 @@
+import bytes
+
+def main():
+    invalid_utf8: Vec[uint8] = [97, 255]
+    match String.from_bytes(invalid_utf8):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidUtf8(index)):
+            print(f"utf8:{index}")
+        case Result.Err(error):
+            print(error)
+
+    match bytes.hex_decode("abc"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidHexLength(length)):
+            print(f"hex-length:{length}")
+        case Result.Err(error):
+            print(error)
+
+    match bytes.hex_decode("00?0"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidHexDigit(index, byte)):
+            print(f"hex-digit:{index}:{byte}")
+        case Result.Err(error):
+            print(error)
+
+    match bytes.base64_decode("Zg"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidBase64(index)):
+            print(f"base64-padding:{index}")
+        case Result.Err(error):
+            print(error)
+
+    match bytes.base64_decode("-w=="):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidBase64(index)):
+            print(f"base64-alphabet:{index}")
+        case Result.Err(error):
+            print(error)
+
+    match bytes.base64_decode("Zh=="):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(bytes.Error.InvalidBase64(index)):
+            print(f"base64-discarded-bits:{index}")
+        case Result.Err(error):
+            print(error)
+
+    print(invalid_utf8)

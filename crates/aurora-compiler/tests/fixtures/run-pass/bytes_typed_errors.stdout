@@ -1,0 +1,7 @@
+utf8:1
+hex-length:3
+hex-digit:2:63
+base64-padding:2
+base64-alphabet:0
+base64-discarded-bits:1
+[97, 255]

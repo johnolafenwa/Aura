@@ -35,7 +35,7 @@ fn builtin_imported_binding_resolves_exports_and_reports_missing_names() {
 }
 
 #[test]
-fn host_builtin_metadata_is_derived_from_function_namespaces() {
+fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() {
     for name in [
         "sys::args",
         "sys::env",
@@ -47,6 +47,14 @@ fn host_builtin_metadata_is_derived_from_function_namespaces() {
         "path::file_name",
         "path::extension",
         "path::is_absolute",
+        "bytes::hex_encode",
+        "bytes::hex_decode",
+        "bytes::base64_encode",
+        "bytes::base64_decode",
+        "bytes::sha256",
+        "bytes::sha256_string",
+        "String.to_bytes",
+        "String.from_bytes",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -123,6 +131,78 @@ fn host_builtin_metadata_is_derived_from_function_namespaces() {
 
     assert!(host_builtin_metadata("fs::exists").is_none());
     assert!(host_builtin_metadata("missing::function").is_none());
+}
+
+#[test]
+fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
+    use crate::sema::Type;
+
+    let namespace =
+        builtin_module_namespace(&["bytes".to_string()]).expect("bytes should be builtin");
+    assert_eq!(
+        namespace
+            .functions
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            "base64_decode",
+            "base64_encode",
+            "hex_decode",
+            "hex_encode",
+            "sha256",
+            "sha256_string",
+        ]
+    );
+    for function in namespace.functions.values() {
+        assert_eq!(function.decl.params[0].mode, ParamMode::Default);
+        assert_eq!(
+            function.signature.param_passings,
+            vec![ReceiverKind::Borrow],
+            "{} should retain its input",
+            function.decl.name
+        );
+    }
+
+    let error = namespace.enums.get("Error").expect("bytes.Error enum");
+    assert_eq!(
+        error
+            .decl
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "InvalidUtf8",
+            "InvalidHexLength",
+            "InvalidHexDigit",
+            "InvalidBase64",
+        ]
+    );
+    assert_eq!(
+        error.variants["InvalidHexDigit"]
+            .payloads
+            .iter()
+            .map(|payload| (
+                payload.name.as_deref().expect("named bytes.Error payload"),
+                payload.ty.clone(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("index", Type::named("int32")),
+            ("byte", Type::named("uint8")),
+        ]
+    );
+
+    let from_bytes = host_builtin_metadata("String.from_bytes").expect("associated metadata");
+    assert_eq!(from_bytes.params[0].passing, ReceiverKind::Borrow);
+    assert_eq!(
+        from_bytes.return_type,
+        Type::Named(
+            "Result".to_string(),
+            vec![Type::named("String"), Type::named("bytes.Error")],
+        )
+    );
 }
 
 #[test]

@@ -241,7 +241,6 @@ const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
 ];
 const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
-const DURATION_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const RNG_SEED_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("seed")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
@@ -249,6 +248,10 @@ const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::optional("timeout"),
 ];
 const NO_BUILTIN_PARAMS: [BuiltinParam; 0] = [];
+const DURATION_VALUE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "value", ReceiverKind::Value)];
+const STRING_FROM_BYTES_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "bytes", ReceiverKind::Borrow)];
 const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
@@ -574,12 +577,14 @@ pub enum BuiltinAssociatedFunction {
     DurationMilliseconds,
     DurationSeconds,
     DurationMinutes,
+    StringFromBytes,
 }
 
 pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
     BuiltinAssociatedFunction::DurationMilliseconds,
     BuiltinAssociatedFunction::DurationSeconds,
     BuiltinAssociatedFunction::DurationMinutes,
+    BuiltinAssociatedFunction::StringFromBytes,
 ];
 
 impl BuiltinAssociatedFunction {
@@ -588,7 +593,17 @@ impl BuiltinAssociatedFunction {
             ("Duration", "ms") => Some(Self::DurationMilliseconds),
             ("Duration", "seconds") => Some(Self::DurationSeconds),
             ("Duration", "minutes") => Some(Self::DurationMinutes),
+            ("String", "from_bytes") => Some(Self::StringFromBytes),
             _ => None,
+        }
+    }
+
+    pub const fn owner_name(self) -> &'static str {
+        match self {
+            Self::DurationMilliseconds | Self::DurationSeconds | Self::DurationMinutes => {
+                "Duration"
+            }
+            Self::StringFromBytes => "String",
         }
     }
 
@@ -597,6 +612,7 @@ impl BuiltinAssociatedFunction {
             Self::DurationMilliseconds => "ms",
             Self::DurationSeconds => "seconds",
             Self::DurationMinutes => "minutes",
+            Self::StringFromBytes => "from_bytes",
         }
     }
 
@@ -605,6 +621,7 @@ impl BuiltinAssociatedFunction {
             Self::DurationMilliseconds => "ms(value: int64) -> Duration",
             Self::DurationSeconds => "seconds(value: int64) -> Duration",
             Self::DurationMinutes => "minutes(value: int64) -> Duration",
+            Self::StringFromBytes => "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]",
         }
     }
 
@@ -619,17 +636,48 @@ impl BuiltinAssociatedFunction {
             Self::DurationMinutes => {
                 "Constructs a Duration from an exact signed number of minutes."
             }
+            Self::StringFromBytes => {
+                "Strictly decodes UTF-8 bytes, returning `bytes.Error.InvalidUtf8` at the first invalid byte."
+            }
         }
     }
 
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
-        bind_call_arguments(
-            &format!("`Duration.{}`", self.name()),
-            &DURATION_VALUE_PARAMS,
+        self.call_shape().bind_args(
+            &format!("`{}.{}`", self.owner_name(), self.name()),
             args,
             span,
-            CallConvention::PositionalOrNamed,
         )
+    }
+
+    pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].passing)
+        } else {
+            None
+        }
+    }
+
+    pub const fn argument_name(self, index: usize) -> Option<&'static str> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].binding.name)
+        } else {
+            None
+        }
+    }
+
+    const fn call_shape(self) -> BuiltinCallShape {
+        match self {
+            Self::DurationMilliseconds | Self::DurationSeconds | Self::DurationMinutes => {
+                BuiltinCallShape::fixed(&DURATION_VALUE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringFromBytes => BuiltinCallShape::fixed(
+                &STRING_FROM_BYTES_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
+        }
     }
 }
 
@@ -702,6 +750,7 @@ pub enum BuiltinMember {
     StringStripSuffix,
     StringTrim,
     StringJoin,
+    StringToBytes,
     ScalarToString,
     VecLen,
     VecIsEmpty,
@@ -929,6 +978,7 @@ impl BuiltinMember {
             ("String", "strip_suffix") => Some(Self::StringStripSuffix),
             ("String", "trim") => Some(Self::StringTrim),
             ("String", "join") => Some(Self::StringJoin),
+            ("String", "to_bytes") => Some(Self::StringToBytes),
             ("String", "clone") => Some(Self::StringClone),
             ("Queue", "put") => Some(Self::QueuePut),
             ("Queue", "try_put") => Some(Self::QueueTryPut),
@@ -1065,6 +1115,7 @@ impl BuiltinMember {
             Self::StringStripSuffix => "strip_suffix",
             Self::StringTrim => "trim",
             Self::StringJoin => "join",
+            Self::StringToBytes => "to_bytes",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
             Self::VecClone | Self::MapClone | Self::StringClone => "clone",
@@ -1231,6 +1282,7 @@ impl BuiltinMember {
             Self::StringStripSuffix => "strip_suffix(text: String) -> Option[String]",
             Self::StringTrim => "trim() -> String",
             Self::StringJoin => "join(parts: Vec[String]) -> String",
+            Self::StringToBytes => "to_bytes() -> Vec[uint8]",
             Self::VecLen => "len() -> int32",
             Self::VecIsEmpty => "is_empty() -> bool",
             Self::VecClone => "clone() -> Vec[T]",
@@ -1440,6 +1492,9 @@ impl BuiltinMember {
             }
             Self::StringJoin => {
                 "Joins the `Vec[String]` parts using the receiver string as the separator."
+            }
+            Self::StringToBytes => {
+                "Returns a fresh `Vec[uint8]` containing the string's exact UTF-8 encoding."
             }
             Self::VecLen => "Returns the current number of elements in the vector.",
             Self::VecIsEmpty => "Returns true when the vector contains no elements.",
@@ -1651,6 +1706,7 @@ impl BuiltinMember {
             | Self::StringToLower
             | Self::StringToUpper
             | Self::StringTrim
+            | Self::StringToBytes
             | Self::VecLen
             | Self::VecIsEmpty
             | Self::VecClone

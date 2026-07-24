@@ -416,20 +416,20 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
 }
 
 #[test]
-fn direct_json_arg_buffer_reports_metadata_and_storage_contract_violations() {
+fn direct_host_arg_buffer_reports_metadata_and_storage_contract_violations() {
     fn assert_au4001(error: Diagnostic, message: &str) {
         assert_eq!(error.code, "AU4001");
         assert_eq!(error.message, message);
     }
 
-    let empty = super::DirectJsonArgBuffer {
+    let empty = super::DirectHostArgBuffer {
         handles: Vec::new(),
     };
     assert_au4001(
         empty
             .validate("json::missing")
             .expect_err("unknown dynamic JSON builtins must be rejected"),
-        "unknown dynamic JSON host builtin `json::missing`",
+        "unknown dynamic host builtin `json::missing`",
     );
     assert_au4001(
         empty
@@ -441,7 +441,7 @@ fn direct_json_arg_buffer_reports_metadata_and_storage_contract_violations() {
         empty
             .handle("json::missing", 0, ReceiverKind::Borrow)
             .expect_err("unknown metadata cannot supply an argument handle"),
-        "unknown dynamic JSON host builtin `json::missing`",
+        "unknown dynamic host builtin `json::missing`",
     );
     assert_au4001(
         empty
@@ -456,21 +456,21 @@ fn direct_json_arg_buffer_reports_metadata_and_storage_contract_violations() {
         "`json::parse` is missing argument 1",
     );
 
-    let null = super::DirectJsonArgBuffer { handles: vec![0] };
+    let null = super::DirectHostArgBuffer { handles: vec![0] };
     assert_au4001(
         null.handle("json::parse", 0, ReceiverKind::Borrow)
             .expect_err("null opaque handles must be rejected"),
         "`json::parse` received a null argument 1",
     );
 
-    let passing_mismatch = super::DirectJsonArgBuffer {
+    let passing_mismatch = super::DirectHostArgBuffer {
         handles: vec![boxed_value(Value::String("{}".to_string())) as i64],
     };
     assert_au4001(
         passing_mismatch
             .handle("json::parse", 0, ReceiverKind::Value)
             .expect_err("the runtime must detect compiler/runtime passing-mode drift"),
-        "dynamic JSON host ABI expected `json::parse` argument `text` to use Value passing, found Borrow",
+        "dynamic host ABI expected `json::parse` argument `text` to use Value passing, found Borrow",
     );
 }
 
@@ -889,6 +889,79 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
             Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
             other => panic!("expected String, found {other:?}"),
         });
+        release_value(source);
+    }
+}
+
+#[test]
+fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
+    let source = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: vec![Value::Int(
+            IntegerValue::from_typed_unsigned(0xab, IntegerKind::Uint8)
+                .expect("the test byte fits uint8"),
+        )],
+    }));
+    let source_elements = unsafe {
+        super::with_value(source, |value| match value {
+            Value::Vec(value) => value.elements.as_ptr(),
+            other => panic!("expected Vec[uint8], found {other:?}"),
+        })
+    };
+    let args = super::DirectHostArgBuffer {
+        handles: vec![source as i64],
+    };
+
+    let error = crate::runtime_value::with_bytes_runtime_allocation_budget(0, || {
+        super::evaluate_direct_bytes_host_builtin("bytes::hex_encode", &args)
+    })
+    .expect_err("direct byte materialization allocation failure should trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing byte data"
+    );
+    unsafe {
+        super::with_value(source, |value| match value {
+            Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
+            other => panic!("expected Vec[uint8], found {other:?}"),
+        });
+    }
+}
+
+#[test]
+fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
+    let source = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: [0x00_u8, 0xab, 0xff]
+            .into_iter()
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(u128::from(byte), IntegerKind::Uint8)
+                        .expect("every test byte fits uint8"),
+                )
+            })
+            .collect(),
+    }));
+    let source_elements = unsafe {
+        super::with_value(source, |value| match value {
+            Value::Vec(value) => value.elements.as_ptr(),
+            other => panic!("expected Vec[uint8], found {other:?}"),
+        })
+    };
+
+    let encoded = direct_host_builtin_call("bytes::hex_encode", &[source]);
+    assert_eq!(
+        unsafe { take_value(encoded) },
+        Value::String("00abff".to_string())
+    );
+    unsafe {
+        super::with_value(source, |value| match value {
+            Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
+            other => panic!("expected Vec[uint8], found {other:?}"),
+        });
+        release_value(encoded);
         release_value(source);
     }
 }

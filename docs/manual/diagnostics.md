@@ -256,6 +256,12 @@ indent outside `0..=16` or a value deeper than 128 containers, `AU4001` for a
 NaN or infinite `json.Value.Float`, and `AU4005` when conversion exceeds the
 same node limit, encoded output would exceed 67,108,864 bytes, or a controlled
 conversion/output allocation fails. No failed dump returns a partial String.
+
+Malformed UTF-8, hexadecimal, and base64 input returns `bytes.Error`, including
+the relevant zero-based byte offset or odd input length. Bytes conversion,
+codec, or SHA-256 output that cannot be represented or allocated uses
+`AU4005`; no failed operation returns a partial String or byte vector.
+
 Unrecoverable host or dependency-internal out-of-memory termination remains
 outside the catchable diagnostic contract.
 

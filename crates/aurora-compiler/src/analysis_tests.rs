@@ -572,8 +572,71 @@ fn compiler_member_completion_for_string_exposes_string_methods() {
     assert!(names.contains(&"to_upper".to_string()));
     assert!(names.contains(&"strip_prefix".to_string()));
     assert!(names.contains(&"strip_suffix".to_string()));
+    assert!(names.contains(&"to_bytes".to_string()));
     assert!(names.contains(&"clone".to_string()));
+    assert!(!names.contains(&"from_bytes".to_string()));
     assert!(!names.contains(&"as_str".to_string()));
+}
+
+#[test]
+fn compiler_string_byte_tooling_separates_static_decode_from_instance_encode() {
+    let static_source = "def main() -> int32:\n    String.\n    return 0\n";
+    let static_names = completion_names_after_marker(static_source, "String.");
+    assert!(static_names.contains(&"from_bytes".to_string()));
+    assert!(!static_names.contains(&"to_bytes".to_string()));
+
+    let analysis = analyze_source(
+        r#"
+import bytes
+
+def decode(value: Vec[uint8]) -> Result[String, bytes.Error]:
+    encoded = "Aurora".to_bytes()
+    digest = bytes.sha256(encoded)
+    return String.from_bytes(value)
+
+def main() -> int32:
+    return 0
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("to_bytes() -> Vec[uint8]")));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence
+            .hover
+            .contains("from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]")
+    }));
+
+    let shadowed = analyze_source(
+        r#"
+class Decoder:
+    def from_bytes(self, value: int32) -> int32:
+        return value + 1
+
+def main():
+    String = Decoder()
+    print(String.from_bytes(7))
+"#,
+    );
+    assert!(
+        shadowed.diagnostics.is_empty(),
+        "{:?}",
+        shadowed.diagnostics
+    );
+    assert!(shadowed.occurrences.iter().any(|occurrence| occurrence
+        .hover
+        .contains("method from_bytes(self, value: int32) -> int32")));
+    assert!(shadowed.occurrences.iter().all(|occurrence| {
+        !occurrence
+            .hover
+            .contains("from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]")
+    }));
 }
 
 #[test]

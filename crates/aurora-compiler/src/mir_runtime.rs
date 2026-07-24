@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -21,7 +23,8 @@ use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
-    evaluate_host_builtin_with_program_args, float_floor_divmod, host_process_args, io_error,
+    evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
     io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_to_runtime,
     nominal_runtime_base_name, option_none, option_some, poll_cancellation,
@@ -470,6 +473,16 @@ struct Env {
     types: HashMap<String, Type>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static MIR_VALUE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn mir_value_clone_count() -> usize {
+    MIR_VALUE_CLONE_COUNT.with(Cell::get)
+}
+
 impl Env {
     fn define_typed(&mut self, name: impl Into<String>, ty: Type, value: Value) {
         let name = name.into();
@@ -554,6 +567,8 @@ impl Env {
     }
 
     fn read_place(&self, place: &str) -> Result<Value> {
+        #[cfg(test)]
+        MIR_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
         self.place_ref(place).cloned()
     }
 
@@ -769,7 +784,11 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
         Operand::Duration(value) => MirBorrowedOperand::Immediate(Value::Duration(*value)),
         Operand::Float(value) => MirBorrowedOperand::Immediate(Value::Float(*value)),
         Operand::Bool(value) => MirBorrowedOperand::Immediate(Value::Bool(*value)),
-        Operand::String(value) => MirBorrowedOperand::Immediate(Value::String(value.clone())),
+        Operand::String(value) => {
+            #[cfg(test)]
+            MIR_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
+            MirBorrowedOperand::Immediate(Value::String(value.clone()))
+        }
         Operand::Unit => MirBorrowedOperand::Immediate(Value::Unit),
     })
 }
@@ -1082,6 +1101,31 @@ fn evaluate_json_mir_host_call(
         _ => return None,
     };
     Some(result)
+}
+
+fn evaluate_bytes_mir_host_call(name: &str, args: &[MirArg], env: &Env) -> Option<Result<Value>> {
+    let expected_name = match name {
+        "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "String.to_bytes" => {
+            "value"
+        }
+        "bytes::hex_decode" | "bytes::base64_decode" | "bytes::sha256_string" => "text",
+        "String.from_bytes" => "bytes",
+        _ => return None,
+    };
+    let bound = match bind_mir_arg_refs(&[expected_name], args) {
+        Ok(bound) => bound,
+        Err(error) => return Some(Err(error)),
+    };
+    if name == "String.to_bytes" {
+        if let Operand::String(text) = &bound[0].value {
+            return Some(evaluate_string_to_bytes_host_ref(text));
+        }
+    }
+    let value = match borrow_mir_operand(&bound[0].value, env) {
+        Ok(value) => value,
+        Err(error) => return Some(Err(error)),
+    };
+    evaluate_bytes_host_builtin_ref(name, value.as_value())
 }
 
 fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
@@ -2582,7 +2626,10 @@ impl MirRuntime {
                         .map_err(|error| random_resource_error_to_diagnostic(error, None));
                 }
 
-                if let Some((type_name, member_name)) = name.split_once('.') {
+                if let Some((type_name, member_name)) = name
+                    .split_once('.')
+                    .filter(|(type_name, _)| *type_name == "Duration")
+                {
                     if let Some(constructor) =
                         BuiltinAssociatedFunction::resolve(type_name, member_name)
                     {
@@ -2612,6 +2659,9 @@ impl MirRuntime {
                             }
                             BuiltinAssociatedFunction::DurationSeconds => NANOS_PER_SECOND,
                             BuiltinAssociatedFunction::DurationMinutes => NANOS_PER_MINUTE,
+                            BuiltinAssociatedFunction::StringFromBytes => {
+                                unreachable!("String.from_bytes is not a Duration constructor")
+                            }
                         };
                         return value
                             .checked_mul(scale)
@@ -2825,6 +2875,10 @@ impl MirRuntime {
                     };
                 }
 
+                if let Some(result) = evaluate_bytes_mir_host_call(name, args, env) {
+                    return result;
+                }
+
                 if let Some(result) = evaluate_json_mir_host_call(name, args, env) {
                     return result;
                 }
@@ -2921,6 +2975,18 @@ impl MirRuntime {
                 field,
                 receiver_place,
             } => {
+                if field == "to_bytes" {
+                    if let Operand::Place(place) = object {
+                        let receiver = env.place_ref(place)?;
+                        if let Value::String(text) = receiver {
+                            if !args.is_empty() {
+                                return Err(Diagnostic::new("`to_bytes` does not take arguments"));
+                            }
+                            return evaluate_string_to_bytes_host_ref(text);
+                        }
+                    }
+                }
+
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
@@ -4283,6 +4349,14 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`trim` does not take arguments"));
                 }
                 Ok(Value::String(text.trim().to_string()))
+            }
+            "to_bytes" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_bytes` does not take arguments"));
+                }
+                let value = Value::String(text);
+                evaluate_bytes_host_builtin_ref("String.to_bytes", &value)
+                    .expect("String.to_bytes should be a registered byte host builtin")
             }
             "clone" => {
                 if !args.is_empty() {

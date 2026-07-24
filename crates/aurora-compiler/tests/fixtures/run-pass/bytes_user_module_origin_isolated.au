@@ -1,0 +1,5 @@
+import bytes_user_module_support.bytes
+
+def main():
+    value = bytes_user_module_support.bytes.hex_encode("local")
+    print(value)

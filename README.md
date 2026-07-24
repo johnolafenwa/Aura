@@ -102,6 +102,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/json/dynamic_values.au`
   - parse recursive JSON into typed variants, inspect an exact accessor, and
     emit deterministic compact and pretty JSON
+- `cargo run -p aura -- run examples/bytes/codecs_and_hashing.au`
+  - convert strict UTF-8 text, encode canonical hex/base64, and compute raw
+    SHA-256 bytes without consuming the inputs
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`

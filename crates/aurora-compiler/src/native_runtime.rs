@@ -24,10 +24,10 @@ use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, collect_queue_values,
     current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
-    evaluate_host_builtin, fail_current_lightweight_task, float_floor_divmod, io_error,
-    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_to_runtime,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    evaluate_bytes_host_builtin_ref, evaluate_host_builtin, fail_current_lightweight_task,
+    float_floor_divmod, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_to_runtime, nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
     process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
     process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
@@ -948,11 +948,11 @@ unsafe fn consume_owned_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Val
         .collect()
 }
 
-struct DirectJsonArgBuffer {
+struct DirectHostArgBuffer {
     handles: Vec<i64>,
 }
 
-impl DirectJsonArgBuffer {
+impl DirectHostArgBuffer {
     unsafe fn from_raw(buffer: *mut i64, count: usize) -> Self {
         Self {
             handles: unsafe { Vec::from_raw_parts(buffer, count, count) },
@@ -963,7 +963,7 @@ impl DirectJsonArgBuffer {
         let Some(metadata) = host_builtin_metadata(name) else {
             return Err(Diagnostic::coded(
                 "AU4001",
-                format!("unknown dynamic JSON host builtin `{name}`"),
+                format!("unknown dynamic host builtin `{name}`"),
             ));
         };
         if self.handles.len() != metadata.params.len() {
@@ -986,10 +986,7 @@ impl DirectJsonArgBuffer {
         expected_passing: ReceiverKind,
     ) -> std::result::Result<*mut OpaqueValue, Diagnostic> {
         let metadata = host_builtin_metadata(name).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4001",
-                format!("unknown dynamic JSON host builtin `{name}`"),
-            )
+            Diagnostic::coded("AU4001", format!("unknown dynamic host builtin `{name}`"))
         })?;
         let parameter = metadata.params.get(index).ok_or_else(|| {
             Diagnostic::coded("AU4001", format!("`{name}` has no argument {}", index + 1))
@@ -998,7 +995,7 @@ impl DirectJsonArgBuffer {
             return Err(Diagnostic::coded(
                 "AU4001",
                 format!(
-                    "dynamic JSON host ABI expected `{name}` argument `{}` to use {:?} passing, found {:?}",
+                    "dynamic host ABI expected `{name}` argument `{}` to use {:?} passing, found {:?}",
                     parameter.name, expected_passing, parameter.passing
                 ),
             ));
@@ -1044,7 +1041,7 @@ impl DirectJsonArgBuffer {
     }
 }
 
-impl Drop for DirectJsonArgBuffer {
+impl Drop for DirectHostArgBuffer {
     fn drop(&mut self) {
         for handle in self.handles.drain(..) {
             if handle != 0 {
@@ -1069,6 +1066,32 @@ fn is_dynamic_json_host_builtin(name: &str) -> bool {
             | "json::into_array"
             | "json::into_object"
     )
+}
+
+fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "bytes::hex_encode"
+            | "bytes::hex_decode"
+            | "bytes::base64_encode"
+            | "bytes::base64_decode"
+            | "bytes::sha256"
+            | "bytes::sha256_string"
+            | "String.to_bytes"
+            | "String.from_bytes"
+    )
+}
+
+fn evaluate_direct_bytes_host_builtin(
+    name: &str,
+    args: &DirectHostArgBuffer,
+) -> std::result::Result<Value, Diagnostic> {
+    debug_assert!(is_dynamic_bytes_host_builtin(name));
+    args.validate(name)?;
+    args.with_borrow(name, 0, |value| {
+        evaluate_bytes_host_builtin_ref(name, value)
+            .expect("classified byte host builtins are registered with the shared adapter")
+    })
 }
 
 fn direct_json_variant<'a>(
@@ -1176,7 +1199,7 @@ fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnos
 
 fn evaluate_direct_json_host_builtin(
     name: &str,
-    args: &DirectJsonArgBuffer,
+    args: &DirectHostArgBuffer,
 ) -> std::result::Result<Value, Diagnostic> {
     args.validate(name)?;
     match name {
@@ -4527,9 +4550,13 @@ pub extern "C-unwind" fn aurora_direct_host_builtin(
         let name = decode_bytes(name_ptr, name_len);
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
-        if is_dynamic_json_host_builtin(&name) {
-            let args = unsafe { DirectJsonArgBuffer::from_raw(args_ptr, arg_count) };
-            let result = evaluate_direct_json_host_builtin(&name, &args);
+        if is_dynamic_json_host_builtin(&name) || is_dynamic_bytes_host_builtin(&name) {
+            let args = unsafe { DirectHostArgBuffer::from_raw(args_ptr, arg_count) };
+            let result = if is_dynamic_json_host_builtin(&name) {
+                evaluate_direct_json_host_builtin(&name, &args)
+            } else {
+                evaluate_direct_bytes_host_builtin(&name, &args)
+            };
             drop(args);
             return match result {
                 Ok(value) => boxed_value(value),

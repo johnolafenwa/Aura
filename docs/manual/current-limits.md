@@ -16,6 +16,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - `String(...)` is not a constructor; use string literals and string methods.
 - Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
 - `String` has scalar-count `len()` and UTF-8 `byte_len()`, but no integer indexing, slicing, `chars()`, `ord()`, or `chr()` in Aurora 0.1.
+- `Vec[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 - Newlines are not continuation inside `(...)`, `[...]`, or `{...}`. Keep calls and collection literals on one physical line today.
 - Backslash line continuation is not implemented.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
@@ -44,6 +45,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification remains Provisional under ADR-0019.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
+- Hex and padded-base64 encoders preflight their expanded String size, and decoders preflight the destination `Vec[uint8]`; there is no codec-specific byte cap below the existing representable container length. An unrepresentable result or allocation failure traps with `AU4005`. SHA-256 always returns 32 raw bytes.
 - JSON supports the recursive `json.Value` tree, typed `json.Error` parse
   failures, deterministic dumps, a 128-container depth limit, a shared
   root-inclusive 262,144-value materialization limit, and independent 64 MiB

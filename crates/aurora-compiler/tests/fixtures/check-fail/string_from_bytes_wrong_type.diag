@@ -1,0 +1,5 @@
+error[AU2999]: `String.from_bytes` expects `Vec[uint8]`, found `String`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/string_from_bytes_wrong_type.au:2:23
+  |
+2 |     String.from_bytes("not bytes")
+  |                       ^

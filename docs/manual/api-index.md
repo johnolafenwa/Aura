@@ -34,6 +34,8 @@ This page indexes every maintained public builtin function, method, module type,
 | `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; Provisional under ADR-0019. |
 | `String.len` | `len() -> int32` | Counts Unicode scalar values in O(n). |
 | `String.byte_len` | `byte_len() -> int32` | Returns the UTF-8 byte count in O(1). |
+| `String.to_bytes` | `to_bytes() -> Vec[uint8]` | Returns a fresh vector containing the receiver's exact UTF-8 bytes. |
+| `String.from_bytes` | `from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]` | Strictly validates UTF-8 and returns a fresh String or the first invalid byte offset. |
 | `String.contains` | `contains(text: String) -> bool` | `true` when the receiver contains `text`. |
 | `String.starts_with` | `starts_with(text: String) -> bool` | Prefix test. |
 | `String.ends_with` | `ends_with(text: String) -> bool` | Suffix test. |
@@ -75,6 +77,28 @@ shuffle transfer or rearrange values without duplicating generator state.
 Generic clone-producing calls infer clone-safety obligations and discharge them
 after specialization; the obligation is retained through generic callers and
 module imports.
+
+## Bytes, Text Codecs, And SHA-256
+
+See [Bytes, Text Codecs, And SHA-256](/manual/bytes) for exact UTF-8
+preservation, strict malformed-input policy, error offsets, ownership, output
+size preflights, and the cryptographic scope of SHA-256.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `String.to_bytes` | `to_bytes() -> Vec[uint8]` | Exact UTF-8 bytes; shared receiver and fresh result. |
+| `String.from_bytes` | `from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]` | Strict UTF-8; no replacement decoding. |
+| `bytes.hex_encode` | `hex_encode(value: Vec[uint8]) -> String` | Two lowercase ASCII digits per byte. |
+| `bytes.hex_decode` | `hex_decode(text: String) -> Result[Vec[uint8], bytes.Error]` | Accepts mixed-case ASCII hex; rejects prefixes, separators, and whitespace. |
+| `bytes.base64_encode` | `base64_encode(value: Vec[uint8]) -> String` | RFC 4648 standard alphabet with canonical padding. |
+| `bytes.base64_decode` | `base64_decode(text: String) -> Result[Vec[uint8], bytes.Error]` | Strict canonical standard-alphabet decode. |
+| `bytes.sha256` | `sha256(value: Vec[uint8]) -> Vec[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
+| `bytes.sha256_string` | `sha256_string(text: String) -> Vec[uint8]` | SHA-256 over the text's exact UTF-8 bytes. |
+
+All displayed inputs use shared access and remain reusable. An `encoding`
+argument is reserved but not implemented. Expanded output that cannot be
+represented or allocated traps with `AU4005`; malformed data returns
+`bytes.Error`.
 
 ## Collections
 
@@ -371,6 +395,7 @@ Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `
 | `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
 | `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 | `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
+| `bytes.Error` | `InvalidUtf8(index: own int32)`, `InvalidHexLength(length: own int32)`, `InvalidHexDigit(index: own int32, byte: own uint8)`, `InvalidBase64(index: own int32)` |
 | `io.Error` | `NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `ConnectionRefused`, `ConnectionReset`, `ConnectionAborted`, `NotConnected`, `AddrInUse`, `AddrNotAvailable`, `BrokenPipe`, `TimedOut`, `WouldBlock`, `UnexpectedEof`, `InvalidInput`, `InvalidData`, `Closed`, `Cancelled`, `Other(message: own String)` |
 | `process.Stdio` | `Inherit`, `Null`, `Pipe` |
 | `process.ExitStatus` | `Exited(code: own int32)`, `Signaled(signal: own int32)` |

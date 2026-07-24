@@ -276,8 +276,11 @@ impl<'a> AnalysisBuilder<'a> {
                         return Ok(self.trait_bound_member_completions(&binding.trait_bounds));
                     }
                 }
-                if name == "Duration" && !scope.contains_key(name) {
-                    return Ok(builtin_associated_function_completions(name));
+                if !scope.contains_key(name) {
+                    let associated = builtin_associated_function_completions(name);
+                    if !associated.is_empty() {
+                        return Ok(associated);
+                    }
                 }
             }
             let Some(receiver_type) = self.infer_expr_type(&receiver_expr, &scope) else {
@@ -1480,14 +1483,23 @@ impl<'a> AnalysisBuilder<'a> {
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<ResolvedMember> {
         if let ExprKind::Name(type_name) = &object.kind {
-            if type_name == "Duration" && !scope.contains_key(type_name) {
-                return BuiltinAssociatedFunction::resolve(type_name, field).map(|associated| {
-                    ResolvedMember {
+            if !scope.contains_key(type_name) {
+                if let Some(associated) = BuiltinAssociatedFunction::resolve(type_name, field) {
+                    let ty = match associated {
+                        BuiltinAssociatedFunction::DurationMilliseconds
+                        | BuiltinAssociatedFunction::DurationSeconds
+                        | BuiltinAssociatedFunction::DurationMinutes => Type::named("Duration"),
+                        BuiltinAssociatedFunction::StringFromBytes => Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("String"), Type::named("bytes.Error")],
+                        ),
+                    };
+                    return Some(ResolvedMember {
                         hover: builtin_function_hover(associated.detail(), associated.docs()),
                         definition: None,
-                        ty: Some(Type::named("Duration")),
-                    }
-                });
+                        ty: Some(ty),
+                    });
+                }
             }
         }
         let receiver_type = self.infer_expr_type(object, scope)?;
@@ -1645,6 +1657,9 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
                     Some(Type::named("int32"))
+                }
+                BuiltinMember::StringToBytes => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
                 }
                 BuiltinMember::StringContains
                 | BuiltinMember::StringStartsWith
@@ -2601,12 +2616,22 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
-                    if let Some(associated) = BuiltinAssociatedFunction::resolve(enum_name, field) {
-                        return Some(match associated {
-                            BuiltinAssociatedFunction::DurationMilliseconds
-                            | BuiltinAssociatedFunction::DurationSeconds
-                            | BuiltinAssociatedFunction::DurationMinutes => Type::named("Duration"),
-                        });
+                    if !scope.contains_key(enum_name) {
+                        if let Some(associated) =
+                            BuiltinAssociatedFunction::resolve(enum_name, field)
+                        {
+                            return Some(match associated {
+                                BuiltinAssociatedFunction::DurationMilliseconds
+                                | BuiltinAssociatedFunction::DurationSeconds
+                                | BuiltinAssociatedFunction::DurationMinutes => {
+                                    Type::named("Duration")
+                                }
+                                BuiltinAssociatedFunction::StringFromBytes => Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::named("String"), Type::named("bytes.Error")],
+                                ),
+                            });
+                        }
                     }
                     if enum_name == "Duration" {
                         return None;
@@ -3677,6 +3702,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringStripPrefix,
         BuiltinMember::StringStripSuffix,
         BuiltinMember::StringTrim,
+        BuiltinMember::StringToBytes,
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,
         BuiltinMember::VecInsert,

@@ -317,6 +317,14 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinMember::StringContains.detail(),
         "contains(text: String) -> bool"
     );
+    assert_eq!(
+        BuiltinMember::StringToBytes.detail(),
+        "to_bytes() -> Vec[uint8]"
+    );
+    assert_eq!(
+        BuiltinMember::StringToBytes.receiver_passing(),
+        ReceiverKind::Borrow
+    );
     assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
     assert_eq!(
         BuiltinMember::QueueTryPut.detail(),
@@ -332,13 +340,14 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
 }
 
 #[test]
-fn duration_call_metadata_covers_constructors_and_exact_unit_conversions() {
+fn associated_call_metadata_covers_duration_constructors_and_string_byte_decoding() {
     assert_eq!(
         ALL_BUILTIN_ASSOCIATED_FUNCTIONS,
         &[
             BuiltinAssociatedFunction::DurationMilliseconds,
             BuiltinAssociatedFunction::DurationSeconds,
             BuiltinAssociatedFunction::DurationMinutes,
+            BuiltinAssociatedFunction::StringFromBytes,
         ]
     );
     for (name, constructor) in [
@@ -377,6 +386,26 @@ fn duration_call_metadata_covers_constructors_and_exact_unit_conversions() {
         BuiltinAssociatedFunction::resolve("Duration", "milliseconds"),
         None
     );
+    let from_bytes = BuiltinAssociatedFunction::resolve("String", "from_bytes")
+        .expect("String.from_bytes should have associated-function metadata");
+    assert_eq!(from_bytes, BuiltinAssociatedFunction::StringFromBytes);
+    assert_eq!(
+        from_bytes.detail(),
+        "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]"
+    );
+    assert_eq!(from_bytes.argument_passing(0), Some(ReceiverKind::Borrow));
+    assert_eq!(from_bytes.argument_passing(1), None);
+    assert_eq!(from_bytes.argument_name(0), Some("bytes"));
+    assert_eq!(from_bytes.argument_name(1), None);
+    let named_bytes = [dummy_arg(Some("bytes"))];
+    from_bytes
+        .bind_args(&named_bytes, Span::new(1, 1))
+        .expect("String.from_bytes accepts bytes=...");
+    assert!(from_bytes
+        .bind_args(&[dummy_arg(Some("encoding"))], Span::new(1, 1))
+        .unwrap_err()
+        .message
+        .contains("has no parameter named `encoding`"));
     assert_eq!(
         BuiltinMember::resolve("Duration", "to_ms"),
         Some(BuiltinMember::DurationToMilliseconds)

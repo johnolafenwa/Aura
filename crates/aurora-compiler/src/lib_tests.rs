@@ -230,6 +230,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "16\n",
     ),
     (
+        "examples/bytes/codecs_and_hashing.au",
+        include_str!("../../../examples/bytes/codecs_and_hashing.au"),
+        "4175726f726120f09f8c8c\nAurora 🌌\nAAH+/w==\n0001feff\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726f726120f09f8c8c\n[0, 1, 254, 255]\n",
+    ),
+    (
         "examples/basics/borrow_parameters.au",
         include_str!("../../../examples/basics/borrow_parameters.au"),
         "41\n42\n42\n",

@@ -257,6 +257,14 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
         "json::into_string",
         "json::into_array",
         "json::into_object",
+        "bytes::hex_encode",
+        "bytes::hex_decode",
+        "bytes::base64_encode",
+        "bytes::base64_decode",
+        "bytes::sha256",
+        "bytes::sha256_string",
+        "String.to_bytes",
+        "String.from_bytes",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -275,6 +283,17 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
         assert!(super::host_builtin_return_type(name).is_some(), "{name}");
     }
     assert!(super::host_builtin_return_type("missing::call").is_none());
+    assert_eq!(
+        super::builtin_opaque_member_return_type(
+            &Type::named("String"),
+            "to_bytes",
+            &HashMap::new()
+        ),
+        Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::named("uint8")],
+        )))
+    );
 }
 
 #[test]
@@ -3363,6 +3382,17 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
     };
 
     let cases = vec![
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                "to_bytes",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `to_bytes()` to take no arguments",
+        ),
         (
             module_with_main_member_call_result_type(
                 "text",

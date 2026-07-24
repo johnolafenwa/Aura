@@ -4843,6 +4843,9 @@ impl<'a> FunctionCompiler<'a> {
                 BuiltinAssociatedFunction::DurationMinutes => {
                     crate::runtime_value::NANOS_PER_MINUTE
                 }
+                BuiltinAssociatedFunction::StringFromBytes => {
+                    unreachable!("String.from_bytes is not a Duration constructor")
+                }
             };
             let unit_nanoseconds = self
                 .builder
@@ -5257,12 +5260,7 @@ impl<'a> FunctionCompiler<'a> {
             .map(|param| param.name.as_str())
             .collect::<Vec<_>>();
         let bound = ordered_optional_named_args(&expected_names, args)?;
-        let count = self
-            .builder
-            .ins()
-            .iconst(types::I64, expected_names.len() as i64);
-        let buffer_call = self.builder.ins().call(self.arg_buffer_new, &[count]);
-        let buffer = self.builder.inst_results(buffer_call)[0];
+        let mut loaded_args = Vec::with_capacity(bound.len());
         for (index, argument) in bound.into_iter().enumerate() {
             let argument = required_named_arg(
                 argument,
@@ -5273,6 +5271,29 @@ impl<'a> FunctionCompiler<'a> {
             )?;
             let loaded = self.load_operand(&argument.value)?;
             let loaded = self.ensure_opaque(loaded)?;
+            loaded_args.push(loaded);
+        }
+        self.compile_host_builtin_loaded_call(name, &loaded_args)
+    }
+
+    fn compile_host_builtin_loaded_call(
+        &mut self,
+        name: &str,
+        args: &[ValueRef],
+    ) -> std::result::Result<ValueRef, String> {
+        let metadata = host_builtin_metadata(name)
+            .expect("host builtin codegen is only called for registered host builtins");
+        if args.len() != metadata.params.len() {
+            return Err(format!(
+                "direct backend expected `{name}` to receive {} arguments, found {}",
+                metadata.params.len(),
+                args.len()
+            ));
+        }
+        let count = self.builder.ins().iconst(types::I64, args.len() as i64);
+        let buffer_call = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self.builder.inst_results(buffer_call)[0];
+        for (index, loaded) in args.iter().enumerate() {
             let index = self.builder.ins().iconst(types::I64, index as i64);
             self.builder
                 .ins()
@@ -7687,6 +7708,15 @@ impl<'a> FunctionCompiler<'a> {
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("String"),
                         ))
+                    }
+                    "to_bytes" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `to_bytes()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        self.compile_host_builtin_loaded_call("String.to_bytes", &[object])
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -12627,6 +12657,10 @@ fn builtin_opaque_member_return_type(
         | ("String", "to_upper")
         | ("String", "trim")
         | ("String", "clone") => Some(DirectType::Opaque(Type::named("String"))),
+        ("String", "to_bytes") => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::named("uint8")],
+        ))),
         ("String", "join") => Some(DirectType::Opaque(Type::named("String"))),
         ("String", "strip_prefix") | ("String", "strip_suffix") => Some(DirectType::Opaque(
             Type::Named("Option".to_string(), vec![Type::named("String")]),

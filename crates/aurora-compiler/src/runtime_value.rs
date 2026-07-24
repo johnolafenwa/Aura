@@ -43,6 +43,7 @@ use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixS
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+use crate::bytes_codec::{self, BytesCodecError, BytesDataError, BytesResourceError};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::json_codec::{self, JsonCodecError, JsonValue};
@@ -7726,6 +7727,437 @@ pub(crate) fn result_err(value: Value) -> Value {
     })
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static BYTES_RUNTIME_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+    static BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+struct BytesRuntimeAllocationBudgetGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for BytesRuntimeAllocationBudgetGuard {
+    fn drop(&mut self) {
+        BYTES_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_bytes_runtime_allocation_budget<T>(
+    successful_allocations: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous =
+        BYTES_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.replace(Some(successful_allocations)));
+    let _guard = BytesRuntimeAllocationBudgetGuard(previous);
+    operation()
+}
+
+#[cfg(test)]
+struct BytesRuntimeEncodedInputLenGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for BytesRuntimeEncodedInputLenGuard {
+    fn drop(&mut self) {
+        BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE.with(|length| length.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_bytes_runtime_encoded_input_len_for_test<T>(
+    input_len: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous =
+        BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE.with(|length| length.replace(Some(input_len)));
+    let _guard = BytesRuntimeEncodedInputLenGuard(previous);
+    operation()
+}
+
+fn bytes_runtime_allocation_error() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        "memory allocation failed while materializing byte data",
+    )
+}
+
+fn bytes_runtime_allocation_checkpoint() -> Result<()> {
+    #[cfg(test)]
+    {
+        let injected_failure = BYTES_RUNTIME_ALLOCATION_BUDGET.with(|budget| match budget.get() {
+            Some(0) => true,
+            Some(remaining) => {
+                budget.set(Some(remaining - 1));
+                false
+            }
+            None => false,
+        });
+        if injected_failure {
+            return Err(bytes_runtime_allocation_error());
+        }
+    }
+    Ok(())
+}
+
+fn bytes_runtime_try_reserve<T>(values: &mut Vec<T>, additional: usize) -> Result<()> {
+    if additional == 0 {
+        return Ok(());
+    }
+    bytes_runtime_allocation_checkpoint()?;
+    values
+        .try_reserve(additional)
+        .map_err(|_| bytes_runtime_allocation_error())
+}
+
+fn bytes_runtime_owned_string(value: &str) -> Result<String> {
+    let mut owned = String::new();
+    if !value.is_empty() {
+        bytes_runtime_allocation_checkpoint()?;
+        owned
+            .try_reserve(value.len())
+            .map_err(|_| bytes_runtime_allocation_error())?;
+        owned.push_str(value);
+    }
+    Ok(owned)
+}
+
+fn exact_runtime_uint8(value: &Value) -> Option<u8> {
+    let Value::Int(value) = value else {
+        return None;
+    };
+    if value.runtime_kind() != Some(IntegerKind::Uint8) {
+        return None;
+    }
+    value.as_i128().and_then(|value| u8::try_from(value).ok())
+}
+
+fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value]> {
+    let Value::Vec(value) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{call}` expects a runtime `Vec[uint8]` value"),
+        ));
+    };
+    if !matches!(
+        &value.element_type,
+        Type::Named(name, arguments) if name == "uint8" && arguments.is_empty()
+    ) || value
+        .elements
+        .iter()
+        .any(|value| exact_runtime_uint8(value).is_none())
+    {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{call}` expects an exact runtime `Vec[uint8]` value"),
+        ));
+    }
+    Ok(&value.elements)
+}
+
+fn host_bytes_from_runtime_elements(elements: &[Value]) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes_runtime_try_reserve(&mut bytes, elements.len())?;
+    bytes.extend(
+        elements
+            .iter()
+            .map(|value| exact_runtime_uint8(value).expect("runtime bytes were validated")),
+    );
+    Ok(bytes)
+}
+
+pub(crate) fn host_bytes_from_runtime(value: &Value, call: &str) -> Result<Vec<u8>> {
+    host_bytes_from_runtime_elements(runtime_uint8_elements(value, call)?)
+}
+
+fn runtime_utf8_error_index(bytes: impl IntoIterator<Item = u8>) -> Option<usize> {
+    let mut bytes = bytes.into_iter();
+    let mut index = 0;
+
+    while let Some(first) = bytes.next() {
+        let sequence_start = index;
+        index += 1;
+        let (sequence_len, second_min, second_max) = match first {
+            0x00..=0x7f => continue,
+            0xc2..=0xdf => (2, 0x80, 0xbf),
+            0xe0 => (3, 0xa0, 0xbf),
+            0xe1..=0xec | 0xee..=0xef => (3, 0x80, 0xbf),
+            0xed => (3, 0x80, 0x9f),
+            0xf0 => (4, 0x90, 0xbf),
+            0xf1..=0xf3 => (4, 0x80, 0xbf),
+            0xf4 => (4, 0x80, 0x8f),
+            _ => return Some(sequence_start),
+        };
+
+        let Some(second) = bytes.next() else {
+            return Some(sequence_start);
+        };
+        index += 1;
+        if !(second_min..=second_max).contains(&second) {
+            return Some(sequence_start);
+        }
+        for _ in 2..sequence_len {
+            let Some(continuation) = bytes.next() else {
+                return Some(sequence_start);
+            };
+            index += 1;
+            if !(0x80..=0xbf).contains(&continuation) {
+                return Some(sequence_start);
+            }
+        }
+    }
+    None
+}
+
+fn bytes_runtime_encoded_input_len(actual: usize) -> usize {
+    #[cfg(test)]
+    if let Some(overridden) = BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE.with(|length| length.get()) {
+        return overridden;
+    }
+    actual
+}
+
+fn preflight_runtime_bytes_encoder<'a>(
+    value: &'a Value,
+    call: &str,
+    encoded_len: fn(usize) -> std::result::Result<usize, BytesResourceError>,
+) -> Result<&'a [Value]> {
+    let elements = runtime_uint8_elements(value, call)?;
+    encoded_len(bytes_runtime_encoded_input_len(elements.len()))
+        .map_err(bytes_resource_error_to_diagnostic)?;
+    Ok(elements)
+}
+
+pub(crate) fn bytes_resource_error_to_diagnostic(error: BytesResourceError) -> Diagnostic {
+    Diagnostic::coded("AU4005", error.to_string())
+}
+
+pub(crate) fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
+    if bytes.len() > bytes_codec::MAX_BYTES_COLLECTION_LEN {
+        return Err(bytes_resource_error_to_diagnostic(
+            BytesResourceError::OutputTooLarge {
+                maximum: bytes_codec::MAX_BYTES_COLLECTION_LEN,
+            },
+        ));
+    }
+
+    let mut elements = Vec::new();
+    bytes_runtime_try_reserve(&mut elements, bytes.len())?;
+    elements.extend(bytes.iter().copied().map(|byte| {
+        Value::Int(
+            IntegerValue::from_typed_unsigned(u128::from(byte), IntegerKind::Uint8)
+                .expect("every host byte fits the uint8 runtime kind"),
+        )
+    }));
+    Ok(Value::Vec(VecValue {
+        element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
+        elements,
+    }))
+}
+
+fn bytes_runtime_single_payload(value: Value) -> Result<Vec<Value>> {
+    let mut payloads = Vec::new();
+    bytes_runtime_try_reserve(&mut payloads, 1)?;
+    payloads.push(value);
+    Ok(payloads)
+}
+
+fn bytes_runtime_enum_value(
+    enum_name: &str,
+    variant_name: &str,
+    payloads: Vec<Value>,
+) -> Result<Value> {
+    Ok(Value::EnumVariant(EnumVariantValue {
+        enum_name: bytes_runtime_owned_string(enum_name)?,
+        variant_name: bytes_runtime_owned_string(variant_name)?,
+        payloads,
+    }))
+}
+
+fn bytes_runtime_result(variant_name: &str, value: Value) -> Result<Value> {
+    bytes_runtime_enum_value("Result", variant_name, bytes_runtime_single_payload(value)?)
+}
+
+fn bytes_error_index(value: usize) -> Result<Value> {
+    let value = i32::try_from(value).map_err(|_| {
+        Diagnostic::coded(
+            "AU4005",
+            "byte-codec error metadata exceeds Aurora's int32 collection index range",
+        )
+    })?;
+    Ok(Value::Int(IntegerValue::from_i32(value)))
+}
+
+fn bytes_data_error_to_runtime(error: BytesDataError) -> Result<Value> {
+    let (variant_name, payloads) = match error {
+        BytesDataError::InvalidUtf8 { index } => (
+            "InvalidUtf8",
+            bytes_runtime_single_payload(bytes_error_index(index)?)?,
+        ),
+        BytesDataError::InvalidHexLength { length } => (
+            "InvalidHexLength",
+            bytes_runtime_single_payload(bytes_error_index(length)?)?,
+        ),
+        BytesDataError::InvalidHexDigit { index, byte } => {
+            let mut payloads = Vec::new();
+            bytes_runtime_try_reserve(&mut payloads, 2)?;
+            payloads.push(bytes_error_index(index)?);
+            payloads.push(Value::Int(
+                IntegerValue::from_typed_unsigned(u128::from(byte), IntegerKind::Uint8)
+                    .expect("every byte error payload fits uint8"),
+            ));
+            ("InvalidHexDigit", payloads)
+        }
+        BytesDataError::InvalidBase64 { index } => (
+            "InvalidBase64",
+            bytes_runtime_single_payload(bytes_error_index(index)?)?,
+        ),
+    };
+    bytes_runtime_enum_value("bytes.Error", variant_name, payloads)
+}
+
+pub(crate) fn bytes_codec_error_to_result(error: BytesCodecError) -> Result<Value> {
+    match error {
+        BytesCodecError::Data(error) => {
+            bytes_runtime_result("Err", bytes_data_error_to_runtime(error)?)
+        }
+        BytesCodecError::Resource(error) => Err(bytes_resource_error_to_diagnostic(error)),
+    }
+}
+
+fn bytes_resource_only<T>(
+    result: std::result::Result<T, BytesCodecError>,
+    call: &str,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(BytesCodecError::Resource(error)) => Err(bytes_resource_error_to_diagnostic(error)),
+        Err(BytesCodecError::Data(error)) => Err(Diagnostic::coded(
+            "AU4001",
+            format!("internal byte-codec data error in `{call}`: {error}"),
+        )),
+    }
+}
+
+fn host_string_value_ref<'a>(value: &'a Value, index: usize, call: &str) -> Result<&'a str> {
+    match value {
+        Value::String(value) => Ok(value),
+        other => Err(Diagnostic::new(format!(
+            "`{call}` expects argument {} to be `String`, found `{}`",
+            index + 1,
+            other.render()
+        ))),
+    }
+}
+
+fn bytes_host_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "bytes::hex_encode"
+            | "bytes::hex_decode"
+            | "bytes::base64_encode"
+            | "bytes::base64_decode"
+            | "bytes::sha256"
+            | "bytes::sha256_string"
+            | "String.to_bytes"
+            | "String.from_bytes"
+    )
+}
+
+pub(crate) fn evaluate_string_to_bytes_host_ref(text: &str) -> Result<Value> {
+    bytes_resource_only(bytes_codec::string_to_bytes(text), "String.to_bytes")
+        .and_then(|bytes| runtime_bytes_from_host(&bytes))
+}
+
+pub(crate) fn evaluate_bytes_host_builtin_ref(name: &str, value: &Value) -> Option<Result<Value>> {
+    if !bytes_host_builtin_name(name) {
+        return None;
+    }
+
+    let result = match name {
+        "bytes::hex_encode" => {
+            preflight_runtime_bytes_encoder(value, name, bytes_codec::hex_encoded_len)
+                .and_then(host_bytes_from_runtime_elements)
+                .and_then(|bytes| {
+                    bytes_resource_only(bytes_codec::hex_encode(&bytes), name).map(Value::String)
+                })
+        }
+        "bytes::hex_decode" => {
+            let text = match host_string_value_ref(value, 0, name) {
+                Ok(text) => text,
+                Err(error) => return Some(Err(error)),
+            };
+            match bytes_codec::hex_decode(text) {
+                Ok(bytes) => runtime_bytes_from_host(&bytes)
+                    .and_then(|value| bytes_runtime_result("Ok", value)),
+                Err(error) => bytes_codec_error_to_result(error),
+            }
+        }
+        "bytes::base64_encode" => {
+            preflight_runtime_bytes_encoder(value, name, bytes_codec::base64_encoded_len)
+                .and_then(host_bytes_from_runtime_elements)
+                .and_then(|bytes| {
+                    bytes_resource_only(bytes_codec::base64_encode(&bytes), name).map(Value::String)
+                })
+        }
+        "bytes::base64_decode" => {
+            let text = match host_string_value_ref(value, 0, name) {
+                Ok(text) => text,
+                Err(error) => return Some(Err(error)),
+            };
+            match bytes_codec::base64_decode(text) {
+                Ok(bytes) => runtime_bytes_from_host(&bytes)
+                    .and_then(|value| bytes_runtime_result("Ok", value)),
+                Err(error) => bytes_codec_error_to_result(error),
+            }
+        }
+        "bytes::sha256" => host_bytes_from_runtime(value, name).and_then(|bytes| {
+            bytes_resource_only(bytes_codec::sha256_bytes(&bytes), name)
+                .and_then(|digest| runtime_bytes_from_host(&digest))
+        }),
+        "bytes::sha256_string" => {
+            let text = match host_string_value_ref(value, 0, name) {
+                Ok(text) => text,
+                Err(error) => return Some(Err(error)),
+            };
+            bytes_resource_only(bytes_codec::sha256_string(text), name)
+                .and_then(|digest| runtime_bytes_from_host(&digest))
+        }
+        "String.to_bytes" => {
+            let text = match host_string_value_ref(value, 0, name) {
+                Ok(text) => text,
+                Err(error) => return Some(Err(error)),
+            };
+            evaluate_string_to_bytes_host_ref(text)
+        }
+        "String.from_bytes" => {
+            let elements = match runtime_uint8_elements(value, name) {
+                Ok(elements) => elements,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Some(index) = runtime_utf8_error_index(
+                elements
+                    .iter()
+                    .map(|value| exact_runtime_uint8(value).expect("runtime bytes were validated")),
+            ) {
+                return Some(bytes_codec_error_to_result(BytesCodecError::Data(
+                    BytesDataError::InvalidUtf8 { index },
+                )));
+            }
+            let bytes = match host_bytes_from_runtime_elements(elements) {
+                Ok(bytes) => bytes,
+                Err(error) => return Some(Err(error)),
+            };
+            match bytes_codec::string_from_bytes(&bytes) {
+                Ok(text) => bytes_runtime_result("Ok", Value::String(text)),
+                Err(error) => bytes_codec_error_to_result(error),
+            }
+        }
+        _ => unreachable!("byte host builtin names were filtered above"),
+    };
+    Some(result)
+}
+
 static HOST_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
 static HOST_METRICS: OnceLock<Mutex<BTreeMap<String, i64>>> = OnceLock::new();
 
@@ -8539,6 +8971,12 @@ fn evaluate_host_builtin_with_args(
     args: Vec<Value>,
     program_args: Option<&[String]>,
 ) -> Result<Value> {
+    if bytes_host_builtin_name(name) {
+        host_expect_arity(name, &args, 1)?;
+        return evaluate_bytes_host_builtin_ref(name, &args[0])
+            .expect("recognized byte host builtin should be dispatched");
+    }
+
     match name {
         "sys::args" => {
             host_expect_arity(name, &args, 0)?;

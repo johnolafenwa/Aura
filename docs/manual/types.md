@@ -72,11 +72,13 @@ type; code must not assume a separate slice layout or lifetime-bearing runtime
 representation.
 
 `String.len() -> int32` scans the text and counts Unicode scalar values in
-O(n). `String.byte_len() -> int32` reads the UTF-8 byte count in O(1). Aurora
-0.1 has no distinct character type, integer String indexing, slicing,
-`chars()`, `ord()`, or `chr()`. The iteration and conversion APIs are scheduled
-for the Phase 3 control-plane surface; String slicing remains part of the Phase
-7 slicing work.
+O(n). `String.byte_len() -> int32` reads the UTF-8 byte count in O(1).
+`String.to_bytes() -> Vec[uint8]` and
+`String.from_bytes(Vec[uint8]) -> Result[String, bytes.Error]` provide the
+explicit strict UTF-8 boundary; `Vec[uint8]` is Aurora's bytes representation.
+Aurora 0.1 has no distinct character type, integer String indexing, slicing,
+`chars()`, `ord()`, or `chr()`. String slicing remains part of the Phase 7
+slicing work.
 
 ## Copy And Move Categories
 

@@ -1,0 +1,7 @@
+import bytes
+
+def main():
+    payload: Vec[uint8] = [65, 117, 114, 111, 114, 97]
+    decoded: Result[String, bytes.Error] = String.from_bytes(payload)
+    print(payload.len())
+    print(decoded)

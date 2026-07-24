@@ -253,9 +253,11 @@ print(text.byte_len())  # 5; O(1)
 ```
 
 Aurora 0.1 does not support integer indexing or slicing on `String`.
-Character iteration, `ord()`, `chr()`, and explicit-encoding String/bytes
-conversion arrive with the Phase 3 control-plane surface; slicing waits for
-Phase 7.
+Character iteration, `ord()`, and `chr()` are not implemented. Strict UTF-8
+conversion is available now through `text.to_bytes()` and
+`String.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
+and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
+argument is reserved but not implemented, and slicing waits for Phase 7.
 
 `strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
 

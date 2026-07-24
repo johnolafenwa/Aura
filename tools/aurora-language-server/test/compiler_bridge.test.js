@@ -2422,6 +2422,154 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
   }
 });
 
+test("compiler bridge exposes the canonical bytes module, errors, and String conversions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-bytes-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const prelude = ["import bytes", "", "def main() -> int32:"];
+    const completionsForLine = async (line) => {
+      const source = [...prelude, line, "    return 0"].join("\n");
+      const lineIndex = prelude.length;
+      const items = await completeWithCompiler(
+        mainUri,
+        source,
+        lineIndex,
+        line.length,
+        "."
+      );
+      assert.ok(items);
+      return items;
+    };
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const validSource = [
+      "import bytes",
+      "",
+      "def decode(value: Vec[uint8]) -> Result[String, bytes.Error]:",
+      "    return String.from_bytes(bytes=value)",
+      "",
+      "def main() -> int32:",
+      "    text = \"abc\"",
+      "    payload = text.to_bytes()",
+      "    print(bytes.hex_encode(value=payload))",
+      "    print(bytes.base64_encode(value=payload))",
+      "    print(bytes.sha256(value=payload))",
+      "    print(bytes.sha256_string(text=text))",
+      "    return 0"
+    ].join("\n");
+    const analysis = await analyzeWithCompiler(mainUri, validSource);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const signature of [
+      "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]",
+      "to_bytes() -> Vec[uint8]",
+      "hex_encode(value: Vec[uint8]) -> String",
+      "base64_encode(value: Vec[uint8]) -> String",
+      "sha256(value: Vec[uint8]) -> Vec[uint8]",
+      "sha256_string(text: String) -> Vec[uint8]"
+    ]) {
+      assert.ok(
+        analysis.occurrences.some((occurrence) =>
+          occurrence.hover.includes(signature)
+        ),
+        `missing Bytes hover: ${signature}`
+      );
+    }
+
+    const moduleItems = await completionsForLine("    bytes.");
+    const moduleNames = new Set(moduleItems.map((item) => item.name));
+    for (const expected of [
+      "Error",
+      "hex_encode",
+      "hex_decode",
+      "base64_encode",
+      "base64_decode",
+      "sha256",
+      "sha256_string"
+    ]) {
+      assert.ok(moduleNames.has(expected), `bytes completion should include ${expected}`);
+    }
+    const moduleDetails = {
+      hex_encode: "hex_encode(value: Vec[uint8]) -> String",
+      hex_decode: "hex_decode(text: String) -> Result[Vec[uint8], bytes.Error]",
+      base64_encode: "base64_encode(value: Vec[uint8]) -> String",
+      base64_decode:
+        "base64_decode(text: String) -> Result[Vec[uint8], bytes.Error]",
+      sha256: "sha256(value: Vec[uint8]) -> Vec[uint8]",
+      sha256_string: "sha256_string(text: String) -> Vec[uint8]"
+    };
+    for (const [name, detail] of Object.entries(moduleDetails)) {
+      assert.equal(moduleItems.find((item) => item.name === name)?.detail, detail);
+    }
+
+    const errorItems = await completionsForLine("    bytes.Error.");
+    assert.deepEqual(
+      Object.fromEntries(errorItems.map((item) => [item.name, item.detail])),
+      {
+        InvalidBase64:
+          "InvalidBase64(index: own int32) -> bytes.Error",
+        InvalidHexDigit:
+          "InvalidHexDigit(index: own int32, byte: own uint8) -> bytes.Error",
+        InvalidHexLength:
+          "InvalidHexLength(length: own int32) -> bytes.Error",
+        InvalidUtf8:
+          "InvalidUtf8(index: own int32) -> bytes.Error"
+      }
+    );
+
+    const staticItems = await completionsForLine("    String.");
+    assert.equal(
+      staticItems.find((item) => item.name === "from_bytes")?.detail,
+      "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]"
+    );
+    assert.equal(staticItems.some((item) => item.name === "to_bytes"), false);
+
+    const instanceLine = "    text.";
+    const instanceSource = [
+      ...prelude,
+      "    text = \"abc\"",
+      instanceLine,
+      "    return 0"
+    ].join("\n");
+    const instanceItems = await completeWithCompiler(
+      mainUri,
+      instanceSource,
+      prelude.length + 1,
+      instanceLine.length,
+      "."
+    );
+    assert.ok(instanceItems);
+    assert.equal(
+      instanceItems.find((item) => item.name === "to_bytes")?.detail,
+      "to_bytes() -> Vec[uint8]"
+    );
+    assert.equal(instanceItems.some((item) => item.name === "from_bytes"), false);
+
+    const fromImportSource = [
+      "from bytes import Error, hex_decode",
+      "",
+      "def decode(text: String) -> Result[Vec[uint8], Error]:",
+      "    return hex_decode(text)",
+      "",
+      "def main() -> int32:",
+      "    return 0"
+    ].join("\n");
+    const fromImportAnalysis = await analyzeWithCompiler(mainUri, fromImportSource);
+    assert.ok(fromImportAnalysis);
+    assert.deepEqual(fromImportAnalysis.diagnostics, []);
+    assert.ok(
+      fromImportAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("hex_decode") &&
+          occurrence.hover.includes("bytes.Error")
+      )
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge recovers imported completions and symbols when a buffer contains multiple dangling dots", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-multi-dangling-"));
   try {

@@ -79,6 +79,457 @@ fn assert_value_equals_clone(value: Value) {
     assert_eq!(value, value.clone());
 }
 
+fn runtime_bytes(bytes: &[u8]) -> Value {
+    Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: bytes
+            .iter()
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(
+                        u128::from(*byte),
+                        crate::integer::IntegerKind::Uint8,
+                    )
+                    .expect("every byte fits uint8"),
+                )
+            })
+            .collect(),
+    })
+}
+
+fn expect_runtime_bytes(value: &Value) -> Vec<u8> {
+    super::host_bytes_from_runtime(value, "test byte value")
+        .expect("runtime byte value should carry exact Vec[uint8] metadata")
+}
+
+#[test]
+fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
+    let original = runtime_bytes(&[0, 1, 127, 128, 255]);
+    let snapshot = original.clone();
+    assert_eq!(
+        super::host_bytes_from_runtime(&original, "bytes::hex_encode")
+            .expect("exact runtime bytes should materialize"),
+        vec![0, 1, 127, 128, 255]
+    );
+    assert_eq!(original, snapshot);
+
+    let materialized = super::runtime_bytes_from_host(&[0, 1, 127, 128, 255])
+        .expect("host bytes should materialize");
+    let Value::Vec(materialized_vec) = &materialized else {
+        panic!("host bytes should materialize as Vec[uint8]");
+    };
+    assert_eq!(materialized_vec.element_type, Type::named("uint8"));
+    assert_eq!(
+        expect_runtime_bytes(&materialized),
+        vec![0, 1, 127, 128, 255]
+    );
+    assert!(materialized_vec.elements.iter().all(|value| {
+        matches!(
+            value,
+            Value::Int(value)
+                if value.runtime_kind() == Some(crate::integer::IntegerKind::Uint8)
+        )
+    }));
+
+    for operation in ["host", "runtime"] {
+        let error = super::with_bytes_runtime_allocation_budget(0, || match operation {
+            "host" => {
+                super::host_bytes_from_runtime(&original, "bytes::sha256").map(|_| Value::Unit)
+            }
+            "runtime" => super::runtime_bytes_from_host(&[1]),
+            _ => unreachable!(),
+        })
+        .expect_err("byte-buffer materialization allocation failure must trap");
+        assert_eq!(error.code, "AU4005", "{operation}");
+        assert_eq!(
+            error.message, "memory allocation failed while materializing byte data",
+            "{operation}"
+        );
+    }
+}
+
+#[test]
+fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
+    let not_a_vector = Value::String("not bytes".to_string());
+    let wrong_type = Value::Vec(VecValue {
+        element_type: Type::named("int32"),
+        elements: Vec::new(),
+    });
+    let wrong_metadata = Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: vec![Value::Int(IntegerValue::from_literal(1))],
+    });
+    let wrong_element = Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: vec![Value::Bool(true)],
+    });
+
+    let error = super::host_bytes_from_runtime(&not_a_vector, "bytes::hex_encode")
+        .expect_err("non-vector runtime values must be rejected");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "`bytes::hex_encode` expects a runtime `Vec[uint8]` value"
+    );
+
+    for value in [&wrong_type, &wrong_metadata, &wrong_element] {
+        let error = super::host_bytes_from_runtime(value, "bytes::hex_encode")
+            .expect_err("malformed Vec[uint8] runtime values must be rejected");
+        assert_eq!(error.code, "AU4001");
+        assert!(error.message.contains("`bytes::hex_encode`"));
+        assert!(error.message.contains("`Vec[uint8]`"));
+    }
+}
+
+#[test]
+fn bytes_adapter_rejects_wrong_runtime_types_without_consuming_inputs() {
+    let wrong = Value::Bool(true);
+    for name in [
+        "bytes::hex_decode",
+        "bytes::base64_decode",
+        "bytes::sha256_string",
+        "String.to_bytes",
+    ] {
+        let error = super::evaluate_bytes_host_builtin_ref(name, &wrong)
+            .expect("the byte builtin should be recognized")
+            .expect_err("String-taking byte builtins must reject non-String values");
+        assert_eq!(error.code, "AU2004", "{name}");
+        assert_eq!(
+            error.message,
+            format!("`{name}` expects argument 1 to be `String`, found `true`"),
+            "{name}"
+        );
+    }
+
+    let error = super::evaluate_bytes_host_builtin_ref("String.from_bytes", &wrong)
+        .expect("String.from_bytes should be recognized")
+        .expect_err("String.from_bytes must reject non-byte-vector runtime values");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "`String.from_bytes` expects a runtime `Vec[uint8]` value"
+    );
+    assert_eq!(wrong, Value::Bool(true));
+}
+
+#[test]
+fn bytes_data_errors_materialize_exact_typed_result_payloads() {
+    use crate::bytes_codec::{BytesCodecError, BytesDataError};
+
+    let cases = [
+        (
+            BytesDataError::InvalidUtf8 { index: 7 },
+            "InvalidUtf8",
+            vec![(7, crate::integer::IntegerKind::Int32)],
+        ),
+        (
+            BytesDataError::InvalidHexLength { length: 9 },
+            "InvalidHexLength",
+            vec![(9, crate::integer::IntegerKind::Int32)],
+        ),
+        (
+            BytesDataError::InvalidHexDigit {
+                index: 3,
+                byte: 0xfe,
+            },
+            "InvalidHexDigit",
+            vec![
+                (3, crate::integer::IntegerKind::Int32),
+                (0xfe, crate::integer::IntegerKind::Uint8),
+            ],
+        ),
+        (
+            BytesDataError::InvalidBase64 { index: 4 },
+            "InvalidBase64",
+            vec![(4, crate::integer::IntegerKind::Int32)],
+        ),
+    ];
+
+    for (error, expected_variant, expected_payloads) in cases {
+        let value = super::bytes_codec_error_to_result(BytesCodecError::Data(error))
+            .expect("data errors should be recoverable typed results");
+        let Value::EnumVariant(result) = value else {
+            panic!("codec data error should produce Result.Err");
+        };
+        assert_eq!(
+            (result.enum_name.as_str(), result.variant_name.as_str()),
+            ("Result", "Err")
+        );
+        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+            panic!("Result.Err should contain bytes.Error");
+        };
+        assert_eq!(
+            (error.enum_name.as_str(), error.variant_name.as_str()),
+            ("bytes.Error", expected_variant)
+        );
+        assert_eq!(error.payloads.len(), expected_payloads.len());
+        for (payload, (expected_value, expected_kind)) in
+            error.payloads.iter().zip(expected_payloads)
+        {
+            assert!(matches!(
+                payload,
+                Value::Int(value)
+                    if value.as_i128() == Some(expected_value)
+                        && value.runtime_kind() == Some(expected_kind)
+            ));
+        }
+    }
+}
+
+#[test]
+fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
+    fn call(name: &str, args: &[&Value]) -> Value {
+        let [value] = args else {
+            panic!("{name} test call should contain exactly one argument");
+        };
+        super::evaluate_bytes_host_builtin_ref(name, value)
+            .unwrap_or_else(|| panic!("{name} should be a recognized bytes builtin"))
+            .unwrap_or_else(|error| panic!("{name} should succeed: {error}"))
+    }
+
+    let binary = runtime_bytes(&[0, 1, 0xfe, 0xff]);
+    let binary_snapshot = binary.clone();
+    assert_eq!(
+        call("bytes::hex_encode", &[&binary]),
+        Value::String("0001feff".to_string())
+    );
+    assert_eq!(
+        call("bytes::base64_encode", &[&binary]),
+        Value::String("AAH+/w==".to_string())
+    );
+    assert_eq!(binary, binary_snapshot);
+
+    let hex = Value::String("00AaFf".to_string());
+    let base64 = Value::String("AAH+/w==".to_string());
+    for (name, input, expected) in [
+        ("bytes::hex_decode", &hex, vec![0, 0xaa, 0xff]),
+        ("bytes::base64_decode", &base64, vec![0, 1, 0xfe, 0xff]),
+    ] {
+        let Value::EnumVariant(result) = call(name, &[input]) else {
+            panic!("{name} should return Result");
+        };
+        assert_eq!(result.variant_name, "Ok");
+        assert_eq!(expect_runtime_bytes(&result.payloads[0]), expected);
+    }
+
+    let abc = runtime_bytes(b"abc");
+    let digest = call("bytes::sha256", &[&abc]);
+    assert_eq!(expect_runtime_bytes(&digest).len(), 32);
+    let text = Value::String("abc".to_string());
+    assert_eq!(call("bytes::sha256_string", &[&text]), digest);
+    let encoded = call("String.to_bytes", &[&text]);
+    assert_eq!(expect_runtime_bytes(&encoded), b"abc");
+    let Value::EnumVariant(decoded) = call("String.from_bytes", &[&encoded]) else {
+        panic!("String.from_bytes should return Result");
+    };
+    assert_eq!(decoded.variant_name, "Ok");
+    assert_eq!(decoded.payloads, vec![Value::String("abc".to_string())]);
+    assert_eq!(text, Value::String("abc".to_string()));
+
+    assert_eq!(
+        super::evaluate_host_builtin("bytes::hex_encode", vec![binary])
+            .expect("the owned host dispatcher should delegate to the shared byte adapter"),
+        Value::String("0001feff".to_string())
+    );
+    let arity = super::evaluate_host_builtin("bytes::sha256", Vec::new())
+        .expect_err("the owned host dispatcher should retain ordinary arity diagnostics");
+    assert_eq!(
+        arity.message,
+        "`bytes::sha256` expects 1 arguments, found 0"
+    );
+
+    assert!(super::evaluate_bytes_host_builtin_ref("json::parse", &text).is_none());
+}
+
+#[test]
+fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
+    fn error_variant(name: &str, input: &Value) -> String {
+        let value = super::evaluate_bytes_host_builtin_ref(name, input)
+            .expect("bytes builtin should be recognized")
+            .expect("malformed byte data should be returned, not trapped");
+        let Value::EnumVariant(result) = value else {
+            panic!("{name} should return Result");
+        };
+        assert_eq!(result.variant_name, "Err");
+        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+            panic!("{name} Result.Err should contain bytes.Error");
+        };
+        error.variant_name.clone()
+    }
+
+    assert_eq!(
+        error_variant("String.from_bytes", &runtime_bytes(&[b'a', 0xff, b'b'])),
+        "InvalidUtf8"
+    );
+    assert_eq!(
+        error_variant("bytes::hex_decode", &Value::String("0".to_string())),
+        "InvalidHexLength"
+    );
+    assert_eq!(
+        error_variant("bytes::base64_decode", &Value::String("YQ".to_string())),
+        "InvalidBase64"
+    );
+
+    for (resource, expected_message) in [
+        (
+            crate::bytes_codec::BytesResourceError::OutputTooLarge {
+                maximum: i32::MAX as usize,
+            },
+            "maximum collection length",
+        ),
+        (
+            crate::bytes_codec::BytesResourceError::AllocationFailed,
+            "memory allocation failed",
+        ),
+    ] {
+        let diagnostic = super::bytes_resource_error_to_diagnostic(resource.clone());
+        assert_eq!(diagnostic.code, "AU4005");
+        assert!(diagnostic.message.contains(expected_message));
+
+        let diagnostic = super::bytes_codec_error_to_result(
+            crate::bytes_codec::BytesCodecError::Resource(resource),
+        )
+        .expect_err("codec resource errors must trap instead of becoming bytes.Error");
+        assert_eq!(diagnostic.code, "AU4005");
+        assert!(diagnostic.message.contains(expected_message));
+    }
+}
+
+#[test]
+fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materialization() {
+    let malformed = runtime_bytes(&[b'a', 0xf0, 0x9f, 0x8c]);
+
+    // InvalidUtf8 needs exactly six runtime allocations: one payload and two
+    // names for bytes.Error, then one payload and two names for Result.Err.
+    // Any eager copy of the Vec[uint8] would consume a seventh checkpoint and
+    // incorrectly replace this typed data error with AU4005.
+    let value = super::with_bytes_runtime_allocation_budget(6, || {
+        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &malformed)
+            .expect("String.from_bytes should be recognized")
+    })
+    .expect("the allocation budget needed for bytes.Error must not be spent copying the input");
+
+    let Value::EnumVariant(result) = value else {
+        panic!("String.from_bytes should return Result");
+    };
+    assert_eq!(result.variant_name, "Err");
+    let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+        panic!("Result.Err should contain bytes.Error");
+    };
+    assert_eq!(
+        (error.enum_name.as_str(), error.variant_name.as_str()),
+        ("bytes.Error", "InvalidUtf8")
+    );
+    assert!(matches!(
+        error.payloads.as_slice(),
+        [Value::Int(index)]
+            if index.as_i128() == Some(1)
+                && index.runtime_kind() == Some(crate::integer::IntegerKind::Int32)
+    ));
+}
+
+#[test]
+fn bytes_string_from_bytes_reports_materialization_failure_without_consuming_input() {
+    let source = runtime_bytes(b"valid UTF-8");
+    let snapshot = source.clone();
+
+    let error = super::with_bytes_runtime_allocation_budget(0, || {
+        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &source)
+            .expect("String.from_bytes should be recognized")
+    })
+    .expect_err("runtime byte materialization failure must remain an AU4005 trap");
+
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "memory allocation failed while materializing byte data"
+    );
+    assert_eq!(source, snapshot);
+}
+
+#[test]
+fn bytes_runtime_utf8_validation_matches_std_first_error_offsets_without_allocating() {
+    fn expected(bytes: &[u8]) -> Option<usize> {
+        std::str::from_utf8(bytes)
+            .err()
+            .map(|error| error.valid_up_to())
+    }
+
+    fn assert_matches_std(bytes: &[u8]) {
+        assert_eq!(
+            super::runtime_utf8_error_index(bytes.iter().copied()),
+            expected(bytes),
+            "UTF-8 validation diverged for {bytes:02x?}"
+        );
+    }
+
+    assert_matches_std(&[]);
+    for first in u8::MIN..=u8::MAX {
+        assert_matches_std(&[first]);
+        for second in u8::MIN..=u8::MAX {
+            assert_matches_std(&[first, second]);
+        }
+    }
+
+    for text in [
+        "ASCII",
+        "café",
+        "Aurora\0",
+        "Καλημέρα",
+        "こんにちは",
+        "🌌🦀",
+        "\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}",
+    ] {
+        assert_matches_std(text.as_bytes());
+    }
+
+    let mut state = 0x4d59_5df4_d0f3_3173_u64;
+    for length in 0..=24 {
+        for _ in 0..4_096 {
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                bytes.push((state >> 56) as u8);
+            }
+            assert_matches_std(&bytes);
+        }
+    }
+}
+
+#[test]
+fn bytes_encoder_expansion_is_preflighted_before_runtime_vec_materialization() {
+    let bytes = runtime_bytes(&[0xab]);
+    for (name, logical_input_len) in [
+        (
+            "bytes::hex_encode",
+            crate::bytes_codec::MAX_BYTES_COLLECTION_LEN / 2 + 1,
+        ),
+        (
+            "bytes::base64_encode",
+            (crate::bytes_codec::MAX_BYTES_COLLECTION_LEN / 4) * 3 + 1,
+        ),
+    ] {
+        let error = super::with_bytes_runtime_encoded_input_len_for_test(logical_input_len, || {
+            super::with_bytes_runtime_allocation_budget(0, || {
+                super::evaluate_bytes_host_builtin_ref(name, &bytes)
+                    .expect("encoder should be recognized")
+            })
+        })
+        .expect_err("an unrepresentable expanded output must trap before input allocation");
+        assert_eq!(error.code, "AU4005", "{name}");
+        assert_eq!(
+            error.message,
+            format!(
+                "byte-codec output exceeds Aurora's maximum collection length of {}",
+                crate::bytes_codec::MAX_BYTES_COLLECTION_LEN
+            ),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn bounded_read_helpers_reject_zero_and_oversized_requests_without_allocation() {
     let error = validate_requested_read_size("read_bytes(...)", 0)

@@ -72,6 +72,11 @@ def read_image_size() -> Result[int32, io.Error]:
 
 The same distinction exists on `fs.File`.
 
+Raw file bytes can be validated as UTF-8, encoded as canonical hex/base64, or
+hashed through the separate [Bytes, Text Codecs, And SHA-256](/manual/bytes)
+surface. Those conversions do not change the filesystem API's typed
+`io.Error` boundary.
+
 All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid input. A read that exceeds 256 MiB also returns `InvalidData`. File writes are not transactional: after cancellation or a host failure, the caller must not assume that no bytes were written.
 
 ## Example: Append A Line

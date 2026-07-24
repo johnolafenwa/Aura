@@ -1,0 +1,27 @@
+import bytes
+
+def main():
+    text = "Aurora 🌌"
+    encoded = text.to_bytes()
+    print(bytes.hex_encode(encoded))
+
+    match String.from_bytes(encoded):
+        case Result.Ok(decoded):
+            print(decoded)
+        case Result.Err(error):
+            print(error)
+
+    payload: Vec[uint8] = [0, 1, 254, 255]
+    encoded_base64 = bytes.base64_encode(payload)
+    print(encoded_base64)
+
+    match bytes.base64_decode(encoded_base64):
+        case Result.Ok(decoded):
+            print(bytes.hex_encode(decoded))
+        case Result.Err(error):
+            print(error)
+
+    print(bytes.hex_encode(bytes.sha256_string("abc")))
+
+    print(bytes.hex_encode(encoded))
+    print(payload)
