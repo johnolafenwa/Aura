@@ -28,7 +28,9 @@ if ready:
 
 One-line suites such as `if ready: print("ready")` are not valid. Blank and comment-only lines do not make a suite nonempty; use `pass` when no operation is required.
 
-Statements are terminated by logical newlines. Aurora has no semicolon and does not permit multiple statements on one physical line.
+Statements are terminated by logical newlines. A physical newline suppressed
+inside an open delimiter is not a statement terminator. Aurora has no semicolon
+and does not permit multiple statements on one physical line.
 
 ## Bindings And Assignment
 
@@ -471,8 +473,9 @@ direct lowering is contained rather than silently given different semantics.
 ## Limits And Implementation-Defined Behavior
 
 Suites require a real statement, loop targets are one identifier, loop `else`
-is unavailable, statement match arms cannot be inline, general multiline
-continuation is unavailable, and items cannot nest in suites. Range ownership
+is unavailable, statement match arms cannot be inline, a statement may span
+physical lines only through an open `(`, `[`, or `{`, backslash continuation is
+unavailable, and items cannot nest in suites. Range ownership
 modifiers are accepted but have no effect on copy `int32` iteration as recorded
 above. No statement evaluation order is implementation-defined.
 

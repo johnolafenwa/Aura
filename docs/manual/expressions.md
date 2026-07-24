@@ -32,6 +32,20 @@ The lexical spelling and default literal types are defined by [Lexical Structure
 
 Parentheses group exactly one expression. `(value)` is a group, not a tuple, and `(left, right)` is not Aurora 0.1 syntax.
 
+## Delimiter Continuation
+
+An expression may span physical lines while a `(`, `[`, or `{` remains open.
+This applies uniformly to grouping, function and constructor calls, indexes,
+specialization/type arguments, collection literals, and delimited portions of
+headers and declarations. The lexer joins those physical lines before the
+expression grammar runs.
+
+Continuation indentation is visual only. It does not create a suite or alter
+evaluation order. The maintained style indents continued content by one level.
+A trailing comma is still invalid, and a newline outside an open delimiter
+still ends the logical line. Backslashes do not continue a line. Ordinary
+strings and f-strings remain single-line.
+
 ## Evaluation Order
 
 Except for short-circuit boolean operators and control-flow expressions, evaluation is left-to-right:
@@ -218,9 +232,9 @@ Positional arguments come before named arguments. Static binding proceeds as fol
 5. Every omitted parameter must have a default.
 6. Each argument must have the substituted parameter type.
 
-Arguments do not accept a trailing comma and ordinary calls remain on one
-physical line. Every supplied argument is evaluated first in call-site source
-order before the next expression begins. A copy or move result is captured in
+Arguments do not accept a trailing comma. A call may span physical lines while
+its `(` remains open. Every supplied argument is evaluated first in call-site
+source order before the next expression begins. A copy or move result is captured in
 its parameter slot; a borrow-mode selection is established without cloning and
 remains subject to the retained-borrow overlap rule. Later side effects cannot
 change an earlier captured argument. Defaults for omitted parameters are then
@@ -335,11 +349,11 @@ explicit_seen: Set[int32] = Set{}
 
 `{}` is grammatically an empty map but is accepted as an empty set when its expected type is `Set[T]`. `Set{}` is the unambiguous empty-set form.
 
-Collection literals do not accept trailing commas and remain on one physical
-line. Lists and sets evaluate elements in source order. Maps evaluate each key
-before its value and entries in source order. If two evaluated map keys are
-equal, the later value replaces the earlier value while the key retains its
-first insertion position.
+Collection literals may span physical lines while their `[` or `{` remains
+open, but they do not accept trailing commas. Lists and sets evaluate elements
+in source order. Maps evaluate each key before its value and entries in source
+order. If two evaluated map keys are equal, the later value replaces the
+earlier value while the key retains its first insertion position.
 
 ## F-Strings
 
@@ -379,7 +393,11 @@ label = match code:
 
 The indented form is still one expression, not a suite of statements. Every arm must produce one compatible result type, and the match must be exhaustive under [Enums And Pattern Matching](/manual/enums-and-match#exhaustiveness-and-wildcards).
 
-A complete match expression may appear anywhere an expression is expected, including an initializer, return value, call argument, collection element, or grouping. It is the only maintained multiline accommodation inside a surrounding delimiter. The exact closing-delimiter rule is defined in [Grammar](/manual/grammar#match-expressions); it does not provide general line continuation.
+A complete match expression may appear anywhere an expression is expected,
+including an initializer, return value, call argument, collection element, or
+grouping. Inside an enclosing delimiter, its required arm layout forms a
+layout island rather than being suppressed by ordinary continuation. The exact
+forms are defined in [Grammar](/manual/grammar#match-expressions).
 
 Use `match borrow value` to inspect without consuming a non-copy scrutinee, or `match borrow mut value` when an arm must mutate through payload bindings.
 
@@ -416,7 +434,11 @@ Bare builtin variants such as `Ok`, `Err`, `Some`, or `None` are accepted only w
 
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include tuples, comprehensions, lambdas, conditional expressions, assignment expressions, call-site borrow annotations, non-numeric casts, general multiline delimiters, or trailing commas. If a form is absent from [Grammar](/manual/grammar), it is not part of the implemented expression language.
+Aurora 0.1 expressions do not include tuples, comprehensions, lambdas,
+conditional expressions, assignment expressions, call-site borrow
+annotations, non-numeric casts, or trailing commas. If a form is absent from
+[Grammar](/manual/grammar), it is not part of the implemented expression
+language.
 
 ## Grammar
 
@@ -487,8 +509,10 @@ are produced before backend selection.
 
 ## Limits And Implementation-Defined Behavior
 
-The parser caps expression nesting and operator chains at 128, delimiters do
-not generally continue a logical line, and trailing commas are unavailable.
+The parser caps expression nesting and operator chains at 128. Physical lines
+continue only while a source delimiter remains open; backslashes and
+multiline string/f-string literals do not continue them. Trailing commas are
+unavailable.
 Collection and string resource caps are documented by their feature pages.
 Floating values follow the specified Aurora operations and shortest-round-trip
 printing; no backend may substitute a different expression result as an
@@ -497,6 +521,8 @@ implementation-defined choice.
 ## Status
 
 The expression forms defined positively in this chapter are implemented.
+Delimiter continuation is implemented under Provisional ADR-0025; it does not
+add a new expression AST form.
 Tuples, lambdas, comprehensions, conditional and assignment expressions,
 general callables, nonnumeric casts, and call-site ownership modifiers are
 unavailable. `in` is reserved as a loop keyword but is unavailable as an

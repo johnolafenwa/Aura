@@ -4,11 +4,11 @@ use super::{
     builtin_function_return_type, builtin_member_completions, callable_contains_line,
     complete_path_source, complete_source, enclosing_function_return_placeholder,
     extract_receiver_before_dot, extract_receiver_ending_before, find_identifier_in_line,
-    find_receiver_start, format_class_hover, format_enum_hover_named, format_function_detail,
-    format_function_hover, format_method_hover, format_value_hover, format_variant_hover,
-    infer_builtin_variant_call, lower_type_ref, placeholder_stmt_for_return_type, range_from_span,
-    range_from_span_with_path, recover_checked_program_after_member_errors,
-    recover_checked_program_after_member_errors_with,
+    find_receiver_start, first_dangling_member_line, format_class_hover, format_enum_hover_named,
+    format_function_detail, format_function_hover, format_method_hover, format_value_hover,
+    format_variant_hover, infer_builtin_variant_call, lower_type_ref,
+    placeholder_stmt_for_return_type, range_from_span, range_from_span_with_path,
+    recover_checked_program_after_member_errors, recover_checked_program_after_member_errors_with,
     recover_checked_program_after_parse_error_with, recover_checked_program_after_position,
     replace_dangling_member_stmt_with_recovery_stmt, sanitize_member_completion_source,
     stmt_end_line, stmt_start_line, AnalysisBuilder, TypeExt,
@@ -992,6 +992,51 @@ fn analysis_recovery_helpers_stop_when_replacement_makes_no_progress() {
         recover_checked_program_after_member_errors_with(&source, &mut check_program, no_progress,)
             .is_none(),
         "member recovery should stop if the replacement leaves the candidate unchanged"
+    );
+}
+
+#[test]
+fn analysis_recovery_only_classifies_code_dots_as_dangling_members() {
+    assert_eq!(
+        first_dangling_member_line("def main():\n    print(value.\n    return 0"),
+        Some(1)
+    );
+    assert_eq!(
+        first_dangling_member_line("def main():\n    text = \"value.\"\n    # value."),
+        None
+    );
+    assert_eq!(
+        first_dangling_member_line("def main():\n    text = 'value.' # comment."),
+        None
+    );
+}
+
+#[test]
+fn analysis_recovery_replaces_the_multiline_statement_owning_a_dangling_member() {
+    let source = [
+        "def main() -> int32:",
+        "    text = \"hello\"",
+        "    print(",
+        "        \"escaped \\\" quote\",",
+        "        text.",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        !analysis.symbols.is_empty(),
+        "analysis should retain declaration structure while the call is incomplete"
+    );
+    assert!(
+        !analysis.occurrences.is_empty(),
+        "analysis should retain checked occurrences while the call is incomplete"
+    );
+
+    let completions =
+        complete_source(&source, 4, 13, Some('.')).expect("member completion should recover");
+    assert!(
+        completions.iter().any(|item| item.name == "len"),
+        "the recovered receiver should retain its String type"
     );
 }
 

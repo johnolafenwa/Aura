@@ -222,6 +222,11 @@ The current compiler supports these expression forms:
 - enum and built-in enum variant construction
 - `try expr`
 - parenthesized expressions
+- delimiter-based newline continuation while `(`, `[`, or `{` remains open
+  - continuation indentation is visual and does not create a block
+  - existing comma-separated forms still reject trailing commas
+  - backslashes and physical newlines inside ordinary/f-strings do not
+    continue source
 
 Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
 

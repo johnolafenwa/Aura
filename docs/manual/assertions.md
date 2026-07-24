@@ -18,6 +18,10 @@ The top-level comma belongs to the assertion statement rather than either
 operand. There is no parenthesized statement form, trailing comma, or
 additional argument.
 
+Either operand may use ordinary delimiter continuation. For example, the
+condition may be grouped across physical lines; that remains an assertion
+statement and does not create an `assert(...)` call form.
+
 `assert` is a reserved keyword. An assertion is valid anywhere an ordinary
 statement is valid, including a script-style entry module. A file still cannot
 combine executable top-level statements with a local `main`.

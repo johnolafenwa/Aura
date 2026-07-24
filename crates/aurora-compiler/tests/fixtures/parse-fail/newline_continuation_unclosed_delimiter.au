@@ -1,0 +1,4 @@
+def main():
+    values = [
+        1,
+        2

@@ -171,3 +171,93 @@ test("Aurora newline indentation inherits the current block indent", () => {
   assert.equal(computeAuroraNewlineIndent("    if score < 10:", "    if score < 10:".length, "    "), "        ");
   assert.equal(computeAuroraNewlineIndent("print(1)", "print(1)".length, "    "), "");
 });
+
+test("Aurora newline indentation handles source delimiters", () => {
+  for (const line of [
+    "    total = add(",
+    "    values = [",
+    "    mapping = {"
+  ]) {
+    assert.equal(computeAuroraNewlineIndent(line, line.length, "    "), "        ", line);
+  }
+
+  const nested = "    value = ([{";
+  assert.equal(
+    computeAuroraNewlineIndent(nested, nested.length, "    "),
+    "        ",
+    "nested delimiters add one continuation level, not one level per delimiter"
+  );
+
+  for (const line of [
+    "    total = add(value)",
+    "    values = [1, 2]",
+    "    mapping = {1: 2}",
+    "    value = ([{}])"
+  ]) {
+    assert.equal(computeAuroraNewlineIndent(line, line.length, "    "), "    ", line);
+  }
+
+  const textAfterCursor = "    value = (later)";
+  assert.equal(
+    computeAuroraNewlineIndent(textAfterCursor, "    value = (".length, "    "),
+    "        ",
+    "only text before the cursor determines the inserted newline indentation"
+  );
+});
+
+test("Aurora newline indentation ignores delimiters in strings, f-strings, and comments", () => {
+  for (const line of [
+    '    text = "("',
+    "    text = ']'",
+    '    text = "escaped \\"(\\""',
+    '    text = f"("',
+    '    text = f"{value[0]}"',
+    '    text = f"{echo("(")}"',
+    "    value = call() # ([{",
+    '    text = "# (" # ['
+  ]) {
+    assert.equal(computeAuroraNewlineIndent(line, line.length, "    "), "    ", line);
+  }
+
+  const blockWithStringDelimiter = '    if label == "(":';
+  assert.equal(
+    computeAuroraNewlineIndent(
+      blockWithStringDelimiter,
+      blockWithStringDelimiter.length,
+      "    "
+    ),
+    "        ",
+    "block headers retain their single indentation level"
+  );
+});
+
+test("Aurora newline indentation recognizes multiline block headers", () => {
+  assert.equal(
+    computeAuroraNewlineIndent(
+      "    ) -> int64:",
+      "    ) -> int64:".length,
+      "    ",
+      ["def total(", "    left: int64,", "    right: int64"]
+    ),
+    "    "
+  );
+  assert.equal(
+    computeAuroraNewlineIndent(
+      "    ):",
+      "    ):".length,
+      "    ",
+      ["    if (", "        ready"]
+    ),
+    "        "
+  );
+  assert.equal(
+    computeAuroraNewlineIndent(
+      "            )",
+      "            )".length,
+      "    ",
+      ["    value = call(", "        1"]
+    ),
+    "    ",
+    "closing a continued expression returns to the logical line's base indent"
+  );
+});

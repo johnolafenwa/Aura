@@ -673,6 +673,168 @@ test("compiler bridge returns machine-readable analysis for a real example", asy
   assert.ok(analysis.symbols.some((symbol) => symbol.name === "Point"));
 });
 
+test("compiler bridge analyzes and completes inside continued delimiters", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-continuation-"));
+  const source = [
+    "def add(left: int32, right: int32) -> int32:",
+    "    return left + right",
+    "",
+    "def main() -> int32:",
+    "    base: int32 = 40",
+    "    result = add(",
+    "        base,",
+    "        2",
+    "    )",
+    "    return result",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const hover = compilerHoverAtPosition(analysis, 6, 9);
+    assert.deepEqual(hover, {
+      value: "```aurora\nbinding base: int32\n```",
+      range: {
+        start: { line: 6, character: 8 },
+        end: { line: 6, character: 12 }
+      }
+    });
+
+    const definition = compilerDefinitionAtPosition(mainUri, analysis, 6, 9);
+    assert.equal(
+      definition?.uri,
+      `file://${path.join(fs.realpathSync(tempRoot), "main.au")}`
+    );
+    assert.deepEqual(definition?.range, {
+      start: { line: 4, character: 4 },
+      end: { line: 4, character: 8 }
+    });
+
+    const completions = await completeWithCompiler(mainUri, source, 6, 12, null);
+    assert.ok(
+      completions.some(
+        (completion) => completion.name === "add" && completion.kind === "function"
+      )
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge recovers member completion when an earlier line owns the open delimiter", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-multiline-dangling-"));
+  const source = [
+    "def main() -> int32:",
+    "    text = \"hello\"",
+    "    print(",
+    "        text."
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.ok(analysis.symbols.length > 0);
+    assert.ok(analysis.occurrences.length > 0);
+
+    const completions = await completeWithCompiler(mainUri, source, 3, 13, ".");
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "len"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge maps mismatched delimiter diagnostics to the opening delimiter", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-delimiter-error-"));
+  const source = [
+    "def main():",
+    "    values = [",
+    "        1,",
+    "        2)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].code, "AU1001");
+    assert.match(
+      analysis.diagnostics[0].message,
+      /mismatched closing delimiter `\)`; expected `]`/
+    );
+    assert.deepEqual(analysis.diagnostics[0].secondary_spans, [
+      {
+        line: 1,
+        start_character: 13,
+        end_character: 14,
+        label: "opening delimiter `[` is here"
+      }
+    ]);
+
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 3, character: 9 },
+      end: { line: 3, character: 10 }
+    });
+    assert.deepEqual(diagnostic.relatedInformation, [
+      {
+        location: {
+          uri: mainUri,
+          range: {
+            start: { line: 1, character: 13 },
+            end: { line: 1, character: 14 }
+          }
+        },
+        message: "opening delimiter `[` is here"
+      }
+    ]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge keeps unclosed-delimiter EOF ranges inside a document without a final newline", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-unclosed-delimiter-"));
+  const source = ["def main():", "    print("].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].code, "AU1001");
+    assert.match(analysis.diagnostics[0].message, /unclosed delimiter `\(`/);
+
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 10 },
+      end: { line: 1, character: 11 }
+    });
+    assert.equal(diagnostic.relatedInformation?.[0]?.location.uri, mainUri);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves assert operand occurrences and keyword completion", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-assert-"));
   const source = [

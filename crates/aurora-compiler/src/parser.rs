@@ -61,7 +61,6 @@ struct Parser {
     tokens: Vec<Token>,
     index: usize,
     recursion_depth: usize,
-    pending_delimited_match_expr_dedents: usize,
 }
 
 impl Parser {
@@ -74,7 +73,6 @@ impl Parser {
             tokens,
             index: 0,
             recursion_depth,
-            pending_delimited_match_expr_dedents: 0,
         }
     }
 
@@ -1492,13 +1490,10 @@ impl Parser {
                 }
                 arms.push(self.parse_match_expr_arm()?);
             }
-            if self.at_simple(&TokenKind::Dedent) {
-                self.expect_simple(TokenKind::Dedent)?;
-            } else if self.at_delimited_match_expr_end() {
-                self.pending_delimited_match_expr_dedents += 1;
-            } else {
+            if !self.at_simple(&TokenKind::Dedent) {
                 return Err(self.error_here("expected end of match expression"));
             }
+            self.expect_simple(TokenKind::Dedent)?;
             return Ok(Expr {
                 kind: ExprKind::Match {
                     scrutinee: Box::new(scrutinee),
@@ -2210,9 +2205,6 @@ impl Parser {
     fn expect_match_expr_arm_terminator(&mut self) -> Result<()> {
         if self.eat_simple(&TokenKind::Newline).is_some()
             || self.at_simple(&TokenKind::Dedent)
-            || self.at_simple(&TokenKind::RParen)
-            || self.at_simple(&TokenKind::RBracket)
-            || self.at_simple(&TokenKind::RBrace)
             || matches!(
                 self.tokens
                     .get(self.index.saturating_sub(1))
@@ -2338,40 +2330,11 @@ impl Parser {
     fn bump(&mut self) -> Token {
         let token = self.tokens[self.index].clone();
         self.index += 1;
-        self.consume_pending_delimited_match_expr_dedent(&token.kind);
         token
     }
 
     fn at_match_expr_end(&self) -> bool {
-        self.at_simple(&TokenKind::Dedent) || self.at_delimited_match_expr_end()
-    }
-
-    fn at_delimited_match_expr_end(&self) -> bool {
-        matches!(
-            self.current_kind(),
-            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
-        ) && matches!(self.peek_kind(1), Some(TokenKind::Newline))
-            && matches!(self.peek_kind(2), Some(TokenKind::Dedent))
-    }
-
-    fn consume_pending_delimited_match_expr_dedent(&mut self, consumed_kind: &TokenKind) {
-        if self.pending_delimited_match_expr_dedents == 0 {
-            return;
-        }
-        if !matches!(
-            consumed_kind,
-            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
-        ) {
-            return;
-        }
-        if self.at_simple(&TokenKind::Newline) {
-            self.index += 1;
-        }
-        if self.at_simple(&TokenKind::Dedent) {
-            self.index += 1;
-        }
-        self.pending_delimited_match_expr_dedents =
-            self.pending_delimited_match_expr_dedents.saturating_sub(1);
+        self.at_simple(&TokenKind::Dedent)
     }
 
     fn error_here(&self, message: impl Into<String>) -> Diagnostic {

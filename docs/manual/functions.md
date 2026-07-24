@@ -118,7 +118,9 @@ Binding is deterministic:
 5. every omitted parameter must have a default
 6. each bound argument must have the parameter's exact substituted type
 
-Positional arguments cannot follow a named argument. Parameter and argument lists do not accept trailing commas in Aurora 0.1.
+Positional arguments cannot follow a named argument. Parameter and argument
+lists may span physical lines while their parentheses remain open, but they do
+not accept trailing commas in Aurora 0.1.
 
 ## Default Arguments
 

@@ -39,6 +39,7 @@ When the implemented language surface changes, update these in the same pass:
 22. [21-json.md](21-json.md)
 23. [22-bytes.md](22-bytes.md)
 24. [23-assertions.md](23-assertions.md)
+25. [24-multiline-expressions.md](24-multiline-expressions.md)
 
 ## Scope Today
 
@@ -71,6 +72,10 @@ The current tutorial set covers:
   typed malformed-input errors, and raw SHA-256
 - `assert condition` and `assert condition, message`, with lazy messages,
   source-located `AU4001` failures, and file-level `aura test` behavior
+- delimiter-based newline continuation inside `()`, `[]`, and `{}`, including
+  multiline signatures, calls, grouping, indexing, and collection literals;
+  trailing commas, backslash continuation, and multiline f-strings remain
+  unavailable
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

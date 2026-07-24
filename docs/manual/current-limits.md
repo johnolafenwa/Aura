@@ -17,8 +17,12 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
 - `String` has scalar-count `len()` and UTF-8 `byte_len()`, but no integer indexing, slicing, `chars()`, `ord()`, or `chr()` in Aurora 0.1.
 - `Vec[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
-- Newlines are not continuation inside `(...)`, `[...]`, or `{...}`. Keep calls and collection literals on one physical line today.
-- Backslash line continuation is not implemented.
+- Physical newlines continue a logical line only while `(`, `[`, or `{`
+  remains open. Continuation indentation is visual; delimiter kinds must
+  match.
+- Backslash continuation is not implemented. Ordinary strings and f-strings
+  remain single-line, and existing comma-separated lists still reject
+  trailing commas.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - Chained comparisons are rejected with migration guidance; write an explicit boolean combination such as `a < b and b < c`.
 - `for` loop bindings cannot shadow names already visible in the same scope.

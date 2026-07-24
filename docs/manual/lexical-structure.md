@@ -6,7 +6,12 @@ This chapter defines how Aurora source text becomes tokens and indentation marke
 
 Aurora source files conventionally use the `.au` extension and contain UTF-8 text. One UTF-8 byte-order mark is ignored only when it occurs at the beginning of the file.
 
-Source is processed as physical lines. Except for the narrow multiline-match accommodation described below, a physical line is also the boundary of an Aurora logical line.
+Source is processed as physical lines and logical lines. Outside an open source
+delimiter, a nonblank physical line normally ends one logical line. While a
+`(`, `[`, or `{` remains open, ordinary physical line boundaries are lexical
+whitespace and the logical line continues. The expression-form `match` layout
+island described below is the one exception that preserves block tokens inside
+an enclosing delimiter.
 
 ## Identifiers
 
@@ -83,31 +88,72 @@ Indentation uses ASCII spaces. A physical tab character anywhere in a source lin
 Blank and comment-only lines do not produce tokens and do not change indentation. Every other line is handled as follows:
 
 1. The lexer counts its leading spaces.
-2. A count greater than the current count emits one `INDENT` and records the new count.
-3. A smaller count emits one or more `DEDENT` tokens. The new count must equal a previously recorded indentation level.
-4. The line contents are tokenized and followed by `NEWLINE`.
+2. When no ordinary delimiter continuation is active, a count greater than the
+   current block count emits one `INDENT` and records the new count.
+3. When no ordinary delimiter continuation is active, a smaller count emits
+   one or more `DEDENT` tokens. The new count must equal a previously recorded
+   indentation level.
+4. The line contents are tokenized. The lexer emits `NEWLINE` only when the
+   physical boundary is a logical boundary or belongs to a delimited
+   expression-form `match` layout island.
 5. End of file emits all outstanding `DEDENT` tokens and then `EOF`.
 
 Aurora does not require an indentation width of four spaces, but sibling lines must return to exactly the same recorded count. The maintained examples use four spaces.
 
 A suite must contain at least one nonblank, non-comment line. Use `pass` for an intentionally empty suite.
 
-## Physical-Line Boundaries
+## Physical And Logical Line Boundaries
 
-Parentheses, brackets, and braces do not generally suppress `NEWLINE`, `INDENT`, or `DEDENT`. Function signatures, calls, type-argument lists, and collection literals therefore stay on one physical line in Aurora 0.1:
+Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline does not
+emit `NEWLINE`, `INDENT`, or `DEDENT`. The next nonblank physical line
+continues the same logical token sequence. Delimiters may be nested and mixed,
+but they must close in last-opened, first-closed order with the matching kind.
 
 ```python
-# Valid.
-result = call(first, second)
+def combine(
+    left: int64,
+    right: int64
+) -> int64:
+    return left + right
 
-# Not valid Aurora 0.1 continuation.
-# result = call(
-#     first,
-#     second,
-# )
+def main():
+    values = [
+        20,
+        22
+    ]
+    result = combine(
+        values[0],
+        values[1]
+    )
+    print(result)
 ```
 
-Backslash continuation is not implemented. A complete multiline match expression may appear inside a delimited expression through a narrow parser rule; that exception is defined in [Expressions](/manual/expressions) and [Grammar](/manual/grammar#match-expressions). It does not enable general multiline calls or literals.
+The verified program prints `42`. It deliberately has no trailing comma after
+`right`, `22`, or `values[1]`: newline continuation does not change the
+comma-separated-list grammar.
+
+Leading spaces on an ordinary continuation line are formatting rather than
+block indentation. They do not consult or modify the surrounding indentation
+stack. The maintained style uses one additional four-space level. Physical
+tabs remain invalid even when they appear only in continuation indentation.
+Blank and comment-only lines remain ignored, and a trailing comment may end a
+continued physical line.
+
+The newline after the outermost closing delimiter ends the logical line
+normally. A newline does not continue merely because the preceding token is an
+operator or comma: some `(`, `[`, or `{` must still be open at that physical
+boundary.
+
+An expression-form `match` inside a delimiter retains the layout tokens needed
+by its `case` arms. That arm block is a layout island inside the continued
+outer expression. It accepts both the existing closer after a final inline arm
+and a closer placed on its own line. See
+[Expressions](/manual/expressions#match-expressions) and
+[Grammar](/manual/grammar#match-expressions).
+
+Backslash continuation is not implemented. Ordinary strings and f-strings remain single-line;
+delimiters inside them do not continue source, and an f-string interpolation
+cannot cross a physical newline.
 
 ## Punctuation And Operators
 
@@ -263,6 +309,10 @@ numbers, duration nanoseconds, and f-string text segments become constants or
 MIR inputs only after the complete module has parsed and checked. A lexical
 failure prevents execution.
 
+Suppressing a physical line boundary has no runtime action. The resulting
+token sequence evaluates exactly as the same tokens written on one physical
+line.
+
 ## Ownership And Evaluation Order
 
 Tokens do not own or borrow runtime values. Ordinary and f-string literals
@@ -270,13 +320,20 @@ produce owned values when evaluated; f-string interpolation expressions run
 left to right as specified by [Expressions](/manual/expressions). Indentation,
 comments, and physical-line markers have no runtime evaluation.
 
+Physical-line placement and continuation indentation do not create, extend, or
+end a borrow and do not change move/copy decisions. Source-order evaluation
+follows the joined logical token sequence.
+
 ## Diagnostics
 
 `AU1001` reports invalid lexical input, including physical tabs, invalid
-escapes, malformed or unterminated literals, invalid characters, and invalid
-indentation. `AU1002` reports the focused single-quoted f-string spelling and
-directs the author to `f"..."`. Once tokenization succeeds, syntax failures
-belong to parser code `AU1101` rather than this page.
+escapes, malformed or unterminated literals, invalid characters, invalid block
+indentation, and delimiter pairing failures. An unexpected closer is primary
+at that closer. A mismatched closer names the expected delimiter and carries a
+labeled secondary span for its opener. An unclosed delimiter reports at EOF
+and likewise labels its opener. `AU1002` reports the focused single-quoted
+f-string spelling and directs the author to `f"..."`. Once tokenization
+succeeds, syntax failures belong to parser code `AU1101` rather than this page.
 
 ## Backend Support
 
@@ -286,17 +343,20 @@ the same lexical language; there is no backend-specific lexer.
 
 ## Limits And Implementation-Defined Behavior
 
-Identifiers are ASCII, source is UTF-8, physical tabs are rejected, general
-delimiter-based line continuation is unavailable, lists reject trailing
-commas, and literal magnitude and parser-complexity caps are fixed by this
-chapter and [Current Limits](/manual/current-limits). No lexical behavior is
-implementation-defined in Aurora 0.1 beyond the host path used to identify the
-source in diagnostics.
+Identifiers are ASCII, source is UTF-8, physical tabs are rejected,
+continuation requires an unmatched source delimiter, lists reject trailing
+commas, backslash continuation and multiline ordinary/f-strings are
+unavailable, and literal magnitude and parser-complexity caps are fixed by
+this chapter and [Current Limits](/manual/current-limits). Continuation
+indentation is not semantically significant, but delimiter matching, token
+spans, and the expression-match layout island are defined behavior rather than
+implementation choices.
 
 ## Status
 
-The forms described as accepted above are implemented. Reserved token words
-remain unavailable as ordinary identifiers except for the contextual cases
-listed here. Raw, byte, triple-quoted, and single-quoted f-strings; alternate
-integer bases; digit separators; block comments; semicolons; and general line
-continuation are unavailable, not partially implemented.
+The forms described as accepted above are implemented. Delimiter continuation
+and its layout/diagnostic policy are Provisional under ADR-0025 pending the
+Batch 2 checkpoint review. Raw, byte, triple-quoted, and single-quoted
+f-strings; alternate integer bases; digit separators; block comments;
+semicolons; trailing commas; backslash continuation; and multiline string or
+f-string literals are unavailable, not partially implemented.

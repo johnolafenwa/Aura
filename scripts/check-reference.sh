@@ -64,6 +64,19 @@ grep -Fq 'retrying_network_worker.au' tutorials/13-concurrency.md
 grep -Fq 'retrying_network_worker.au' tutorials/19-io-and-networking.md
 grep -Fq 'retrying_network_worker_runs_with_computed_backoff_on_both_backends' docs/manual/conformance.md
 grep -Fq 'fn retrying_network_worker_runs_with_computed_backoff_on_both_backends()' crates/aura/tests/cli.rs
+grep -Fq 'Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline does not' docs/manual/lexical-structure.md
+grep -Fq 'Backslash continuation is not implemented.' docs/manual/lexical-structure.md
+grep -Fq 'Ordinary strings and f-strings remain single-line' docs/manual/lexical-structure.md
+grep -Fq 'existing comma-separated source lists still reject a trailing comma' docs/manual/grammar.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
+grep -Fq '0025-newline-continuation-and-delimited-layout.md' architecture_docs/decisions/README.md
+test -s examples/basics/multiline_expressions.au
+grep -Fq '`multiline_expressions.au`' examples/README.md
+grep -Fq 'examples/basics/multiline_expressions.au' README.md
+grep -Fq '[24-multiline-expressions.md]' tutorials/README.md
+grep -Fq 'Delimiter continuation, ignored continuation indentation' docs/manual/conformance.md
+grep -Fq 'compiler bridge analyzes and completes inside continued delimiters' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'Aurora newline indentation handles source delimiters' tools/vscode-aurora/test/package.test.js
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md
@@ -254,6 +267,14 @@ if rg -n 'There is no `FloorDiv`|has no `FloorDiv`|no `FloorDiv` operator trait|
   tutorials \
   examples; then
   echo "reference still describes the retired Duration or FloorDiv surface" >&2
+  exit 1
+fi
+
+if rg -U -n 'Newlines are not continuation|ordinary calls remain on one\s+physical line|Collection literals[^.]*remain on one\s+physical line|Because general delimiter continuation does not exist|only maintained multiline accommodation inside a surrounding delimiter|general multiline\s+continuation is unavailable|general multiline literals are\s+unavailable|general\s+delimiter-based line continuation is unavailable|general multiline delimiters' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes delimiter continuation as unavailable" >&2
   exit 1
 fi
 

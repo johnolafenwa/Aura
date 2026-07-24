@@ -802,9 +802,10 @@
       "reason": "Indentation fragment: ready is a placeholder condition supplied by the surrounding prose."
     },
     "docs/manual/lexical-structure.md#aurora-4": {
-      "sha256": "21041321b7c179cdbdbdb00933f9efff5d06d84b48c985b576c7e105b1cd1c41",
-      "mode": "illustrative",
-      "reason": "Line-continuation illustration: the rejected multiline form is intentionally commented and call targets are placeholders."
+      "sha256": "5ce477a287176367127d8d5affed00d4f74fef44c8db5a3251a03bbea062eb46",
+      "mode": "run",
+      "stdout": "42\n",
+      "stderr": ""
     },
     "docs/manual/lexical-structure.md#aurora-5": {
       "sha256": "6808f270d7c19b063c2f9c5a3f7bc6278366a3d5d04a8623956cd28240a73efd",

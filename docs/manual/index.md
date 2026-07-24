@@ -8,7 +8,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 
 ## Language Reference
 
-- [Lexical Structure](/manual/lexical-structure): files, indentation, comments, identifiers, keywords, literals, f-strings, and duration literals.
+- [Lexical Structure](/manual/lexical-structure): files, physical/logical
+  lines and delimiter continuation, indentation, comments, identifiers,
+  keywords, literals, f-strings, and duration literals.
 - [Complete Grammar](/manual/grammar): normative EBNF, precedence, associativity, contextual syntax, layout, and unsupported forms.
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility, bindings, block scope, no-shadowing, and member lookup.
 - [Types](/manual/types): primitive types, `None`, `Duration`, generic types, copy and move categories, and type annotations.

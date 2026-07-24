@@ -140,11 +140,9 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
         .contains("unexpected trailing tokens after expression"));
     assert_eq!(trailing.code, "AU1101");
 
-    let unexpected = parse_expression(")").expect_err("expected unexpected-token failure");
-    assert!(unexpected
-        .message
-        .contains("unexpected token in expression"));
-    assert_eq!(unexpected.code, "AU1101");
+    let unexpected = parse_expression(")").expect_err("expected unmatched-delimiter failure");
+    assert!(unexpected.message.contains("no matching opener"));
+    assert_eq!(unexpected.code, "AU1001");
 
     let borrowed = parse_expression("borrow value").expect_err("expected borrow-prefix failure");
     assert!(borrowed
@@ -679,17 +677,18 @@ fn parser_helpers_cover_brackets_keywords_and_member_names() {
     let parser = Parser::new(tokens);
     assert_eq!(parser.skip_type_tokens(0), 10);
 
-    let tokens = lex("Vec[Map[String, int32]\n").expect("tokens");
-    let parser = Parser::new(tokens);
-    assert_eq!(parser.skip_type_tokens(0), 10);
+    let unclosed_type =
+        lex("Vec[Map[String, int32]\n").expect_err("unclosed type brackets should fail lexing");
+    assert_eq!(unclosed_type.code, "AU1001");
+    assert!(unclosed_type.message.contains("expected `]`"));
 
     let tokens = lex("[value]\n").expect("tokens");
     let parser = Parser::new(tokens);
     assert_eq!(parser.skip_bracketed_tokens(0), Some(3));
 
-    let tokens = lex("[value\n").expect("tokens");
-    let parser = Parser::new(tokens);
-    assert_eq!(parser.skip_bracketed_tokens(0), None);
+    let unclosed_bracket = lex("[value\n").expect_err("unclosed bracket should fail lexing");
+    assert_eq!(unclosed_bracket.code, "AU1001");
+    assert!(unclosed_bracket.message.contains("expected `]`"));
 
     let tokens = lex("import name\n").expect("tokens");
     let mut parser = Parser::new(tokens);
@@ -1314,11 +1313,10 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     assert!(parser.starts_specialization_suffix(&expr));
     assert_eq!(parser.skip_bracketed_tokens(1), Some(4));
 
-    let tokens = lex("Value[int32\n").expect("tokenization should succeed");
-    let mut parser = Parser::new(tokens);
-    parser.index = 1;
-    assert_eq!(parser.skip_bracketed_tokens(1), None);
-    assert!(!parser.starts_specialization_suffix(&expr));
+    let unclosed_specialization =
+        lex("Value[int32\n").expect_err("unclosed specialization should fail lexing");
+    assert_eq!(unclosed_specialization.code, "AU1001");
+    assert!(unclosed_specialization.message.contains("expected `]`"));
 
     let invalid_pattern = parse_stmt_from("match value:\n    case +name:\n        pass\n")
         .expect_err("invalid match pattern should fail");
@@ -1385,6 +1383,135 @@ fn parse_match_expressions_in_argument_and_nested_block_positions() {
     };
     assert_eq!(arms.len(), 2);
     assert!(matches!(arms[0].value.kind, ExprKind::Match { .. }));
+}
+
+#[test]
+fn parser_accepts_multiline_expressions_without_newline_skipping_workarounds() {
+    let function = parse_item_from(
+        [
+            "def add(",
+            "    left: int32,",
+            "    right: int32",
+            ") -> int32:",
+            "    return left + right",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("function parameters should continue inside parentheses");
+    let Item::Function(function) = function else {
+        panic!("expected function item");
+    };
+    assert_eq!(function.params.len(), 2);
+
+    let call = parse_expression(["add(", "    1,", "    2", ")"].join("\n").as_str())
+        .expect("call arguments should continue inside parentheses");
+    assert!(matches!(
+        call.kind,
+        ExprKind::Call { ref args, .. } if args.len() == 2
+    ));
+
+    let list = parse_expression(["[", "    1,", "    2", "]"].join("\n").as_str())
+        .expect("list elements should continue inside brackets");
+    assert!(matches!(list.kind, ExprKind::List(ref values) if values.len() == 2));
+
+    let map = parse_expression(
+        ["{", "    \"left\": 1,", "    \"right\": 2", "}"]
+            .join("\n")
+            .as_str(),
+    )
+    .expect("map entries should continue inside braces");
+    assert!(matches!(map.kind, ExprKind::Map(ref entries) if entries.len() == 2));
+
+    let grouped = parse_expression(["(", "    1 +", "    2", ")"].join("\n").as_str())
+        .expect("grouped arithmetic should continue inside parentheses");
+    assert!(matches!(grouped.kind, ExprKind::Group(_)));
+}
+
+#[test]
+fn parser_preserves_match_layout_islands_nested_in_delimiters() {
+    let call = parse_expression(
+        [
+            "choose(",
+            "    match value:",
+            "        case 1: \"one\"",
+            "        case _: \"other\"",
+            ")",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("a block-form match should parse as a multiline call argument");
+    let ExprKind::Call { args, .. } = call.kind else {
+        panic!("expected call expression");
+    };
+    assert!(matches!(args[0].value.kind, ExprKind::Match { .. }));
+
+    let list = parse_expression(
+        [
+            "[match value:",
+            "    case 1: \"one\"",
+            "    case _: \"other\"]",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("the match suite should dedent before a same-line closing bracket");
+    let ExprKind::List(values) = list.kind else {
+        panic!("expected list expression");
+    };
+    assert!(matches!(values[0].kind, ExprKind::Match { .. }));
+
+    let nested = parse_expression(
+        [
+            "consume([",
+            "    match outer:",
+            "        case 1:",
+            "            match inner:",
+            "                case 2: \"two\"",
+            "                case _: \"other\"",
+            "        case _: \"outer\"",
+            "])",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("nested match islands should coexist with ordinary delimiter continuation");
+    assert!(matches!(nested.kind, ExprKind::Call { .. }));
+
+    let multiline_scrutinee = parse_expression(
+        [
+            "choose(",
+            "    match inspect(",
+            "        value",
+            "    ):",
+            "        case 1: \"one\"",
+            "        case _: \"other\"",
+            ")",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("a delimited match header may contain a continued scrutinee");
+    assert!(matches!(
+        multiline_scrutinee.kind,
+        ExprKind::Call { ref args, .. }
+            if matches!(args[0].value.kind, ExprKind::Match { .. })
+    ));
+
+    let visually_indented_closer = parse_item_from(
+        [
+            "def main():",
+            "    print(",
+            "        match 1:",
+            "            case 1: \"one\"",
+            "                )",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("a match container closer may use arbitrary continuation indentation");
+    assert!(matches!(visually_indented_closer, Item::Function(_)));
 }
 
 #[test]
@@ -1681,7 +1808,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
             .expect("blocks should tolerate whitespace-only blank lines");
     assert!(matches!(whitespace_only_block_stmt, Stmt::If(_)));
 
-    let tokens = lex("value[\n").expect("tokens");
+    let tokens = lex("value[\n]\n").expect("tokens");
     let parser = Parser::new(tokens);
     assert!(!parser.is_assignment_stmt());
 
@@ -1747,7 +1874,7 @@ fn parser_skips_synthetic_newlines_inside_statement_and_expression_blocks() {
 }
 
 #[test]
-fn parser_internal_helpers_cover_member_names_patterns_and_delimited_match_cleanup() {
+fn parser_internal_helpers_cover_member_names_patterns_and_match_terminators() {
     let member = parse_expression("object.from").expect("keyword member names should parse");
     assert!(matches!(member.kind, ExprKind::Member { ref field, .. } if field == "from"));
 
@@ -1766,22 +1893,6 @@ fn parser_internal_helpers_cover_member_names_patterns_and_delimited_match_clean
     ));
 
     let span = Span::new(1, 1);
-    for terminator in [TokenKind::RBracket, TokenKind::RBrace] {
-        let mut parser = Parser::new(vec![
-            Token {
-                kind: terminator,
-                span,
-            },
-            Token {
-                kind: TokenKind::Eof,
-                span,
-            },
-        ]);
-        parser
-            .expect_match_expr_arm_terminator()
-            .expect("closing delimiter should terminate a match expression arm");
-    }
-
     let mut parser = Parser::new(vec![
         Token {
             kind: TokenKind::Dedent,
@@ -1854,57 +1965,4 @@ fn parser_internal_helpers_cover_member_names_patterns_and_delimited_match_clean
         .parse_expr()
         .expect_err("unterminated match expression should report its missing end");
     assert!(error.message.contains("expected end of match expression"));
-
-    let mut parser = Parser::new(vec![
-        Token {
-            kind: TokenKind::Newline,
-            span: Span::new(1, 1),
-        },
-        Token {
-            kind: TokenKind::Dedent,
-            span: Span::new(1, 1),
-        },
-        Token {
-            kind: TokenKind::Eof,
-            span: Span::new(1, 1),
-        },
-    ]);
-    parser.pending_delimited_match_expr_dedents = 1;
-    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RParen);
-    assert_eq!(parser.index, 2);
-    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
-
-    let mut parser = Parser::new(vec![
-        Token {
-            kind: TokenKind::Dedent,
-            span: Span::new(1, 1),
-        },
-        Token {
-            kind: TokenKind::Eof,
-            span: Span::new(1, 1),
-        },
-    ]);
-    parser.pending_delimited_match_expr_dedents = 1;
-    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RBracket);
-    assert_eq!(parser.index, 1);
-    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
-
-    let mut parser = Parser::new(vec![
-        Token {
-            kind: TokenKind::Newline,
-            span: Span::new(1, 1),
-        },
-        Token {
-            kind: TokenKind::Eof,
-            span: Span::new(1, 1),
-        },
-    ]);
-    parser.pending_delimited_match_expr_dedents = 1;
-    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RBrace);
-    assert_eq!(parser.index, 1);
-    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
-
-    parser.pending_delimited_match_expr_dedents = 1;
-    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::Identifier("value".to_string()));
-    assert_eq!(parser.pending_delimited_match_expr_dedents, 1);
 }

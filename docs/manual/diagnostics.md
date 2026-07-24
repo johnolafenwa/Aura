@@ -19,6 +19,12 @@ the phase that owns the failure:
 | `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
+`AU1001` also owns source-delimiter pairing. An unexpected closer is primary at
+that closer. A mismatched closer names the expected kind and labels its opener
+as related information. EOF with an unclosed delimiter reports the expected
+closer and labels the opener. These locations and labels are preserved by
+analysis JSON and the LSP bridge.
+
 The registry is append-only. Once published, a code MUST NOT be reused,
 renumbered, or silently reassigned to a different diagnostic category. If a
 diagnostic becomes obsolete, its number remains reserved. New categories

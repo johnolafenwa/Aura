@@ -1,0 +1,33 @@
+def add(
+    left: int32,
+    right: int32
+) -> int32:
+    return (
+        left +
+        right
+    )
+
+def main() -> int32:
+    values = [
+        add(
+            1,
+            2
+        ),
+        4
+    ]
+    lookup = {
+        "sum":
+            values[0],
+        "other":
+            values[1]
+    }
+    print(
+        match lookup["sum"]:
+            case 3: "ok"
+            case _: "bad"
+    )
+    print(
+        values[0] +
+        values[1]
+    )
+    return 0

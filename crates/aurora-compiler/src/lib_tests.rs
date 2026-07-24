@@ -240,6 +240,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "checking\nall assertions passed\n",
     ),
     (
+        "examples/basics/multiline_expressions.au",
+        include_str!("../../../examples/basics/multiline_expressions.au"),
+        "80\n20\n",
+    ),
+    (
         "examples/basics/borrow_parameters.au",
         include_str!("../../../examples/basics/borrow_parameters.au"),
         "41\n42\n42\n",

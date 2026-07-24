@@ -55,7 +55,16 @@ function activate(context) {
       const indentUnit = getIndentUnit(activeEditor);
       const newSelections = activeEditor.selections.map((selection) => {
         const lineText = document.lineAt(selection.active.line).text;
-        const indent = computeAuroraNewlineIndent(lineText, selection.active.character, indentUnit);
+        const precedingLines = [];
+        for (let line = 0; line < selection.active.line; line += 1) {
+          precedingLines.push(document.lineAt(line).text);
+        }
+        const indent = computeAuroraNewlineIndent(
+          lineText,
+          selection.active.character,
+          indentUnit,
+          precedingLines
+        );
         const newPosition = new vscode.Position(selection.active.line + 1, indent.length);
         return {
           selection,

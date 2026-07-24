@@ -73,6 +73,13 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `checking`
     - `all assertions passed`
+- `multiline_expressions.au`
+  - splits a function signature, grouped arithmetic, calls, list literals, and
+    a map literal across physical lines through `()`, `[]`, and `{}`
+  - keeps the existing no-trailing-comma and single-line-string rules
+  - prints:
+    - `80`
+    - `20`
 
 ### `collections/`
 

@@ -18,6 +18,11 @@ The grammar uses an EBNF-style notation:
 
 Comma-separated source lists do not accept a trailing comma unless a future grammar explicitly adds one.
 
+`NEWLINE` in the productions means a logical newline. A physical newline
+suppressed inside an open `(`, `[`, or `{` never reaches this grammar.
+Delimiter continuation changes token formation, not the expression
+productions; existing comma-separated source lists still reject a trailing comma.
+
 ## Lexical Grammar
 
 ```ebnf
@@ -93,14 +98,30 @@ Layout token formation is:
 
 1. A blank or comment-only physical line produces no token and does not affect indentation.
 2. Every other physical line is measured by its number of leading ASCII spaces.
-3. An increase from the current indentation count emits one `INDENT` and pushes that exact count.
-4. A decrease emits `DEDENT` tokens until an earlier count is reached. A count not present on the stack is inconsistent indentation and is rejected.
-5. The logical content of the line is tokenized, then one `NEWLINE` is emitted.
+3. In ordinary block-layout mode, an increase from the current indentation
+   count emits one `INDENT` and pushes that exact count.
+4. In ordinary block-layout mode, a decrease emits `DEDENT` tokens until an
+   earlier count is reached. A count not present on the stack is inconsistent
+   indentation and is rejected.
+5. The line content is tokenized. An ordinary-layout line emits one
+   `NEWLINE`; a continuation line suppresses it; and a delimited
+   expression-`match` layout island emits only the layout tokens required by
+   its header and arms.
 6. At end of source, remaining indentation levels emit `DEDENT`, followed by `EOF`.
 
-Aurora does not prescribe four-space indentation; it requires consistent return to previous indentation levels. In practice the maintained formatter and examples use four spaces.
+Outside an open delimiter, Aurora does not prescribe four-space indentation;
+it requires consistent return to previous block levels. The maintained
+formatter and examples use four spaces.
 
-Parentheses, brackets, and braces do not generally suppress `NEWLINE` or indentation. Calls, signatures, and collection literals therefore remain on one physical line in Aurora 0.1. The parser has a narrow layout accommodation for a complete match expression used within a delimited expression; it is not general implicit line continuation.
+While a `(`, `[`, or `{` remains open, ordinary physical newlines and their
+leading spaces do not produce layout tokens. Delimiters must nest and match by
+kind. A delimited expression-form `match` is a layout island: its header and
+arms retain the layout tokens required by the match productions even though an
+outer delimiter remains open.
+
+Backslash continuation is not part of Aurora 0.1. Ordinary strings and
+f-strings remain single-line, and existing comma-separated forms do not gain a
+trailing comma.
 
 ## Punctuation And Operators
 
@@ -556,7 +577,11 @@ match-expression-arm-end
 
 A match-expression arm contains exactly one expression, either inline after the colon or on one indented following line. It is not a general statement suite.
 
-A complete match expression may appear in a return, initializer, call argument, collection element, grouping expression, or other expression position. Because general delimiter continuation does not exist, the closing delimiter around a multiline match must follow a form accepted by the parser's match-expression layout rule.
+A complete match expression may appear in a return, initializer, call
+argument, collection element, grouping expression, or other expression
+position. When it appears inside a continued delimiter, its header and arms
+form a layout island and retain their required layout tokens. The containing
+delimiter may close after the final inline arm or on its own following line.
 
 ## Syntactic Complexity Limits
 
@@ -573,7 +598,8 @@ These are implementation limits of Aurora 0.1 and therefore observable parts of 
 The grammar intentionally excludes:
 
 - semicolons and multiple statements on one physical line
-- general implicit or backslash line continuation
+- backslash line continuation
+- multiline ordinary strings and f-strings
 - tuples and destructuring
 - lambdas, local item declarations, comprehensions, decorators, and attributes
 - wildcard/aliased/relative import syntax

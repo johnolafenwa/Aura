@@ -32,6 +32,9 @@ Aurora's lexer in [`lexer.rs`](../crates/aurora-compiler/src/lexer.rs) is respon
 - skipping blank lines and comment-only lines
 - computing indentation depth per line
 - emitting explicit `Indent` and `Dedent` tokens
+- tracking and validating nested source delimiters
+- suppressing ordinary layout inside an open delimiter while preserving
+  delimited-match layout islands
 - recognizing keywords, identifiers, numbers, strings, and f-strings
 - recognizing duration suffixes such as `5ms`, `2s`, and `1m`
 - preserving source locations with `Span`
@@ -47,10 +50,14 @@ flowchart TD
     A["Read one source line"] --> B["Reject tabs"]
     B --> C["Skip blank/comment-only lines"]
     C --> D["Measure leading spaces"]
-    D --> E["Compare with indent stack"]
-    E --> F["Emit Indent / Dedent tokens"]
-    F --> G["Tokenize the rest of the line"]
-    G --> H["Emit Newline"]
+    D --> E{"Current delimiter/layout mode?"}
+    E -->|"ordinary block"| F["Emit block Indent / Dedent"]
+    E -->|"continuation"| G["Ignore visual leading spaces"]
+    E -->|"match layout island"| H["Emit local match Indent / Dedent"]
+    F --> I["Tokenize and update typed delimiter stack"]
+    G --> I
+    H --> I
+    I --> J["Emit or suppress physical-line Newline"]
 ```
 
 ## Important token categories
@@ -98,9 +105,25 @@ string contents rather than changing interpolation depth.
 parser accepts it in the consuming receiver spelling `own self`; every stage
 therefore sees one unambiguous ownership token.
 
+### 5. Delimiters join physical lines
+
+The lexer keeps a typed stack for `(`, `[`, and `{`. While that stack is
+nonempty, an ordinary physical line boundary emits no `Newline`, `Indent`, or
+`Dedent`, and leading continuation spaces do not touch the block-indent stack.
+A mismatched or unclosed delimiter is therefore a lexical diagnostic with the
+opener retained as related source context.
+
+Expression-form `match` is the deliberate exception. When it occurs inside a
+delimiter, its arm block becomes a layout island so the parser still receives
+the match grammar's real layout tokens. This is why the implementation cannot
+be a blanket “drop every newline at delimiter depth greater than zero” filter.
+
 ## A tiny Aurora-like lexer in Rust
 
-The real Aurora lexer is much richer than this, but this example shows the core idea: tokenize one line and emit a `Newline`.
+The real Aurora lexer is much richer than this, but this example shows the core
+idea: tokenize one line and emit a `Newline`. This deliberately pedagogical
+`lex_line` function has no cross-line delimiter state and is not a complete
+implementation of Aurora's current lexer.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +214,7 @@ Aurora's real lexer adds:
 - floats and duration suffixes
 - compound operators such as `+=` and `->`
 - braces, brackets, dots, and question-mark optional syntax
+- cross-line typed delimiter tracking and match layout islands
 - span-aware diagnostics
 
 You can inspect those details in:

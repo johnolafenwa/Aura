@@ -355,8 +355,9 @@ behavior. Compiler analysis and the LSP consume those same builtin signatures.
 
 Mutable Set iteration and direct Map iteration are unavailable; iterate the
 owned Vec snapshots returned by Map methods. Arbitrary user-defined iterables,
-comprehensions, trailing commas, and general multiline literals are
-unavailable. The slice surface is reserved for Phase 7 and is not accepted in
+comprehensions, and trailing commas are unavailable; collection literals may
+span physical lines through their own delimiters. The slice surface is
+reserved for Phase 7 and is not accepted in
 Aurora 0.1. Set iteration and rendering currently follow an insertion-oriented
 representation, but Set order is not a promised API contract; algorithms MUST
 NOT depend on it. Allocation success is limited by available host resources.

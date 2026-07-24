@@ -84,6 +84,260 @@ pub enum TokenKind {
     KwAs,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DelimiterKind {
+    Parenthesis,
+    Bracket,
+    Brace,
+}
+
+impl DelimiterKind {
+    fn opener(self) -> char {
+        match self {
+            Self::Parenthesis => '(',
+            Self::Bracket => '[',
+            Self::Brace => '{',
+        }
+    }
+
+    fn closer(self) -> char {
+        match self {
+            Self::Parenthesis => ')',
+            Self::Bracket => ']',
+            Self::Brace => '}',
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DelimiterFrame {
+    kind: DelimiterKind,
+    span: Span,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct PendingDelimitedMatch {
+    container_depth: usize,
+    base_indent: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LayoutIsland {
+    /// Number of open delimiters containing this block-form match expression.
+    container_depth: usize,
+    /// Physical indentation of the `match` header. This is a local baseline,
+    /// not an emitted `Indent`.
+    base_indent: usize,
+    /// Physical indentation levels whose `Indent` tokens were emitted inside
+    /// the island. The baseline is retained as the first, non-emitting entry.
+    indent_stack: Vec<usize>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum LineLayout {
+    Global,
+    Island,
+    Continuation,
+}
+
+#[derive(Default)]
+struct LexState {
+    delimiters: Vec<DelimiterFrame>,
+    pending_delimited_matches: Vec<PendingDelimitedMatch>,
+    layout_islands: Vec<LayoutIsland>,
+}
+
+impl LexState {
+    fn prepare_line(
+        &mut self,
+        indent: usize,
+        starts_with_closer: bool,
+        span: Span,
+        tokens: &mut Vec<Token>,
+    ) -> Result<LineLayout> {
+        loop {
+            let Some(island) = self.layout_islands.last() else {
+                return Ok(if self.delimiters.is_empty() {
+                    LineLayout::Global
+                } else {
+                    LineLayout::Continuation
+                });
+            };
+
+            let depth = self.delimiters.len();
+            if depth < island.container_depth
+                || (depth == island.container_depth
+                    && (indent <= island.base_indent || starts_with_closer))
+            {
+                self.close_top_layout_island(span, tokens);
+                continue;
+            }
+
+            if depth > island.container_depth {
+                return Ok(LineLayout::Continuation);
+            }
+
+            update_indentation(
+                indent,
+                &mut self.layout_islands.last_mut().unwrap().indent_stack,
+                span,
+                tokens,
+            )?;
+            return Ok(LineLayout::Island);
+        }
+    }
+
+    fn open_delimiter(&mut self, kind: DelimiterKind, span: Span) -> Result<()> {
+        if self.delimiters.len() >= RECURSION_LIMIT {
+            return Err(lexical_error(
+                span,
+                format!(
+                    "delimiter nesting exceeds the supported recursion limit of {}",
+                    RECURSION_LIMIT
+                ),
+            ));
+        }
+        self.delimiters.push(DelimiterFrame { kind, span });
+        Ok(())
+    }
+
+    fn close_delimiter(
+        &mut self,
+        kind: DelimiterKind,
+        span: Span,
+        tokens: &mut Vec<Token>,
+    ) -> Result<()> {
+        let Some(frame) = self.delimiters.last().copied() else {
+            return Err(lexical_error(
+                span,
+                format!(
+                    "unexpected closing delimiter `{}` with no matching opener",
+                    kind.closer()
+                ),
+            ));
+        };
+
+        if frame.kind != kind {
+            return Err(lexical_error(
+                span,
+                format!(
+                    "mismatched closing delimiter `{}`; expected `{}` to close `{}`",
+                    kind.closer(),
+                    frame.kind.closer(),
+                    frame.kind.opener()
+                ),
+            )
+            .with_secondary(
+                frame.span,
+                format!("opening delimiter `{}` is here", frame.kind.opener()),
+            ));
+        }
+
+        let closing_depth = self.delimiters.len();
+        while matches!(
+            self.layout_islands.last(),
+            Some(island) if island.container_depth == closing_depth
+        ) {
+            self.close_top_layout_island(span, tokens);
+        }
+        self.pending_delimited_matches
+            .retain(|pending| pending.container_depth < closing_depth);
+        self.delimiters.pop();
+        Ok(())
+    }
+
+    fn note_match_keyword(&mut self, base_indent: usize) {
+        if !self.delimiters.is_empty() {
+            self.pending_delimited_matches.push(PendingDelimitedMatch {
+                container_depth: self.delimiters.len(),
+                base_indent,
+            });
+        }
+    }
+
+    fn note_colon(&mut self) {
+        let depth = self.delimiters.len();
+        let Some(index) = self
+            .pending_delimited_matches
+            .iter()
+            .rposition(|pending| pending.container_depth == depth)
+        else {
+            return;
+        };
+        let pending = self.pending_delimited_matches.remove(index);
+        self.layout_islands.push(LayoutIsland {
+            container_depth: pending.container_depth,
+            base_indent: pending.base_indent,
+            indent_stack: vec![pending.base_indent],
+        });
+    }
+
+    fn close_top_layout_island(&mut self, span: Span, tokens: &mut Vec<Token>) {
+        let Some(mut island) = self.layout_islands.pop() else {
+            return;
+        };
+        while island.indent_stack.len() > 1 {
+            island.indent_stack.pop();
+            tokens.push(Token {
+                kind: TokenKind::Dedent,
+                span,
+            });
+        }
+    }
+
+    fn should_emit_newline(&self) -> bool {
+        match self.layout_islands.last() {
+            Some(island) => self.delimiters.len() == island.container_depth,
+            None => self.delimiters.is_empty(),
+        }
+    }
+
+    fn unclosed_delimiter_error(&self, eof_span: Span) -> Option<Diagnostic> {
+        self.delimiters.last().map(|frame| {
+            lexical_error(
+                eof_span,
+                format!(
+                    "unclosed delimiter `{}`; expected `{}` before end of file",
+                    frame.kind.opener(),
+                    frame.kind.closer()
+                ),
+            )
+            .with_secondary(
+                frame.span,
+                format!("opening delimiter `{}` is here", frame.kind.opener()),
+            )
+        })
+    }
+}
+
+fn update_indentation(
+    indent: usize,
+    indent_stack: &mut Vec<usize>,
+    span: Span,
+    tokens: &mut Vec<Token>,
+) -> Result<()> {
+    let current_indent = *indent_stack.last().unwrap();
+    if indent > current_indent {
+        indent_stack.push(indent);
+        tokens.push(Token {
+            kind: TokenKind::Indent,
+            span,
+        });
+    } else if indent < current_indent {
+        while indent < *indent_stack.last().unwrap() {
+            indent_stack.pop();
+            tokens.push(Token {
+                kind: TokenKind::Dedent,
+                span,
+            });
+        }
+        if indent != *indent_stack.last().unwrap() {
+            return Err(lexical_error(span, "inconsistent indentation"));
+        }
+    }
+    Ok(())
+}
+
 fn decode_hex_digit(ch: char) -> Option<u32> {
     match ch {
         '0'..='9' => Some((ch as u32) - ('0' as u32)),
@@ -213,6 +467,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut tokens = Vec::new();
     let mut indent_stack = vec![0usize];
+    let mut state = LexState::default();
 
     for (index, raw_line) in source.lines().enumerate() {
         let line_no = index + 1;
@@ -232,49 +487,56 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
 
         let indent = raw_line.chars().take_while(|ch| *ch == ' ').count();
         let content = &raw_line[indent..];
-        let current_indent = *indent_stack.last().unwrap();
+        let line_span = Span::new(line_no, 1);
 
-        if indent > current_indent {
-            indent_stack.push(indent);
-            tokens.push(Token {
-                kind: TokenKind::Indent,
-                span: Span::new(line_no, 1),
-            });
-        } else if indent < current_indent {
-            while indent < *indent_stack.last().unwrap() {
-                indent_stack.pop();
-                tokens.push(Token {
-                    kind: TokenKind::Dedent,
-                    span: Span::new(line_no, 1),
-                });
-            }
-
-            if indent != *indent_stack.last().unwrap() {
-                return Err(lexical_error(
-                    Span::new(line_no, 1),
-                    "inconsistent indentation",
-                ));
-            }
+        let starts_with_closer = matches!(content.chars().next(), Some(')' | ']' | '}'));
+        if state.prepare_line(indent, starts_with_closer, line_span, &mut tokens)?
+            == LineLayout::Global
+        {
+            update_indentation(indent, &mut indent_stack, line_span, &mut tokens)?;
         }
 
-        tokenize_line(content, line_no, indent + 1, &mut tokens)?;
-        tokens.push(Token {
-            kind: TokenKind::Newline,
-            span: Span::new(line_no, raw_line.len() + 1),
-        });
+        tokenize_line(
+            content,
+            line_no,
+            indent + 1,
+            indent,
+            &mut state,
+            &mut tokens,
+        )?;
+        if state.should_emit_newline() {
+            tokens.push(Token {
+                kind: TokenKind::Newline,
+                span: Span::new(line_no, raw_line.len() + 1),
+            });
+        }
+    }
+
+    let line_count = source.lines().count();
+    let eof_span = Span::new(line_count + 1, 1);
+    let diagnostic_eof_span = if source.is_empty() || source.ends_with('\n') {
+        eof_span
+    } else {
+        Span::new(
+            line_count.max(1),
+            source.rsplit('\n').next().map_or(1, |line| line.len() + 1),
+        )
+    };
+    if let Some(error) = state.unclosed_delimiter_error(diagnostic_eof_span) {
+        return Err(error);
     }
 
     while indent_stack.len() > 1 {
         indent_stack.pop();
         tokens.push(Token {
             kind: TokenKind::Dedent,
-            span: Span::new(source.lines().count() + 1, 1),
+            span: eof_span,
         });
     }
 
     tokens.push(Token {
         kind: TokenKind::Eof,
-        span: Span::new(source.lines().count() + 1, 1),
+        span: eof_span,
     });
 
     Ok(tokens)
@@ -284,6 +546,8 @@ fn tokenize_line(
     content: &str,
     line_no: usize,
     base_column: usize,
+    line_indent: usize,
+    state: &mut LexState,
     tokens: &mut Vec<Token>,
 ) -> Result<()> {
     let chars: Vec<(usize, char)> = content.char_indices().collect();
@@ -299,31 +563,46 @@ fn tokenize_line(
             }
             '#' => break,
             '(' => {
+                state.open_delimiter(DelimiterKind::Parenthesis, Span::new(line_no, column))?;
                 tokens.push(simple(TokenKind::LParen, line_no, column));
                 index += 1;
             }
             ')' => {
+                state.close_delimiter(
+                    DelimiterKind::Parenthesis,
+                    Span::new(line_no, column),
+                    tokens,
+                )?;
                 tokens.push(simple(TokenKind::RParen, line_no, column));
                 index += 1;
             }
             '[' => {
+                state.open_delimiter(DelimiterKind::Bracket, Span::new(line_no, column))?;
                 tokens.push(simple(TokenKind::LBracket, line_no, column));
                 index += 1;
             }
             ']' => {
+                state.close_delimiter(
+                    DelimiterKind::Bracket,
+                    Span::new(line_no, column),
+                    tokens,
+                )?;
                 tokens.push(simple(TokenKind::RBracket, line_no, column));
                 index += 1;
             }
             '{' => {
+                state.open_delimiter(DelimiterKind::Brace, Span::new(line_no, column))?;
                 tokens.push(simple(TokenKind::LBrace, line_no, column));
                 index += 1;
             }
             '}' => {
+                state.close_delimiter(DelimiterKind::Brace, Span::new(line_no, column), tokens)?;
                 tokens.push(simple(TokenKind::RBrace, line_no, column));
                 index += 1;
             }
             ':' => {
                 tokens.push(simple(TokenKind::Colon, line_no, column));
+                state.note_colon();
                 index += 1;
             }
             ',' => {
@@ -717,6 +996,9 @@ fn tokenize_line(
                     "false" => TokenKind::BoolLiteral(false),
                     _ => TokenKind::Identifier(text.to_string()),
                 };
+                if kind == TokenKind::KwMatch {
+                    state.note_match_keyword(line_indent);
+                }
                 tokens.push(Token {
                     kind,
                     span: Span::new(line_no, column),

@@ -178,14 +178,288 @@ fn lexes_indentation_and_skips_blank_or_comment_lines() {
 }
 
 #[test]
+fn newline_continuation_suppresses_layout_inside_all_delimiter_kinds() {
+    let tokens = lex([
+        "result = call(",
+        "    1,",
+        "    [2,",
+        "        3],",
+        "    {\"answer\":",
+        "        4}",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect("physical newlines inside delimiters should be lexical whitespace");
+    let token_kinds = tokens
+        .iter()
+        .map(|token| token.kind.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Newline)
+            .count(),
+        1,
+        "only the logical statement terminator should remain"
+    );
+    assert!(!token_kinds.contains(&TokenKind::Indent));
+    assert!(!token_kinds.contains(&TokenKind::Dedent));
+    assert_eq!(
+        tokens
+            .iter()
+            .find(|token| token.kind == TokenKind::IntLiteral(3))
+            .unwrap()
+            .span,
+        Span::new(4, 9),
+        "suppression must preserve physical source coordinates"
+    );
+}
+
+#[test]
+fn newline_continuation_ignores_blank_and_comment_only_physical_lines() {
+    let tokens = kinds(
+        [
+            "value = (",
+            "    1 +",
+            "",
+            "    # explanation",
+            "    2",
+            ")",
+        ]
+        .join("\n")
+        .as_str(),
+    );
+
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Newline)
+            .count(),
+        1
+    );
+    assert!(!tokens.contains(&TokenKind::Indent));
+    assert!(!tokens.contains(&TokenKind::Dedent));
+}
+
+#[test]
+fn newline_continuation_ignores_physical_indent_and_resumes_outer_layout() {
+    let tokens = lex([
+        "def main():",
+        "    value = (",
+        "1 +",
+        "                    2",
+        " )",
+        "    print(value)",
+        "print(0)",
+    ]
+    .join("\n")
+    .as_str())
+    .expect("continuation indentation should not change the outer block");
+    let token_kinds = tokens
+        .iter()
+        .map(|token| token.kind.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        tokens
+            .iter()
+            .find(|token| token.kind == TokenKind::IntLiteral(1))
+            .unwrap()
+            .span,
+        Span::new(3, 1)
+    );
+}
+
+#[test]
+fn delimiters_inside_strings_fstrings_and_comments_do_not_affect_continuation() {
+    let tokens = kinds(
+        [
+            "values = [",
+            "    \")]} literal\",",
+            "    f\"braces {{ stay }} and {name}\",",
+            "    \"# comment text ( [ {\" # real comment ) ] }",
+            "]",
+        ]
+        .join("\n")
+        .as_str(),
+    );
+
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Newline)
+            .count(),
+        1
+    );
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|kind| matches!(kind, TokenKind::StringLiteral(_)))
+            .count(),
+        2
+    );
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|kind| matches!(kind, TokenKind::FStringLiteral(_)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn delimited_match_layout_island_emits_only_the_match_suite_layout() {
+    let tokens = lex([
+        "consume(",
+        "    match value:",
+        "        case 1: \"one\"",
+        "        case _: \"other\"",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect("block-form match should retain local layout inside a call");
+    let token_kinds = tokens
+        .iter()
+        .map(|token| token.kind.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count(),
+        1
+    );
+    let dedent = token_kinds
+        .iter()
+        .position(|kind| *kind == TokenKind::Dedent)
+        .unwrap();
+    let close = token_kinds
+        .iter()
+        .position(|kind| *kind == TokenKind::RParen)
+        .unwrap();
+    assert!(
+        dedent < close,
+        "the suite must close before its containing delimiter"
+    );
+}
+
+#[test]
+fn delimited_match_closer_indentation_is_continuation_formatting() {
+    for closer_indent in [10, 16] {
+        let source = format!(
+            "def main():\n    print(\n        match 1:\n            case 1: \"one\"\n{})\n",
+            " ".repeat(closer_indent)
+        );
+        let tokens = lex(&source)
+            .expect("a containing closer must ignore its visual continuation indentation");
+        let token_kinds = tokens
+            .iter()
+            .map(|token| token.kind.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            token_kinds
+                .iter()
+                .filter(|kind| **kind == TokenKind::Indent)
+                .count(),
+            2,
+            "only the function suite and match-arm suite should indent"
+        );
+        let match_dedent = token_kinds
+            .iter()
+            .position(|kind| *kind == TokenKind::Dedent)
+            .expect("the match suite should close");
+        let close = token_kinds
+            .iter()
+            .rposition(|kind| *kind == TokenKind::RParen)
+            .expect("the containing call should close");
+        assert!(
+            match_dedent < close,
+            "match layout must close before its delimiter: {token_kinds:?}"
+        );
+    }
+}
+
+#[test]
+fn delimiter_diagnostics_pair_closers_and_eof_with_the_opening_span() {
+    for (source, closer, opener, expected) in [
+        ("value = (]\n", Span::new(1, 10), Span::new(1, 9), "`)`"),
+        ("value = [}\n", Span::new(1, 10), Span::new(1, 9), "`]`"),
+        ("value = {)\n", Span::new(1, 10), Span::new(1, 9), "`}`"),
+    ] {
+        let error = lex(source).expect_err("mismatched delimiter should fail lexing");
+        assert_eq!(error.code, "AU1001");
+        assert_eq!(error.span, Some(closer));
+        assert!(error.message.contains("mismatched closing delimiter"));
+        assert!(error.message.contains(expected));
+        assert_eq!(error.secondary_spans.len(), 1);
+        assert_eq!(error.secondary_spans[0].span, opener);
+        assert!(error.secondary_spans[0].label.contains("opening delimiter"));
+    }
+
+    let unexpected = lex("value = )\n").expect_err("unpaired closer should fail lexing");
+    assert_eq!(unexpected.code, "AU1001");
+    assert_eq!(unexpected.span, Some(Span::new(1, 9)));
+    assert!(unexpected.message.contains("no matching opener"));
+    assert!(unexpected.secondary_spans.is_empty());
+
+    let unclosed = lex("value = (\n    1\n").expect_err("unclosed delimiter should fail at EOF");
+    assert_eq!(unclosed.code, "AU1001");
+    assert_eq!(unclosed.span, Some(Span::new(3, 1)));
+    assert!(unclosed.message.contains("expected `)` before end of file"));
+    assert_eq!(unclosed.secondary_spans.len(), 1);
+    assert_eq!(unclosed.secondary_spans[0].span, Span::new(1, 9));
+
+    let no_final_newline =
+        lex("value = (").expect_err("EOF should remain source-addressable without a final newline");
+    assert_eq!(no_final_newline.span, Some(Span::new(1, 10)));
+    assert_eq!(no_final_newline.secondary_spans[0].span, Span::new(1, 9));
+}
+
+#[test]
+fn delimiter_nesting_limit_is_a_lexical_error_at_the_next_opener() {
+    let source = format!(
+        "{}0{}",
+        "(".repeat(crate::limits::RECURSION_LIMIT + 1),
+        ")".repeat(crate::limits::RECURSION_LIMIT + 1)
+    );
+    let error = lex(&source).expect_err("excessive delimiter nesting should fail");
+    assert_eq!(error.code, "AU1001");
+    assert_eq!(
+        error.span,
+        Some(Span::new(1, crate::limits::RECURSION_LIMIT + 1))
+    );
+    assert!(error.message.contains("delimiter nesting exceeds"));
+}
+
+#[test]
 fn lexes_single_token_and_trailing_comment_cases() {
     for (source, expected) in [
-        ("(\n", TokenKind::LParen),
-        (")\n", TokenKind::RParen),
-        ("[\n", TokenKind::LBracket),
-        ("]\n", TokenKind::RBracket),
-        ("{\n", TokenKind::LBrace),
-        ("}\n", TokenKind::RBrace),
         (":\n", TokenKind::Colon),
         (",\n", TokenKind::Comma),
         (".\n", TokenKind::Dot),

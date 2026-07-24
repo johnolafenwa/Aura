@@ -3935,6 +3935,9 @@ fn recover_checked_program_after_parse_error_with<F>(
 where
     F: FnMut(&str) -> Result<Program>,
 {
+    if error.message.starts_with("unclosed delimiter") {
+        return recover_checked_program_after_member_errors(source, check_program);
+    }
     if !error.message.starts_with("expected member name") {
         return None;
     }
@@ -3986,6 +3989,15 @@ fn recover_checked_program_after_member_errors_with(
 ) -> Option<Program> {
     let mut candidate = source.to_string();
     for _ in 0..8 {
+        if let Some(line) = first_dangling_member_line(&candidate) {
+            let next = replace_member_stmt(&candidate, line);
+            if next == candidate {
+                return None;
+            }
+            candidate = next;
+            continue;
+        }
+
         match parser::parse(&candidate) {
             Ok(_) => return check_program(&candidate).ok(),
             Err(error) if error.message.starts_with("expected member name") => {
@@ -4000,6 +4012,40 @@ fn recover_checked_program_after_member_errors_with(
         }
     }
     None
+}
+
+fn first_dangling_member_line(source: &str) -> Option<usize> {
+    source
+        .lines()
+        .enumerate()
+        .find_map(|(line, text)| line_ends_with_dangling_member_dot(text).then_some(line))
+}
+
+fn line_ends_with_dangling_member_dot(line: &str) -> bool {
+    if !line.trim_end().ends_with('.') {
+        return false;
+    }
+
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(active) if ch == active => quote = None,
+            Some(_) => {}
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch == '#' => return false,
+            None => {}
+        }
+    }
+    quote.is_none()
 }
 
 fn sanitize_member_completion_source(source: &str, line: usize, character: usize) -> String {
@@ -4031,18 +4077,67 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
 
 fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) -> String {
     let mut lines = source.lines().map(str::to_string).collect::<Vec<_>>();
-    let Some(line_text) = lines.get_mut(line) else {
+    let start_line = unmatched_delimiter_statement_start_line(source, line).unwrap_or(line);
+    let Some(line_text) = lines.get(start_line) else {
         return source.to_string();
     };
     let indent = line_text
         .chars()
         .take_while(|ch| ch.is_whitespace())
         .collect::<String>();
-    let replacement = enclosing_function_return_placeholder(source, line)
+    let replacement = enclosing_function_return_placeholder(source, start_line)
         .map(|value| format!("{}{}", indent, value))
         .unwrap_or_else(|| format!("{}pass", indent));
-    *line_text = replacement;
+    if start_line == line {
+        lines[start_line] = replacement;
+    } else {
+        for line_text in lines.iter_mut().take(line).skip(start_line) {
+            line_text.clear();
+        }
+        let Some(line_text) = lines.get_mut(line) else {
+            return source.to_string();
+        };
+        *line_text = replacement;
+    }
     lines.join("\n")
+}
+
+fn unmatched_delimiter_statement_start_line(source: &str, through_line: usize) -> Option<usize> {
+    let mut delimiters = Vec::<(char, usize)>::new();
+    for (line, text) in source.lines().enumerate().take(through_line + 1) {
+        let mut quote = None;
+        let mut escaped = false;
+        for ch in text.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' && quote.is_some() {
+                escaped = true;
+                continue;
+            }
+            match quote {
+                Some(active) if ch == active => quote = None,
+                Some(_) => {}
+                None if ch == '"' || ch == '\'' => quote = Some(ch),
+                None if ch == '#' => break,
+                None if matches!(ch, '(' | '[' | '{') => delimiters.push((ch, line)),
+                None if matches!(ch, ')' | ']' | '}') => {
+                    let expected = match ch {
+                        ')' => '(',
+                        ']' => '[',
+                        '}' => '{',
+                        _ => unreachable!(),
+                    };
+                    if matches!(delimiters.last(), Some((opener, _)) if *opener == expected) {
+                        delimiters.pop();
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    delimiters.first().map(|(_, line)| *line)
 }
 
 fn enclosing_function_return_placeholder(source: &str, line: usize) -> Option<String> {
