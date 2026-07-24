@@ -1,0 +1,10 @@
+def classify(first: bool, second: bool):
+    match (first, second):
+        case (true, _):
+            pass
+        case (false, true):
+            pass
+        case (_, true):
+            print("unreachable")
+        case (false, false):
+            pass

@@ -117,6 +117,9 @@
       "kind": "structural",
       "reason": "Manual-wide stability and compatibility policy."
     },
+    "docs/manual/tuples.md": {
+      "kind": "feature"
+    },
     "docs/manual/types.md": {
       "kind": "feature"
     }
@@ -396,7 +399,7 @@
       "reason": "Literal-pattern fragment: code is an input supplied by the surrounding example."
     },
     "docs/manual/expressions.md#aurora-1": {
-      "sha256": "0b6c75c85ea256dd43b52cebaa621fa6a28ce889cf16ae6c5269866984d8e4da",
+      "sha256": "1176ae428130a317546c807ee5d89982956e2e8b4c7d5334a457613f0ff7b276",
       "mode": "illustrative",
       "reason": "Expression-form catalog: the lines are independent grammar examples and include placeholder names, not one program."
     },
@@ -1069,7 +1072,7 @@
       "stderr": ""
     },
     "docs/manual/statements.md#aurora-13": {
-      "sha256": "174a92d34bf6eab875cc896705390e5bce0112499efdbf9c134b8d9c646d9815",
+      "sha256": "f2a7af0bee0a06d8285f9e22ee27241a3d05ef1b2bf47b08dcc017623cdecdb2",
       "mode": "illustrative",
       "reason": "Iteration fragment: values is the collection supplied by the surrounding example."
     },
@@ -1109,6 +1112,24 @@
       "sha256": "37edb6ce3a2558aca196dd0cdca5a6e3e02721488a7529ae5b29c7d622a0b57d",
       "mode": "run",
       "stdout": "hello\n",
+      "stderr": ""
+    },
+    "docs/manual/tuples.md#aurora-1": {
+      "sha256": "9c96231d22ff3b4ae72894e75ab3449e148f4034be8a9454d88696bf6f21d250",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/tuples.md#aurora-2": {
+      "sha256": "fa88ece2d79ca1cdc7c5fa65cc2aa9c56ac30a0f7460641afaf1841e99e9d4b4",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/tuples.md#aurora-3": {
+      "sha256": "62923f71e326e667c4d56f2d72772a3e61faa58c5aaf89fff7f50f79c1e5858c",
+      "mode": "run",
+      "stdout": "Aurora\n7\n20\nready:2\ndone:3\n3\ntrue\n",
       "stderr": ""
     },
     "docs/manual/types.md#aurora-1": {
@@ -1295,7 +1316,7 @@
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-4": {
-      "sha256": "72d8ddd835ce8ca96065cb5832fd3bbad9bcb5784bfbf11617d01e6774d69f22",
+      "sha256": "852a4dee80b0fb45ac9b493c0393891aecaf67fd871cc0fb4241344504ace6b5",
       "mode": "illustrative",
       "reason": "Normative type-and-type-parameter EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1320,12 +1341,12 @@
       "reason": "Normative trait-and-implementation EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-9": {
-      "sha256": "61af07debce3461b87cbf93125023763e683143f573f8345e520a2d6d5505a0f",
+      "sha256": "c31d79602c7a2b62a36684811f3055d2f2047f18b1aea29d3c4a0ee1eee21cb7",
       "mode": "illustrative",
       "reason": "Normative statement-and-assignment EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-10": {
-      "sha256": "c43e034f9349384c3f0ab2a3df499967768ecb9b48a32bb78d07abf8588ccb3b",
+      "sha256": "bbdedd27f2883cecd77ae2b82bcb3576f1d55d55645186e331d72107b5e0a281",
       "mode": "illustrative",
       "reason": "Normative conditional-and-loop EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1335,7 +1356,7 @@
       "reason": "Normative with-statement EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-12": {
-      "sha256": "a16d1676a29ad07b60e79078318f209fedc18040fc4810b91b01a6b026400bb0",
+      "sha256": "3937b047795f08cb39ecb11f5d5c9168a01d33149e34f6b7816a4dab1f37267a",
       "mode": "illustrative",
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1345,7 +1366,7 @@
       "reason": "Normative expression-precedence-and-call EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-14": {
-      "sha256": "3ff9dcbda89802453d110c4edd5fbd61225d1ca4ba8dd45d6770d796646582de",
+      "sha256": "4f5a7b665a261413f7984e1525a2484f05310f45aec639af0f4b071aaaf15895",
       "mode": "illustrative",
       "reason": "Normative primary-and-collection-literal EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1423,6 +1444,16 @@
       "sha256": "66b9581c0756d7a821c6c8d693d29a702ebb0bbbe3e4dfb27dadf2126e00198f",
       "mode": "illustrative",
       "reason": "Exact integer-division diagnostic-message excerpt, not Aurora source."
+    },
+    "docs/manual/tuples.md#ebnf-1": {
+      "sha256": "7e357e99a244966f408181c7cf4b70f5c65469c2493f52851eadf3231e58cd57",
+      "mode": "illustrative",
+      "reason": "Normative tuple EBNF fragment interpreted by the tuple and aggregate grammar prose, not Aurora source."
+    },
+    "docs/manual/tuples.md#text-1": {
+      "sha256": "344dc5e327485e1cba471c3f35b13ba94628f9fdb621359eefeeb9950d5aa68f",
+      "mode": "illustrative",
+      "reason": "Pinned standard output from the preceding verified Aurora tuple program."
     }
   }
 }

@@ -13,10 +13,12 @@ Start with [Language Specification](/manual/language-specification) for scope, t
   keywords, literals, f-strings, and duration literals.
 - [Complete Grammar](/manual/grammar): normative EBNF, precedence, associativity, contextual syntax, layout, and unsupported forms.
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility, bindings, block scope, no-shadowing, and member lookup.
-- [Types](/manual/types): primitive types, `None`, `Duration`, generic types, copy and move categories, and type annotations.
+- [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic types, copy and move categories, and type annotations.
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
 - [Expressions](/manual/expressions): operators, calls, indexing, member access, literals, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
+- [Tuples](/manual/tuples): fixed structural values and types, recursive
+  unpacking and patterns, whole-source ownership, and constant indexing.
 - [Assertions](/manual/assertions): exact boolean conditions, lazy messages,
   `AU4001` failures, cleanup precedence, and backend behavior.
 - [Functions](/manual/functions): signatures, default/`own`/borrowed parameter

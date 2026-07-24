@@ -95,7 +95,7 @@ value = left + \        # invalid Aurora
 ```
 
 A comma or operator at the end of a line is not enough by itself. Keep a
-delimiter open. Trailing commas are still rejected, so write:
+delimiter open. A multi-element list still rejects a trailing comma, so write:
 
 ```python
 values = [
@@ -122,5 +122,4 @@ It prints `80` and `20`.
 
 Delimiter continuation changes source layout only. Values have the same types,
 ownership, evaluation order, and backend behavior as the equivalent one-line
-program. Continue with tuples once that separate Phase 3.5 feature is
-implemented.
+program. Continue with [Tuples](25-tuples.md).

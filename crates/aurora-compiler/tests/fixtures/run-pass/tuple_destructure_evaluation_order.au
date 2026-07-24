@@ -1,0 +1,17 @@
+def first() -> int64:
+    print("first")
+    return 1
+
+def second() -> int64:
+    print("second")
+    return 2
+
+def make() -> (int64, (String, int64)):
+    print("make")
+    return (first(), ("middle", second()))
+
+def main():
+    left, (middle, right) = make()
+    print(left)
+    print(middle)
+    print(right)

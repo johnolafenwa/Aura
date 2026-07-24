@@ -1,0 +1,17 @@
+def make_record() -> ((Option[int32], int32), (String,)):
+    return ((None, 7), ("ready",))
+
+def inspect(record: own ((Option[int32], int32), (String,))):
+    (maybe, count), (label,) = record
+    match borrow (label, count):
+        case (name, value):
+            pass
+
+def inspect_rows(rows: Vec[(String, int32)]):
+    for label, value in rows:
+        pass
+
+def main():
+    record: ((Option[int32], int32), (String,)) = ((None, 7), ("ready",))
+    inspect(record)
+    inspect(make_record())

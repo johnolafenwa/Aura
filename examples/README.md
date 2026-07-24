@@ -80,6 +80,17 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `80`
     - `20`
+- `tuples.au`
+  - fixed tuple values and return types, whole-source unpacking, copy-only
+    constant indexing, tuple-target iteration, and a recursive tuple pattern
+  - prints:
+    - `Aurora`
+    - `7`
+    - `20`
+    - `ready:2`
+    - `done:3`
+    - `3`
+    - `true`
 
 ### `collections/`
 

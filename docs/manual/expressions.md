@@ -9,7 +9,7 @@ Primary expressions are the atoms from which postfix, prefix, and binary express
 - a name such as `count`, `from`, or `point`
 - an integer, float, duration, boolean, string, or f-string literal
 - `None`
-- a parenthesized expression
+- a parenthesized expression or tuple
 - a list, set, or map literal
 
 ```python
@@ -23,6 +23,8 @@ true
 f"count={count}"
 None
 (left + right)
+(left, right)
+(left,)
 [1, 2, 3]
 {"ready": 2}
 {1, 2, 3}
@@ -30,7 +32,31 @@ None
 
 The lexical spelling and default literal types are defined by [Lexical Structure](/manual/lexical-structure). A name must resolve under [Names And Scopes](/manual/names-and-scopes).
 
-Parentheses group exactly one expression. `(value)` is a group, not a tuple, and `(left, right)` is not Aurora 0.1 syntax.
+Parentheses without a comma group exactly one expression. `(value)` is a
+group, `(value,)` is a singleton tuple, and `(left, right)` is a two-element
+tuple. Tuple value expressions always require parentheses; Aurora does not
+accept a naked comma expression.
+
+## Tuple Expressions
+
+A tuple expression evaluates and captures its elements left to right:
+
+    pair = ("north", 7)
+    nested = (pair, (true,))
+
+Its type is the fixed structural tuple of its element types. A tuple copies if
+every element type copies; otherwise it moves as one complete value. See
+[Tuples](/manual/tuples) for unpacking and matching.
+
+A postfix tuple index is deliberately narrow:
+
+    coordinates = (3, 4)
+    vertical = coordinates[1]
+
+The index must be a non-negative integer literal known at compile time, must be
+in bounds, and must select a copy element. The result is a copy. Dynamic,
+negative, out-of-bounds, and non-copy-element tuple indexing are static errors;
+unpack a tuple when ownership of a non-copy element is required.
 
 ## Delimiter Continuation
 
@@ -434,9 +460,10 @@ Bare builtin variants such as `Ok`, `Err`, `Some`, or `None` are accepted only w
 
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include tuples, comprehensions, lambdas,
-conditional expressions, assignment expressions, call-site borrow
-annotations, non-numeric casts, or trailing commas. If a form is absent from
+Aurora 0.1 expressions do not include comprehensions, lambdas, conditional
+expressions, assignment expressions, call-site borrow annotations, non-numeric
+casts, or ordinary trailing commas. The required singleton-tuple comma is the
+one tuple-specific exception. If a form is absent from
 [Grammar](/manual/grammar), it is not part of the implemented expression
 language.
 
@@ -511,8 +538,8 @@ are produced before backend selection.
 
 The parser caps expression nesting and operator chains at 128. Physical lines
 continue only while a source delimiter remains open; backslashes and
-multiline string/f-string literals do not continue them. Trailing commas are
-unavailable.
+multiline string/f-string literals do not continue them. Ordinary trailing
+commas are unavailable; `(value,)` is the required singleton tuple spelling.
 Collection and string resource caps are documented by their feature pages.
 Floating values follow the specified Aurora operations and shortest-round-trip
 printing; no backend may substitute a different expression result as an
@@ -523,9 +550,10 @@ implementation-defined choice.
 The expression forms defined positively in this chapter are implemented.
 Delimiter continuation is implemented under Provisional ADR-0025; it does not
 add a new expression AST form.
-Tuples, lambdas, comprehensions, conditional and assignment expressions,
-general callables, nonnumeric casts, and call-site ownership modifiers are
-unavailable. `in` is reserved as a loop keyword but is unavailable as an
+Lambdas, comprehensions, conditional and assignment expressions, general
+callables, nonnumeric casts, and call-site ownership modifiers are unavailable.
+The minimal tuple surface is Provisional under ADR-0026. `in` is reserved as a
+loop keyword but is unavailable as an
 expression operator. Chained comparisons are deliberately rejected rather
 than given Python semantics. Parser migration hints for any of these spellings
 do not make them language features.

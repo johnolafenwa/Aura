@@ -1,0 +1,18 @@
+def main():
+    rows: Vec[(String, int64)] = [("left", 1), ("right", 2)]
+    for label, value in own rows:
+        print(f"{label}:{value}")
+
+    match (2, ("go", true)):
+        case (1, _):
+            print("wrong")
+        case (2, (command, true)):
+            print(f"case {command}")
+        case _:
+            print("wrong")
+
+    jobs = Queue[(int64, String)]()
+    jobs.put((3, "queue"))
+    jobs.close()
+    for number, name in jobs:
+        print(f"{number}:{name}")

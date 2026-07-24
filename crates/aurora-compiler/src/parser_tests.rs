@@ -18,6 +18,13 @@ fn parse_pattern_from(source: &str) -> Result<Pattern> {
     parser.parse_pattern()
 }
 
+fn named_type_ref(ty: &TypeRef) -> Option<(&str, &[TypeRef])> {
+    match &ty.kind {
+        TypeRefKind::Named { name, args } => Some((name, args)),
+        TypeRefKind::Tuple(_) => None,
+    }
+}
+
 fn tokens_with_newline_after_first_indent(source: &str) -> Vec<Token> {
     let mut tokens = lex(source).expect("source should lex");
     let indent = tokens
@@ -40,7 +47,316 @@ fn d3_parser_accepts_int_alias_as_numeric_cast_target() {
     let cast = parse_expression("value as int").expect("`int` should be a numeric cast target");
     assert!(matches!(
         cast.kind,
-        ExprKind::Cast { ty, .. } if ty.name == "int" && ty.args.is_empty()
+        ExprKind::Cast { ty, .. }
+            if matches!(named_type_ref(&ty), Some(("int", args)) if args.is_empty())
+    ));
+}
+
+#[test]
+fn tuple_literals_are_parenthesized_and_distinct_from_groups() {
+    let pair = parse_expression("(1, \"one\")").expect("pair tuple should parse");
+    assert!(matches!(
+        pair.kind,
+        ExprKind::Tuple(ref elements)
+            if elements.len() == 2
+                && matches!(elements[0].kind, ExprKind::Int(1))
+                && matches!(elements[1].kind, ExprKind::String(ref value) if value == "one")
+    ));
+
+    let singleton = parse_expression("(1,)").expect("singleton tuple should parse");
+    assert!(matches!(
+        singleton.kind,
+        ExprKind::Tuple(ref elements)
+            if elements.len() == 1 && matches!(elements[0].kind, ExprKind::Int(1))
+    ));
+
+    let group = parse_expression("(1)").expect("group should remain valid");
+    assert!(matches!(
+        group.kind,
+        ExprKind::Group(ref inner) if matches!(inner.kind, ExprKind::Int(1))
+    ));
+
+    let nested = parse_expression("(\n    (1, \"one\"),\n    (2,)\n)")
+        .expect("nested multiline tuples should parse");
+    assert!(matches!(
+        nested.kind,
+        ExprKind::Tuple(ref elements)
+            if elements.len() == 2
+                && matches!(elements[0].kind, ExprKind::Tuple(ref inner) if inner.len() == 2)
+                && matches!(elements[1].kind, ExprKind::Tuple(ref inner) if inner.len() == 1)
+    ));
+
+    let unparenthesized =
+        parse_expression("1, 2").expect_err("tuple expressions require parentheses");
+    assert!(unparenthesized
+        .message
+        .contains("unexpected trailing tokens after expression"));
+}
+
+#[test]
+fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
+    let item = parse_item_from(
+        "def rotate(value: (int32, String), only: (int64,)) -> ((String, int32), bool)?:\n    return None\n",
+    )
+    .expect("tuple parameter and return types should parse");
+    let Item::Function(function) = item else {
+        panic!("expected function");
+    };
+
+    let TypeRefKind::Tuple(value_elements) = &function.params[0].ty.kind else {
+        panic!("expected pair tuple type");
+    };
+    assert_eq!(value_elements.len(), 2);
+    assert!(matches!(
+        named_type_ref(&value_elements[0]),
+        Some(("int32", args)) if args.is_empty()
+    ));
+    assert!(matches!(
+        named_type_ref(&value_elements[1]),
+        Some(("String", args)) if args.is_empty()
+    ));
+
+    assert!(matches!(
+        function.params[1].ty.kind,
+        TypeRefKind::Tuple(ref elements) if elements.len() == 1
+    ));
+    let TypeRefKind::Named {
+        name,
+        args: option_args,
+    } = &function.return_type.kind
+    else {
+        panic!("optional tuple return should lower to an Option type reference");
+    };
+    assert_eq!(name, "Option");
+    assert!(matches!(
+        option_args.as_slice(),
+        [TypeRef {
+            kind: TypeRefKind::Tuple(elements),
+            ..
+        }] if elements.len() == 2
+            && matches!(elements[0].kind, TypeRefKind::Tuple(ref nested) if nested.len() == 2)
+    ));
+
+    let indirect = parse_item_from("def invalid(value: indirect (int32,)):\n    pass\n")
+        .expect_err("indirect tuple types must not silently discard the modifier");
+    assert!(indirect
+        .message
+        .contains("`indirect` applies only to named types"));
+}
+
+#[test]
+fn destructuring_and_for_targets_use_recursive_binding_target_nodes() {
+    let flat = parse_stmt_from("left, right = pair\n").expect("flat destructuring should parse");
+    assert!(matches!(
+        flat,
+        Stmt::Destructure(DestructureStmt {
+            target: BindingTarget::Tuple { ref elements, .. },
+            ..
+        }) if matches!(
+            elements.as_slice(),
+            [
+                BindingTarget::Name { name: left, .. },
+                BindingTarget::Name { name: right, .. }
+            ] if left == "left" && right == "right"
+        )
+    ));
+
+    let nested = parse_stmt_from("(left, (middle, right)) = value\n")
+        .expect("nested parenthesized destructuring should parse");
+    assert!(matches!(
+        nested,
+        Stmt::Destructure(DestructureStmt {
+            target:
+                BindingTarget::Tuple {
+                    ref elements,
+                    ..
+                },
+            ..
+        }) if matches!(
+            elements.as_slice(),
+            [
+                BindingTarget::Name { name: left, .. },
+                BindingTarget::Tuple {
+                    elements: nested,
+                    ..
+                }
+            ] if left == "left" && nested.len() == 2
+        )
+    ));
+
+    let for_stmt = parse_stmt_from("for index, label in rows:\n    pass\n")
+        .expect("tuple for target should parse");
+    assert!(matches!(
+        for_stmt,
+        Stmt::For(ForStmt {
+            target: BindingTarget::Tuple { ref elements, .. },
+            ..
+        }) if elements.len() == 2
+    ));
+
+    let ordinary =
+        parse_stmt_from("for item in rows:\n    pass\n").expect("name for target should parse");
+    assert!(matches!(
+        ordinary,
+        Stmt::For(ForStmt {
+            target: BindingTarget::Name { ref name, .. },
+            ..
+        }) if name == "item"
+    ));
+}
+
+#[test]
+fn tuple_patterns_are_recursive_and_do_not_reuse_variant_payload_nodes() {
+    let pattern = parse_pattern_from("(0, (name,))").expect("recursive tuple pattern should parse");
+    assert!(matches!(
+        pattern,
+        Pattern::Tuple(TuplePattern {
+            ref elements,
+            ..
+        }) if elements.len() == 2
+            && matches!(elements[0], Pattern::Literal(_))
+            && matches!(
+                elements[1],
+                Pattern::Tuple(TuplePattern {
+                    elements: ref nested,
+                    ..
+                }) if nested.len() == 1
+            )
+    ));
+}
+
+#[test]
+fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
+    let call = parse_expression("consume((1, 2), 3)").expect("call separators should remain owned");
+    assert!(matches!(
+        call.kind,
+        ExprKind::Call { ref args, .. }
+            if args.len() == 2
+                && matches!(args[0].value.kind, ExprKind::Tuple(ref elements) if elements.len() == 2)
+                && matches!(args[1].value.kind, ExprKind::Int(3))
+    ));
+
+    let list = parse_expression("[(1, 2), (3,)]").expect("list separators should remain owned");
+    assert!(matches!(
+        list.kind,
+        ExprKind::List(ref elements)
+            if elements.len() == 2
+                && elements
+                    .iter()
+                    .all(|element| matches!(element.kind, ExprKind::Tuple(_)))
+    ));
+
+    for source in [
+        "value: Map[String, int32] = values\n",
+        "value: (String, int32) = pair\n",
+    ] {
+        assert!(
+            matches!(parse_stmt_from(source), Ok(Stmt::Assign(_))),
+            "commas inside an annotation belong to the type: {source}"
+        );
+    }
+
+    for source in ["()", "(1, 2,)", "(1,)", "(1, 2)"] {
+        let parsed = parse_expression(source);
+        if source == "(1,)" || source == "(1, 2)" {
+            assert!(parsed.is_ok(), "{source} should be a valid tuple");
+        } else {
+            let error = parsed.expect_err("unsupported tuple form should fail");
+            assert_eq!(error.code, "AU1101");
+        }
+    }
+
+    let missing_type_comma = parse_item_from("def read(value: (String)):\n    pass\n")
+        .expect_err("a singleton tuple type needs a comma");
+    assert!(missing_type_comma
+        .message
+        .contains("tuple types need a comma"));
+
+    let duplicate = parse_stmt_from("left, left = pair\n")
+        .expect_err("duplicate destructuring names should fail in the parser");
+    assert!(duplicate
+        .message
+        .contains("duplicate binding target `left`"));
+
+    let compound =
+        parse_stmt_from("left, right += pair\n").expect_err("compound destructuring should fail");
+    assert!(compound
+        .message
+        .contains("destructuring only supports plain `=`"));
+
+    let mutable = parse_stmt_from("mut left, right = pair\n")
+        .expect_err("mutable destructuring is outside the minimal tuple ticket");
+    assert!(mutable
+        .message
+        .contains("`mut` destructuring is not supported"));
+
+    for (source, expected) in [
+        ("()", "empty tuple patterns are not supported"),
+        (
+            "(name)",
+            "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
+        ),
+        (
+            "(left, right,)",
+            "trailing commas are only allowed for singleton tuple patterns",
+        ),
+    ] {
+        let error = parse_pattern_from(source)
+            .expect_err("unsupported tuple pattern syntax must produce a teaching diagnostic");
+        assert_eq!(error.message, expected);
+    }
+
+    for (source, expected) in [
+        (
+            "def invalid(value: ()):\n    pass\n",
+            "empty tuple types are not supported",
+        ),
+        (
+            "def invalid(value: (int32, String,)):\n    pass\n",
+            "trailing commas are only allowed for singleton tuple types",
+        ),
+    ] {
+        let error = parse_item_from(source)
+            .expect_err("unsupported tuple type syntax must produce a teaching diagnostic");
+        assert_eq!(error.message, expected);
+    }
+
+    for (source, expected) in [
+        (
+            "left, = pair\n",
+            "an unparenthesized destructuring target cannot end with a comma; write `(name,)` for a singleton tuple target",
+        ),
+        (
+            "(left, right,) = pair\n",
+            "trailing commas are only allowed for singleton tuple targets",
+        ),
+        (
+            "((), right) = pair\n",
+            "empty tuple binding targets are not supported",
+        ),
+        (
+            "left, 1 = pair\n",
+            "binding targets must be names or recursively nested tuple targets",
+        ),
+    ] {
+        let error = parse_stmt_from(source)
+            .expect_err("unsupported tuple target syntax must produce a teaching diagnostic");
+        assert_eq!(error.message, expected);
+    }
+
+    let tokens = lex("left, right\n").expect("diagnostic source should lex");
+    let mut parser = Parser::new(tokens);
+    let missing_equal = parser
+        .parse_destructure_stmt()
+        .expect_err("a parsed destructuring target still requires `=`");
+    assert_eq!(
+        missing_equal.message,
+        "expected `=` after destructuring target"
+    );
+
+    assert!(matches!(
+        parse_stmt_from("pair: (int32, String)? = None\n"),
+        Ok(Stmt::Assign(_))
     ));
 }
 
@@ -373,7 +689,10 @@ fn parse_structural_items_tolerate_blank_lines_and_pass() {
         Item::Trait(trait_decl) => {
             assert!(trait_decl.supertraits.is_empty());
             assert_eq!(trait_decl.methods.len(), 1);
-            assert_eq!(trait_decl.methods[0].return_type.name, "None");
+            assert!(matches!(
+                named_type_ref(&trait_decl.methods[0].return_type),
+                Some(("None", args)) if args.is_empty()
+            ));
         }
         other => panic!("expected trait item, got {other:?}"),
     }
@@ -387,9 +706,14 @@ fn parse_structural_items_tolerate_blank_lines_and_pass() {
     match &supertrait_item {
         Item::Trait(trait_decl) => {
             assert_eq!(trait_decl.supertraits.len(), 2);
-            assert_eq!(trait_decl.supertraits[0].name, "Parent");
-            assert_eq!(trait_decl.supertraits[1].name, "Debug");
-            assert_eq!(trait_decl.supertraits[1].args.len(), 1);
+            assert!(matches!(
+                named_type_ref(&trait_decl.supertraits[0]),
+                Some(("Parent", args)) if args.is_empty()
+            ));
+            assert!(matches!(
+                named_type_ref(&trait_decl.supertraits[1]),
+                Some(("Debug", args)) if args.len() == 1
+            ));
         }
         other => panic!("expected trait item, got {other:?}"),
     }
@@ -973,22 +1297,22 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
                                                                 },
                                                                 span,
                                                             }),
-                                                            ty: TypeRef {
-                                                                name: "float64".to_string(),
-                                                                args: vec![TypeRef {
-                                                                    name: "Vec".to_string(),
-                                                                    args: vec![TypeRef {
-                                                                        name: "int32".to_string(),
-                                                                        args: vec![],
-                                                                        indirect: false,
+                                                            ty: TypeRef::named(
+                                                                "float64",
+                                                                vec![TypeRef::named(
+                                                                    "Vec",
+                                                                    vec![TypeRef::named(
+                                                                        "int32",
+                                                                        vec![],
+                                                                        false,
                                                                         span,
-                                                                    }],
-                                                                    indirect: false,
+                                                                    )],
+                                                                    false,
                                                                     span,
-                                                                }],
-                                                                indirect: false,
+                                                                )],
+                                                                false,
                                                                 span,
-                                                            },
+                                                            ),
                                                         },
                                                         span,
                                                     })),
@@ -1015,27 +1339,24 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
     assert_eq!(expr.span.line, 7);
     assert_eq!(expr.span.column, 4);
 
-    let mut ty = TypeRef {
-        name: "Map".to_string(),
-        args: vec![TypeRef {
-            name: "Vec".to_string(),
-            args: vec![TypeRef {
-                name: "int32".to_string(),
-                args: vec![],
-                indirect: false,
-                span,
-            }],
-            indirect: false,
+    let mut ty = TypeRef::named(
+        "Map",
+        vec![TypeRef::named(
+            "Vec",
+            vec![TypeRef::named("int32", vec![], false, span)],
+            false,
             span,
-        }],
-        indirect: false,
+        )],
+        false,
         span,
-    };
+    );
     offset_type_ref_span(&mut ty, 9, 5);
     assert_eq!(ty.span.line, 9);
     assert_eq!(ty.span.column, 6);
-    assert_eq!(ty.args[0].span.line, 9);
-    assert_eq!(ty.args[0].args[0].span.column, 6);
+    let (_, ty_args) = named_type_ref(&ty).expect("named Map type");
+    assert_eq!(ty_args[0].span.line, 9);
+    let (_, nested_args) = named_type_ref(&ty_args[0]).expect("named Vec type");
+    assert_eq!(nested_args[0].span.column, 6);
 }
 
 #[test]
@@ -1241,29 +1562,27 @@ fn offset_helpers_cover_fstring_expression_parts() {
     };
     assert_eq!(type_args[0].span.line, 9);
     assert!(type_args[0].span.column >= 5);
-    assert_eq!(type_args[0].args[0].span.line, 9);
-    assert!(type_args[0].args[0].span.column >= type_args[0].span.column);
+    let (_, specialized_args) = named_type_ref(&type_args[0]).expect("named Box type");
+    assert_eq!(specialized_args[0].span.line, 9);
+    assert!(specialized_args[0].span.column >= type_args[0].span.column);
 
-    let mut type_ref = TypeRef {
-        name: "Box".to_string(),
-        args: vec![TypeRef {
-            name: "Vec".to_string(),
-            args: vec![TypeRef {
-                name: "int32".to_string(),
-                args: Vec::new(),
-                indirect: false,
-                span: Span::new(1, 11),
-            }],
-            indirect: false,
-            span: Span::new(1, 7),
-        }],
-        indirect: false,
-        span: Span::new(1, 3),
-    };
+    let mut type_ref = TypeRef::named(
+        "Box",
+        vec![TypeRef::named(
+            "Vec",
+            vec![TypeRef::named("int32", Vec::new(), false, Span::new(1, 11))],
+            false,
+            Span::new(1, 7),
+        )],
+        false,
+        Span::new(1, 3),
+    );
     offset_type_ref_span(&mut type_ref, 12, 4);
     assert_eq!(type_ref.span, Span::new(12, 7));
-    assert_eq!(type_ref.args[0].span, Span::new(12, 11));
-    assert_eq!(type_ref.args[0].args[0].span, Span::new(12, 15));
+    let (_, type_ref_args) = named_type_ref(&type_ref).expect("named Box type");
+    assert_eq!(type_ref_args[0].span, Span::new(12, 11));
+    let (_, inner_args) = named_type_ref(&type_ref_args[0]).expect("named Vec type");
+    assert_eq!(inner_args[0].span, Span::new(12, 15));
 }
 
 #[test]

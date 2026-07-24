@@ -2853,3 +2853,150 @@ test("compiler bridge recovers imported completions and symbols when a buffer co
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("compiler bridge exposes tuple return, index, destructuring, loop, and pattern analysis", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-tuples-"));
+  const source = [
+    "def make() -> (int64, String):",
+    "    return (1, \"one\")",
+    "",
+    "def main():",
+    "    pair = make()",
+    "    first = pair[0]",
+    "    number, label = pair",
+    "    rows = [(2, 3)]",
+    "    for left, right in rows:",
+    "        print(left + right)",
+    "    match (4, 5):",
+    "        case (matched_left, matched_right):",
+    "            print(matched_left + matched_right)",
+    "    print(first)",
+    "    print(number)",
+    "    print(label)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.ok(
+      analysis.symbols.some(
+        (symbol) =>
+          symbol.name === "make" &&
+          symbol.kind === "function" &&
+          symbol.detail === "(int64, String)"
+      )
+    );
+    assert.deepEqual(compilerHoverAtPosition(analysis, 5, 13), {
+      value: "```aurora\nbinding pair: (int64, String)\n```",
+      range: {
+        start: { line: 5, character: 12 },
+        end: { line: 5, character: 16 }
+      }
+    });
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nbinding number: int64\n```"
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nbinding label: String\n```"
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nlocal left: int64\n```"
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nlocal right: int64\n```"
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nlocal matched_left: int64\n```"
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nlocal matched_right: int64\n```"
+      )
+    );
+    assert.deepEqual(
+      compilerDefinitionAtPosition(mainUri, analysis, 14, 12)?.range,
+      {
+        start: { line: 6, character: 4 },
+        end: { line: 6, character: 10 }
+      }
+    );
+    assert.deepEqual(
+      compilerDefinitionAtPosition(mainUri, analysis, 12, 20)?.range,
+      {
+        start: { line: 11, character: 14 },
+        end: { line: 11, character: 26 }
+      }
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge maps non-copy tuple index diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-tuple-index-"));
+  const source = [
+    "def main():",
+    "    pair = (\"left\", 1)",
+    "    print(pair[0])",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.deepEqual(analysis.diagnostics[0], {
+      code: "AU3005",
+      edits: [],
+      end_character: 11,
+      help: [],
+      line: 2,
+      message:
+        "cannot consume non-copy tuple element `String` by indexing; unpack the tuple to move its elements",
+      notes: [],
+      secondary_spans: [],
+      severity: 1,
+      start_character: 10
+    });
+
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostic.code, "AU3005");
+    assert.equal(diagnostic.source, "aurora-compiler");
+    assert.equal(
+      diagnostic.message,
+      "cannot consume non-copy tuple element `String` by indexing; unpack the tuple to move its elements"
+    );
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 2, character: 10 },
+      end: { line: 2, character: 11 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

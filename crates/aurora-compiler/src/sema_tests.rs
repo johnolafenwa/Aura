@@ -13,12 +13,538 @@ fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
 }
 
 fn type_ref(name: &str) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-        indirect: false,
-        span: Span::new(1, 1),
+    TypeRef::named(name, Vec::new(), false, Span::new(1, 1))
+}
+
+#[test]
+fn tuples_type_contextual_none_indexing_and_recursive_copyability() {
+    crate::check_source(
+        "\
+def choose() -> (Option[int32], int32):
+    return (None, 7)
+
+def main():
+    pair: (Option[int32], int32) = choose()
+    value: int32 = pair[1]
+    grouped: Option[int32] = pair[(0)]
+    print(value)
+",
+    )
+    .expect("tuple literals use element-wise expected types and copy indexing");
+
+    assert!(Type::Tuple(vec![Type::named("int32"), Type::Unit]).is_copy());
+    assert!(!Type::Tuple(vec![Type::named("String"), Type::Unit]).is_copy());
+    assert_eq!(
+        Type::Tuple(vec![Type::named("int32")]).to_string(),
+        "(int32,)",
+        "singleton tuple types must render with the comma that distinguishes their arity"
+    );
+
+    let dynamic = crate::check_source(
+        "def main():\n    pair = (1, 2)\n    index = 0\n    print(pair[index])\n",
+    )
+    .expect_err("tuple indices must be compile-time literals");
+    assert_eq!(dynamic.code, "AU2003");
+    assert!(dynamic.message.contains("tuple indices must be"));
+
+    let non_copy =
+        crate::check_source("def main():\n    pair = (\"left\", 2)\n    print(pair[0])\n")
+            .expect_err("non-copy tuple elements cannot be consumed by indexing");
+    assert!(non_copy.message.contains("unpack the tuple"));
+
+    let grouped_dynamic = crate::check_source(
+        "def main():\n    pair = (1, 2)\n    index = 0\n    print(pair[(index)])\n",
+    )
+    .expect_err("a grouped non-literal is still a dynamic tuple index");
+    assert_eq!(
+        grouped_dynamic.message,
+        "tuple indices must be non-negative integer literals"
+    );
+}
+
+#[test]
+fn tuple_comparison_is_rejected_until_it_has_ratified_semantics() {
+    for operator in ["==", "!=", "<", "<=", ">", ">="] {
+        let source = format!(
+            "def main():\n    left = (1, 2)\n    right = (1, 2)\n    compared = left {operator} right\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("tuple comparisons are outside the ratified language");
+        assert_eq!(error.code, "AU2003");
+        assert_eq!(
+            error.message,
+            "tuple comparison is not supported; compare tuple elements explicitly"
+        );
     }
+}
+
+#[test]
+fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics() {
+    let tuple_ref = TypeRef::tuple(
+        vec![type_ref("T"), nested_type_ref("Vec", vec![type_ref("U")])],
+        false,
+        Span::new(1, 1),
+    );
+    let mut collected_ref_params = BTreeSet::new();
+    collect_type_ref_type_params(
+        &tuple_ref,
+        &BTreeMap::new(),
+        &mut collected_ref_params,
+        false,
+    );
+    assert_eq!(
+        collected_ref_params,
+        BTreeSet::from(["T".to_string(), "U".to_string()])
+    );
+
+    let tuple_pattern = Type::Tuple(vec![Type::TypeParam("T".to_string()), Type::named("int32")]);
+    let mut collected_type_params = BTreeSet::new();
+    collect_type_params_from_type(&tuple_pattern, &mut collected_type_params);
+    assert_eq!(collected_type_params, BTreeSet::from(["T".to_string()]));
+    assert!(has_unresolved_type_params(&tuple_pattern));
+    assert_eq!(type_pattern_specificity(&tuple_pattern), 2);
+
+    let type_params = BTreeSet::from(["T".to_string()]);
+    let actual = Type::Tuple(vec![Type::named("String"), Type::named("int32")]);
+    let mut substitutions = HashMap::new();
+    assert!(type_pattern_matches(
+        &tuple_pattern,
+        &actual,
+        &type_params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&Type::named("String")));
+    assert!(!type_pattern_matches(
+        &tuple_pattern,
+        &Type::named("String"),
+        &type_params,
+        &mut HashMap::new(),
+    ));
+
+    let not_tuple = unify_type_pattern(&tuple_pattern, &Type::named("String"), &mut HashMap::new())
+        .expect_err("tuple generic patterns must reject non-tuples");
+    assert_eq!(not_tuple.message, "expected `(T, int32)`, found `String`");
+    let wrong_arity = unify_type_pattern(
+        &tuple_pattern,
+        &Type::Tuple(vec![Type::named("String")]),
+        &mut HashMap::new(),
+    )
+    .expect_err("tuple generic patterns must reject the wrong arity");
+    assert_eq!(
+        wrong_arity.message,
+        "expected `(T, int32)`, found `(String,)`"
+    );
+
+    let classes = BTreeMap::from([(
+        "Wrapper".to_string(),
+        class_info(
+            "Wrapper",
+            false,
+            vec![(
+                "payload",
+                Type::Tuple(vec![Type::named("Node"), Type::named("int32")]),
+                false,
+            )],
+        ),
+    )]);
+    assert!(type_reaches_class_through_non_indirect_fields(
+        &Type::named("Wrapper"),
+        "Node",
+        &classes,
+        &mut BTreeSet::new(),
+    ));
+}
+
+#[test]
+fn tuples_destructure_recursively_and_consume_the_whole_non_copy_source() {
+    crate::check_source(
+        "\
+def main():
+    pair = (1, (2, 3))
+    (first, (second, third)) = pair
+    print(first)
+    print(second)
+    print(third)
+",
+    )
+    .expect("recursive copy tuple destructuring should check");
+
+    let moved = crate::check_source(
+        "\
+def main():
+    pair = (\"left\", \"right\")
+    (left, right) = pair
+    print(pair)
+",
+    )
+    .expect_err("unpacking a non-copy tuple consumes the whole source");
+    assert!(moved.message.contains("use of moved value `pair`"));
+
+    let wrong_shape = crate::check_source("def main():\n    (left, right, extra) = (1, 2)\n")
+        .expect_err("tuple target arity must match");
+    assert!(wrong_shape.message.contains("has 3 elements"));
+}
+
+#[test]
+fn tuple_loop_targets_and_match_patterns_are_structural() {
+    crate::check_source(
+        "\
+def main():
+    values = [(1, 2), (3, 4)]
+    for (left, right) in values:
+        print(left + right)
+
+    pair = (1, \"ready\")
+    match borrow pair:
+        case (number, text):
+            print(number)
+            print(text)
+",
+    )
+    .expect("tuple loop targets and shared-borrow tuple patterns should check");
+
+    crate::check_source(
+        "\
+def main():
+    pair = ((1, 2), 3)
+    match pair:
+        case ((left, right), tail):
+            print(left + right + tail)
+",
+    )
+    .expect("nested tuple patterns recursively bind every leaf");
+
+    let mutable = crate::check_source(
+        "\
+def main():
+    mut values = [(1, 2)]
+    for (left, right) in borrow mut values:
+        pass
+",
+    )
+    .expect_err("borrow-mut tuple targets are intentionally rejected");
+    assert!(
+        mutable
+            .message
+            .contains("`borrow mut` tuple targets are not supported"),
+        "{}",
+        mutable.message
+    );
+
+    let match_mut = crate::check_source(
+        "\
+def main():
+    mut pair = (1, 2)
+    match borrow mut pair:
+        case (left, right):
+            pass
+",
+    )
+    .expect_err("match borrow mut tuple patterns are intentionally rejected");
+    assert!(match_mut
+        .message
+        .contains("does not support tuple patterns"));
+}
+
+#[test]
+fn tuple_patterns_report_scrutinee_kind_and_expression_exhaustiveness() {
+    let enum_statement = crate::check_source(
+        "\
+enum State:
+    Ready
+
+def main():
+    state = State.Ready
+    match state:
+        case (_,):
+            pass
+",
+    )
+    .expect_err("an enum statement match must reject a tuple pattern");
+    assert_eq!(
+        enum_statement.message,
+        "match over `State` expects enum variant patterns, not a tuple pattern"
+    );
+
+    let enum_expression = crate::check_source(
+        "\
+enum State:
+    Ready
+
+def main() -> int32:
+    state = State.Ready
+    return match state:
+        case (_,): 1
+",
+    )
+    .expect_err("an enum expression match must reject a tuple pattern");
+    assert_eq!(
+        enum_expression.message,
+        "match over `State` expects enum variant patterns, not a tuple pattern"
+    );
+
+    let scalar_statement = crate::check_source(
+        "\
+def main():
+    match true:
+        case (_,):
+            pass
+",
+    )
+    .expect_err("a scalar statement match must reject a tuple pattern");
+    assert_eq!(
+        scalar_statement.message,
+        "tuple pattern requires a tuple scrutinee, found `bool`"
+    );
+
+    let scalar_expression = crate::check_source(
+        "\
+def main() -> int32:
+    return match true:
+        case (_,): 1
+",
+    )
+    .expect_err("a scalar expression match must reject a tuple pattern");
+    assert_eq!(
+        scalar_expression.message,
+        "tuple pattern requires a tuple scrutinee, found `bool`"
+    );
+
+    let nested_scalar = crate::check_source(
+        "\
+def main():
+    match (true, false):
+        case ((_, _), _):
+            pass
+",
+    )
+    .expect_err("a nested tuple pattern must validate its corresponding element type");
+    assert_eq!(
+        nested_scalar.message,
+        "tuple pattern requires a tuple scrutinee, found `bool`"
+    );
+
+    crate::check_source(
+        "\
+def classify(pair: (bool, bool)) -> bool:
+    return match pair:
+        case (true, value): value
+        case _: false
+",
+    )
+    .expect("tuple match expressions should bind element types recursively");
+
+    let partial_expression = crate::check_source(
+        "\
+def classify(first: bool, second: bool) -> int32:
+    return match (first, second):
+        case (true, _): 1
+",
+    )
+    .expect_err("a tuple match expression must cover its finite product");
+    assert_eq!(
+        partial_expression.message,
+        "non-exhaustive match over `(bool, bool)`: add a covering tuple pattern or final `case _:`"
+    );
+}
+
+#[test]
+fn tuple_pattern_unions_preserve_nested_bool_and_enum_exhaustiveness() {
+    crate::check_source(
+        "\
+enum Maybe:
+    Some(bool)
+    None
+
+def main():
+    match (true, 1):
+        case (true, _):
+            pass
+        case (false, _):
+            pass
+
+    match ((true, false),):
+        case ((true, _),):
+            pass
+        case ((false, _),):
+            pass
+
+    match (Maybe.Some(true), \"value\"):
+        case (Maybe.Some(true), _):
+            pass
+        case (Maybe.Some(false), _):
+            pass
+        case (Maybe.None, _):
+            pass
+",
+    )
+    .expect("complementary finite tuple patterns should be exhaustive");
+
+    let partial = crate::check_source(
+        "\
+def main():
+    match (true, 1):
+        case (true, _):
+            pass
+",
+    )
+    .expect_err("a partial tuple-pattern union must remain non-exhaustive");
+    assert_eq!(
+        partial.message,
+        "non-exhaustive match over `(bool, int64)`: add a covering tuple pattern or final `case _:`"
+    );
+
+    let unreachable = crate::check_source(
+        "\
+def main():
+    match (true, 1):
+        case (true, _):
+            pass
+        case (false, _):
+            pass
+        case _:
+            pass
+",
+    )
+    .expect_err("a wildcard after a complete tuple-pattern union must remain unreachable");
+    assert_eq!(unreachable.message, "unreachable match arm");
+
+    let union_covered_subset = crate::check_source(
+        "\
+def classify(first: bool, second: bool):
+    match (first, second):
+        case (true, _):
+            pass
+        case (false, true):
+            pass
+        case (_, true):
+            print(\"unreachable\")
+        case (false, false):
+            pass
+",
+    )
+    .expect_err("a tuple arm covered by the union of earlier rows must be unreachable");
+    assert_eq!(union_covered_subset.message, "unreachable match arm");
+
+    let nested_union_covered_subset = crate::check_source(
+        "\
+enum Maybe:
+    Some(bool)
+    None
+
+def classify(value: Maybe, flag: bool):
+    match (value, flag):
+        case (Maybe.Some(true), _):
+            pass
+        case (Maybe.Some(false), true):
+            pass
+        case (Maybe.Some(_), true):
+            print(\"unreachable\")
+        case (Maybe.Some(false), false):
+            pass
+        case (Maybe.None, _):
+            pass
+",
+    )
+    .expect_err(
+        "correlated earlier rows must cover a current tuple arm through nested enum patterns",
+    );
+    assert_eq!(nested_union_covered_subset.message, "unreachable match arm");
+
+    let nested_wildcard_union = crate::check_source(
+        "\
+def classify(left: bool, right: bool, flag: bool):
+    match ((left, right), flag):
+        case (_, true):
+            pass
+        case (_, false):
+            pass
+        case ((true, _), _):
+            print(\"unreachable\")
+",
+    )
+    .expect_err("wildcard rows over a nested tuple domain must participate in union reachability");
+    assert_eq!(nested_wildcard_union.message, "unreachable match arm");
+
+    let variant_wildcard_union = crate::check_source(
+        "\
+enum Flags:
+    Pair(bool, bool)
+
+def classify(flags: Flags):
+    match flags:
+        case Flags.Pair(_, true):
+            pass
+        case Flags.Pair(_, false):
+            pass
+        case Flags.Pair(true, _):
+            print(\"unreachable\")
+",
+    )
+    .expect_err("wildcard rows over multi-payload variants must participate in union reachability");
+    assert_eq!(variant_wildcard_union.message, "unreachable match arm");
+
+    crate::check_source(
+        "\
+def classify(first: bool, second: bool):
+    match (first, second):
+        case (true, true):
+            pass
+        case (false, false):
+            pass
+        case (_, true):
+            print(\"reachable for false, true\")
+        case _:
+            pass
+",
+    )
+    .expect("disjoint correlated rows must not make a partially overlapping tuple arm unreachable");
+
+    crate::check_source(
+        "\
+enum PairState:
+    Pair(bool, bool)
+    Empty
+
+def classify(value: PairState):
+    match value:
+        case PairState.Pair(true, _):
+            pass
+        case PairState.Pair(false, _):
+            pass
+        case PairState.Empty:
+            pass
+",
+    )
+    .expect("complementary rows must exhaust every product position of a multi-payload variant");
+
+    let multi_payload_union_covered_subset = crate::check_source(
+        "\
+enum PairState:
+    Pair(bool, bool)
+    Empty
+
+def classify(value: PairState):
+    match value:
+        case PairState.Pair(true, _):
+            pass
+        case PairState.Pair(false, true):
+            pass
+        case PairState.Pair(_, true):
+            print(\"unreachable\")
+        case PairState.Pair(false, false):
+            pass
+        case PairState.Empty:
+            pass
+",
+    )
+    .expect_err(
+        "correlated earlier rows must make a covered multi-payload variant arm unreachable",
+    );
+    assert_eq!(
+        multi_payload_union_covered_subset.message,
+        "unreachable match arm"
+    );
 }
 
 #[test]
@@ -1207,6 +1733,54 @@ fn rng_clone_safety_ignores_handle_payloads_and_ambiguous_nominal_fallbacks() {
             "a {handle} payload must not create clone-safety obligations",
         );
     }
+    let safe_tuple = Type::Tuple(vec![Type::named("int32"), Type::Unit]);
+    assert_eq!(
+        rng_clone_safety_in_context_with_modules(
+            &safe_tuple,
+            &classes,
+            &enums,
+            &imported_modules,
+            &module_registry,
+        ),
+        RngCloneSafety::Safe,
+    );
+    let rng_tuple = Type::Tuple(vec![Type::named("random.Rng"), Type::named("int32")]);
+    assert_eq!(
+        rng_clone_safety_in_context_with_modules(
+            &rng_tuple,
+            &classes,
+            &enums,
+            &imported_modules,
+            &module_registry,
+        ),
+        RngCloneSafety::ContainsRng,
+        "a tuple is only clone-safe when every element is clone-safe"
+    );
+    let generic_tuple = Type::Tuple(vec![
+        Type::TypeParam("Element".to_string()),
+        Type::named("int32"),
+    ]);
+    assert_eq!(
+        rng_clone_safety_in_context_with_modules(
+            &generic_tuple,
+            &classes,
+            &enums,
+            &imported_modules,
+            &module_registry,
+        ),
+        RngCloneSafety::Unknown,
+    );
+    assert_eq!(
+        rng_clone_obligation_params_in_context_with_modules(
+            &generic_tuple,
+            &classes,
+            &enums,
+            &imported_modules,
+            &module_registry,
+        ),
+        BTreeSet::from(["Element".to_string()]),
+        "generic tuple elements propagate clone-safety obligations"
+    );
 
     let mut first_class = class_info("Shared", false, Vec::new());
     first_class.module_name = "first".to_string();
@@ -1994,11 +2568,24 @@ fn contextual_none_rejects_non_optional_comparisons_symmetrically() {
 }
 
 fn nested_type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args,
-        indirect: false,
-        span: Span::new(1, 1),
+    TypeRef::named(name, args, false, Span::new(1, 1))
+}
+
+fn type_to_ref(ty: &Type) -> TypeRef {
+    match ty {
+        Type::Named(name, args) => TypeRef::named(
+            name,
+            args.iter().map(type_to_ref).collect(),
+            false,
+            Span::new(1, 1),
+        ),
+        Type::Tuple(elements) => TypeRef::tuple(
+            elements.iter().map(type_to_ref).collect(),
+            false,
+            Span::new(1, 1),
+        ),
+        Type::TypeParam(name) | Type::Module(name) => type_ref(name),
+        Type::Unit => type_ref("None"),
     }
 }
 
@@ -2099,52 +2686,7 @@ fn field_decl(name: &str, ty: TypeRef, indirect: bool) -> FieldDecl {
 fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> ClassInfo {
     let decl_fields = field_specs
         .iter()
-        .map(|(field_name, ty, indirect)| {
-            field_decl(
-                field_name,
-                match ty {
-                    Type::Named(name, args) => TypeRef {
-                        name: name.clone(),
-                        args: args
-                            .iter()
-                            .map(|arg| match arg {
-                                Type::Named(name, args) => TypeRef {
-                                    name: name.clone(),
-                                    args: args
-                                        .iter()
-                                        .map(|inner| match inner {
-                                            Type::Named(name, args) => TypeRef {
-                                                name: name.clone(),
-                                                args: args
-                                                    .iter()
-                                                    .map(|_| type_ref("Unknown"))
-                                                    .collect(),
-                                                indirect: false,
-                                                span: Span::new(1, 1),
-                                            },
-                                            Type::TypeParam(name) => type_ref(name),
-                                            Type::Module(name) => type_ref(name),
-                                            Type::Unit => type_ref("None"),
-                                        })
-                                        .collect(),
-                                    indirect: false,
-                                    span: Span::new(1, 1),
-                                },
-                                Type::TypeParam(name) => type_ref(name),
-                                Type::Module(name) => type_ref(name),
-                                Type::Unit => type_ref("None"),
-                            })
-                            .collect(),
-                        indirect: false,
-                        span: Span::new(1, 1),
-                    },
-                    Type::TypeParam(name) => type_ref(name),
-                    Type::Module(name) => type_ref(name),
-                    Type::Unit => type_ref("None"),
-                },
-                *indirect,
-            )
-        })
+        .map(|(field_name, ty, indirect)| field_decl(field_name, type_to_ref(ty), *indirect))
         .collect::<Vec<_>>();
     let fields = field_specs
         .into_iter()
@@ -2174,12 +2716,7 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
         .as_ref()
         .map(|ty| crate::ast::EnumPayloadFieldDecl {
             name: None,
-            ty: match ty {
-                Type::Named(name, _) => type_ref(name),
-                Type::TypeParam(name) => type_ref(name),
-                Type::Module(name) => type_ref(name),
-                Type::Unit => type_ref("None"),
-            },
+            ty: type_to_ref(ty),
             span: Span::new(1, 1),
         })
         .into_iter()
@@ -8254,9 +8791,18 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
             ("type_param_field", Type::TypeParam("T".to_string()), false),
         ],
     );
-    assert_eq!(info.decl.fields[0].ty.name, "pkg.helpers");
-    assert_eq!(info.decl.fields[1].ty.name, "None");
-    assert_eq!(info.decl.fields[2].ty.name, "T");
+    assert!(matches!(
+        info.decl.fields[0].ty.named_parts(),
+        Some(("pkg.helpers", _))
+    ));
+    assert!(matches!(
+        info.decl.fields[1].ty.named_parts(),
+        Some(("None", _))
+    ));
+    assert!(matches!(
+        info.decl.fields[2].ty.named_parts(),
+        Some(("T", _))
+    ));
 
     let classes = BTreeMap::from([(
         "Boxed".to_string(),
@@ -9432,7 +9978,7 @@ fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
         span: omitted.span,
     };
     let mut option_param = param;
-    option_param.ty.args = vec![type_ref("Duration")];
+    option_param.ty = nested_type_ref("Option", vec![type_ref("Duration")]);
     checker
         .check_param_defaults(
             &[option_param],
@@ -10191,6 +10737,27 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
     )
     .expect_err("trait arity mismatch should fail");
     assert!(arity.message.contains("expects 1 type arguments, found 0"));
+
+    let tuple_bound = lower_trait_bounds(
+        &BTreeMap::from([(
+            "T".to_string(),
+            vec![TypeRef::tuple(
+                vec![type_ref("Named")],
+                false,
+                Span::new(2, 8),
+            )],
+        )]),
+        &traits,
+        &type_names,
+        &type_arities,
+        empty_canonical_type_names(),
+        &scope,
+    )
+    .expect_err("a tuple type cannot stand in for a named trait bound");
+    assert_eq!(
+        tuple_bound.message,
+        "a type parameter bound must be a named trait type"
+    );
 }
 
 #[test]
@@ -10270,6 +10837,25 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
     )
     .expect_err("supertrait arguments should be type-checked");
     assert!(bad_arg.message.contains("unknown type `MissingType`"));
+
+    let tuple_supertrait = lower_supertraits(
+        &[TypeRef::tuple(
+            vec![type_ref("Base")],
+            false,
+            Span::new(3, 7),
+        )],
+        &traits,
+        &type_names,
+        &type_arities,
+        empty_canonical_type_names(),
+        &scope,
+        Some(&Type::named("Widget")),
+    )
+    .expect_err("a tuple type cannot stand in for a named supertrait");
+    assert_eq!(
+        tuple_supertrait.message,
+        "a supertrait must be a named trait type"
+    );
 }
 
 #[test]
@@ -11743,7 +12329,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
-                "`match` currently requires an enum, bool, integer, float, or String scrutinee",
+                "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee",
             ),
             (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
@@ -11923,7 +12509,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
     for (source, expected) in [
         (
             "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
-            "`match` currently requires an enum, bool, integer, float, or String scrutinee",
+            "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee",
         ),
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    return match 1:\n        case Status.Ready: 1\n        case _: 0\n",
@@ -14706,6 +15292,10 @@ fn check_reports_duplicate_recursive_and_copy_class_errors() {
                 "recursive field `next` on class `Node` requires `indirect`",
             ),
             (
+                "class Node:\n    next: (Node, int32)\n",
+                "tuple types cannot be `indirect`",
+            ),
+            (
                 "copy class Holder:\n    name: String\n",
                 "field `name` on `copy class Holder` must be a copy type",
             ),
@@ -15008,12 +15598,7 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
     );
     assert_eq!(
         lower_type(
-            &TypeRef {
-                name: "pkg.tools.Widget".to_string(),
-                args: Vec::new(),
-                indirect: false,
-                span: Span::new(1, 1),
-            },
+            &TypeRef::named("pkg.tools.Widget", Vec::new(), false, Span::new(1, 1),),
             &type_names,
             &type_arities,
             empty_canonical_type_names(),
@@ -15025,12 +15610,7 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
 
     for (invalid_type, expected) in [
         (
-            TypeRef {
-                name: "T".to_string(),
-                args: vec![type_ref("int32")],
-                indirect: false,
-                span: Span::new(2, 1),
-            },
+            TypeRef::named("T", vec![type_ref("int32")], false, Span::new(2, 1)),
             "type parameter `T` does not take type arguments",
         ),
         (

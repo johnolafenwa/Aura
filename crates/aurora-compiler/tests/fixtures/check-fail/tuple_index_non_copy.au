@@ -1,0 +1,3 @@
+def main():
+    pair = ("left", 1)
+    print(pair[0])

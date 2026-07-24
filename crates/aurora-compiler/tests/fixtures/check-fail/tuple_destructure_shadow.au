@@ -1,0 +1,4 @@
+def main():
+    left = 1
+    pair = (2, 3)
+    left, right = pair

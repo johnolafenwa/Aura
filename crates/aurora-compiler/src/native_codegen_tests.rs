@@ -17,7 +17,8 @@ use super::{
     mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
     release_direct_call_results, release_direct_values, render_direct_type,
     runtime_type_is_wildcard, signature_for, thunk_signature, thunk_string_constant,
-    unbox_thunk_value, validate_function, validate_operand, DirectType, NativeCodegen,
+    unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
+    validate_tuple_projection_operand, validate_tuple_take_place, DirectType, NativeCodegen,
     PlainClassField, PlainClassType, ScalarKind,
 };
 use crate::ast::{BinaryOp, UnaryOp};
@@ -34,6 +35,97 @@ fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
     direct_type(ty, &HashMap::new()).and_then(|ty| ty.scalar_kind())
 }
 
+#[test]
+fn tuple_native_ownership_gates_separate_public_projection_from_private_destructuring() {
+    assert!(validate_tuple_projection_operand(&Operand::Place("pair".to_string())).is_ok());
+    let public_move = validate_tuple_projection_operand(&Operand::MovePlace("pair".to_string()))
+        .expect_err("public tuple indexing must never consume a source projection");
+    assert!(public_move.contains("only reads Copy elements"));
+
+    assert!(validate_tuple_take_place("%t17").is_ok());
+    let user_place = validate_tuple_take_place("pair")
+        .expect_err("destructive extraction must be scoped to a private captured tuple");
+    assert!(user_place.contains("whole-tuple destructuring"));
+
+    let classes = HashMap::new();
+    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
+    assert_eq!(
+        direct_type(&tuple_type, &classes),
+        Some(DirectType::Opaque(tuple_type.clone())),
+        "structural tuple types use the opaque aggregate ABI"
+    );
+    assert!(validate_rvalue(
+        &Rvalue::TupleLiteral {
+            elements: vec![Operand::Int(1), Operand::String("one".to_string())],
+            element_types: vec![Type::named("int64"), Type::named("String")],
+        },
+        &classes,
+    )
+    .is_ok());
+    let arity_error = validate_rvalue(
+        &Rvalue::TupleLiteral {
+            elements: vec![Operand::Int(1)],
+            element_types: vec![Type::named("int64"), Type::named("String")],
+        },
+        &classes,
+    )
+    .expect_err("tuple literal MIR metadata must preserve source arity");
+    assert!(arity_error.contains("tuple literal arity 1 with 2 element types"));
+
+    let projection_error = validate_rvalue(
+        &Rvalue::TupleElement {
+            tuple: Operand::MovePlace("pair".to_string()),
+            index: 0,
+            element_type: Type::named("int64"),
+        },
+        &classes,
+    )
+    .expect_err("public tuple projection cannot consume its source");
+    assert!(projection_error.contains("only reads Copy elements"));
+    assert!(validate_rvalue(
+        &Rvalue::TupleElement {
+            tuple: Operand::Place("pair".to_string()),
+            index: 0,
+            element_type: Type::named("int64"),
+        },
+        &classes,
+    )
+    .is_ok());
+
+    let take_error = validate_rvalue(
+        &Rvalue::TupleTakeElement {
+            place: "pair".to_string(),
+            index: 1,
+            element_type: Type::named("String"),
+        },
+        &classes,
+    )
+    .expect_err("destructive extraction cannot name a user-visible place");
+    assert!(take_error.contains("private captured temporary"));
+    assert!(validate_rvalue(
+        &Rvalue::TupleTakeElement {
+            place: "%t4".to_string(),
+            index: 1,
+            element_type: Type::named("String"),
+        },
+        &classes,
+    )
+    .is_ok());
+
+    assert!(!runtime_type_is_wildcard(&tuple_type));
+    assert!(runtime_type_is_wildcard(&Type::Tuple(vec![
+        Type::TypeParam("Element".to_string())
+    ])));
+    assert_eq!(
+        super::render_runtime_type_pattern(&Type::Tuple(vec![Type::named("int64")])),
+        "(int64,)"
+    );
+    assert_eq!(
+        super::render_runtime_type_pattern(&tuple_type),
+        "(int64, String)"
+    );
+}
+
 fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
     let object = cranelift_object::object::File::parse(bytes)
         .expect("direct backend output should be a readable host object");
@@ -46,6 +138,187 @@ fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
         })
         .filter_map(|symbol| symbol.name().ok().map(str::to_string))
         .collect()
+}
+
+#[test]
+fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
+    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
+    let module = |instructions, local_types| crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types,
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions,
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    let public_projection = module(
+        vec![
+            Instruction::Assign {
+                target: "pair".to_string(),
+                value: Rvalue::TupleLiteral {
+                    elements: vec![Operand::Int(7), Operand::String("seven".to_string())],
+                    element_types: vec![Type::named("int64"), Type::named("String")],
+                },
+            },
+            Instruction::Assign {
+                target: "first".to_string(),
+                value: Rvalue::TupleElement {
+                    tuple: Operand::Place("pair".to_string()),
+                    index: 0,
+                    element_type: Type::named("int64"),
+                },
+            },
+        ],
+        vec![
+            MirLocalType {
+                name: "pair".to_string(),
+                ty: tuple_type.clone(),
+            },
+            MirLocalType {
+                name: "first".to_string(),
+                ty: Type::named("int64"),
+            },
+        ],
+    );
+    let public_object =
+        emit_host_object(&public_projection).expect("Copy tuple projection should emit directly");
+    let public_symbols = object_referenced_symbols(&public_object);
+    for required in ["aurora_direct_tuple_new", "aurora_direct_tuple_element"] {
+        assert!(
+            public_symbols
+                .iter()
+                .any(|symbol| symbol.contains(required)),
+            "public tuple projection should reference `{required}`: {public_symbols:?}"
+        );
+    }
+    assert!(
+        public_symbols
+            .iter()
+            .all(|symbol| !symbol.contains("aurora_direct_tuple_take_element")),
+        "public tuple projection must not reference destructive take: {public_symbols:?}"
+    );
+
+    let private_take = module(
+        vec![
+            Instruction::Assign {
+                target: "pair".to_string(),
+                value: Rvalue::TupleLiteral {
+                    elements: vec![Operand::Int(7), Operand::String("seven".to_string())],
+                    element_types: vec![Type::named("int64"), Type::named("String")],
+                },
+            },
+            Instruction::Assign {
+                target: "%t0".to_string(),
+                value: Rvalue::Use(Operand::MovePlace("pair".to_string())),
+            },
+            Instruction::Assign {
+                target: "label".to_string(),
+                value: Rvalue::TupleTakeElement {
+                    place: "%t0".to_string(),
+                    index: 1,
+                    element_type: Type::named("String"),
+                },
+            },
+        ],
+        vec![
+            MirLocalType {
+                name: "pair".to_string(),
+                ty: tuple_type.clone(),
+            },
+            MirLocalType {
+                name: "%t0".to_string(),
+                ty: tuple_type,
+            },
+            MirLocalType {
+                name: "label".to_string(),
+                ty: Type::named("String"),
+            },
+        ],
+    );
+    let private_object =
+        emit_host_object(&private_take).expect("private captured tuple take should emit directly");
+    let private_symbols = object_referenced_symbols(&private_object);
+    assert!(
+        private_symbols
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_tuple_take_element")),
+        "private tuple destruction should reference destructive take: {private_symbols:?}"
+    );
+}
+
+#[test]
+fn tuple_specialized_trait_dispatch_emits_structural_runtime_matchers() {
+    let source = r#"
+trait Label:
+    def label(borrow self) -> String
+
+class Envelope[T]:
+    payload: T
+
+impl Label for Envelope[(int32, String)]:
+    def label(borrow self) -> String:
+        return "integer then string"
+
+impl Label for Envelope[(String, int32)]:
+    def label(borrow self) -> String:
+        return "string then integer"
+
+def describe[T: Label](value: T) -> String:
+    return value.label()
+
+def main():
+    print(describe(Envelope[(int32, String)](payload=(7, "seven"))))
+    print(describe(Envelope[(String, int32)](payload=("eight", 8))))
+"#;
+
+    let mir = lower_source_to_mir(source).expect("tuple-specialized dispatch should lower");
+    let output = crate::run_mir(&mir).expect("tuple-specialized dispatch should run through MIR");
+    assert_eq!(output.stdout, "integer then string\nstring then integer\n");
+
+    let bytes =
+        emit_host_object(&mir).expect("tuple-specialized dispatch should emit direct object code");
+    let referenced = object_referenced_symbols(&bytes);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_value_type_matches")),
+        "dynamic tuple specialization must consult runtime type matching: {referenced:?}"
+    );
+
+    let object = cranelift_object::object::File::parse(bytes.as_slice())
+        .expect("direct tuple-dispatch output should be a readable host object");
+    let data_occurrences = |needle: &[u8]| {
+        object
+            .sections()
+            .filter_map(|section| section.data().ok())
+            .map(|data| {
+                data.windows(needle.len())
+                    .filter(|window| *window == needle)
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    assert!(
+        data_occurrences(b"(int32, String)") >= 2,
+        "direct dispatch must encode a tuple matcher in addition to the enclosing class pattern"
+    );
+    assert!(
+        data_occurrences(b"(String, int32)") >= 2,
+        "direct dispatch must encode a second tuple matcher in addition to its enclosing class pattern"
+    );
 }
 
 #[test]

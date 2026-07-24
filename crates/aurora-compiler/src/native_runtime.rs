@@ -47,7 +47,7 @@ use crate::runtime_value::{
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
     SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -692,6 +692,7 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
 fn embedded_runtime_type_name(value: &Value) -> Option<String> {
     match value {
         Value::Int(value) => value.runtime_type_name().map(str::to_string),
+        Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone()).to_string()),
         Value::Vec(vector) => {
             Some(Type::Named("Vec".to_string(), vec![vector.element_type.clone()]).to_string())
         }
@@ -728,11 +729,42 @@ unsafe fn effective_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
 }
 
 fn runtime_type_from_name(name: &str) -> Type {
+    fn split_type_list(source: &str) -> Vec<Type> {
+        let mut values = Vec::new();
+        let mut bracket_depth = 0usize;
+        let mut tuple_depth = 0usize;
+        let mut start = 0usize;
+        for (index, character) in source.char_indices() {
+            match character {
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                '(' => tuple_depth += 1,
+                ')' => tuple_depth = tuple_depth.saturating_sub(1),
+                ',' if bracket_depth == 0 && tuple_depth == 0 => {
+                    let value = source[start..index].trim();
+                    if !value.is_empty() {
+                        values.push(runtime_type_from_name(value));
+                    }
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        let value = source[start..].trim();
+        if !value.is_empty() {
+            values.push(runtime_type_from_name(value));
+        }
+        values
+    }
+
     if name == "None" {
         return Type::Unit;
     }
     if let Some(module) = name.strip_prefix("module ") {
         return Type::Module(module.to_string());
+    }
+    if name.starts_with('(') && name.ends_with(')') {
+        return Type::Tuple(split_type_list(&name[1..name.len() - 1]));
     }
     let Some(open) = name.find('[') else {
         return Type::named(name);
@@ -742,24 +774,7 @@ fn runtime_type_from_name(name: &str) -> Type {
     }
     let base = &name[..open];
     let inner = &name[open + 1..name.len() - 1];
-    let mut args = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (index, character) in inner.char_indices() {
-        match character {
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                args.push(runtime_type_from_name(inner[start..index].trim()));
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < inner.len() {
-        args.push(runtime_type_from_name(inner[start..].trim()));
-    }
-    Type::Named(base.to_string(), args)
+    Type::Named(base.to_string(), split_type_list(inner))
 }
 
 fn runtime_type_pattern_from_name(name: &str) -> Type {
@@ -772,6 +787,9 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
                 name,
                 args.into_iter().map(decode_pattern).collect::<Vec<_>>(),
             ),
+            Type::Tuple(elements) => {
+                Type::Tuple(elements.into_iter().map(decode_pattern).collect())
+            }
             Type::Unit | Type::Module(_) | Type::TypeParam(_) => ty,
         }
     }
@@ -804,6 +822,17 @@ fn runtime_type_pattern_matches(
                     .all(|(pattern_arg, actual_arg)| {
                         runtime_type_pattern_matches(pattern_arg, actual_arg, substitutions)
                     })
+        }
+        Type::Tuple(pattern_elements) => {
+            let Type::Tuple(actual_elements) = actual else {
+                return false;
+            };
+            pattern_elements.len() == actual_elements.len()
+                && pattern_elements.iter().zip(actual_elements).all(
+                    |(pattern_element, actual_element)| {
+                        runtime_type_pattern_matches(pattern_element, actual_element, substitutions)
+                    },
+                )
         }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if path == actual_path),
         Type::Unit => *actual == Type::Unit,
@@ -847,6 +876,13 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
                     if name == "Map" && args.len() == 2 {
                         map.key_type = args[0].clone();
                         map.value_type = args[1].clone();
+                    }
+                }
+            }
+            Value::Tuple(tuple) => {
+                if let Type::Tuple(element_types) = &parsed {
+                    if element_types.len() == tuple.elements.len() {
+                        tuple.element_types = element_types.clone();
                     }
                 }
             }
@@ -936,12 +972,22 @@ unsafe fn consume_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
 }
 
 unsafe fn consume_owned_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
+    unsafe { consume_owned_opaque_buffer_for(buffer, count, "enum payload") }
+}
+
+unsafe fn consume_owned_opaque_buffer_for(
+    buffer: *mut i64,
+    count: usize,
+    element_description: &str,
+) -> Vec<Value> {
     let handles = unsafe { Vec::from_raw_parts(buffer, count, count) };
     handles
         .into_iter()
         .map(|handle| {
             if handle == 0 {
-                runtime_error("direct runtime received a null owned enum payload handle");
+                runtime_error(format!(
+                    "direct runtime received a null owned {element_description} handle"
+                ));
             }
             unsafe { consume_owned_untracked_value(handle as *mut OpaqueValue) }
         })
@@ -1811,6 +1857,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
         Value::String(_) => "String".to_string(),
+        Value::Tuple(_) => "tuple".to_string(),
         Value::Vec(_) => "Vec".to_string(),
         Value::Set(_) => "Set".to_string(),
         Value::Map(_) => "Map".to_string(),
@@ -1853,6 +1900,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::String(_) => Type::named("String"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
+        Value::Tuple(tuple) => Type::Tuple(tuple.element_types.clone()),
         Value::Vec(vector) => Type::Named("Vec".to_string(), vec![vector.element_type.clone()]),
         Value::Set(set) => Type::Named("Set".to_string(), vec![set.element_type.clone()]),
         Value::Map(map) => Type::Named(
@@ -4176,6 +4224,14 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
                     value_type_name(&actual) == *name
                         && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))
                 }
+                Type::Tuple(_) => match &actual {
+                    Value::Tuple(tuple) => runtime_type_pattern_matches(
+                        &pattern,
+                        &Type::Tuple(tuple.element_types.clone()),
+                        &mut BTreeMap::new(),
+                    ),
+                    _ => false,
+                },
                 Type::Unit | Type::Module(_) | Type::TypeParam(_) => false,
             };
             return i64::from(untagged_outer_wildcard);
@@ -4189,6 +4245,10 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
                 nominal_runtime_base_name(&variant.enum_name) == expected
             }
             Value::String(_) => expected == "String",
+            Value::Tuple(tuple) => {
+                expected == "tuple"
+                    || Type::Tuple(tuple.element_types.clone()).to_string() == expected
+            }
             Value::Vec(_) => expected == "Vec",
             Value::Set(_) => expected == "Set",
             Value::Map(_) => expected == "Map",
@@ -4255,6 +4315,125 @@ pub extern "C-unwind" fn aurora_direct_enum_variant(
                 unsafe { consume_owned_opaque_buffer(payloads_ptr, payload_count) }
             },
         }))
+    })
+}
+
+/// Constructs a tuple by consuming every owned opaque handle in `elements_ptr`.
+///
+/// The caller must allocate the buffer with `aurora_direct_arg_buffer_new` and
+/// fill it with `aurora_direct_arg_buffer_store_owned`. Tuple values use the
+/// same single opaque-handle ABI as other heterogeneous aggregate values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_tuple_new(
+    elements_ptr: *mut i64,
+    element_count: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let element_count = usize::try_from(element_count)
+            .unwrap_or_else(|_| runtime_error("invalid tuple element count"));
+        if element_count > 0 && elements_ptr.is_null() {
+            runtime_error("direct runtime received a null tuple element buffer");
+        }
+        let elements = if element_count == 0 {
+            Vec::new()
+        } else {
+            unsafe { consume_owned_opaque_buffer_for(elements_ptr, element_count, "tuple element") }
+        };
+        let element_types = elements.iter().map(inferred_collection_type).collect();
+        boxed_value(Value::Tuple(TupleValue {
+            element_types,
+            elements,
+        }))
+    })
+}
+
+/// Returns an independently owned clone of a tuple element.
+///
+/// Semantic checking must restrict indexed projection to Copy element types.
+/// Consuming extraction is a separate internal-only destructuring ABI and must
+/// never be selected for user-visible indexed access.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_tuple_element(
+    value: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let index =
+            usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid tuple element index"));
+        unsafe {
+            with_value(value, |value| {
+                let Value::Tuple(tuple) = value else {
+                    runtime_error(format!(
+                        "expected tuple value, found `{}`",
+                        value_type_name(value)
+                    ));
+                };
+                if matches!(tuple.elements.get(index), Some(Value::Unit))
+                    && !matches!(tuple.element_types.get(index), Some(Type::Unit))
+                {
+                    runtime_error(format!(
+                        "tuple element at index {} has already been moved",
+                        index
+                    ));
+                }
+                tuple
+                    .elements
+                    .get(index)
+                    .cloned()
+                    .map(boxed_value)
+                    .unwrap_or_else(|| {
+                        runtime_error(format!(
+                            "tuple of length {} has no element at index {}",
+                            tuple.elements.len(),
+                            index
+                        ))
+                    })
+            })
+        }
+    })
+}
+
+/// Destructively transfers one element from a tuple that is already owned by a
+/// private MIR destructuring temporary.
+///
+/// This ABI must never back user-visible indexed access. Native codegen gates
+/// it to compiler-generated `%t...` places after lowering has moved the whole
+/// source tuple into that private temporary.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_tuple_take_element(
+    value: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let index =
+            usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid tuple element index"));
+        let element = unsafe {
+            value_mut(value, |value| {
+                let Value::Tuple(tuple) = value else {
+                    runtime_error(format!(
+                        "expected tuple value, found `{}`",
+                        value_type_name(value)
+                    ));
+                };
+                if matches!(tuple.elements.get(index), Some(Value::Unit))
+                    && !matches!(tuple.element_types.get(index), Some(Type::Unit))
+                {
+                    runtime_error(format!(
+                        "tuple element at index {} has already been moved",
+                        index
+                    ));
+                }
+                let length = tuple.elements.len();
+                let element = tuple.elements.get_mut(index).unwrap_or_else(|| {
+                    runtime_error(format!(
+                        "tuple of length {} has no element at index {}",
+                        length, index
+                    ))
+                });
+                std::mem::replace(element, Value::Unit)
+            })
+        };
+        boxed_value(element)
     })
 }
 

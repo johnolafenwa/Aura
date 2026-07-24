@@ -1,0 +1,5 @@
+error[AU4003]: tuple index 2 is out of bounds for a 2-element tuple
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_index_bounds.au:3:16
+  |
+3 |     print(pair[2])
+  |                ^

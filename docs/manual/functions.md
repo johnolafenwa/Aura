@@ -26,6 +26,13 @@ def log(message: String):
 
 `return expression` must have exactly the declared return type. `return` without an expression has type `None` and is valid only in a `None`-returning function. Reaching the end of a `None` function returns `None` implicitly.
 
+A function may return one fixed structural tuple. Both the return annotation
+and value use parentheses, and a comma distinguishes a singleton tuple from
+grouping: `def locate() -> (String, int64):` may
+`return ("north", 7)`. The caller may bind the result with
+`name, number = locate()`. Tuple return copy/move behavior follows the complete
+tuple's recursive classification; see [Tuples](/manual/tuples).
+
 A function with any other return type must return on every statically reachable path:
 
 ```python

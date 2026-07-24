@@ -1,6 +1,6 @@
 use super::*;
 use crate::ast::{
-    Argument, AssignTarget, BindingPattern, Expr, ExprKind, ForStmt, LiteralPattern,
+    Argument, AssignTarget, BindingPattern, BindingTarget, Expr, ExprKind, ForStmt, LiteralPattern,
     LiteralPatternKind, MapEntryExpr, PassStmt, Pattern, Stmt, TypeRef, VariantPattern,
 };
 use crate::diag::Span;
@@ -31,12 +31,7 @@ fn member_expr(object: Expr, field: &str) -> Expr {
 }
 
 fn type_ref(name: &str) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-        indirect: false,
-        span: Span::new(1, 1),
-    }
+    TypeRef::named(name, Vec::new(), false, Span::new(1, 1))
 }
 
 #[test]
@@ -69,6 +64,518 @@ fn arg(value: Expr) -> Argument {
         span: value.span,
         value,
     }
+}
+
+#[test]
+fn tuple_literals_capture_each_element_left_to_right_before_construction() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def first() -> String:
+    return "first"
+
+def second() -> String:
+    return "second"
+
+def main():
+    pair = (first(), second())
+"#,
+    )
+    .expect("tuple literal should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    let first_call = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+                    ..
+                } if name == "first"
+            )
+        })
+        .expect("first call should lower");
+    let second_call = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+                    ..
+                } if name == "second"
+            )
+        })
+        .expect("second call should lower");
+    let tuple_construct = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::TupleLiteral { .. },
+                    ..
+                }
+            )
+        })
+        .expect("tuple construction should lower");
+    assert!(first_call < second_call && second_call < tuple_construct);
+    assert!(
+        instructions[first_call + 1..second_call]
+            .iter()
+            .any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Use(Operand::MovePlace(_)),
+                        ..
+                    }
+                )
+            }),
+        "the first element must be captured before the second expression runs"
+    );
+}
+
+#[test]
+fn tuple_literal_elements_use_the_explicit_tuple_annotation_context() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    pair: (int8, int16) = (1, 2)
+"#,
+    )
+    .expect("annotated tuple literal should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let element_types = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::TupleLiteral { element_types, .. },
+                ..
+            } => Some(element_types),
+            _ => None,
+        })
+        .expect("tuple literal should be explicit in MIR");
+    assert_eq!(
+        element_types,
+        &vec![Type::named("int8"), Type::named("int16")]
+    );
+}
+
+#[test]
+fn non_copy_destructure_consumes_the_whole_source_then_takes_captured_elements() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    pair = ("left", "right")
+    left, right = pair
+    print(left)
+    print(right)
+"#,
+    )
+    .expect("non-Copy tuple destructure should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        instructions
+            .iter()
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Use(Operand::MovePlace(place)),
+                        ..
+                    } if place == "pair"
+                )
+            })
+            .count(),
+        1,
+        "the original tuple binding must be consumed exactly once"
+    );
+    let takes = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::TupleTakeElement { place, index, .. },
+                ..
+            } => Some((place, index)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(takes.len(), 2);
+    assert!(takes.iter().all(|(place, _)| place.starts_with("%t")));
+    assert_eq!(
+        takes.iter().map(|(_, index)| **index).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+}
+
+#[test]
+fn copy_tuple_indexing_projects_without_partial_move_mir() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    pair = (10, 20)
+    first = pair[0]
+    print(first)
+"#,
+    )
+    .expect("Copy tuple index should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let rvalues = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(rvalues.iter().any(|value| {
+        matches!(
+            value,
+            Rvalue::TupleElement {
+                index: 0,
+                element_type,
+                ..
+            } if *element_type == Type::named("int64")
+        )
+    }));
+    assert!(!rvalues
+        .iter()
+        .any(|value| matches!(value, Rvalue::TupleTakeElement { .. })));
+}
+
+#[test]
+fn tuple_patterns_lower_through_element_cfg_not_enum_match() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    match (1, 2):
+        case (1, value):
+            print(value)
+        case _:
+            pass
+"#,
+    )
+    .expect("tuple pattern should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    assert!(main.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::TupleElement { .. },
+                    ..
+                }
+            )
+        })
+    }));
+    assert!(main
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator, Terminator::Branch { .. })));
+    assert!(
+        !main
+            .blocks
+            .iter()
+            .any(|block| matches!(block.terminator, Terminator::Match { .. })),
+        "tuple patterns must not use the enum-only Match terminator"
+    );
+}
+
+#[test]
+fn consuming_bind_only_tuple_patterns_do_not_clone_elements_during_matching() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    match ("left", "right"):
+        case (left, right):
+            print(left)
+            print(right)
+"#,
+    )
+    .expect("consuming bind-only tuple pattern should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let rvalues = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rvalues
+            .iter()
+            .filter(|value| matches!(value, Rvalue::TupleTakeElement { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        !rvalues
+            .iter()
+            .any(|value| matches!(value, Rvalue::TupleElement { .. })),
+        "binding registration must not clone non-Copy tuple elements"
+    );
+}
+
+#[test]
+fn consuming_mixed_tuple_patterns_take_owned_elements_and_copy_scalar_bindings() {
+    let source = r#"
+def main():
+    match ("owned", 7, true):
+        case (text, number, true):
+            print(f"{text}:{number}")
+        case _:
+            pass
+"#;
+    let module = crate::lower_source_to_mir(source)
+        .expect("a consuming tuple pattern may mix owned and Copy bindings");
+    let output = crate::run_mir(&module).expect("the mixed tuple pattern should execute");
+    assert_eq!(output.stdout, "owned:7\n");
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let rvalues = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(rvalues.iter().any(|value| {
+        matches!(
+            value,
+            Rvalue::TupleTakeElement {
+                index: 0,
+                element_type,
+                ..
+            } if element_type == &Type::named("String")
+        )
+    }));
+    assert!(rvalues.iter().any(|value| {
+        matches!(
+            value,
+            Rvalue::TupleElement {
+                index: 1,
+                element_type,
+                ..
+            } if element_type == &Type::named("int64")
+        )
+    }));
+}
+
+#[test]
+fn tuple_for_targets_project_the_iteration_value_before_the_body() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    rows = [(1, 2), (3, 4)]
+    for left, right in rows:
+        print(left + right)
+"#,
+    )
+    .expect("tuple for-target should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let body = main
+        .blocks
+        .iter()
+        .find(|block| block.label.contains("for_body"))
+        .expect("for body should lower");
+    let projection_indices = body
+        .instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::TupleElement { index, .. },
+                ..
+            } => Some(*index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(projection_indices, vec![0, 1]);
+}
+
+#[test]
+fn nested_and_copy_tuple_patterns_preserve_binding_ownership() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def nested():
+    match (("left", "right"), "tail"):
+        case ((left, right), tail):
+            print(left)
+            print(right)
+            print(tail)
+
+def copied():
+    pair = (10, 20)
+    match pair:
+        case (left, right):
+            print(left + right)
+    print(pair[0])
+
+def main():
+    nested()
+    copied()
+"#,
+    )
+    .expect("nested and Copy tuple patterns should lower");
+
+    let nested = module
+        .functions
+        .iter()
+        .find(|function| function.name == "nested")
+        .expect("nested pattern function should lower");
+    assert!(
+        nested.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::TupleTakeElement { .. },
+                        ..
+                    }
+                )
+            })
+        }),
+        "nested non-Copy bindings must transfer their tuple elements"
+    );
+
+    let copied = module
+        .functions
+        .iter()
+        .find(|function| function.name == "copied")
+        .expect("Copy pattern function should lower");
+    let copied_rvalues = copied
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        copied_rvalues
+            .iter()
+            .filter(|value| matches!(value, Rvalue::TupleElement { .. }))
+            .count()
+            >= 3,
+        "Copy pattern bindings and the later index must project without consuming the tuple"
+    );
+    assert!(
+        !copied_rvalues
+            .iter()
+            .any(|value| matches!(value, Rvalue::TupleTakeElement { .. })),
+        "matching Copy elements must leave the original tuple readable"
+    );
+}
+
+#[test]
+fn grouped_tuple_index_and_set_destructure_execute_through_mir() {
+    let output = crate::run_source(
+        r#"
+def main():
+    pair = (10, 20)
+    print(pair[(0)])
+
+    rows: Set[(int64, int64)] = Set{(1, 2)}
+    for left, right in rows:
+        print(left + right)
+"#,
+    )
+    .expect("grouped tuple indexing and Set tuple targets should run");
+
+    assert_eq!(output.stdout, "10\n3\n");
+}
+
+#[test]
+fn generic_tuple_type_helpers_preserve_nested_parameters_and_structure() {
+    let tuple = Type::Tuple(vec![
+        Type::TypeParam("Left".to_string()),
+        Type::Named(
+            "Vec".to_string(),
+            vec![Type::TypeParam("Right".to_string())],
+        ),
+    ]);
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&tuple, &mut collected);
+    assert_eq!(
+        collected,
+        BTreeSet::from(["Left".to_string(), "Right".to_string()]),
+        "tuple elements must participate in generic trait-impl specialization"
+    );
+
+    let tuple_ref = TypeRef::tuple(
+        vec![
+            type_ref("int"),
+            TypeRef::named("Vec", vec![type_ref("str")], false, Span::new(1, 1)),
+        ],
+        false,
+        Span::new(1, 1),
+    );
+    assert_eq!(
+        lower_type_ref(&tuple_ref),
+        Type::Tuple(vec![
+            Type::named("int64"),
+            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        ])
+    );
 }
 
 #[test]
@@ -1582,12 +2089,12 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
     assert_eq!(lower_type_ref(&type_ref("None")), Type::Unit);
     assert_eq!(lower_type_ref(&type_ref("str")), Type::named("String"));
     assert_eq!(
-        lower_type_ref(&TypeRef {
-            name: "Vec".to_string(),
-            args: vec![type_ref("int32")],
-            indirect: false,
-            span: Span::new(1, 1),
-        }),
+        lower_type_ref(&TypeRef::named(
+            "Vec",
+            vec![type_ref("int32")],
+            false,
+            Span::new(1, 1),
+        )),
         Type::Named("Vec".to_string(), vec![Type::named("int32")])
     );
 }
@@ -3087,7 +3594,10 @@ def main() -> int32:
     );
 
     lowerer.lower_for(&ForStmt {
-        binding: "item".to_string(),
+        target: BindingTarget::Name {
+            name: "item".to_string(),
+            span: Span::new(1, 1),
+        },
         iterable: expr(ExprKind::Bool(true)),
         borrow_mode: None,
         body: vec![Stmt::Pass(PassStmt {
@@ -3120,7 +3630,10 @@ def main() -> int32:
         cleanup_depth: 0,
     });
     return_lowerer.lower_for(&ForStmt {
-        binding: "item".to_string(),
+        target: BindingTarget::Name {
+            name: "item".to_string(),
+            span: Span::new(1, 1),
+        },
         iterable: name_expr("items"),
         borrow_mode: Some(ReceiverKind::BorrowMut),
         body: vec![Stmt::Return(crate::ast::ReturnStmt {

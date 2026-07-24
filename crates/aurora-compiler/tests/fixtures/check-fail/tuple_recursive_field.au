@@ -1,0 +1,5 @@
+class Node:
+    next: (Node, int32)
+
+def main() -> int32:
+    return 0

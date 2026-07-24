@@ -1,0 +1,5 @@
+error[AU2999]: tuple binding `left` would shadow an existing name
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_destructure_shadow.au:4:5
+  |
+4 |     left, right = pair
+  |     ^

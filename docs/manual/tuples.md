@@ -1,0 +1,207 @@
+# Tuples
+
+Tuples are fixed-size, heterogeneous product values. Aurora's minimal tuple
+surface is intended for returning, passing, unpacking, and pattern-matching a
+known number of values. Tuples are not variable-size collections.
+
+## Grammar
+
+The normative productions are in [Complete Grammar](/manual/grammar):
+
+```ebnf
+tuple-expression = "(", expression, ",", ")"
+                 | "(", expression, ",", expression,
+                   { ",", expression }, ")" ;
+
+tuple-type = "(", type, ",", ")"
+           | "(", type, ",", type, { ",", type }, ")" ;
+
+unpack-target
+    = binding-target, ",", binding-target, { ",", binding-target }
+    | "(", binding-target-list, ")" ;
+
+binding-target-list
+    = binding-target, ","
+    | binding-target, ",", binding-target, { ",", binding-target } ;
+
+binding-target
+    = identifier
+    | "(", binding-target-list, ")" ;
+
+tuple-pattern = "(", pattern, ",", ")"
+              | "(", pattern, ",", pattern, { ",", pattern }, ")" ;
+```
+
+Tuple value expressions are always parenthesized. `(value)` remains grouping,
+while `(value,)` is a singleton tuple. `()` is not a tuple value. A
+multi-element tuple has no trailing comma:
+
+```aurora
+pair = ("north", 7)
+singleton = (true,)
+nested = (pair, (2, 3))
+```
+
+Top-level assignment and `for` binding lists use `left, right`; parentheses
+represent a nested target or a singleton target. Tuple types and tuple patterns
+are parenthesized.
+
+## Typing Rules
+
+A tuple type records one exact element type at each position:
+
+```aurora
+def location() -> (String, int64):
+    return ("north", 7)
+
+point: (int64, int64) = (3, 4)
+```
+
+The tuple expression's arity and element types must exactly match an expected
+tuple type when one is present. Otherwise each element is inferred in its own
+position. Tuple types are structural: two tuple types are equal exactly when
+they have the same arity and equal corresponding element types. This type
+identity rule does not add tuple value `==` or `!=`.
+
+The ordinary optional-type suffix applies to a complete tuple type:
+`(String, int64)?` is `Option[(String, int64)]`. `indirect` tuple types are
+rejected; `indirect` remains the recursive named-field facility. Consequently,
+a class field cannot place its recursive link inside a tuple. Put that link in
+a separately named `indirect` field instead; the compiler diagnoses the tuple
+case with that exit.
+
+An unpacking target or tuple pattern must have the scrutinee's exact recursive
+tuple shape. Each binding leaf receives its corresponding element type.
+Duplicate names and a leaf that shadows a visible name are rejected by the
+ordinary binding rules. A tuple binding leaf is a name, not a member or index
+place.
+
+Tuple indexing accepts only a non-negative integer literal known at compile
+time. The literal must select an existing position, and that element's type
+must be copyable. The expression's type is the selected element type. A
+computed index, a negative literal, an out-of-bounds literal, or selection of a
+non-copy element is a static error.
+
+## Runtime Semantics
+
+A tuple value stores its elements in source order. Construction evaluates and
+captures each element from left to right. An unpacking operation evaluates its
+right side or iteration item exactly once, then binds leaves left to right
+according to the recursive tuple shape.
+
+A tuple-pattern match evaluates the scrutinee once and tests arms in source
+order. The first matching arm executes. Tuple patterns are irrefutable when
+all nested patterns are binding patterns or `_`; literal and enum subpatterns
+retain their existing matching and exhaustiveness rules.
+
+Constant tuple indexing selects the statically named position and returns a
+copy. It has no runtime index expression to evaluate.
+
+Tuple rendering uses parentheses, `, ` between elements, and one final comma
+for a singleton: `(1, 2)` and `(1,)`. Each element uses its ordinary Aurora
+rendering, so a contained `String` is not quoted. `print`, f-string
+interpolation, and backend diagnostics use this same format. Rendering does
+not add tuple equality or ordering.
+
+```aurora
+def make_record() -> (String, int64):
+    return ("Aurora", 7)
+
+def main():
+    record = make_record()
+    name, version = record
+    print(name)
+    print(version)
+
+    copy_pair = (10, 20)
+    print(copy_pair[1])
+
+    for label, count in [("ready", 2), ("done", 3)]:
+        print(f"{label}:{count}")
+
+    nested = ((1, 2), true)
+    match nested:
+        case ((left, right), flag):
+            print(left + right)
+            print(flag)
+```
+
+```text
+Aurora
+7
+20
+ready:2
+done:3
+3
+true
+```
+
+## Ownership And Evaluation Order
+
+A tuple is copyable if and only if every element type is copyable. Assignment,
+owned argument passing, returns, and pattern flow then follow the ordinary copy
+or move rule for the tuple as a whole.
+
+Unpacking a copy tuple copies its elements and leaves the source usable.
+Unpacking a non-copy tuple consumes the whole source exactly once and gives
+owned leaf bindings. Aurora does not turn positional fields into independently
+reusable partial-move places; any later source use is diagnosed as use after
+move.
+
+For collection iteration, tuple leaves inherit the ownership provenance of the
+yielded element:
+
+- bare or explicit shared iteration retains the collection and gives shared
+  leaf provenance for non-copy tuple elements
+- `own` iteration consumes the collection and gives owned leaves
+- bare Queue iteration receives an owned tuple item and gives owned leaves
+
+Mutable-borrow iteration with a tuple target is rejected. Aurora does not
+reconstruct and write a recursively unpacked tuple back into a collection
+element.
+
+By-value matching consumes a non-copy tuple scrutinee and gives owned leaf
+bindings. `match borrow` retains the tuple and gives shared leaf provenance.
+`match borrow mut` with a tuple pattern is rejected; mutable tuple-pattern
+writeback is outside this surface.
+
+## Diagnostics
+
+Malformed tuple expressions, types, targets, patterns, or comma placement are
+`AU1101`. An annotated tuple element-type mismatch is `AU2002`; tuple
+shape/arity mismatches use the checker's general `AU2999` code. Unsupported
+tuple operations, including non-constant or invalid indexing and mutable tuple
+writeback forms, are rejected at check time with a diagnostic that identifies
+the restriction and the supported alternative.
+
+Using a non-copy tuple after whole-source unpacking or by-value matching is
+`AU3001` and points to the move. Attempting to move an element through shared
+unpacking or `match borrow` is `AU3002`.
+
+## Backend Support
+
+Tuple construction, fixed structural types, function returns, recursive
+assignment/loop unpacking, tuple patterns, whole-source ownership, and
+copy-only constant indexing are implemented for MIR execution and direct
+native generation. Maintained parity fixtures require both backends to produce
+the same output and primary diagnostics.
+
+## Limits And Implementation-Defined Behavior
+
+Aurora 0.1 has no empty tuple, multi-element trailing tuple comma, tuple
+iteration, tuple methods, tuple equality or ordering, named tuple elements,
+rest/star unpacking, mutable tuple-target writeback, tuple slicing, or dynamic
+tuple indexing. A tuple is not implicitly converted to or from `Vec`.
+
+Tuple element order, left-to-right construction, recursive shape matching,
+copy classification, whole-source non-copy moves, and constant-index results
+are language-defined rather than implementation-defined.
+
+## Status
+
+The minimal tuple kernel described on this page is Provisional under ADR-0026
+pending the Batch 2 checkpoint review. The maintained implementation includes
+parenthesized tuple values and types, function returns, recursive assignment
+and `for` unpacking, recursive tuple patterns, structural copy classification,
+whole-source moves, shared borrowed destructuring, and copy-only constant
+indexing. The limits above are intentionally not pre-accepted.

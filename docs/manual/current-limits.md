@@ -6,7 +6,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 
 - Identifiers are ASCII; Unicode is supported in string contents, not identifier spelling.
 - A physical tab anywhere on a source line is rejected, including inside a comment or string literal. Use `\t` to encode a tab in a string.
-- Source lists do not accept trailing commas.
+- Source lists do not accept trailing commas except the required comma in
+  singleton tuple values, types, targets, and patterns. Multi-element tuples
+  still reject a trailing comma.
 - Parser nesting/postfix/binary-chain guards are limited to 128 operations; deeper input is rejected with a diagnostic.
 - Non-numeric casts are not implemented.
 - Direct recursive fields require `indirect`.
@@ -21,8 +23,13 @@ This page documents known current limits of the Aurora compiler and runtime.
   remains open. Continuation indentation is visual; delimiter kinds must
   match.
 - Backslash continuation is not implemented. Ordinary strings and f-strings
-  remain single-line, and existing comma-separated lists still reject
-  trailing commas.
+  remain single-line.
+- Tuples have fixed structural types, recursive unpack targets and patterns,
+  and copy-only constant indexing. There is no empty tuple, multi-element
+  trailing tuple comma, tuple iteration or methods, tuple equality or ordering,
+  named/rest unpacking, mutable tuple-target writeback, dynamic/negative tuple
+  indexing, or tuple-to-collection conversion. Unpack a tuple to take ownership
+  of a non-copy element.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - Chained comparisons are rejected with migration guidance; write an explicit boolean combination such as `a < b and b < c`.
 - `for` loop bindings cannot shadow names already visible in the same scope.

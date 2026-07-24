@@ -613,12 +613,14 @@ fn current_process_thread_count() -> usize {
 }
 
 fn type_ref(name: &str) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args: vec![],
-        indirect: false,
-        span: crate::diag::Span::new(1, 1),
-    }
+    TypeRef::named(name, vec![], false, crate::diag::Span::new(1, 1))
+}
+
+fn named_ref_name(type_ref: &TypeRef) -> &str {
+    type_ref
+        .named_parts()
+        .map(|(name, _)| name)
+        .expect("test expected a named type reference")
 }
 
 fn collect_aurora_files(dir: &PathBuf) -> Vec<PathBuf> {
@@ -1260,17 +1262,20 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
 
     let qualified_ref = qualify_export_type_ref(
         &program,
-        &TypeRef {
-            name: "Box".to_string(),
-            args: vec![type_ref("int32")],
-            indirect: false,
-            span: crate::diag::Span::new(1, 1),
-        },
+        &TypeRef::named(
+            "Box",
+            vec![type_ref("int32")],
+            false,
+            crate::diag::Span::new(1, 1),
+        ),
     );
-    assert_eq!(qualified_ref.name, "pkg.user.Box");
-    assert_eq!(qualified_ref.args[0].name, "int32");
+    assert_eq!(named_ref_name(&qualified_ref), "pkg.user.Box");
     assert_eq!(
-        qualify_export_type_ref(&program, &type_ref("str")).name,
+        named_ref_name(&qualified_ref.named_parts().expect("named ref").1[0]),
+        "int32"
+    );
+    assert_eq!(
+        named_ref_name(&qualify_export_type_ref(&program, &type_ref("str"))),
         "str"
     );
     assert_eq!(
@@ -1298,7 +1303,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         .get("T")
         .expect("bounds should preserve type parameter")
         .iter()
-        .map(|type_ref| type_ref.name.as_str())
+        .map(named_ref_name)
         .collect::<Vec<_>>();
     assert_eq!(
         qualified_bound_names,
@@ -1307,12 +1312,12 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     let qualified_enum =
         qualify_enum_decl_for_export(&program, &program.enums.get("Flag").expect("flag").decl);
     assert_eq!(
-        qualified_enum.variants[1].payloads[0].ty.name,
+        named_ref_name(&qualified_enum.variants[1].payloads[0].ty),
         "pkg.user.Box"
     );
     let qualified_impl = qualify_impl_decl_for_export(&program, &program.trait_impls[0].decl);
     assert_eq!(qualified_impl.trait_name, "Show");
-    assert_eq!(qualified_impl.trait_args[0].name, "T");
+    assert_eq!(named_ref_name(&qualified_impl.trait_args[0]), "T");
 
     let mut namespace_map = BTreeMap::new();
     let mut local_namespace = remote_namespace.clone();
@@ -1336,7 +1341,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
 
     match exported_binding(&program, "wrap").expect("public function export") {
         crate::sema::ImportedBinding::Function(info) => {
-            assert_eq!(info.decl.return_type.name, "pkg.user.Box");
+            assert_eq!(named_ref_name(&info.decl.return_type), "pkg.user.Box");
         }
         other => panic!("expected function binding, found {other:?}"),
     }
@@ -1796,6 +1801,64 @@ fn imported_function_return_types_keep_members_visible_across_modules() {
     let mir = lower_path_to_mir(&main_path).expect("module program should lower to MIR");
     let mir_output = run_mir(&mir).expect("module program should run through explicit MIR runtime");
     assert_eq!(mir_output.stdout, "41\n");
+    assert_eq!(mir_output.value, zero_exit_value());
+}
+
+#[test]
+fn imported_tuple_signatures_qualify_each_element_across_modules() {
+    let temp = TempDir::new("aurora-compiler-imported-tuple-signatures");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/token.au"),
+        [
+            "public class Token:",
+            "    public value: int32",
+            "",
+            "public def make_token() -> (Token, int32):",
+            "    return (Token(value=40), 2)",
+            "",
+        ]
+        .join("\n"),
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    fs::write(
+        &main_path,
+        [
+            "from helpers.token import make_token",
+            "",
+            "def main() -> int32:",
+            "    token, delta = make_token()",
+            "    print(token.value + delta)",
+            "    return 0",
+            "",
+        ]
+        .join("\n"),
+    )
+    .expect("failed to write main module");
+
+    let checked = check_path(&main_path)
+        .expect("tuple elements in imported signatures should keep qualified class types");
+    let make_token = checked
+        .functions
+        .get("make_token")
+        .expect("imported tuple-returning function should be present");
+    assert_eq!(
+        make_token.signature.return_type,
+        crate::sema::Type::Tuple(vec![
+            crate::sema::Type::named("helpers.token.Token"),
+            crate::sema::Type::named("int32"),
+        ])
+    );
+
+    let direct = run_path(&main_path).expect("imported tuple signature should run directly");
+    assert_eq!(direct.stdout, "42\n");
+    assert_eq!(direct.value, zero_exit_value());
+
+    let mir = lower_path_to_mir(&main_path)
+        .expect("imported tuple signature should lower through module boundaries");
+    let mir_output = run_mir(&mir).expect("imported tuple signature should run through MIR");
+    assert_eq!(mir_output.stdout, "42\n");
     assert_eq!(mir_output.value, zero_exit_value());
 }
 
@@ -2902,14 +2965,9 @@ fn lib_helper_paths_cover_relative_paths_missing_reads_and_import_qualification(
 
     let qualified_ref = qualify_export_type_ref(
         &program,
-        &TypeRef {
-            name: "Imported".to_string(),
-            args: Vec::new(),
-            indirect: false,
-            span: Span::new(1, 1),
-        },
+        &TypeRef::named("Imported", Vec::new(), false, Span::new(1, 1)),
     );
-    assert_eq!(qualified_ref.name, "dep.Imported");
+    assert_eq!(named_ref_name(&qualified_ref), "dep.Imported");
 
     let unknown = qualify_export_type(
         &program,
@@ -2930,13 +2988,13 @@ fn lib_helper_paths_cover_relative_paths_missing_reads_and_import_qualification(
 
     let bounds = BTreeMap::from([(
         "T".to_string(),
-        vec![TypeRef {
-            name: "Imported".to_string(),
-            args: Vec::new(),
-            indirect: false,
-            span: Span::new(2, 3),
-        }],
+        vec![TypeRef::named(
+            "Imported",
+            Vec::new(),
+            false,
+            Span::new(2, 3),
+        )],
     )]);
     let qualified_bounds = super::qualify_export_bounds(&program, &bounds);
-    assert_eq!(qualified_bounds["T"][0].name, "dep.Imported");
+    assert_eq!(named_ref_name(&qualified_bounds["T"][0]), "dep.Imported");
 }

@@ -23,6 +23,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | --- | --- |
 | UTF-8, indentation, tokens, literals, escapes | `crates/aurora-compiler/src/lexer_tests.rs` |
 | Delimiter continuation, ignored continuation indentation, expression-match layout islands, trailing-comma/backslash/single-line-string boundaries, and pairing diagnostics | focused lexer/parser tests; `newline_continuation*` and delimiter parse/run fixtures; `examples/basics/multiline_expressions.au`; compiler-bridge and extension indentation tests; and the MIR/direct parity matrix |
+| Parenthesized tuple values/types, recursive assignment/loop targets and patterns, function returns, left-to-right capture, recursive Copy, whole-source non-Copy moves, shared leaf provenance, copy-only constant indexing, canonical rendering, equality/order rejection, and mutable-writeback rejections | focused lexer/parser/sema/MIR/native/runtime tests; `tuple_*` parse/check/run fixtures; `examples/basics/tuples.au`; the executable `docs/manual/tuples.md` fence; language-server tests; and the MIR/direct parity matrix |
 | grammar and parser limits | `crates/aurora-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aurora-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, and `float_shortest_roundtrip_printing` fixtures |
@@ -134,8 +135,8 @@ The `Diagnostics` section MUST name each applicable stable `AU` code. If a featu
 
 Every feature page MUST also contain at least one verified fenced example in a
 non-illustrative mode. A page cannot satisfy that rule with a stale source hash
-or with an explanation-only fragment. This ensures that all nineteen current
-feature chapters have a live compiler, package, or safe CLI proof rather than
+or with an explanation-only fragment. This ensures that all current feature
+chapters have a live compiler, package, or safe CLI proof rather than
 relying only on prose.
 
 The gate reports the total page and all-language fence inventory,

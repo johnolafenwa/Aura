@@ -292,6 +292,7 @@ pub struct FunctionSignature {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Type {
     Named(String, Vec<Type>),
+    Tuple(Vec<Type>),
     TypeParam(String),
     Module(String),
     Unit,
@@ -307,6 +308,7 @@ impl Type {
             Type::Unit => true,
             Type::Module(_) => false,
             Type::TypeParam(_) => false,
+            Type::Tuple(elements) => elements.iter().all(Type::is_copy),
             Type::Named(name, args) => is_builtin_copy_named_type(name, args),
         }
     }
@@ -563,6 +565,20 @@ fn rng_clone_safety_in_context_inner(
         return match ty {
             Type::TypeParam(_) => RngCloneSafety::Unknown,
             Type::Unit | Type::Module(_) => RngCloneSafety::Safe,
+            Type::Tuple(elements) => {
+                elements
+                    .iter()
+                    .fold(RngCloneSafety::Safe, |safety, element| {
+                        safety.combine(rng_clone_safety_in_context_inner(
+                            element,
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                        ))
+                    })
+            }
             Type::Named(_, _) => unreachable!(),
         };
     };
@@ -730,6 +746,15 @@ fn collect_rng_clone_obligation_params_in_context_inner(
             params.insert(name.clone());
         }
         Type::Unit | Type::Module(_) => {}
+        Type::Tuple(elements) => collect_rng_clone_obligation_params_from_args(
+            elements,
+            classes,
+            enums,
+            imported_modules,
+            module_registry,
+            visiting,
+            params,
+        ),
         Type::Named(name, args) if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 => {
             // Cloning a Queue or Task copies only its shared handle, not its
             // contained or eventual value.
@@ -950,6 +975,16 @@ fn type_is_copy_in_context_inner(
         Type::Unit => true,
         Type::Module(_) => false,
         Type::TypeParam(_) => false,
+        Type::Tuple(elements) => elements.iter().all(|element| {
+            type_is_copy_in_context_inner(
+                element,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
+        }),
         Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
         Type::Named(name, args) if name == "Option" && args.len() == 1 => {
             type_is_copy_in_context_inner(
@@ -1057,6 +1092,19 @@ impl fmt::Display for Type {
             Type::Unit => write!(f, "None"),
             Type::Module(name) => write!(f, "module {}", name),
             Type::TypeParam(name) => write!(f, "{}", name),
+            Type::Tuple(elements) => {
+                write!(f, "(")?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", element)?;
+                }
+                if elements.len() == 1 {
+                    write!(f, ",")?;
+                }
+                write!(f, ")")
+            }
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
                 write!(f, "{}[", name)?;
@@ -1423,10 +1471,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
                 return Err(Diagnostic::at(
                     field.span,
-                    format!(
-                        "recursive field `{}` on class `{}` requires `indirect`",
-                        field.name, class_decl.name
-                    ),
+                    recursive_field_message(&class_decl.name, &field.name, &field.ty),
                 ));
             }
             if fields
@@ -1572,10 +1617,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             ) {
                 return Err(Diagnostic::at(
                     field_decl.span,
-                    format!(
-                        "recursive field `{}` on class `{}` requires `indirect`",
-                        field_decl.name, class_decl.name
-                    ),
+                    recursive_field_message(&class_decl.name, &field_decl.name, &field_decl.ty),
                 ));
             }
         }
@@ -2552,14 +2594,33 @@ fn lower_type_with_self(
     type_params: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<Type> {
-    let type_name = match type_ref.name.as_str() {
+    let (name, type_args) = match &type_ref.kind {
+        crate::ast::TypeRefKind::Tuple(elements) => {
+            return elements
+                .iter()
+                .map(|element| {
+                    lower_type_with_self(
+                        element,
+                        type_names,
+                        type_arities,
+                        canonical_type_names,
+                        type_params,
+                        self_type,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Type::Tuple);
+        }
+        crate::ast::TypeRefKind::Named { name, args } => (name, args),
+    };
+    let type_name = match name.as_str() {
         "str" => "String",
         "int" => "int64",
         name => name,
     };
 
     if type_name == "Self" {
-        if !type_ref.args.is_empty() {
+        if !type_args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
                 "`Self` does not take generic arguments",
@@ -2575,7 +2636,7 @@ fn lower_type_with_self(
     }
 
     if type_params.contains_key(type_name) {
-        if !type_ref.args.is_empty() {
+        if !type_args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
                 format!(
@@ -2588,7 +2649,7 @@ fn lower_type_with_self(
     }
 
     if type_name == "None" {
-        if !type_ref.args.is_empty() {
+        if !type_args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
                 "`None` does not take generic arguments",
@@ -2597,8 +2658,7 @@ fn lower_type_with_self(
         return Ok(Type::Unit);
     }
 
-    let args = type_ref
-        .args
+    let args = type_args
         .iter()
         .map(|arg| {
             lower_type_with_self(
@@ -2715,7 +2775,7 @@ fn lower_type_with_self(
     } else {
         Err(Diagnostic::at(
             type_ref.span,
-            format!("unknown type `{}`", type_ref.name),
+            format!("unknown type `{}`", name),
         ))
     }
 }
@@ -2861,16 +2921,25 @@ fn collect_type_ref_type_params(
     collected: &mut BTreeSet<String>,
     include_self: bool,
 ) {
-    if include_self
-        && type_ref.args.is_empty()
-        && !type_ref.indirect
-        && !is_builtin_type(&type_ref.name)
-        && !type_names.contains_key(&type_ref.name)
-    {
-        collected.insert(type_ref.name.clone());
-    }
-    for arg in &type_ref.args {
-        collect_type_ref_type_params(arg, type_names, collected, true);
+    match &type_ref.kind {
+        crate::ast::TypeRefKind::Tuple(elements) => {
+            for element in elements {
+                collect_type_ref_type_params(element, type_names, collected, true);
+            }
+        }
+        crate::ast::TypeRefKind::Named { name, args } => {
+            if include_self
+                && args.is_empty()
+                && !type_ref.indirect
+                && !is_builtin_type(name)
+                && !type_names.contains_key(name)
+            {
+                collected.insert(name.clone());
+            }
+            for arg in args {
+                collect_type_ref_type_params(arg, type_names, collected, true);
+            }
+        }
     }
 }
 
@@ -2896,7 +2965,7 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
                     default_argument_references_param(&argument.value, param_names)
                 })
             }),
-        ExprKind::List(elements) | ExprKind::Set(elements) => elements
+        ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => elements
             .iter()
             .find_map(|element| default_argument_references_param(element, param_names)),
         ExprKind::Map(entries) => entries.iter().find_map(|entry| {
@@ -2958,25 +3027,30 @@ fn lower_supertraits(
 ) -> Result<Vec<TraitBound>> {
     let mut lowered = Vec::new();
     for supertrait in supertraits {
-        let Some(trait_info) = traits.get(&supertrait.name) else {
+        let Some((trait_name, trait_type_args)) = supertrait.named_parts() else {
             return Err(Diagnostic::at(
                 supertrait.span,
-                format!("unknown trait `{}`", supertrait.name),
+                "a supertrait must be a named trait type",
             ));
         };
-        if supertrait.args.len() != trait_info.decl.type_params.len() {
+        let Some(trait_info) = traits.get(trait_name) else {
+            return Err(Diagnostic::at(
+                supertrait.span,
+                format!("unknown trait `{}`", trait_name),
+            ));
+        };
+        if trait_type_args.len() != trait_info.decl.type_params.len() {
             return Err(Diagnostic::at(
                 supertrait.span,
                 format!(
                     "trait `{}` expects {} type arguments, found {}",
-                    supertrait.name,
+                    trait_name,
                     trait_info.decl.type_params.len(),
-                    supertrait.args.len()
+                    trait_type_args.len()
                 ),
             ));
         }
-        let trait_args = supertrait
-            .args
+        let trait_args = trait_type_args
             .iter()
             .map(|arg| {
                 lower_type_with_self(
@@ -2990,7 +3064,7 @@ fn lower_supertraits(
             })
             .collect::<Result<Vec<_>>>()?;
         lowered.push(TraitBound {
-            trait_name: supertrait.name.clone(),
+            trait_name: trait_name.to_string(),
             trait_args,
         });
     }
@@ -3010,25 +3084,30 @@ fn lower_trait_bounds_with_self(
     for (type_param, trait_bounds) in bounds {
         let mut names = Vec::new();
         for bound in trait_bounds {
-            let Some(trait_info) = traits.get(&bound.name) else {
+            let Some((trait_name, trait_type_args)) = bound.named_parts() else {
                 return Err(Diagnostic::at(
                     bound.span,
-                    format!("unknown trait `{}`", bound.name),
+                    "a type parameter bound must be a named trait type",
                 ));
             };
-            if bound.args.len() != trait_info.decl.type_params.len() {
+            let Some(trait_info) = traits.get(trait_name) else {
+                return Err(Diagnostic::at(
+                    bound.span,
+                    format!("unknown trait `{}`", trait_name),
+                ));
+            };
+            if trait_type_args.len() != trait_info.decl.type_params.len() {
                 return Err(Diagnostic::at(
                     bound.span,
                     format!(
                         "trait `{}` expects {} type arguments, found {}",
-                        bound.name,
+                        trait_name,
                         trait_info.decl.type_params.len(),
-                        bound.args.len()
+                        trait_type_args.len()
                     ),
                 ));
             }
-            let trait_args = bound
-                .args
+            let trait_args = trait_type_args
                 .iter()
                 .map(|arg| {
                     lower_type_with_self(
@@ -3042,7 +3121,7 @@ fn lower_trait_bounds_with_self(
                 })
                 .collect::<Result<Vec<_>>>()?;
             names.push(TraitBound {
-                trait_name: bound.name.clone(),
+                trait_name: trait_name.to_string(),
                 trait_args,
             });
         }
@@ -3067,11 +3146,23 @@ pub(crate) fn merge_trait_bounds(
 
 fn type_contains_named(ty: &Type, target: &str) -> bool {
     match ty {
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| type_contains_named(element, target)),
         Type::Named(name, args) => {
             name == target || args.iter().any(|arg| type_contains_named(arg, target))
         }
         Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
     }
+}
+
+fn recursive_field_message(class_name: &str, field_name: &str, field_type: &TypeRef) -> String {
+    if matches!(&field_type.kind, crate::ast::TypeRefKind::Tuple(_)) {
+        return format!(
+            "recursive field `{field_name}` on class `{class_name}` contains tuple storage; tuple types cannot be `indirect`, so move the recursive link into an `indirect` named field"
+        );
+    }
+    format!("recursive field `{field_name}` on class `{class_name}` requires `indirect`")
 }
 
 fn type_reaches_class_through_non_indirect_fields(
@@ -3081,6 +3172,9 @@ fn type_reaches_class_through_non_indirect_fields(
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     match ty {
+        Type::Tuple(elements) => elements.iter().any(|element| {
+            type_reaches_class_through_non_indirect_fields(element, target, classes, visiting)
+        }),
         Type::Named(name, args) => {
             if name == target {
                 return true;
@@ -3124,6 +3218,12 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
             .get(name)
             .cloned()
             .unwrap_or_else(|| Type::TypeParam(name.clone())),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| substitute_type(element, substitutions))
+                .collect(),
+        ),
         Type::Named(name, args) => Type::Named(
             name.clone(),
             args.iter()
@@ -3175,6 +3275,11 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
                 collect_type_params_from_type(arg, collected);
             }
         }
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_type_params_from_type(element, collected);
+            }
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -3183,6 +3288,7 @@ pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
     match ty {
         Type::TypeParam(_) => 0,
         Type::Named(_, args) => 1 + args.iter().map(type_pattern_specificity).sum::<usize>(),
+        Type::Tuple(elements) => 1 + elements.iter().map(type_pattern_specificity).sum::<usize>(),
         Type::Module(_) | Type::Unit => 1,
     }
 }
@@ -3229,6 +3335,18 @@ pub(crate) fn type_pattern_matches(
                     type_pattern_matches(pattern_arg, actual_arg, type_params, substitutions)
                 })
         }
+        Type::Tuple(pattern_elements) => {
+            let Type::Tuple(actual_elements) = actual else {
+                return false;
+            };
+            pattern_elements.len() == actual_elements.len()
+                && pattern_elements
+                    .iter()
+                    .zip(actual_elements)
+                    .all(|(pattern, actual)| {
+                        type_pattern_matches(pattern, actual, type_params, substitutions)
+                    })
+        }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if actual_path == path),
         Type::Unit => *actual == Type::Unit,
     }
@@ -3239,6 +3357,7 @@ fn has_unresolved_type_params(ty: &Type) -> bool {
         Type::Unit => false,
         Type::Module(_) => false,
         Type::TypeParam(_) => true,
+        Type::Tuple(elements) => elements.iter().any(has_unresolved_type_params),
         Type::Named(_, args) => args.iter().any(has_unresolved_type_params),
     }
 }
@@ -3310,6 +3429,24 @@ fn unify_type_pattern(
             }
             for (pattern_arg, actual_arg) in args.iter().zip(actual_args.iter()) {
                 unify_type_pattern(pattern_arg, actual_arg, substitutions)?;
+            }
+            Ok(())
+        }
+        Type::Tuple(elements) => {
+            let Type::Tuple(actual_elements) = actual else {
+                return Err(Diagnostic::new(format!(
+                    "expected `{}`, found `{}`",
+                    pattern, actual
+                )));
+            };
+            if elements.len() != actual_elements.len() {
+                return Err(Diagnostic::new(format!(
+                    "expected `{}`, found `{}`",
+                    pattern, actual
+                )));
+            }
+            for (element, actual_element) in elements.iter().zip(actual_elements) {
+                unify_type_pattern(element, actual_element, substitutions)?;
             }
             Ok(())
         }
@@ -4430,7 +4567,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
             ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
-            ExprKind::List(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 for element in elements {
                     self.consume_value_expr(element, locals)?;
                 }
@@ -5275,6 +5412,111 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    fn bind_target(
+        &self,
+        target: &crate::ast::BindingTarget,
+        ty: &Type,
+        passing: ReceiverKind,
+        mutable_place: bool,
+        locals: &mut HashMap<String, LocalBinding>,
+        context: &str,
+    ) -> Result<()> {
+        match target {
+            crate::ast::BindingTarget::Name { name, span } => {
+                if locals.contains_key(name) {
+                    return Err(Diagnostic::at(
+                        *span,
+                        format!(
+                            "{} binding `{}` would shadow an existing name",
+                            context, name
+                        ),
+                    ));
+                }
+                let leaf_passing = if passing == ReceiverKind::BorrowMut {
+                    ReceiverKind::BorrowMut
+                } else if self.is_copy_type(ty) {
+                    ReceiverKind::Value
+                } else {
+                    passing
+                };
+                locals.insert(
+                    name.clone(),
+                    LocalBinding {
+                        ty: ty.clone(),
+                        assignable: false,
+                        mutable_place: mutable_place && leaf_passing == ReceiverKind::BorrowMut,
+                        managed_resource: false,
+                        passing: leaf_passing,
+                        borrow_origin: None,
+                        borrow_label: None,
+                        borrowed_at: (leaf_passing != ReceiverKind::Value).then_some(*span),
+                        match_borrow_mut_place: None,
+                        stale_match_borrow_mut_place: None,
+                        moved: false,
+                        moved_at: None,
+                        moved_fields: BTreeMap::new(),
+                        frozen_places: BTreeMap::new(),
+                    },
+                );
+                Ok(())
+            }
+            crate::ast::BindingTarget::Tuple { elements, span } => {
+                if passing == ReceiverKind::BorrowMut {
+                    return Err(Diagnostic::at(
+                        *span,
+                        "`borrow mut` tuple targets are not supported; bind the tuple to one mutable name and update its elements explicitly",
+                    ));
+                }
+                let Type::Tuple(element_types) = ty else {
+                    return Err(Diagnostic::at(
+                        *span,
+                        format!("tuple binding requires a tuple value, found `{}`", ty),
+                    ));
+                };
+                if elements.len() != element_types.len() {
+                    return Err(Diagnostic::at(
+                        *span,
+                        format!(
+                            "tuple binding has {} elements but the value has {}",
+                            elements.len(),
+                            element_types.len()
+                        ),
+                    ));
+                }
+                for (element, element_ty) in elements.iter().zip(element_types) {
+                    self.bind_target(element, element_ty, passing, false, locals, context)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn check_destructure(
+        &self,
+        destructure: &crate::ast::DestructureStmt,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let value_ty = self.type_of_expr(&destructure.value, locals)?;
+        let mut candidate = locals.clone();
+        self.bind_target(
+            &destructure.target,
+            &value_ty,
+            ReceiverKind::Value,
+            false,
+            &mut candidate,
+            "tuple",
+        )?;
+        self.consume_value_expr(&destructure.value, locals)?;
+        self.bind_target(
+            &destructure.target,
+            &value_ty,
+            ReceiverKind::Value,
+            false,
+            locals,
+            "tuple",
+        )
+    }
+
     fn check_block(
         &self,
         body: &[Stmt],
@@ -5288,6 +5530,7 @@ impl<'a> FunctionChecker<'a> {
         for stmt in body {
             match stmt {
                 Stmt::Assign(assign) => self.check_assign(assign, locals)?,
+                Stmt::Destructure(destructure) => self.check_destructure(destructure, locals)?,
                 Stmt::Pass(_) => {}
                 Stmt::Assert(assert_stmt) => {
                     let condition_ty = self.type_of_expr(&assert_stmt.condition, locals)?;
@@ -5573,15 +5816,6 @@ impl<'a> FunctionChecker<'a> {
                     {
                         self.consume_value_expr(&for_stmt.iterable, locals)?;
                     }
-                    if locals.contains_key(&for_stmt.binding) {
-                        return Err(Diagnostic::at(
-                            for_stmt.span,
-                            format!(
-                                "loop binding `{}` would shadow an existing name",
-                                for_stmt.binding
-                            ),
-                        ));
-                    }
                     let mut body_locals = locals.clone();
                     let effective_borrow_mode = match &iterable_ty {
                         Type::Named(name, args) if name == "Queue" && args.len() == 1 => None,
@@ -5610,26 +5844,14 @@ impl<'a> FunctionChecker<'a> {
                             }
                         }
                     }
-                    body_locals.insert(
-                        for_stmt.binding.clone(),
-                        LocalBinding {
-                            ty: binding_ty,
-                            assignable: false,
-                            mutable_place: binding_mutable_place,
-                            managed_resource: false,
-                            passing: binding_passing,
-                            borrow_origin: None,
-                            borrow_label: None,
-                            borrowed_at: (binding_passing != ReceiverKind::Value)
-                                .then_some(for_stmt.span),
-                            match_borrow_mut_place: None,
-                            stale_match_borrow_mut_place: None,
-                            moved: false,
-                            moved_at: None,
-                            moved_fields: BTreeMap::new(),
-                            frozen_places: BTreeMap::new(),
-                        },
-                    );
+                    self.bind_target(
+                        &for_stmt.target,
+                        &binding_ty,
+                        binding_passing,
+                        binding_mutable_place,
+                        &mut body_locals,
+                        "loop",
+                    )?;
                     self.check_block(
                         &for_stmt.body,
                         &mut body_locals,
@@ -6458,6 +6680,28 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::named("String"))
             }
+            ExprKind::Tuple(elements) => {
+                let expected_elements = match expected {
+                    Some(Type::Tuple(expected_elements))
+                        if expected_elements.len() == elements.len() =>
+                    {
+                        Some(expected_elements.as_slice())
+                    }
+                    _ => None,
+                };
+                let element_types = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        self.type_of_expr_hint(
+                            element,
+                            locals,
+                            expected_elements.and_then(|types| types.get(index)),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Type::Tuple(element_types))
+            }
             ExprKind::List(elements) => {
                 let mut element_ty = expected.and_then(vec_element_type).cloned();
                 for element in elements {
@@ -7181,6 +7425,44 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_expr(object, locals)?;
                 let locals_before_index = locals.clone();
+                if let Type::Tuple(element_types) = &object_ty {
+                    let tuple_index = match &index.kind {
+                        ExprKind::Int(value) => usize::try_from(*value).ok(),
+                        ExprKind::Group(inner) => match &inner.kind {
+                            ExprKind::Int(value) => usize::try_from(*value).ok(),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                    .ok_or_else(|| {
+                        Diagnostic::coded_at(
+                            "AU2003",
+                            index.span,
+                            "tuple indices must be non-negative integer literals",
+                        )
+                    })?;
+                    let element_ty = element_types.get(tuple_index).cloned().ok_or_else(|| {
+                        Diagnostic::at(
+                            index.span,
+                            format!(
+                                "tuple index {} is out of bounds for a {}-element tuple",
+                                tuple_index,
+                                element_types.len()
+                            ),
+                        )
+                    })?;
+                    if !self.is_copy_type(&element_ty) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3005",
+                            expr.span,
+                            format!(
+                                "cannot consume non-copy tuple element `{}` by indexing; unpack the tuple to move its elements",
+                                element_ty
+                            ),
+                        ));
+                    }
+                    return Ok(element_ty);
+                }
                 if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
                     self.check_vec_index_type(index, index.span, locals)?;
                     let retained_base = self
@@ -7274,6 +7556,18 @@ impl<'a> FunctionChecker<'a> {
         if is_duration_type(left_ty) || is_duration_type(right_ty) {
             return true;
         }
+        if matches!(
+            op,
+            BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+        ) && (matches!(left_ty, Type::Tuple(_)) || matches!(right_ty, Type::Tuple(_)))
+        {
+            return true;
+        }
         if left_ty != right_ty {
             return false;
         }
@@ -7303,6 +7597,22 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
+        }
+        if matches!(
+            op,
+            BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+        ) && (matches!(left_ty, Type::Tuple(_)) || matches!(right_ty, Type::Tuple(_)))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                "tuple comparison is not supported; compare tuple elements explicitly",
+            ));
         }
         if is_duration_type(&left_ty) || is_duration_type(&right_ty) {
             return Err(Diagnostic::coded_at(
@@ -7342,7 +7652,9 @@ impl<'a> FunctionChecker<'a> {
             ) if left_ty == right_ty && (is_integer_type(&left_ty) || is_float_type(&left_ty)) => {
                 Ok(left_ty)
             }
-            (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
+            (BinaryOp::Eq | BinaryOp::NotEq, _, _)
+                if left_ty == right_ty && !matches!(left_ty, Type::Tuple(_)) =>
+            {
                 Ok(Type::named("bool"))
             }
             (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _, _)
@@ -11753,6 +12065,15 @@ impl<'a> FunctionChecker<'a> {
                             "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
                         ));
                         }
+                        Pattern::Tuple(tuple) => {
+                            return Err(Diagnostic::at(
+                                tuple.span,
+                                format!(
+                                    "match over `{}` expects enum variant patterns, not a tuple pattern",
+                                    enum_name
+                                ),
+                            ));
+                        }
                         Pattern::Variant(pattern) => {
                             let pattern_enum_name =
                                 if let Some(pattern_enum_name) = &pattern.enum_name {
@@ -11931,8 +12252,9 @@ impl<'a> FunctionChecker<'a> {
                 };
             }
 
-            if !matches!(scrutinee_ty, Type::Named(_, _))
-                || !(is_integer_type(&scrutinee_ty)
+            if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
+                || !(matches!(scrutinee_ty, Type::Tuple(_))
+                    || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
                     || is_string_type(&scrutinee_ty))
@@ -11940,7 +12262,7 @@ impl<'a> FunctionChecker<'a> {
                 return Err(Diagnostic::at(
                 match_stmt.span,
                 format!(
-                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -11998,6 +12320,24 @@ impl<'a> FunctionChecker<'a> {
                         "top-level binding patterns are not yet supported; use `_` or a literal pattern",
                     ));
                     }
+                    Pattern::Tuple(tuple) => {
+                        if !matches!(scrutinee_ty, Type::Tuple(_)) {
+                            return Err(Diagnostic::at(
+                                tuple.span,
+                                format!(
+                                    "tuple pattern requires a tuple scrutinee, found `{}`",
+                                    scrutinee_ty
+                                ),
+                            ));
+                        }
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.borrow_mode,
+                            active_match_borrow.as_ref(),
+                        )?;
+                    }
                 }
 
                 let prior_patterns = match_stmt.arms[..index]
@@ -12038,6 +12378,24 @@ impl<'a> FunctionChecker<'a> {
                             format!(
                                 "non-exhaustive match over `bool`: missing {}",
                                 missing.join(", ")
+                            ),
+                        ));
+                    }
+                } else if matches!(scrutinee_ty, Type::Tuple(_)) {
+                    let patterns = match_stmt
+                        .arms
+                        .iter()
+                        .map(|arm| &arm.pattern)
+                        .collect::<Vec<_>>();
+                    if !self
+                        .missing_patterns_for_type(&patterns, &scrutinee_ty)
+                        .is_empty()
+                    {
+                        return Err(Diagnostic::at(
+                            match_stmt.span,
+                            format!(
+                                "non-exhaustive match over `{}`: add a covering tuple pattern or final `case _:`",
+                                scrutinee_ty
                             ),
                         ));
                     }
@@ -12089,6 +12447,11 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
+                let passing = if self.is_copy_type(expected_ty) {
+                    ReceiverKind::Value
+                } else {
+                    borrow_mode.unwrap_or(ReceiverKind::Value)
+                };
                 locals.insert(
                     binding.name.clone(),
                     LocalBinding {
@@ -12096,7 +12459,7 @@ impl<'a> FunctionChecker<'a> {
                         assignable: borrow_mode == Some(ReceiverKind::BorrowMut),
                         mutable_place: borrow_mode == Some(ReceiverKind::BorrowMut),
                         managed_resource: false,
-                        passing: borrow_mode.unwrap_or(ReceiverKind::Value),
+                        passing,
                         borrow_origin: None,
                         borrow_label: None,
                         borrowed_at: borrow_mode.map(|_| binding.span),
@@ -12108,6 +12471,43 @@ impl<'a> FunctionChecker<'a> {
                         frozen_places: BTreeMap::new(),
                     },
                 );
+                Ok(())
+            }
+            Pattern::Tuple(tuple_pattern) => {
+                if borrow_mode == Some(ReceiverKind::BorrowMut) {
+                    return Err(Diagnostic::at(
+                        tuple_pattern.span,
+                        "`match borrow mut` does not support tuple patterns; bind the tuple as one mutable name",
+                    ));
+                }
+                let Type::Tuple(element_types) = expected_ty else {
+                    return Err(Diagnostic::at(
+                        tuple_pattern.span,
+                        format!(
+                            "tuple pattern requires a tuple scrutinee, found `{}`",
+                            expected_ty
+                        ),
+                    ));
+                };
+                if tuple_pattern.elements.len() != element_types.len() {
+                    return Err(Diagnostic::at(
+                        tuple_pattern.span,
+                        format!(
+                            "tuple pattern has {} elements but the scrutinee has {}",
+                            tuple_pattern.elements.len(),
+                            element_types.len()
+                        ),
+                    ));
+                }
+                for (element, element_ty) in tuple_pattern.elements.iter().zip(element_types) {
+                    self.bind_pattern_locals(
+                        element,
+                        element_ty,
+                        locals,
+                        borrow_mode,
+                        match_borrow_mut_place,
+                    )?;
+                }
                 Ok(())
             }
             Pattern::Variant(variant_pattern) => {
@@ -12270,6 +12670,15 @@ impl<'a> FunctionChecker<'a> {
                             "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
                         ));
                         }
+                        Pattern::Tuple(tuple) => {
+                            return Err(Diagnostic::at(
+                                tuple.span,
+                                format!(
+                                    "match over `{}` expects enum variant patterns, not a tuple pattern",
+                                    enum_name
+                                ),
+                            ));
+                        }
                         Pattern::Variant(pattern) => {
                             let pattern_enum_name =
                                 if let Some(pattern_enum_name) = &pattern.enum_name {
@@ -12431,8 +12840,9 @@ impl<'a> FunctionChecker<'a> {
                 return Ok(result_ty.unwrap_or(Type::Unit));
             }
 
-            if !matches!(scrutinee_ty, Type::Named(_, _))
-                || !(is_integer_type(&scrutinee_ty)
+            if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
+                || !(matches!(scrutinee_ty, Type::Tuple(_))
+                    || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
                     || is_string_type(&scrutinee_ty))
@@ -12440,7 +12850,7 @@ impl<'a> FunctionChecker<'a> {
                 return Err(Diagnostic::at(
                 span,
                 format!(
-                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -12490,6 +12900,24 @@ impl<'a> FunctionChecker<'a> {
                         binding.span,
                         "top-level binding patterns are not yet supported; use `_` or a literal pattern",
                     ));
+                    }
+                    Pattern::Tuple(tuple) => {
+                        if !matches!(scrutinee_ty, Type::Tuple(_)) {
+                            return Err(Diagnostic::at(
+                                tuple.span,
+                                format!(
+                                    "tuple pattern requires a tuple scrutinee, found `{}`",
+                                    scrutinee_ty
+                                ),
+                            ));
+                        }
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref(),
+                        )?;
                     }
                 }
 
@@ -12551,6 +12979,21 @@ impl<'a> FunctionChecker<'a> {
                     scrutinee_ty
                 ),
                 ));
+            }
+            if !wildcard_seen && matches!(scrutinee_ty, Type::Tuple(_)) {
+                let patterns = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                if !self
+                    .missing_patterns_for_type(&patterns, &scrutinee_ty)
+                    .is_empty()
+                {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "non-exhaustive match over `{}`: add a covering tuple pattern or final `case _:`",
+                            scrutinee_ty
+                        ),
+                    ));
+                }
             }
 
             let branch_states = arm_states.iter().collect::<Vec<_>>();
@@ -12693,7 +13136,7 @@ impl<'a> FunctionChecker<'a> {
                         )
                     });
             }
-            Type::Unit => {
+            Type::Tuple(_) | Type::Unit => {
                 return Err(Diagnostic::at(
                     span,
                     format!("cannot access field `{}` on `{}`", field, object_ty),
@@ -13013,7 +13456,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.collect_call_borrowed_places(callee, args, locals, places, include_consumed)
             }
-            ExprKind::List(elements) | ExprKind::Set(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
                     self.collect_expr_call_places(element, locals, places, include_consumed)?;
                 }
@@ -13090,7 +13533,7 @@ impl<'a> FunctionChecker<'a> {
                     self.collect_expr_place_reads(&argument.value, locals, label, places);
                 }
             }
-            ExprKind::List(elements) | ExprKind::Set(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
                     self.collect_expr_place_reads(element, locals, label, places);
                 }
@@ -14102,6 +14545,12 @@ impl<'a> FunctionChecker<'a> {
         {
             return Vec::new();
         }
+        if let Type::Tuple(element_types) = expected_ty {
+            if self.tuple_patterns_cover_type_union(patterns, element_types) {
+                return Vec::new();
+            }
+            return vec!["_".to_string()];
+        }
         let Some(variants) = self.enum_variants_for_type(expected_ty) else {
             return vec!["_".to_string()];
         };
@@ -14151,6 +14600,7 @@ impl<'a> FunctionChecker<'a> {
             Pattern::Literal(pattern) => pattern.span,
             Pattern::Binding(binding) => binding.span,
             Pattern::Variant(variant) => variant.span,
+            Pattern::Tuple(tuple) => tuple.span,
         }
     }
 
@@ -14179,6 +14629,7 @@ impl<'a> FunctionChecker<'a> {
                                 }
                             }
                             Pattern::Variant(_) => {}
+                            Pattern::Tuple(_) => {}
                         }
                     }
                     return covered.len() == 2;
@@ -14216,19 +14667,38 @@ impl<'a> FunctionChecker<'a> {
                 if current_variant.subpatterns.len() != payload_tys.len() {
                     return false;
                 }
-                if payload_tys.len() == 1 {
-                    let nested_patterns = variant_patterns
-                        .iter()
-                        .filter_map(|variant| variant.subpatterns.first())
-                        .collect::<Vec<_>>();
-                    return self.patterns_cover_pattern(
-                        &nested_patterns,
-                        &current_variant.subpatterns[0],
-                        &payload_tys[0],
-                    );
+                let rows = variant_patterns
+                    .iter()
+                    .map(|variant| variant.subpatterns.clone())
+                    .collect::<Vec<_>>();
+                self.pattern_rows_cover_pattern_union(
+                    &rows,
+                    &current_variant.subpatterns,
+                    payload_tys,
+                )
+            }
+            Pattern::Tuple(current_tuple) => {
+                if patterns.iter().any(|previous| {
+                    self.pattern_is_covered_by_pattern(previous, pattern, expected_ty)
+                }) {
+                    return true;
                 }
-                self.variant_pattern_covers_payloads(current_variant, payload_tys)
-                    && self.variant_patterns_cover_payloads_union(&variant_patterns, payload_tys)
+                let Type::Tuple(element_types) = expected_ty else {
+                    return false;
+                };
+                if current_tuple.elements.len() != element_types.len() {
+                    return false;
+                }
+                let rows = patterns
+                    .iter()
+                    .filter_map(|previous| match previous {
+                        Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
+                            Some(tuple.elements.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                self.pattern_rows_cover_pattern_union(&rows, &current_tuple.elements, element_types)
             }
             Pattern::Literal(_) => patterns
                 .iter()
@@ -14277,6 +14747,21 @@ impl<'a> FunctionChecker<'a> {
                         self.pattern_is_covered_by_pattern(previous, current, payload_ty)
                     })
             }
+            (Pattern::Tuple(previous), Pattern::Tuple(current)) => {
+                let Type::Tuple(element_types) = expected_ty else {
+                    return false;
+                };
+                previous.elements.len() == element_types.len()
+                    && current.elements.len() == element_types.len()
+                    && previous
+                        .elements
+                        .iter()
+                        .zip(&current.elements)
+                        .zip(element_types)
+                        .all(|((previous, current), ty)| {
+                            self.pattern_is_covered_by_pattern(previous, current, ty)
+                        })
+            }
             _ => false,
         }
     }
@@ -14285,6 +14770,17 @@ impl<'a> FunctionChecker<'a> {
         match pattern {
             Pattern::Wildcard(_) | Pattern::Binding(_) => true,
             Pattern::Literal(_) => false,
+            Pattern::Tuple(tuple) => {
+                let Type::Tuple(element_types) = expected_ty else {
+                    return false;
+                };
+                tuple.elements.len() == element_types.len()
+                    && tuple
+                        .elements
+                        .iter()
+                        .zip(element_types)
+                        .all(|(element, ty)| self.pattern_covers_entire_type(element, ty))
+            }
             Pattern::Variant(variant_pattern) => {
                 let Some(variants) = self.enum_variants_for_type(expected_ty) else {
                     return false;
@@ -14329,6 +14825,9 @@ impl<'a> FunctionChecker<'a> {
         {
             return true;
         }
+        if let Type::Tuple(element_types) = expected_ty {
+            return self.tuple_patterns_cover_type_union(patterns, element_types);
+        }
         let Some(variants) = self.enum_variants_for_type(expected_ty) else {
             return false;
         };
@@ -14349,6 +14848,298 @@ impl<'a> FunctionChecker<'a> {
         })
     }
 
+    fn tuple_patterns_cover_type_union(
+        &self,
+        patterns: &[&Pattern],
+        element_types: &[Type],
+    ) -> bool {
+        let rows = patterns
+            .iter()
+            .filter_map(|pattern| match pattern {
+                Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
+                    Some(tuple.elements.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.pattern_rows_cover_type_union(&rows, element_types)
+    }
+
+    fn pattern_rows_cover_type_union(&self, rows: &[Vec<Pattern>], types: &[Type]) -> bool {
+        let Some((first_ty, remaining_types)) = types.split_first() else {
+            return !rows.is_empty();
+        };
+        let irrefutable =
+            |pattern: &Pattern| matches!(pattern, Pattern::Wildcard(_) | Pattern::Binding(_));
+
+        if matches!(first_ty, Type::Named(name, args) if name == "bool" && args.is_empty()) {
+            return [false, true].into_iter().all(|expected| {
+                let specialized = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let (first, remaining) = row.split_first()?;
+                        if irrefutable(first)
+                            || matches!(
+                                first,
+                                Pattern::Literal(LiteralPattern {
+                                    kind: LiteralPatternKind::Bool(actual),
+                                    ..
+                                }) if *actual == expected
+                            )
+                        {
+                            Some(remaining.to_vec())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                self.pattern_rows_cover_type_union(&specialized, remaining_types)
+            });
+        }
+
+        if let Type::Tuple(nested_types) = first_ty {
+            let mut specialized_types = nested_types.clone();
+            specialized_types.extend_from_slice(remaining_types);
+            let specialized = rows
+                .iter()
+                .filter_map(|row| {
+                    let (first, remaining) = row.split_first()?;
+                    let mut values = match first {
+                        pattern if irrefutable(pattern) => {
+                            vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
+                        }
+                        Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
+                            tuple.elements.clone()
+                        }
+                        _ => return None,
+                    };
+                    values.extend_from_slice(remaining);
+                    Some(values)
+                })
+                .collect::<Vec<_>>();
+            return self.pattern_rows_cover_type_union(&specialized, &specialized_types);
+        }
+
+        if let Some(variants) = self.enum_variants_for_type(first_ty) {
+            return variants.into_iter().all(|(variant_name, payload_types)| {
+                let mut specialized_types = payload_types.clone();
+                specialized_types.extend_from_slice(remaining_types);
+                let specialized = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let (first, remaining) = row.split_first()?;
+                        let mut values = match first {
+                            pattern if irrefutable(pattern) => {
+                                vec![
+                                    Pattern::Wildcard(self.pattern_span(pattern));
+                                    payload_types.len()
+                                ]
+                            }
+                            Pattern::Variant(variant)
+                                if variant.variant_name == variant_name
+                                    && variant.subpatterns.len() == payload_types.len() =>
+                            {
+                                variant.subpatterns.clone()
+                            }
+                            _ => return None,
+                        };
+                        values.extend_from_slice(remaining);
+                        Some(values)
+                    })
+                    .collect::<Vec<_>>();
+                self.pattern_rows_cover_type_union(&specialized, &specialized_types)
+            });
+        }
+
+        let specialized = rows
+            .iter()
+            .filter_map(|row| {
+                let (first, remaining) = row.split_first()?;
+                irrefutable(first).then(|| remaining.to_vec())
+            })
+            .collect::<Vec<_>>();
+        self.pattern_rows_cover_type_union(&specialized, remaining_types)
+    }
+
+    fn pattern_rows_cover_pattern_union(
+        &self,
+        rows: &[Vec<Pattern>],
+        current: &[Pattern],
+        types: &[Type],
+    ) -> bool {
+        let Some((first_ty, remaining_types)) = types.split_first() else {
+            return current.is_empty() && !rows.is_empty();
+        };
+        let Some((current_first, current_remaining)) = current.split_first() else {
+            return false;
+        };
+        let irrefutable =
+            |pattern: &Pattern| matches!(pattern, Pattern::Wildcard(_) | Pattern::Binding(_));
+
+        let specialize_bool = |expected: bool| {
+            rows.iter()
+                .filter_map(|row| {
+                    let (first, remaining) = row.split_first()?;
+                    if irrefutable(first)
+                        || matches!(
+                            first,
+                            Pattern::Literal(LiteralPattern {
+                                kind: LiteralPatternKind::Bool(actual),
+                                ..
+                            }) if *actual == expected
+                        )
+                    {
+                        Some(remaining.to_vec())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if matches!(first_ty, Type::Named(name, args) if name == "bool" && args.is_empty()) {
+            return match current_first {
+                Pattern::Wildcard(_) | Pattern::Binding(_) => {
+                    [false, true].into_iter().all(|expected| {
+                        self.pattern_rows_cover_pattern_union(
+                            &specialize_bool(expected),
+                            current_remaining,
+                            remaining_types,
+                        )
+                    })
+                }
+                Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::Bool(expected),
+                    ..
+                }) => self.pattern_rows_cover_pattern_union(
+                    &specialize_bool(*expected),
+                    current_remaining,
+                    remaining_types,
+                ),
+                _ => false,
+            };
+        }
+
+        if let Type::Tuple(nested_types) = first_ty {
+            let current_nested = match current_first {
+                pattern if irrefutable(pattern) => {
+                    vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
+                }
+                Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
+                    tuple.elements.clone()
+                }
+                _ => return false,
+            };
+            let mut specialized_types = nested_types.clone();
+            specialized_types.extend_from_slice(remaining_types);
+            let mut specialized_current = current_nested;
+            specialized_current.extend_from_slice(current_remaining);
+            let specialized_rows = rows
+                .iter()
+                .filter_map(|row| {
+                    let (first, remaining) = row.split_first()?;
+                    let mut values = match first {
+                        pattern if irrefutable(pattern) => {
+                            vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
+                        }
+                        Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
+                            tuple.elements.clone()
+                        }
+                        _ => return None,
+                    };
+                    values.extend_from_slice(remaining);
+                    Some(values)
+                })
+                .collect::<Vec<_>>();
+            return self.pattern_rows_cover_pattern_union(
+                &specialized_rows,
+                &specialized_current,
+                &specialized_types,
+            );
+        }
+
+        if let Some(variants) = self.enum_variants_for_type(first_ty) {
+            let current_variant_payloads = match current_first {
+                pattern if irrefutable(pattern) => None,
+                Pattern::Variant(current_variant) => Some(current_variant.subpatterns.clone()),
+                _ => return false,
+            };
+            let variants_to_cover = if let Pattern::Variant(current_variant) = current_first {
+                variants
+                    .into_iter()
+                    .filter(|(variant_name, payload_types)| {
+                        variant_name == &current_variant.variant_name
+                            && payload_types.len() == current_variant.subpatterns.len()
+                    })
+                    .collect()
+            } else {
+                variants
+            };
+            if variants_to_cover.is_empty() {
+                return false;
+            }
+            return variants_to_cover
+                .into_iter()
+                .all(|(variant_name, payload_types)| {
+                    let current_payloads = current_variant_payloads.clone().unwrap_or_else(|| {
+                        vec![
+                            Pattern::Wildcard(self.pattern_span(current_first));
+                            payload_types.len()
+                        ]
+                    });
+                    let mut specialized_types = payload_types.clone();
+                    specialized_types.extend_from_slice(remaining_types);
+                    let mut specialized_current = current_payloads;
+                    specialized_current.extend_from_slice(current_remaining);
+                    let specialized_rows = rows
+                        .iter()
+                        .filter_map(|row| {
+                            let (first, remaining) = row.split_first()?;
+                            let mut values = match first {
+                                pattern if irrefutable(pattern) => {
+                                    vec![
+                                        Pattern::Wildcard(self.pattern_span(pattern));
+                                        payload_types.len()
+                                    ]
+                                }
+                                Pattern::Variant(variant)
+                                    if variant.variant_name == variant_name
+                                        && variant.subpatterns.len() == payload_types.len() =>
+                                {
+                                    variant.subpatterns.clone()
+                                }
+                                _ => return None,
+                            };
+                            values.extend_from_slice(remaining);
+                            Some(values)
+                        })
+                        .collect::<Vec<_>>();
+                    self.pattern_rows_cover_pattern_union(
+                        &specialized_rows,
+                        &specialized_current,
+                        &specialized_types,
+                    )
+                });
+        }
+
+        let specialized = rows
+            .iter()
+            .filter_map(|row| {
+                let (first, remaining) = row.split_first()?;
+                match current_first {
+                    Pattern::Wildcard(_) | Pattern::Binding(_) => {
+                        irrefutable(first).then(|| remaining.to_vec())
+                    }
+                    Pattern::Literal(_) => self
+                        .pattern_is_covered_by_pattern(first, current_first, first_ty)
+                        .then(|| remaining.to_vec()),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        self.pattern_rows_cover_pattern_union(&specialized, current_remaining, remaining_types)
+    }
+
     fn variant_patterns_cover_payloads_union(
         &self,
         patterns: &[&VariantPattern],
@@ -14360,14 +15151,12 @@ impl<'a> FunctionChecker<'a> {
         {
             return true;
         }
-        if payload_tys.len() != 1 {
-            return false;
-        }
-        let nested_patterns = patterns
+        let rows = patterns
             .iter()
-            .filter_map(|pattern| pattern.subpatterns.first())
+            .filter(|pattern| pattern.subpatterns.len() == payload_tys.len())
+            .map(|pattern| pattern.subpatterns.clone())
             .collect::<Vec<_>>();
-        self.patterns_cover_type_union(&nested_patterns, &payload_tys[0])
+        self.pattern_rows_cover_type_union(&rows, payload_tys)
     }
 
     fn render_member_target(&self, object: &Expr, field: &str) -> String {

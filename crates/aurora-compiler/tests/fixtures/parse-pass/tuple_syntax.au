@@ -1,0 +1,10 @@
+def rotate(value: (int32, String), only: (int64,)) -> ((String, int32), bool)?:
+    left, label = value
+    (single,) = only
+    for index, name in rows:
+        print((index, name))
+    match value:
+        case (0, (name,)):
+            return ((name, left), true)
+        case _:
+            return None

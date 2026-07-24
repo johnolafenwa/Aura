@@ -1,6 +1,7 @@
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, IfStmt, LiteralPatternKind,
-    MatchStmt, Param, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, DestructureStmt, Expr, ExprKind,
+    IfStmt, LiteralPatternKind, MatchStmt, Param, Pattern, ReceiverKind, Stmt, TypeRefKind,
+    UnaryOp, WhileStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -133,6 +134,11 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
         Type::Named(_, args) => {
             for arg in args {
                 collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_type_params_from_type(element, collected);
             }
         }
         Type::Unit | Type::Module(_) => {}
@@ -350,6 +356,20 @@ pub enum Rvalue {
     },
     VecLiteral {
         elements: Vec<Operand>,
+        element_type: Type,
+    },
+    TupleLiteral {
+        elements: Vec<Operand>,
+        element_types: Vec<Type>,
+    },
+    TupleElement {
+        tuple: Operand,
+        index: usize,
+        element_type: Type,
+    },
+    TupleTakeElement {
+        place: String,
+        index: usize,
         element_type: Type,
     },
     SetLiteral {
@@ -1111,24 +1131,40 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
-        let Type::Named(source_name, _) = lower_type_ref(type_ref) else {
-            return Type::Unit;
-        };
-        let name = if let Some(class) = self.resolve_class_info(&source_name) {
-            mir_class_type_name(self.program, class, &source_name)
-        } else if let Some(enum_info) = self.resolve_enum_info(&source_name) {
-            mir_runtime_enum_name(self.program, enum_info)
-        } else {
-            source_name
-        };
-        Type::Named(
-            name,
-            type_ref
-                .args
-                .iter()
-                .map(|arg| self.lower_type_ref_with_provenance(arg))
-                .collect(),
-        )
+        match &type_ref.kind {
+            TypeRefKind::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.lower_type_ref_with_provenance(element))
+                    .collect(),
+            ),
+            TypeRefKind::Named {
+                name: source_name,
+                args,
+            } => {
+                if source_name == "None" {
+                    return Type::Unit;
+                }
+                let source_name = match source_name.as_str() {
+                    "str" => "String",
+                    "int" => "int64",
+                    name => name,
+                };
+                let name = if let Some(class) = self.resolve_class_info(source_name) {
+                    mir_class_type_name(self.program, class, source_name)
+                } else if let Some(enum_info) = self.resolve_enum_info(source_name) {
+                    mir_runtime_enum_name(self.program, enum_info)
+                } else {
+                    source_name.to_string()
+                };
+                Type::Named(
+                    name,
+                    args.iter()
+                        .map(|arg| self.lower_type_ref_with_provenance(arg))
+                        .collect(),
+                )
+            }
+        }
     }
 
     fn infer_class_constructor_type(
@@ -1343,6 +1379,10 @@ impl<'a> Lowerer<'a> {
         match stmt {
             Stmt::Assign(assign) => {
                 self.lower_assign(assign);
+                true
+            }
+            Stmt::Destructure(destructure) => {
+                self.lower_destructure(destructure);
                 true
             }
             Stmt::Pass(_) => true,
@@ -1675,6 +1715,76 @@ impl<'a> Lowerer<'a> {
         });
     }
 
+    fn lower_destructure(&mut self, destructure: &DestructureStmt) {
+        let tuple_ty = self
+            .infer_expr_type(&destructure.value)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let source = self.lower_expr_for_owned_value(&destructure.value, Some(&tuple_ty));
+        let captured = self.new_typed_temp(tuple_ty.clone());
+        self.emit(Instruction::Assign {
+            target: captured.clone(),
+            value: Rvalue::Use(source),
+        });
+        self.lower_binding_target_from_place(&destructure.target, &captured, &tuple_ty, true);
+    }
+
+    fn lower_binding_target_from_place(
+        &mut self,
+        target: &BindingTarget,
+        source_place: &str,
+        source_ty: &Type,
+        consume_non_copy: bool,
+    ) {
+        match target {
+            BindingTarget::Name { name, .. } => {
+                self.local_types.insert(name.clone(), source_ty.clone());
+                let source =
+                    if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
+                        Operand::MovePlace(source_place.to_string())
+                    } else {
+                        Operand::Place(source_place.to_string())
+                    };
+                self.emit(Instruction::Assign {
+                    target: name.clone(),
+                    value: Rvalue::Use(source),
+                });
+            }
+            BindingTarget::Tuple { elements, .. } => {
+                let Type::Tuple(element_types) = source_ty else {
+                    return;
+                };
+                for (index, (element, element_ty)) in elements.iter().zip(element_types).enumerate()
+                {
+                    let captured = self.new_typed_temp(element_ty.clone());
+                    let value =
+                        if consume_non_copy && !type_is_copy_in_program(element_ty, self.program) {
+                            Rvalue::TupleTakeElement {
+                                place: source_place.to_string(),
+                                index,
+                                element_type: element_ty.clone(),
+                            }
+                        } else {
+                            Rvalue::TupleElement {
+                                tuple: Operand::Place(source_place.to_string()),
+                                index,
+                                element_type: element_ty.clone(),
+                            }
+                        };
+                    self.emit(Instruction::Assign {
+                        target: captured.clone(),
+                        value,
+                    });
+                    self.lower_binding_target_from_place(
+                        element,
+                        &captured,
+                        element_ty,
+                        consume_non_copy,
+                    );
+                }
+            }
+        }
+    }
+
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
@@ -1956,6 +2066,52 @@ impl<'a> Lowerer<'a> {
                     .collect_writeback
                     .then_some(PatternWriteback::Use(scrutinee))
             }
+            Pattern::Tuple(pattern) => {
+                let Some(Type::Tuple(element_types)) = scrutinee_ty else {
+                    unreachable!("checked tuple patterns always have tuple scrutinees");
+                };
+                debug_assert_eq!(element_types.len(), pattern.elements.len());
+                debug_assert!(!pattern.elements.is_empty());
+
+                let mut next_element_block = self.current_block;
+                for (index, (element_pattern, element_ty)) in
+                    pattern.elements.iter().zip(element_types).enumerate()
+                {
+                    self.switch_to(next_element_block);
+                    let element_success = if index + 1 == pattern.elements.len() {
+                        success_block
+                    } else {
+                        self.new_block("match_tuple_element")
+                    };
+                    if options.consume_payloads && !pattern_requires_runtime_test(element_pattern) {
+                        self.register_consuming_pattern_bindings(element_pattern, element_ty);
+                        self.terminate(Terminator::Goto(self.label(element_success)));
+                    } else {
+                        let element = self.new_typed_temp(element_ty.clone());
+                        self.emit(Instruction::Assign {
+                            target: element.clone(),
+                            value: Rvalue::TupleElement {
+                                tuple: scrutinee.clone(),
+                                index,
+                                element_type: element_ty.clone(),
+                            },
+                        });
+                        self.lower_pattern(
+                            element_pattern,
+                            Operand::Place(element),
+                            Some(element_ty),
+                            element_success,
+                            failure_block,
+                            PatternLoweringOptions {
+                                collect_writeback: false,
+                                consume_payloads: options.consume_payloads,
+                            },
+                        );
+                    }
+                    next_element_block = element_success;
+                }
+                None
+            }
             Pattern::Variant(pattern) => {
                 let resolved_enum_name = self.resolve_pattern_enum_name(pattern, scrutinee_ty);
                 let matched_block = self.new_block("match_variant");
@@ -2040,6 +2196,27 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
+        match pattern {
+            Pattern::Binding(binding) => {
+                let target = self.new_typed_temp(pattern_ty.clone());
+                self.scoped_names
+                    .last_mut()
+                    .expect("match arm scope should exist")
+                    .insert(binding.name.clone(), target);
+            }
+            Pattern::Tuple(pattern) => {
+                let Type::Tuple(element_types) = pattern_ty else {
+                    return;
+                };
+                for (element_pattern, element_ty) in pattern.elements.iter().zip(element_types) {
+                    self.register_consuming_pattern_bindings(element_pattern, element_ty);
+                }
+            }
+            Pattern::Variant(_) | Pattern::Wildcard(_) | Pattern::Literal(_) => {}
+        }
+    }
+
     fn lower_consuming_pattern_bindings(
         &mut self,
         pattern: &Pattern,
@@ -2095,6 +2272,44 @@ impl<'a> Lowerer<'a> {
                         subpattern,
                         Operand::Place(payload_target),
                         Some(&payload_ty),
+                    );
+                }
+            }
+            Pattern::Tuple(pattern) => {
+                let Some(Type::Tuple(element_types)) = scrutinee_ty else {
+                    return;
+                };
+                for (index, (element_pattern, element_ty)) in
+                    pattern.elements.iter().zip(element_types).enumerate()
+                {
+                    if !pattern_contains_binding(element_pattern) {
+                        continue;
+                    }
+                    let element_target = self.new_typed_temp(element_ty.clone());
+                    let value = match &scrutinee {
+                        Operand::Place(place)
+                            if !type_is_copy_in_program(element_ty, self.program) =>
+                        {
+                            Rvalue::TupleTakeElement {
+                                place: place.clone(),
+                                index,
+                                element_type: element_ty.clone(),
+                            }
+                        }
+                        other => Rvalue::TupleElement {
+                            tuple: other.clone(),
+                            index,
+                            element_type: element_ty.clone(),
+                        },
+                    };
+                    self.emit(Instruction::Assign {
+                        target: element_target.clone(),
+                        value,
+                    });
+                    self.lower_consuming_pattern_bindings(
+                        element_pattern,
+                        Operand::Place(element_target),
+                        Some(element_ty),
                     );
                 }
             }
@@ -2156,6 +2371,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
+        let simple_target_name = match &for_stmt.target {
+            BindingTarget::Name { name, .. } => Some(name.clone()),
+            BindingTarget::Tuple { .. } => None,
+        };
+        let mut tuple_target_source: Option<(String, Type, bool)> = None;
         let iterable_ty = self.infer_expr_type(&for_stmt.iterable);
         let mut owned_iterable_place = None;
         let iterable = if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
@@ -2179,10 +2399,13 @@ impl<'a> Lowerer<'a> {
 
         match iterable_ty {
             Some(Type::Named(name, _)) if name == "Range" => {
+                let binding = simple_target_name
+                    .clone()
+                    .expect("tuple targets are rejected for Range iteration by sema");
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 self.terminate(Terminator::ForRange {
-                    binding: for_stmt.binding.clone(),
+                    binding,
                     iterable,
                     body_label: self.label(body_block),
                     exit_label: self.label(after_block),
@@ -2190,12 +2413,19 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Queue" && args.len() == 1 => {
                 let element_ty = args[0].clone();
+                let binding = match simple_target_name.clone() {
+                    Some(binding) => binding,
+                    None => {
+                        let binding = self.new_typed_temp(element_ty.clone());
+                        tuple_target_source = Some((binding.clone(), element_ty.clone(), true));
+                        binding
+                    }
+                };
                 let next_value = self.new_typed_temp(Type::Named(
                     "QueueReceive".to_string(),
                     vec![element_ty.clone()],
                 ));
-                self.local_types
-                    .insert(for_stmt.binding.clone(), element_ty);
+                self.local_types.insert(binding.clone(), element_ty);
                 let (field, args) = if let Some(task_group_place) = self.active_task_group_place() {
                     (
                         INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string(),
@@ -2250,7 +2480,7 @@ impl<'a> Lowerer<'a> {
                 });
                 self.switch_to(body_block);
                 self.emit(Instruction::Assign {
-                    target: for_stmt.binding.clone(),
+                    target: binding,
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::MovePlace(next_value),
                         variant_name: "Item".to_string(),
@@ -2260,18 +2490,26 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => {
                 let element_ty = args[0].clone();
+                let takes_owned = owned_iterable_place.is_some();
+                let binding = match simple_target_name.clone() {
+                    Some(binding) => binding,
+                    None => {
+                        let binding = self.new_typed_temp(element_ty.clone());
+                        tuple_target_source =
+                            Some((binding.clone(), element_ty.clone(), takes_owned));
+                        binding
+                    }
+                };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
                 let index = self.new_typed_temp(Type::named("int32"));
-                self.local_types
-                    .insert(for_stmt.binding.clone(), element_ty);
+                self.local_types.insert(binding.clone(), element_ty);
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
                 });
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
-                let takes_owned = owned_iterable_place.is_some();
                 let (iteration_object, iteration_field, iteration_receiver_place) =
                     if let Some(place) = owned_iterable_place.as_ref() {
                         (
@@ -2321,7 +2559,7 @@ impl<'a> Lowerer<'a> {
                 });
                 self.switch_to(body_block);
                 self.emit(Instruction::Assign {
-                    target: for_stmt.binding.clone(),
+                    target: binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: if takes_owned {
                             Operand::MovePlace(next_value)
@@ -2369,7 +2607,7 @@ impl<'a> Lowerer<'a> {
                         iterable.clone(),
                         &for_stmt.iterable,
                         &index,
-                        &for_stmt.binding,
+                        &binding,
                         for_stmt.span,
                     );
                     self.emit(Instruction::Assign {
@@ -2388,7 +2626,7 @@ impl<'a> Lowerer<'a> {
                         iterable.clone(),
                         &for_stmt.iterable,
                         &index,
-                        &for_stmt.binding,
+                        &binding,
                         for_stmt.span,
                     );
                     self.terminate(Terminator::Goto(self.label(after_block)));
@@ -2398,7 +2636,7 @@ impl<'a> Lowerer<'a> {
                         iterable,
                         &for_stmt.iterable,
                         &index,
-                        &for_stmt.binding,
+                        &binding,
                         for_stmt.span,
                     );
                     if let Some(parent_label) = parent_return_label {
@@ -2426,18 +2664,26 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Set" && args.len() == 1 => {
                 let element_ty = args[0].clone();
+                let takes_owned = owned_iterable_place.is_some();
+                let binding = match simple_target_name.clone() {
+                    Some(binding) => binding,
+                    None => {
+                        let binding = self.new_typed_temp(element_ty.clone());
+                        tuple_target_source =
+                            Some((binding.clone(), element_ty.clone(), takes_owned));
+                        binding
+                    }
+                };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
                 let index = self.new_typed_temp(Type::named("int32"));
-                self.local_types
-                    .insert(for_stmt.binding.clone(), element_ty);
+                self.local_types.insert(binding.clone(), element_ty);
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
                 });
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
-                let takes_owned = owned_iterable_place.is_some();
                 let (iteration_object, iteration_field, iteration_receiver_place) =
                     if let Some(place) = owned_iterable_place.as_ref() {
                         (
@@ -2487,7 +2733,7 @@ impl<'a> Lowerer<'a> {
                 });
                 self.switch_to(body_block);
                 self.emit(Instruction::Assign {
-                    target: for_stmt.binding.clone(),
+                    target: binding,
                     value: Rvalue::VariantPayload {
                         scrutinee: if takes_owned {
                             Operand::MovePlace(next_value)
@@ -2511,10 +2757,13 @@ impl<'a> Lowerer<'a> {
                 }
             }
             _ => {
+                let binding = simple_target_name
+                    .clone()
+                    .expect("tuple targets require a statically known iterable element type");
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 self.terminate(Terminator::ForRange {
-                    binding: for_stmt.binding.clone(),
+                    binding,
                     iterable,
                     body_label: self.label(body_block),
                     exit_label: self.label(after_block),
@@ -2528,6 +2777,14 @@ impl<'a> Lowerer<'a> {
             cleanup_depth: self.with_stack.len(),
         });
         self.switch_to(body_block);
+        if let Some((source, source_ty, consume_non_copy)) = tuple_target_source {
+            self.lower_binding_target_from_place(
+                &for_stmt.target,
+                &source,
+                &source_ty,
+                consume_non_copy,
+            );
+        }
         self.lower_stmts(&for_stmt.body);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -2620,6 +2877,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Float(value) => Operand::Float(*value),
             ExprKind::Bool(value) => Operand::Bool(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
+            ExprKind::Tuple(elements) => self.lower_tuple_literal(elements, None),
             ExprKind::List(elements) => {
                 let element_type = elements
                     .first()
@@ -2897,6 +3155,29 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                if let Some(Type::Tuple(element_types)) = self.infer_expr_type(object) {
+                    let tuple_index = tuple_constant_index(index)
+                        .expect("tuple indices are validated as constant integers by sema");
+                    let element_type = element_types
+                        .get(tuple_index)
+                        .cloned()
+                        .expect("tuple index bounds are validated by sema");
+                    debug_assert!(
+                        type_is_copy_in_program(&element_type, self.program),
+                        "non-Copy tuple indices are rejected by sema"
+                    );
+                    let tuple = self.lower_expr_at_sequence_point(object, None);
+                    let temp = self.new_typed_temp(element_type.clone());
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::TupleElement {
+                            tuple,
+                            index: tuple_index,
+                            element_type,
+                        },
+                    });
+                    return Operand::Place(temp);
+                }
                 let temp = self.new_temp_for_expr(expr);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
                 let lowered_index = self.lower_expr_at_sequence_point(index, None);
@@ -2945,6 +3226,42 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_tuple_literal(
+        &mut self,
+        elements: &[Expr],
+        expected_element_types: Option<&[Type]>,
+    ) -> Operand {
+        let element_types = match expected_element_types {
+            Some(expected) if expected.len() == elements.len() => expected.to_vec(),
+            _ => elements
+                .iter()
+                .map(|element| {
+                    self.infer_expr_type(element)
+                        .unwrap_or_else(|| Type::named("Unknown"))
+                })
+                .collect::<Vec<_>>(),
+        };
+        let mut captured_elements = Vec::with_capacity(elements.len());
+        for (element, element_ty) in elements.iter().zip(&element_types) {
+            let value = self.lower_expr_for_owned_value(element, Some(element_ty));
+            let captured = self.new_typed_temp(element_ty.clone());
+            self.emit(Instruction::Assign {
+                target: captured.clone(),
+                value: Rvalue::Use(value),
+            });
+            captured_elements.push(self.move_place_for_type(captured, element_ty));
+        }
+        let temp = self.new_typed_temp(Type::Tuple(element_types.clone()));
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::TupleLiteral {
+                elements: captured_elements,
+                element_types,
+            },
+        });
+        Operand::Place(temp)
+    }
+
     fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
         if Self::is_contextual_none_expr(expr)
             && matches!(expected, Some(Type::Named(name, args)) if name == "Option" && args.len() == 1)
@@ -2963,6 +3280,12 @@ impl<'a> Lowerer<'a> {
         }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
+            ExprKind::Tuple(elements) => match expected {
+                Some(Type::Tuple(element_types)) if element_types.len() == elements.len() => {
+                    self.lower_tuple_literal(elements, Some(element_types))
+                }
+                _ => self.lower_tuple_literal(elements, None),
+            },
             ExprKind::Int(value) => {
                 if let Some(value) = expected
                     .and_then(|expected| contextual_float_literal_operand(*value, false, expected))
@@ -4578,6 +4901,15 @@ impl<'a> Lowerer<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::Tuple(elements) => Some(Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| {
+                        self.infer_expr_type(element)
+                            .unwrap_or_else(|| Type::named("Unknown"))
+                    })
+                    .collect(),
+            )),
             ExprKind::List(elements) => Some(Type::Named(
                 "Vec".to_string(),
                 vec![elements
@@ -5016,7 +5348,8 @@ impl<'a> Lowerer<'a> {
                     .get(field)
                     .map(|field| substitute_type(&field.ty, &substitutions))
             }
-            ExprKind::Index { object, .. } => match self.infer_expr_type(object)? {
+            ExprKind::Index { object, index } => match self.infer_expr_type(object)? {
+                Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
                 Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
                     Some(args[0].clone())
                 }
@@ -6059,26 +6392,46 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
-    if type_ref.name == "None" {
-        return Type::Unit;
+fn tuple_constant_index(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::Int(value) => usize::try_from(*value).ok(),
+        ExprKind::Group(inner) => tuple_constant_index(inner),
+        _ => None,
     }
-    let name = match type_ref.name.as_str() {
-        "str" => "String",
-        "int" => "int64",
-        name => name,
-    };
-    Type::Named(
-        name.to_string(),
-        type_ref.args.iter().map(lower_type_ref).collect(),
-    )
+}
+
+#[cfg(test)]
+fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
+    match &type_ref.kind {
+        TypeRefKind::Tuple(elements) => Type::Tuple(elements.iter().map(lower_type_ref).collect()),
+        TypeRefKind::Named { name, args } => {
+            if name == "None" {
+                return Type::Unit;
+            }
+            let name = match name.as_str() {
+                "str" => "String",
+                "int" => "int64",
+                name => name,
+            };
+            Type::Named(name.to_string(), args.iter().map(lower_type_ref).collect())
+        }
+    }
 }
 
 fn pattern_contains_binding(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Binding(_) => true,
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_binding),
+        Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_binding),
         Pattern::Wildcard(_) | Pattern::Literal(_) => false,
+    }
+}
+
+fn pattern_requires_runtime_test(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Literal(_) | Pattern::Variant(_) => true,
+        Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_requires_runtime_test),
+        Pattern::Binding(_) | Pattern::Wildcard(_) => false,
     }
 }
 

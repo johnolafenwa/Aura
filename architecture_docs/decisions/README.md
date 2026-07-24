@@ -32,3 +32,4 @@ test locations that must prove completion.
 23. [ADR-0023: Byte-vector codecs and hashing policy](0023-byte-vector-codecs-and-hashing-policy.md)
 24. [ADR-0024: Assertion evaluation and diagnostic policy](0024-assertion-evaluation-and-diagnostic-policy.md)
 25. [ADR-0025: Newline continuation and delimited layout](0025-newline-continuation-and-delimited-layout.md)
+26. [ADR-0026: Minimal tuples](0026-minimal-tuples.md)

@@ -47,9 +47,9 @@ use crate::runtime_value::{
     ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
     RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
-    NANOS_PER_SECOND,
+    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -614,6 +614,48 @@ impl Env {
         Ok(std::mem::replace(payload, Value::Unit))
     }
 
+    fn tuple_element(&self, place: &str, index: usize) -> Result<Value> {
+        let value = self.place_ref(place)?;
+        let Value::Tuple(tuple) = value else {
+            return Err(Diagnostic::new(format!(
+                "cannot project a tuple element from non-tuple MIR place `{place}`"
+            )));
+        };
+        tuple.elements.get(index).cloned().ok_or_else(|| {
+            Diagnostic::new(format!(
+                "tuple MIR place `{place}` has no element at index {index}"
+            ))
+        })
+    }
+
+    fn take_tuple_element(&mut self, place: &str, index: usize) -> Result<Value> {
+        let segments = split_place_segments(place)?;
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
+        let value = self
+            .values
+            .get_mut(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{place}`")))?;
+        let value = nested_place_mut(value, rest, place)?;
+        let Value::Tuple(tuple) = value else {
+            return Err(Diagnostic::new(format!(
+                "cannot take a tuple element from non-tuple MIR place `{place}`"
+            )));
+        };
+        let element = tuple.elements.get_mut(index).ok_or_else(|| {
+            Diagnostic::new(format!(
+                "tuple MIR place `{place}` has no element at index {index}"
+            ))
+        })?;
+        if matches!(element, Value::Unit) {
+            return Err(Diagnostic::new(format!(
+                "tuple element `{place}[{index}]` has already been moved"
+            )));
+        }
+        Ok(std::mem::replace(element, Value::Unit))
+    }
+
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
         let segments = split_place_segments(place)?;
         let (root, rest) = segments
@@ -1131,6 +1173,11 @@ fn evaluate_bytes_mir_host_call(name: &str, args: &[MirArg], env: &Env) -> Optio
 fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
         Value::Channel(queue) => queues.push(queue.clone()),
+        Value::Tuple(tuple) => {
+            for element in &tuple.elements {
+                collect_queue_handles(element, queues);
+            }
+        }
         Value::Vec(vector) => {
             for element in &vector.elements {
                 collect_queue_handles(element, queues);
@@ -1494,6 +1541,7 @@ impl MirRuntime {
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
             Value::String(_) => Some(Type::named("String")),
+            Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone())),
             Value::Vec(vector) => Some(Type::Named(
                 "Vec".to_string(),
                 vec![vector.element_type.clone()],
@@ -1666,6 +1714,30 @@ impl MirRuntime {
                 if name.starts_with("int") || name.starts_with("uint") =>
             {
                 cast_numeric_value(value, ty, span)?
+            }
+            (Value::Tuple(_), Type::Tuple(element_types)) => {
+                let Value::Tuple(tuple) = value else {
+                    unreachable!("tuple coercion arm validates the runtime value")
+                };
+                if tuple.elements.len() != element_types.len() {
+                    return Err(Diagnostic::new(format!(
+                        "tuple value has {} elements but target type expects {}",
+                        tuple.elements.len(),
+                        element_types.len()
+                    )));
+                }
+                let elements = tuple
+                    .elements
+                    .into_iter()
+                    .zip(element_types)
+                    .map(|(element, element_ty)| {
+                        self.coerce_value_to_type(element, element_ty, span)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Value::Tuple(TupleValue {
+                    element_types: element_types.clone(),
+                    elements,
+                })
             }
             _ => value,
         };
@@ -2378,6 +2450,48 @@ impl MirRuntime {
                     .map(|operand| self.evaluate_owned_operand(operand, env))
                     .collect::<Result<Vec<_>>>()?,
             }))),
+            Rvalue::TupleLiteral {
+                elements,
+                element_types,
+            } => {
+                if elements.len() != element_types.len() {
+                    return Err(Diagnostic::new(format!(
+                        "MIR tuple literal has {} values but {} element types",
+                        elements.len(),
+                        element_types.len()
+                    )));
+                }
+                let mut values = Vec::with_capacity(elements.len());
+                for operand in elements {
+                    values.push(self.evaluate_owned_operand(operand, env)?);
+                }
+                Ok(RvalueOutcome::Value(Value::Tuple(TupleValue {
+                    element_types: element_types.clone(),
+                    elements: values,
+                })))
+            }
+            Rvalue::TupleElement {
+                tuple,
+                index,
+                element_type: _,
+            } => {
+                let element = match tuple {
+                    Operand::Place(place) => env.tuple_element(place, *index)?,
+                    _ => {
+                        let value = self.evaluate_operand(tuple, env)?;
+                        return Err(Diagnostic::new(format!(
+                            "MIR tuple projection expected a tuple, found `{}`",
+                            value.render()
+                        )));
+                    }
+                };
+                Ok(RvalueOutcome::Value(element))
+            }
+            Rvalue::TupleTakeElement {
+                place,
+                index,
+                element_type: _,
+            } => Ok(RvalueOutcome::Value(env.take_tuple_element(place, *index)?)),
             Rvalue::SetLiteral {
                 elements,
                 element_type,
@@ -7287,6 +7401,17 @@ fn collect_runtime_type_substitutions(
                 collect_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
             }
         }
+        Type::Tuple(pattern_elements) => {
+            let Type::Tuple(actual_elements) = actual else {
+                return;
+            };
+            if pattern_elements.len() != actual_elements.len() {
+                return;
+            }
+            for (pattern_element, actual_element) in pattern_elements.iter().zip(actual_elements) {
+                collect_runtime_type_substitutions(pattern_element, actual_element, substitutions);
+            }
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -7299,6 +7424,11 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
         Type::Named(_, args) => {
             for arg in args {
                 collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_type_params_from_type(element, collected);
             }
         }
         Type::Unit | Type::Module(_) => {}

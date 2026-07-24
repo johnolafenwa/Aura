@@ -98,7 +98,8 @@ pub mod native_runtime_coverage {
         aurora_direct_tcp_stream_peer_addr, aurora_direct_tcp_stream_read_all,
         aurora_direct_tcp_stream_read_exact, aurora_direct_tcp_stream_shutdown_read,
         aurora_direct_tcp_stream_shutdown_write, aurora_direct_tcp_stream_write_all,
-        aurora_direct_tcp_stream_write_bytes, aurora_direct_udp_datagram_address,
+        aurora_direct_tcp_stream_write_bytes, aurora_direct_tuple_element, aurora_direct_tuple_new,
+        aurora_direct_tuple_take_element, aurora_direct_udp_datagram_address,
         aurora_direct_udp_datagram_bytes, aurora_direct_udp_datagram_text,
         aurora_direct_udp_socket_close, aurora_direct_udp_socket_local_addr,
         aurora_direct_udp_socket_recv, aurora_direct_udp_socket_recv_from,
@@ -781,6 +782,12 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
             }
             sema::Type::Named(name.clone(), qualified_args)
         }
+        sema::Type::Tuple(elements) => sema::Type::Tuple(
+            elements
+                .iter()
+                .map(|element| qualify_export_type(program, element))
+                .collect(),
+        ),
         sema::Type::TypeParam(name) => sema::Type::TypeParam(name.clone()),
         sema::Type::Module(path) => sema::Type::Module(path.clone()),
         sema::Type::Unit => sema::Type::Unit,
@@ -789,34 +796,35 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
 
 fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::TypeRef {
     let mut qualified = type_ref.clone();
-    qualified.args = qualified
-        .args
-        .iter()
-        .map(|arg| qualify_export_type_ref(program, arg))
-        .collect();
-    if qualified.name.contains('.')
-        || qualified.name == "str"
-        || is_builtin_export_type(&qualified.name)
-    {
-        return qualified;
-    }
-    if program.classes.contains_key(&qualified.name)
-        || program.enums.contains_key(&qualified.name)
-        || program.traits.contains_key(&qualified.name)
-    {
-        qualified.name = format!("{}.{}", program.module_name, qualified.name);
-        return qualified;
-    }
-    let mut found = None;
-    let mut ambiguous = false;
-    find_type_namespace_path(
-        &program.imported_modules,
-        &qualified.name,
-        &mut found,
-        &mut ambiguous,
-    );
-    if let (Some(path), false) = (found, ambiguous) {
-        qualified.name = format!("{}.{}", path, qualified.name);
+    match &mut qualified.kind {
+        ast::TypeRefKind::Tuple(elements) => {
+            *elements = elements
+                .iter()
+                .map(|element| qualify_export_type_ref(program, element))
+                .collect();
+        }
+        ast::TypeRefKind::Named { name, args } => {
+            *args = args
+                .iter()
+                .map(|arg| qualify_export_type_ref(program, arg))
+                .collect();
+            if name.contains('.') || name == "str" || is_builtin_export_type(name) {
+                return qualified;
+            }
+            if program.classes.contains_key(name)
+                || program.enums.contains_key(name)
+                || program.traits.contains_key(name)
+            {
+                *name = format!("{}.{}", program.module_name, name);
+                return qualified;
+            }
+            let mut found = None;
+            let mut ambiguous = false;
+            find_type_namespace_path(&program.imported_modules, name, &mut found, &mut ambiguous);
+            if let (Some(path), false) = (found, ambiguous) {
+                *name = format!("{}.{}", path, name);
+            }
+        }
     }
     qualified
 }

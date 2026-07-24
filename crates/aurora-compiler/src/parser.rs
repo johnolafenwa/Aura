@@ -1,10 +1,11 @@
 use crate::ast::{
-    Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BreakStmt, ClassDecl,
-    ContinueStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
-    FieldDecl, ForStmt, FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl,
-    ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
-    TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
+    BreakStmt, ClassDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl,
+    EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FormatPart, FunctionDecl,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LiteralPattern, LiteralPatternKind,
+    MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
+    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp,
+    VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -497,12 +498,7 @@ impl Parser {
             return Ok((
                 ReceiverKind::Value,
                 None,
-                TypeRef {
-                    name: "None".to_string(),
-                    args: Vec::new(),
-                    indirect: false,
-                    span,
-                },
+                TypeRef::named("None", Vec::new(), false, span),
             ));
         }
 
@@ -758,6 +754,8 @@ impl Parser {
             self.parse_break_stmt()
         } else if self.at_simple(&TokenKind::KwContinue) {
             self.parse_continue_stmt()
+        } else if self.is_destructure_assignment_stmt() {
+            self.parse_destructure_stmt()
         } else if self.is_assignment_stmt() {
             self.parse_assign_stmt()
         } else {
@@ -812,6 +810,41 @@ impl Parser {
             target,
             annotation,
             op,
+            value,
+            span,
+        }))
+    }
+
+    fn parse_destructure_stmt(&mut self) -> Result<Stmt> {
+        if self.eat_simple(&TokenKind::KwMut).is_some() {
+            return Err(parse_error(
+                self.current_span(),
+                "`mut` destructuring is not supported yet; bind the tuple first and mutate named values explicitly",
+            ));
+        }
+
+        let span = self.current_span();
+        let target = self.parse_binding_target_sequence(false)?;
+        self.reject_duplicate_binding_names(&target)?;
+
+        if !self.at_simple(&TokenKind::Equal) {
+            if self.is_assignment_operator_kind(Some(self.current_kind())) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "destructuring only supports plain `=`; compound assignment requires a single assignable place",
+                ));
+            }
+            return Err(parse_error(
+                self.current_span(),
+                "expected `=` after destructuring target",
+            ));
+        }
+        self.bump();
+
+        let value = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        Ok(Stmt::Destructure(DestructureStmt {
+            target,
             value,
             span,
         }))
@@ -888,7 +921,8 @@ impl Parser {
 
     fn parse_for_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwFor)?.span;
-        let binding = self.expect_identifier()?;
+        let target = self.parse_binding_target_sequence(false)?;
+        self.reject_duplicate_binding_names(&target)?;
         self.expect_simple(TokenKind::KwIn)?;
         let borrow_mode = self.parse_optional_for_mode();
         let iterable = self.parse_expr()?;
@@ -896,7 +930,7 @@ impl Parser {
         self.expect_newline()?;
         let body = self.parse_block()?;
         Ok(Stmt::For(ForStmt {
-            binding,
+            target,
             iterable,
             borrow_mode,
             body,
@@ -975,6 +1009,40 @@ impl Parser {
 
     fn parse_pattern_inner(&mut self) -> Result<Pattern> {
         let span = self.current_span();
+        if self.eat_simple(&TokenKind::LParen).is_some() {
+            if self.at_simple(&TokenKind::RParen) {
+                return Err(parse_error(span, "empty tuple patterns are not supported"));
+            }
+
+            let first = self.parse_pattern()?;
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
+                ));
+            }
+
+            let mut elements = vec![first];
+            if self.eat_simple(&TokenKind::RParen).is_some() {
+                return Ok(Pattern::Tuple(TuplePattern { elements, span }));
+            }
+
+            loop {
+                elements.push(self.parse_pattern()?);
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+                if self.at_simple(&TokenKind::RParen) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "trailing commas are only allowed for singleton tuple patterns",
+                    ));
+                }
+            }
+            self.expect_simple(TokenKind::RParen)?;
+            return Ok(Pattern::Tuple(TuplePattern { elements, span }));
+        }
+
         if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "_") {
             self.bump();
             return Ok(Pattern::Wildcard(span));
@@ -1159,32 +1227,60 @@ impl Parser {
     fn parse_type_inner(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
-        let name = self.parse_identifier_path()?.join(".");
-        let mut args = Vec::new();
-
-        if self.eat_simple(&TokenKind::LBracket).is_some() {
-            loop {
-                args.push(self.parse_type()?);
-                if self.eat_simple(&TokenKind::Comma).is_none() {
-                    break;
-                }
+        let mut ty = if self.eat_simple(&TokenKind::LParen).is_some() {
+            if indirect {
+                return Err(parse_error(
+                    span,
+                    "`indirect` applies only to named types, not tuple types",
+                ));
             }
-            self.expect_simple(TokenKind::RBracket)?;
-        }
+            if self.at_simple(&TokenKind::RParen) {
+                return Err(parse_error(span, "empty tuple types are not supported"));
+            }
 
-        let mut ty = TypeRef {
-            name,
-            args,
-            indirect,
-            span,
+            let first = self.parse_type()?;
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "tuple types need a comma; write `(T,)` for a singleton tuple type or `T` for the type itself",
+                ));
+            }
+
+            let mut elements = vec![first];
+            if self.eat_simple(&TokenKind::RParen).is_none() {
+                loop {
+                    elements.push(self.parse_type()?);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                    if self.at_simple(&TokenKind::RParen) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "trailing commas are only allowed for singleton tuple types",
+                        ));
+                    }
+                }
+                self.expect_simple(TokenKind::RParen)?;
+            }
+            TypeRef::tuple(elements, false, span)
+        } else {
+            let name = self.parse_identifier_path()?.join(".");
+            let mut args = Vec::new();
+
+            if self.eat_simple(&TokenKind::LBracket).is_some() {
+                loop {
+                    args.push(self.parse_type()?);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                self.expect_simple(TokenKind::RBracket)?;
+            }
+
+            TypeRef::named(name, args, indirect, span)
         };
         if self.eat_simple(&TokenKind::Question).is_some() {
-            ty = TypeRef {
-                name: "Option".to_string(),
-                args: vec![ty],
-                indirect,
-                span,
-            };
+            ty = TypeRef::named("Option", vec![ty], indirect, span);
         }
 
         Ok(ty)
@@ -1710,13 +1806,45 @@ impl Parser {
                 span: token.span,
             }),
             TokenKind::LParen => {
-                self.enter_recursion("expression")?;
-                let inner = self.parse_expr();
-                self.exit_recursion();
-                let inner = inner?;
+                if self.at_simple(&TokenKind::RParen) {
+                    return Err(parse_error(
+                        token.span,
+                        "empty tuple literals are not supported; use `None` for unit",
+                    ));
+                }
+
+                let first = self.parse_non_tuple_expr()?;
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    self.expect_simple(TokenKind::RParen)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Group(Box::new(first)),
+                        span: token.span,
+                    });
+                }
+
+                let mut elements = vec![first];
+                if self.eat_simple(&TokenKind::RParen).is_some() {
+                    return Ok(Expr {
+                        kind: ExprKind::Tuple(elements),
+                        span: token.span,
+                    });
+                }
+
+                loop {
+                    elements.push(self.parse_non_tuple_expr()?);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                    if self.at_simple(&TokenKind::RParen) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "trailing commas are only allowed for singleton tuple literals",
+                        ));
+                    }
+                }
                 self.expect_simple(TokenKind::RParen)?;
                 Ok(Expr {
-                    kind: ExprKind::Group(Box::new(inner)),
+                    kind: ExprKind::Tuple(elements),
                     span: token.span,
                 })
             }
@@ -1887,6 +2015,153 @@ impl Parser {
         false
     }
 
+    fn is_destructure_assignment_stmt(&self) -> bool {
+        let mut idx = self.index;
+        if matches!(self.peek_kind_at(idx), Some(TokenKind::KwMut)) {
+            idx += 1;
+        }
+
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut brace_depth = 0usize;
+        let mut saw_comma = false;
+        loop {
+            match self.peek_kind_at(idx) {
+                Some(TokenKind::LParen) => paren_depth += 1,
+                Some(TokenKind::RParen) => {
+                    if paren_depth == 0 {
+                        return false;
+                    }
+                    paren_depth -= 1;
+                }
+                Some(TokenKind::LBracket) => bracket_depth += 1,
+                Some(TokenKind::RBracket) => {
+                    if bracket_depth == 0 {
+                        return false;
+                    }
+                    bracket_depth -= 1;
+                }
+                Some(TokenKind::LBrace) => brace_depth += 1,
+                Some(TokenKind::RBrace) => {
+                    if brace_depth == 0 {
+                        return false;
+                    }
+                    brace_depth -= 1;
+                }
+                Some(TokenKind::Colon)
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && !saw_comma =>
+                {
+                    return false;
+                }
+                Some(TokenKind::Comma) if bracket_depth == 0 && brace_depth == 0 => {
+                    saw_comma = true;
+                }
+                kind if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && self.is_assignment_operator_kind(kind) =>
+                {
+                    return saw_comma;
+                }
+                Some(TokenKind::Newline | TokenKind::Eof) | None => return false,
+                Some(_) => {}
+            }
+            idx += 1;
+        }
+    }
+
+    fn parse_binding_target_sequence(
+        &mut self,
+        allow_unparenthesized_singleton: bool,
+    ) -> Result<BindingTarget> {
+        let span = self.current_span();
+        let first = self.parse_binding_target_atom()?;
+        if self.eat_simple(&TokenKind::Comma).is_none() {
+            return Ok(first);
+        }
+
+        let mut elements = vec![first];
+        if self.binding_target_sequence_terminator() {
+            if allow_unparenthesized_singleton {
+                return Ok(BindingTarget::Tuple { elements, span });
+            }
+            return Err(parse_error(
+                self.current_span(),
+                "an unparenthesized destructuring target cannot end with a comma; write `(name,)` for a singleton tuple target",
+            ));
+        }
+
+        loop {
+            elements.push(self.parse_binding_target_atom()?);
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                break;
+            }
+            if self.binding_target_sequence_terminator() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "trailing commas are only allowed for singleton tuple targets",
+                ));
+            }
+        }
+
+        Ok(BindingTarget::Tuple { elements, span })
+    }
+
+    fn parse_binding_target_atom(&mut self) -> Result<BindingTarget> {
+        let span = self.current_span();
+        if self.eat_simple(&TokenKind::LParen).is_some() {
+            if self.at_simple(&TokenKind::RParen) {
+                return Err(parse_error(
+                    span,
+                    "empty tuple binding targets are not supported",
+                ));
+            }
+            let target = self.parse_binding_target_sequence(true)?;
+            self.expect_simple(TokenKind::RParen)?;
+            return Ok(target);
+        }
+
+        let name = self.expect_identifier().map_err(|_| {
+            parse_error(
+                span,
+                "binding targets must be names or recursively nested tuple targets",
+            )
+        })?;
+        Ok(BindingTarget::Name { name, span })
+    }
+
+    fn binding_target_sequence_terminator(&self) -> bool {
+        self.at_simple(&TokenKind::RParen)
+            || self.at_simple(&TokenKind::KwIn)
+            || self.is_assignment_operator_kind(Some(self.current_kind()))
+    }
+
+    fn reject_duplicate_binding_names(&self, target: &BindingTarget) -> Result<()> {
+        fn visit(
+            target: &BindingTarget,
+            names: &mut std::collections::BTreeSet<String>,
+        ) -> Result<()> {
+            match target {
+                BindingTarget::Name { name, span } => {
+                    if !names.insert(name.clone()) {
+                        return Err(parse_error(
+                            *span,
+                            format!("duplicate binding target `{name}`"),
+                        ));
+                    }
+                }
+                BindingTarget::Tuple { elements, .. } => {
+                    for element in elements {
+                        visit(element, names)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        visit(target, &mut std::collections::BTreeSet::new())
+    }
+
     fn parse_assign_target(&mut self) -> Result<AssignTarget> {
         let span = self.current_span();
         let name = self.expect_identifier()?;
@@ -1956,6 +2231,31 @@ impl Parser {
         if matches!(self.peek_kind_at(idx), Some(TokenKind::KwIndirect)) {
             idx += 1;
         }
+
+        if matches!(self.peek_kind_at(idx), Some(TokenKind::LParen)) {
+            let mut depth = 0usize;
+            loop {
+                match self.peek_kind_at(idx) {
+                    Some(TokenKind::LParen) => depth += 1,
+                    Some(TokenKind::RParen) => {
+                        depth = depth.saturating_sub(1);
+                        idx += 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        continue;
+                    }
+                    Some(TokenKind::Newline | TokenKind::Eof) | None => return idx,
+                    Some(_) => {}
+                }
+                idx += 1;
+            }
+            if matches!(self.peek_kind_at(idx), Some(TokenKind::Question)) {
+                idx += 1;
+            }
+            return idx;
+        }
+
         if !self.is_contextual_identifier_at(idx) {
             return idx;
         }
@@ -2387,7 +2687,7 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
             offset_expr_span(left, line, column_offset);
             offset_expr_span(right, line, column_offset);
         }
-        ExprKind::List(elements) => {
+        ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {
                 offset_expr_span(element, line, column_offset);
             }
@@ -2455,8 +2755,12 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
 fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usize) {
     type_ref.span.line = line;
     type_ref.span.column += column_offset;
-    for arg in &mut type_ref.args {
-        offset_type_ref_span(arg, line, column_offset);
+    match &mut type_ref.kind {
+        TypeRefKind::Named { args, .. } | TypeRefKind::Tuple(args) => {
+            for arg in args {
+                offset_type_ref_span(arg, line, column_offset);
+            }
+        }
     }
 }
 

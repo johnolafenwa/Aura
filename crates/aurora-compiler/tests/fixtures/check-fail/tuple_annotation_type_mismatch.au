@@ -1,0 +1,2 @@
+def main():
+    pair: (int32, String) = (1, 2)

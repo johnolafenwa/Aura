@@ -90,12 +90,14 @@ positions:
 - `Duration`
 - `Queue[T]`
 - `Task[T]`
+- tuple values when every element type is copyable
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
 
 Move values transfer ownership:
 
+- tuple values with at least one move element
 - `String`
 - `Vec[T]`
 - `Map[K, V]`
@@ -115,6 +117,23 @@ Move values can still be shared through `borrow` and `borrow mut`, or duplicated
 `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` are treated as move outcome values even when `T` is copyable. `Range` is also not a general copy type in Aurora 0.1; use ranges directly in iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.
+
+## Tuple Types
+
+`(T1, T2)` is a fixed two-element structural tuple type and `(T,)` is a
+fixed singleton tuple type. Tuple arity and corresponding element types are
+part of type identity. Tuple types may appear anywhere another complete type
+reference is accepted, including parameter, field, payload, local annotation,
+and return positions.
+
+A tuple is copyable if and only if every element is copyable. Copy
+classification is recursive through nested tuples. Otherwise the complete
+tuple is a move value; unpacking it consumes the source as one whole value
+rather than exposing independently reusable positional partial moves.
+
+Aurora has no empty tuple type and does not convert tuples to or from
+collections. See [Tuples](/manual/tuples) for construction, unpacking,
+patterns, indexing, and the exact current boundary.
 
 Copy/move classification and clone safety are distinct. `random.Rng` is not
 merely a move type: it exposes no public duplication route. A clone-producing
@@ -352,7 +371,7 @@ contains a backend surface that cannot preserve the same behavior.
 ## Limits And Implementation-Defined Behavior
 
 `str` is currently an alias rather than a borrowed view; non-copy borrowed
-returns are contained; tuples, callable types, user-defined numeric casts, and
+returns are contained; callable types, user-defined numeric casts, and
 non-numeric casts are unavailable; and recursive value fields require
 `indirect`. `intsize` and `uintsize` follow the target pointer width, and host
 process exit transport may narrow an `int32` after Aurora returns it. Other
@@ -365,7 +384,8 @@ The scalar, collection, enum, class, trait-bound, resource, optional, result,
 and indirect types described by this Manual are implemented for the post-Phase
 1.5 surface. Borrowed-return syntax reserves the provenance contract for a
 future live non-copy alias representation; calls cannot produce such aliases
-today. Callable, closure, tuple, and FFI types are unavailable. `str` is the
+today. Callable, closure, and FFI types are unavailable. Structural tuple types
+are Provisional under ADR-0026. `str` is the
 implemented compatibility alias for `String`; a distinct borrowed `str` view
 type is unavailable. None of those unavailable types may be inferred from
 current syntax.

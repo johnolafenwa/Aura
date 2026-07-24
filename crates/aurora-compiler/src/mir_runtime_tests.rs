@@ -1,9 +1,9 @@
 use super::{
     bind_args, bind_builtin_args, bind_optional_builtin_args, build_range, bytes_vec_value,
-    collect_runtime_type_substitutions, collect_type_params_from_type, eval_ordering,
-    evaluate_named_args, option_none, option_some, render_runtime_error, result_err, result_ok,
-    run_serialized_mir, send_error_closed, task_result_ready, write_stream, CancellationContext,
-    Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
+    collect_queue_handles, collect_runtime_type_substitutions, collect_type_params_from_type,
+    eval_ordering, evaluate_named_args, option_none, option_some, render_runtime_error, result_err,
+    result_ok, run_serialized_mir, send_error_closed, task_result_ready, write_stream,
+    CancellationContext, Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::{IntegerKind, IntegerValue};
@@ -16,7 +16,8 @@ use crate::runtime_value::{
     ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
     MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
     RangeValue, SetValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    WebSocketValue,
 };
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
@@ -48,6 +49,227 @@ fn mir_arg(name: Option<&str>, value: Operand) -> MirArg {
         value,
         writeback_place: None,
     }
+}
+
+#[test]
+fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let text = "owned tuple element".repeat(32);
+    let text_ptr = text.as_ptr();
+    env.define_typed("text", Type::named("String"), Value::String(text));
+    env.define_typed(
+        "number",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_signed(7)),
+    );
+
+    let outcome = runtime
+        .evaluate_rvalue(
+            &Rvalue::TupleLiteral {
+                elements: vec![
+                    Operand::MovePlace("text".to_string()),
+                    Operand::Place("number".to_string()),
+                ],
+                element_types: vec![Type::named("String"), Type::named("int64")],
+            },
+            &mut env,
+        )
+        .expect("tuple construction should evaluate left-to-right");
+    let super::RvalueOutcome::Value(tuple) = outcome else {
+        panic!("expected tuple value");
+    };
+    assert!(env.place_ref("text").is_err(), "owned element must move");
+    assert_eq!(
+        env.read_place("number").expect("copy element must remain"),
+        Value::Int(IntegerValue::from_signed(7))
+    );
+    env.define_typed(
+        "tuple",
+        Type::Tuple(vec![Type::named("String"), Type::named("int64")]),
+        tuple,
+    );
+
+    let projected = runtime
+        .evaluate_rvalue(
+            &Rvalue::TupleElement {
+                tuple: Operand::Place("tuple".to_string()),
+                index: 1,
+                element_type: Type::named("int64"),
+            },
+            &mut env,
+        )
+        .expect("copy tuple projection should succeed");
+    let super::RvalueOutcome::Value(projected) = projected else {
+        panic!("expected projected value");
+    };
+    assert_eq!(projected, Value::Int(IntegerValue::from_signed(7)));
+
+    let taken = runtime
+        .evaluate_rvalue(
+            &Rvalue::TupleTakeElement {
+                place: "tuple".to_string(),
+                index: 0,
+                element_type: Type::named("String"),
+            },
+            &mut env,
+        )
+        .expect("non-Copy tuple element should move");
+    let super::RvalueOutcome::Value(Value::String(taken)) = taken else {
+        panic!("expected moved String");
+    };
+    assert_eq!(taken.as_ptr(), text_ptr);
+    let Value::Tuple(remaining) = env.read_place("tuple").expect("tuple owner remains") else {
+        panic!("expected tuple owner");
+    };
+    assert_eq!(
+        remaining.elements,
+        vec![Value::Unit, Value::Int(IntegerValue::from_signed(7))]
+    );
+
+    let repeated = env
+        .take_tuple_element("tuple", 0)
+        .expect_err("a tuple slot cannot be moved twice");
+    assert!(repeated.message.contains("has already been moved"));
+}
+
+#[test]
+fn mir_tuple_operations_reject_invalid_shape_and_places() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let malformed = match runtime.evaluate_rvalue(
+        &Rvalue::TupleLiteral {
+            elements: vec![Operand::Bool(true)],
+            element_types: Vec::new(),
+        },
+        &mut env,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("tuple metadata arity must match value arity"),
+    };
+    assert!(malformed.message.contains("1 values but 0 element types"));
+
+    env.define_typed("flag", Type::named("bool"), Value::Bool(true));
+    let non_tuple_projection = env
+        .tuple_element("flag", 0)
+        .expect_err("tuple projection must reject non-tuples");
+    assert!(non_tuple_projection.message.contains("non-tuple MIR place"));
+    let non_tuple = env
+        .take_tuple_element("flag", 0)
+        .expect_err("tuple take must reject non-tuples");
+    assert!(non_tuple.message.contains("non-tuple MIR place"));
+    let missing = env
+        .take_tuple_element("missing", 0)
+        .expect_err("tuple take must diagnose unknown MIR places");
+    assert!(missing.message.contains("unknown MIR place `missing`"));
+
+    env.define_typed(
+        "empty",
+        Type::Tuple(Vec::new()),
+        Value::Tuple(TupleValue {
+            element_types: Vec::new(),
+            elements: Vec::new(),
+        }),
+    );
+    let out_of_bounds = env
+        .take_tuple_element("empty", 0)
+        .expect_err("tuple take must enforce bounds");
+    assert!(out_of_bounds.message.contains("no element at index 0"));
+    let projection_out_of_bounds = env
+        .tuple_element("empty", 0)
+        .expect_err("tuple projection must enforce bounds");
+    assert!(projection_out_of_bounds
+        .message
+        .contains("no element at index 0"));
+
+    let temporary_projection = match runtime.evaluate_rvalue(
+        &Rvalue::TupleElement {
+            tuple: Operand::Bool(true),
+            index: 0,
+            element_type: Type::named("bool"),
+        },
+        &mut env,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("invalid MIR cannot project a tuple element from a scalar operand"),
+    };
+    assert!(temporary_projection
+        .message
+        .contains("tuple projection expected a tuple, found `true`"));
+
+    let arity_mismatch = runtime
+        .coerce_value_to_type(
+            Value::Tuple(TupleValue {
+                element_types: vec![Type::named("int64")],
+                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+            }),
+            &Type::Tuple(Vec::new()),
+            None,
+        )
+        .expect_err("tuple coercion must preserve structural arity");
+    assert!(arity_mismatch
+        .message
+        .contains("tuple value has 1 elements but target type expects 0"));
+
+    let queue = ChannelValue::new();
+    queue.set_runtime_type_name("Queue[int64]".to_string());
+    let nested = Value::Tuple(TupleValue {
+        element_types: vec![Type::Named("Queue".to_string(), vec![Type::named("int64")])],
+        elements: vec![Value::Channel(queue)],
+    });
+    let mut queues = Vec::new();
+    collect_queue_handles(&nested, &mut queues);
+    assert_eq!(
+        queues
+            .first()
+            .and_then(ChannelValue::runtime_type_name)
+            .as_deref(),
+        Some("Queue[int64]"),
+        "task producer tracking must find queues nested inside tuples"
+    );
+}
+
+#[test]
+fn mir_tuple_coercion_preserves_owned_element_allocations_and_metadata() {
+    let runtime = test_runtime();
+    let text = "tuple coercion".repeat(32);
+    let text_ptr = text.as_ptr();
+    let coerced = runtime
+        .coerce_value_to_type(
+            Value::Tuple(TupleValue {
+                element_types: vec![Type::named("String"), Type::named("int64")],
+                elements: vec![
+                    Value::String(text),
+                    Value::Int(IntegerValue::from_signed(7)),
+                ],
+            }),
+            &Type::Tuple(vec![Type::named("String"), Type::named("int8")]),
+            None,
+        )
+        .expect("tuple elements should coerce structurally");
+    let Value::Tuple(coerced) = coerced else {
+        panic!("expected tuple");
+    };
+    assert_eq!(
+        coerced.element_types,
+        vec![Type::named("String"), Type::named("int8")]
+    );
+    let Value::String(text) = &coerced.elements[0] else {
+        panic!("expected String element");
+    };
+    assert_eq!(text.as_ptr(), text_ptr);
+    let Value::Int(number) = &coerced.elements[1] else {
+        panic!("expected integer element");
+    };
+    assert_eq!(number.runtime_kind(), Some(IntegerKind::Int8));
+    assert_eq!(
+        MirRuntime::infer_value_type(&Value::Tuple(coerced)),
+        Some(Type::Tuple(vec![
+            Type::named("String"),
+            Type::named("int8")
+        ])),
+        "runtime inference must preserve the tuple's coerced element metadata"
+    );
 }
 
 #[test]
@@ -8604,6 +8826,37 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     );
     collect_runtime_type_substitutions(&Type::Unit, &Type::Unit, &mut substitutions);
     assert!(!substitutions.contains_key("Ignored"));
+    collect_runtime_type_substitutions(
+        &Type::Tuple(vec![
+            Type::TypeParam("TupleLeft".to_string()),
+            Type::Named(
+                "Vec".to_string(),
+                vec![Type::TypeParam("TupleRight".to_string())],
+            ),
+        ]),
+        &Type::Tuple(vec![
+            Type::named("String"),
+            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        ]),
+        &mut substitutions,
+    );
+    assert_eq!(substitutions.get("TupleLeft"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("TupleRight"), Some(&Type::named("int64")));
+    collect_runtime_type_substitutions(
+        &Type::Tuple(vec![Type::TypeParam("WrongArity".to_string())]),
+        &Type::Tuple(Vec::new()),
+        &mut substitutions,
+    );
+    assert!(!substitutions.contains_key("WrongArity"));
+    collect_runtime_type_substitutions(
+        &Type::Tuple(vec![Type::TypeParam("TupleOnly".to_string())]),
+        &Type::named("String"),
+        &mut substitutions,
+    );
+    assert!(
+        !substitutions.contains_key("TupleOnly"),
+        "a nominal actual type must not satisfy a structural tuple generic"
+    );
 
     let mut collected = BTreeSet::new();
     collect_type_params_from_type(
@@ -8620,6 +8873,14 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         collected,
         BTreeSet::from(["E".to_string(), "T".to_string()])
     );
+    collect_type_params_from_type(
+        &Type::Tuple(vec![
+            Type::TypeParam("TupleT".to_string()),
+            Type::named("String"),
+        ]),
+        &mut collected,
+    );
+    assert!(collected.contains("TupleT"));
     collect_type_params_from_type(&Type::TypeParam("Direct".to_string()), &mut collected);
     collect_type_params_from_type(&Type::Unit, &mut collected);
     assert!(collected.contains("Direct"));

@@ -1,0 +1,5 @@
+error[AU2002]: recursive field `next` on class `Node` contains tuple storage; tuple types cannot be `indirect`, so move the recursive link into an `indirect` named field
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_recursive_field.au:2:5
+  |
+2 |     next: (Node, int32)
+  |     ^

@@ -1,0 +1,4 @@
+def main():
+    match (true, 1):
+        case (true, _):
+            pass

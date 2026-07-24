@@ -1,0 +1,8 @@
+def identity_pair[T](value: own (T, String)) -> (T, String):
+    return value
+
+
+def main() -> int32:
+    number, label = identity_pair(value=(42, "answer"))
+    print(f"{label}: {number}")
+    return 0

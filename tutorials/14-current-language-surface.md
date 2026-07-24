@@ -93,6 +93,9 @@ Builtin generic or runtime-facing types currently accepted:
 - `Task[T]`
 - `TaskGroup`
 
+Structural tuple types such as `(String, int64)` and singleton `(bool,)` are
+also accepted. A tuple is copyable exactly when every element is copyable.
+
 These built-in type names are reserved and cannot be reused for user-defined classes, enums, or traits.
 
 ## Packages And Workspaces
@@ -174,11 +177,13 @@ that contains one, has no public clone route.
 The current compiler supports these statement forms:
 
 - assignment and compound assignment through `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`
+- recursive tuple unpack assignment such as `name, count = record`
 - `return`
 - `if` / `elif` / `else`
 - `while`
 - `for value in range(n):`
 - `for value in jobs:`
+- recursive tuple-target iteration such as `for name, count in records:`
 - `match`
 - `with`
 - `break`
@@ -197,6 +202,7 @@ exact supplied message. Assertions are not stripped in any build mode.
 The current compiler supports these expression forms:
 
 - names
+- parenthesized tuple values such as `(name, count)` and singleton `(value,)`
 - integer, float, string, f-string, boolean, `None`, and duration literals
   - ordinary strings accept matching single or double quotes with shared escapes
   - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
@@ -221,10 +227,11 @@ The current compiler supports these expression forms:
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
 - `try expr`
-- parenthesized expressions
+- parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block
-  - existing comma-separated forms still reject trailing commas
+  - ordinary comma-separated forms still reject trailing commas; singleton
+    tuples require one comma
   - backslashes and physical newlines inside ordinary/f-strings do not
     continue source
 

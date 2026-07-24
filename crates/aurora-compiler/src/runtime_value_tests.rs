@@ -23,7 +23,7 @@ use super::{
     ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
     RangeValue, RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
     MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
@@ -77,6 +77,32 @@ fn assert_cast_source_type(value: Value, expected_source: &str) {
 
 fn assert_value_equals_clone(value: Value) {
     assert_eq!(value, value.clone());
+}
+
+#[test]
+fn tuple_values_preserve_type_metadata_equality_and_rendering() {
+    let pair = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int64"), Type::named("String")],
+        elements: vec![
+            Value::Int(IntegerValue::from_signed(7)),
+            Value::String("seven".to_string()),
+        ],
+    });
+    assert_value_equals_clone(pair.clone());
+    assert_eq!(pair.render(), "(7, seven)");
+
+    let singleton = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("bool")],
+        elements: vec![Value::Bool(true)],
+    });
+    assert_eq!(singleton.render(), "(true,)");
+
+    let empty = Value::Tuple(TupleValue {
+        element_types: Vec::new(),
+        elements: Vec::new(),
+    });
+    assert_eq!(empty.render(), "()");
+    assert_ne!(pair, singleton);
 }
 
 fn runtime_bytes(bytes: &[u8]) -> Value {
@@ -1705,6 +1731,21 @@ fn cast_numeric_value_covers_success_and_failure_paths() {
     assert!(non_numeric
         .message
         .contains("casts are only supported between numeric types"));
+
+    let tuple_cast = cast_numeric_value(
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64")],
+            elements: vec![Value::Int(IntegerValue::from_signed(1))],
+        }),
+        &Type::named("int64"),
+        Some(Span::new(3, 7)),
+    )
+    .expect_err("tuples are structural values, not numeric cast sources");
+    assert_eq!(
+        tuple_cast.message,
+        "casts are only supported between numeric types, found `tuple` and `int64`"
+    );
+    assert_eq!(tuple_cast.span, Some(Span::new(3, 7)));
 
     let integer_to_non_numeric = cast_numeric_value(
         Value::Int(IntegerValue::from_signed(5)),
@@ -4134,7 +4175,8 @@ fn value_equality_and_render_cover_collection_shapes() {
 }
 
 #[test]
-fn nested_queue_producer_registration_walks_collections_instances_and_variants() {
+fn nested_queue_producer_registration_walks_tuples_collections_instances_and_variants() {
+    let queue_in_tuple = ChannelValue::new();
     let queue_in_vec = ChannelValue::new();
     let queue_in_set = ChannelValue::new();
     let queue_in_map_key = ChannelValue::new();
@@ -4144,6 +4186,10 @@ fn nested_queue_producer_registration_walks_collections_instances_and_variants()
     let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
 
     let nested_values = [
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("Queue")],
+            elements: vec![Value::Channel(queue_in_tuple.clone())],
+        }),
         Value::Vec(VecValue {
             element_type: Type::named("Queue"),
             elements: vec![Value::Channel(queue_in_vec.clone())],
@@ -4178,6 +4224,7 @@ fn nested_queue_producer_registration_walks_collections_instances_and_variants()
     queue_in_vec.register_producer_task(&task);
 
     for queue in [
+        queue_in_tuple,
         queue_in_vec,
         queue_in_set,
         queue_in_map_key,

@@ -436,6 +436,18 @@ impl<'a> AnalysisBuilder<'a> {
 
             match stmt {
                 Stmt::Assign(assign) => self.bind_assignment(assign, scope),
+                Stmt::Destructure(destructure) => {
+                    let ty = self
+                        .infer_expr_type(&destructure.value, scope)
+                        .unwrap_or(Type::Unit);
+                    self.insert_scope_target(
+                        &destructure.target,
+                        &ty,
+                        destructure.span.line,
+                        "binding",
+                        scope,
+                    );
+                }
                 Stmt::If(if_stmt) => {
                     for branch in &if_stmt.branches {
                         if block_contains_line(&branch.body, target_line) {
@@ -465,9 +477,9 @@ impl<'a> AnalysisBuilder<'a> {
                         let binding_ty = self
                             .infer_iterable_binding_type(&for_stmt.iterable, scope)
                             .unwrap_or(Type::Unit);
-                        self.insert_scope_binding(
-                            &for_stmt.binding,
-                            binding_ty,
+                        self.insert_scope_target(
+                            &for_stmt.target,
+                            &binding_ty,
                             for_stmt.span.line,
                             "local",
                             scope,
@@ -1152,14 +1164,27 @@ impl<'a> AnalysisBuilder<'a> {
                 let binding_ty = self
                     .infer_iterable_binding_type(&for_stmt.iterable, scope)
                     .unwrap_or(Type::Unit);
-                self.bind_named_value(
-                    &for_stmt.binding,
-                    binding_ty,
+                self.bind_target_value(
+                    &for_stmt.target,
+                    &binding_ty,
                     for_stmt.span.line,
                     "local",
                     &mut body_scope,
                 );
                 self.visit_stmts(&for_stmt.body, &mut body_scope);
+            }
+            Stmt::Destructure(destructure) => {
+                self.visit_expr(&destructure.value, scope);
+                let ty = self
+                    .infer_expr_type(&destructure.value, scope)
+                    .unwrap_or(Type::Unit);
+                self.bind_target_value(
+                    &destructure.target,
+                    &ty,
+                    destructure.span.line,
+                    "binding",
+                    scope,
+                );
             }
             Stmt::With(with_stmt) => {
                 self.visit_expr(&with_stmt.value, scope);
@@ -1230,27 +1255,11 @@ impl<'a> AnalysisBuilder<'a> {
         scrutinee_type: Option<&Type>,
         scope: &mut BTreeMap<String, BindingInfo>,
     ) {
-        let Pattern::Variant(variant) = &arm.pattern else {
-            return;
-        };
-        let Some(binding_name) = variant
-            .subpatterns
-            .iter()
-            .find_map(|pattern| match pattern {
-                Pattern::Binding(binding) => Some(binding.name.as_str()),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        let binding_ty = self
-            .match_binding_type(
-                scrutinee_type,
-                variant.enum_name.as_deref(),
-                &variant.variant_name,
-            )
-            .unwrap_or(Type::Unit);
-        self.bind_named_value(binding_name, binding_ty, arm.span.line, "local", scope);
+        let mut bindings = Vec::new();
+        self.collect_match_pattern_bindings(&arm.pattern, scrutinee_type, &mut bindings);
+        for (name, ty, line) in bindings {
+            self.bind_named_value(&name, ty, line, "local", scope);
+        }
     }
 
     fn bind_match_arm_scope(
@@ -1259,44 +1268,103 @@ impl<'a> AnalysisBuilder<'a> {
         scrutinee_type: Option<&Type>,
         scope: &mut BTreeMap<String, BindingInfo>,
     ) {
-        let Pattern::Variant(variant) = &arm.pattern else {
-            return;
-        };
-        let Some(binding_name) = variant
-            .subpatterns
-            .iter()
-            .find_map(|pattern| match pattern {
-                Pattern::Binding(binding) => Some(binding.name.as_str()),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        let binding_ty = self
-            .match_binding_type(
-                scrutinee_type,
-                variant.enum_name.as_deref(),
-                &variant.variant_name,
-            )
-            .unwrap_or(Type::Unit);
-        self.insert_scope_binding(binding_name, binding_ty, arm.span.line, "local", scope);
+        let mut bindings = Vec::new();
+        self.collect_match_pattern_bindings(&arm.pattern, scrutinee_type, &mut bindings);
+        for (name, ty, line) in bindings {
+            self.insert_scope_binding(&name, ty, line, "local", scope);
+        }
+    }
+
+    fn collect_match_pattern_bindings(
+        &self,
+        pattern: &Pattern,
+        expected_type: Option<&Type>,
+        bindings: &mut Vec<(String, Type, usize)>,
+    ) {
+        match pattern {
+            Pattern::Binding(binding) => bindings.push((
+                binding.name.clone(),
+                expected_type.cloned().unwrap_or(Type::Unit),
+                binding.span.line,
+            )),
+            Pattern::Tuple(tuple) => {
+                let element_types = match expected_type {
+                    Some(Type::Tuple(elements)) => Some(elements.as_slice()),
+                    _ => None,
+                };
+                for (index, element) in tuple.elements.iter().enumerate() {
+                    self.collect_match_pattern_bindings(
+                        element,
+                        element_types.and_then(|types| types.get(index)),
+                        bindings,
+                    );
+                }
+            }
+            Pattern::Variant(variant) => {
+                let payload_types = self.match_binding_types(
+                    expected_type,
+                    variant.enum_name.as_deref(),
+                    &variant.variant_name,
+                );
+                for (index, subpattern) in variant.subpatterns.iter().enumerate() {
+                    self.collect_match_pattern_bindings(
+                        subpattern,
+                        payload_types.get(index),
+                        bindings,
+                    );
+                }
+            }
+            Pattern::Literal(_) | Pattern::Wildcard(_) => {}
+        }
     }
 
     fn visit_match_arm_pattern(&mut self, arm: &MatchArm, scrutinee_type: Option<&Type>) {
-        let Pattern::Variant(variant) = &arm.pattern else {
-            return;
-        };
-        if let Some(resolved) = self.resolve_match_variant(scrutinee_type, variant) {
-            if let Some(range) = self.find_match_variant_range(arm.span.line, variant) {
-                self.push_occurrence(range, resolved.hover, resolved.definition);
-            }
-        }
-        if let Some(enum_name) = &variant.enum_name {
-            if let Some(resolved_enum) = self.resolve_match_variant_enum(enum_name) {
-                if let Some(range) = self.find_match_enum_range(arm.span.line, enum_name) {
-                    self.push_occurrence(range, resolved_enum.hover, resolved_enum.definition);
+        self.visit_match_pattern_occurrences(&arm.pattern, scrutinee_type);
+    }
+
+    fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
+        match pattern {
+            Pattern::Tuple(tuple) => {
+                let element_types = match expected_type {
+                    Some(Type::Tuple(elements)) => Some(elements.as_slice()),
+                    _ => None,
+                };
+                for (index, element) in tuple.elements.iter().enumerate() {
+                    self.visit_match_pattern_occurrences(
+                        element,
+                        element_types.and_then(|types| types.get(index)),
+                    );
                 }
             }
+            Pattern::Variant(variant) => {
+                if let Some(resolved) = self.resolve_match_variant(expected_type, variant) {
+                    if let Some(range) = self.find_match_variant_range(variant.span.line, variant) {
+                        self.push_occurrence(range, resolved.hover, resolved.definition);
+                    }
+                }
+                if let Some(enum_name) = &variant.enum_name {
+                    if let Some(resolved_enum) = self.resolve_match_variant_enum(enum_name) {
+                        if let Some(range) =
+                            self.find_match_enum_range(variant.span.line, enum_name)
+                        {
+                            self.push_occurrence(
+                                range,
+                                resolved_enum.hover,
+                                resolved_enum.definition,
+                            );
+                        }
+                    }
+                }
+                let payload_types = self.match_binding_types(
+                    expected_type,
+                    variant.enum_name.as_deref(),
+                    &variant.variant_name,
+                );
+                for (index, subpattern) in variant.subpatterns.iter().enumerate() {
+                    self.visit_match_pattern_occurrences(subpattern, payload_types.get(index));
+                }
+            }
+            Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => {}
         }
     }
 
@@ -1327,6 +1395,27 @@ impl<'a> AnalysisBuilder<'a> {
             },
         );
         self.push_occurrence(definition.clone(), hover, Some(definition));
+    }
+
+    fn bind_target_value(
+        &mut self,
+        target: &crate::ast::BindingTarget,
+        ty: &Type,
+        line: usize,
+        kind: &str,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match (target, ty) {
+            (crate::ast::BindingTarget::Name { name, .. }, ty) => {
+                self.bind_named_value(name, ty.clone(), line, kind, scope)
+            }
+            (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
+                for (element, element_ty) in elements.iter().zip(element_types) {
+                    self.bind_target_value(element, element_ty, line, kind, scope);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn visit_expr(&mut self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) {
@@ -1371,7 +1460,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
-            ExprKind::List(elements) | ExprKind::Set(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
                     self.visit_expr(element, scope);
                 }
@@ -2322,16 +2411,24 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
-        if ty.name == "None" {
+        let crate::ast::TypeRefKind::Named { name, args } = &ty.kind else {
+            return Type::Tuple(
+                ty.elements()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|element| self.lower_analysis_type_ref(element))
+                    .collect(),
+            );
+        };
+        if name == "None" {
             return Type::Unit;
         }
-        let name = match ty.name.as_str() {
+        let name = match name.as_str() {
             "str" => "String",
             "int" => "int64",
             name => name,
         };
-        let args = ty
-            .args
+        let args = args
             .iter()
             .map(|arg| self.lower_analysis_type_ref(arg))
             .collect::<Vec<_>>();
@@ -2381,6 +2478,15 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::Tuple(elements) => Some(Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| {
+                        self.infer_expr_type(element, scope)
+                            .unwrap_or(Type::named("Unknown"))
+                    })
+                    .collect(),
+            )),
             ExprKind::List(elements) => Some(Type::Named(
                 "Vec".to_string(),
                 vec![elements
@@ -2508,12 +2614,20 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => self
                 .resolve_member_expr(object, field, scope)
                 .and_then(|member| member.ty),
-            ExprKind::Index { object, .. } => {
+            ExprKind::Index { object, index } => {
                 self.infer_expr_type(object, scope)
-                    .and_then(|ty| match base_type_name(&ty) {
-                        "Vec" => ty.type_arguments().first().cloned(),
-                        "Map" => ty.type_arguments().get(1).cloned(),
-                        _ => None,
+                    .and_then(|ty| match &ty {
+                        Type::Tuple(elements) => match &index.kind {
+                            ExprKind::Int(value) => usize::try_from(*value)
+                                .ok()
+                                .and_then(|index| elements.get(index).cloned()),
+                            _ => None,
+                        },
+                        _ => match base_type_name(&ty) {
+                            "Vec" => ty.type_arguments().first().cloned(),
+                            "Map" => ty.type_arguments().get(1).cloned(),
+                            _ => None,
+                        },
                     })
             }
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
@@ -2699,27 +2813,64 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    #[cfg(test)]
     fn match_binding_type(
         &self,
         scrutinee_type: Option<&Type>,
         enum_name: Option<&str>,
         variant_name: &str,
     ) -> Option<Type> {
+        self.match_binding_types(scrutinee_type, enum_name, variant_name)
+            .into_iter()
+            .next()
+    }
+
+    fn match_binding_types(
+        &self,
+        scrutinee_type: Option<&Type>,
+        enum_name: Option<&str>,
+        variant_name: &str,
+    ) -> Vec<Type> {
         if let Some(ty) = scrutinee_type {
             match (base_type_name(ty), variant_name) {
-                ("Option", "Some") => return ty.type_arguments().first().cloned(),
-                ("Result", "Ok") => return ty.type_arguments().first().cloned(),
-                ("Result", "Err") => return ty.type_arguments().get(1).cloned(),
+                ("Option", "Some") => {
+                    return ty.type_arguments().first().cloned().into_iter().collect()
+                }
+                ("Result", "Ok") => {
+                    return ty.type_arguments().first().cloned().into_iter().collect()
+                }
+                ("Result", "Err") => {
+                    return ty.type_arguments().get(1).cloned().into_iter().collect()
+                }
                 ("SendError", "Closed" | "Cancelled") => {
-                    return ty.type_arguments().first().cloned()
+                    return ty.type_arguments().first().cloned().into_iter().collect()
                 }
                 _ => {}
             }
         }
 
-        self.resolve_named_enum_info(enum_name?)
-            .and_then(|info| info.variants.get(variant_name))
-            .and_then(|variant| variant.payloads.first().map(|payload| payload.ty.clone()))
+        let Some(enum_name) = enum_name.or_else(|| scrutinee_type.map(base_type_name)) else {
+            return Vec::new();
+        };
+        let Some(info) = self.resolve_named_enum_info(enum_name) else {
+            return Vec::new();
+        };
+        let Some(variant) = info.variants.get(variant_name) else {
+            return Vec::new();
+        };
+        let substitutions = scrutinee_type
+            .map(TypeExt::type_arguments)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .zip(info.decl.type_params.iter().cloned())
+            .map(|(ty, name)| (name, ty))
+            .collect();
+        variant
+            .payloads
+            .iter()
+            .map(|payload| crate::sema::substitute_type(&payload.ty, &substitutions))
+            .collect()
     }
 
     fn push_occurrence(
@@ -2763,6 +2914,27 @@ impl<'a> AnalysisBuilder<'a> {
                 hover,
             },
         );
+    }
+
+    fn insert_scope_target(
+        &self,
+        target: &crate::ast::BindingTarget,
+        ty: &Type,
+        line: usize,
+        kind: &str,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match (target, ty) {
+            (crate::ast::BindingTarget::Name { name, .. }, ty) => {
+                self.insert_scope_binding(name, ty.clone(), line, kind, scope)
+            }
+            (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
+                for (element, element_ty) in elements.iter().zip(element_types) {
+                    self.insert_scope_target(element, element_ty, line, kind, scope);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn find_identifier_range(&self, line_number: usize, name: &str) -> Option<AnalysisRange> {
@@ -3053,18 +3225,20 @@ fn is_identifier_continue(ch: char) -> bool {
 }
 
 fn lower_type_ref(ty: &TypeRef) -> Type {
-    if ty.name == "None" {
-        return Type::Unit;
+    match &ty.kind {
+        crate::ast::TypeRefKind::Tuple(elements) => {
+            Type::Tuple(elements.iter().map(lower_type_ref).collect())
+        }
+        crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
+        crate::ast::TypeRefKind::Named { name, args } => {
+            let name = match name.as_str() {
+                "str" => "String",
+                "int" => "int64",
+                name => name,
+            };
+            Type::Named(name.to_string(), args.iter().map(lower_type_ref).collect())
+        }
     }
-    let name = match ty.name.as_str() {
-        "str" => "String",
-        "int" => "int64",
-        name => name,
-    };
-    Type::Named(
-        name.to_string(),
-        ty.args.iter().map(lower_type_ref).collect(),
-    )
 }
 
 fn base_type_name(ty: &Type) -> &str {
@@ -3072,6 +3246,7 @@ fn base_type_name(ty: &Type) -> &str {
         Type::Unit => "None",
         Type::Module(name) => name.as_str(),
         Type::TypeParam(name) => name.as_str(),
+        Type::Tuple(_) => "tuple",
         Type::Named(name, _) => name.as_str(),
     }
 }
@@ -3086,6 +3261,7 @@ impl TypeExt for Type {
             Type::Unit => &[],
             Type::Module(_) => &[],
             Type::TypeParam(_) => &[],
+            Type::Tuple(elements) => elements.as_slice(),
             Type::Named(_, args) => args.as_slice(),
         }
     }
@@ -3845,6 +4021,7 @@ fn block_contains_line(stmts: &[Stmt], line: usize) -> bool {
 fn stmt_start_line(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Assign(assign) => assign.span.line,
+        Stmt::Destructure(destructure) => destructure.span.line,
         Stmt::Assert(assert_stmt) => assert_stmt.span.line,
         Stmt::Return(ret) => ret.span.line,
         Stmt::If(if_stmt) => if_stmt.span.line,
@@ -3862,6 +4039,7 @@ fn stmt_start_line(stmt: &Stmt) -> usize {
 fn stmt_end_line(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Assign(assign) => assign.span.line,
+        Stmt::Destructure(destructure) => destructure.span.line,
         Stmt::Assert(assert_stmt) => assert_stmt.span.line,
         Stmt::Return(ret) => ret.span.line,
         Stmt::If(if_stmt) => {

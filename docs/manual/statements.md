@@ -71,7 +71,17 @@ counts["ready"] = 2
 user.profile.name = "Ada"
 ```
 
-Calls cannot occur in an assignment target. Aurora has no tuple or destructuring assignment.
+Calls cannot occur in a place-assignment target. A tuple unpack target contains
+only names and recursively parenthesized name targets:
+
+    left, right = pair
+    name, (x, y) = record
+
+The right side is evaluated once. Its exact tuple shape and corresponding
+element types must match the target. A top-level comma distinguishes unpacking
+from an expression; tuple value expressions themselves require parentheses.
+Tuple unpacking uses plain `=`, not a type annotation, leading `mut`, compound
+assignment, member leaf, or index leaf.
 
 A type annotation is allowed only on a simple-name target. `mut` also belongs only to a new simple-name binding. These forms are invalid:
 
@@ -203,11 +213,16 @@ Moving a non-copy outer value for the first time inside a repeatable loop is rej
 
 ## `for` Iteration
 
-A `for` statement binds one name to each value from an iterable:
+A `for` statement binds one name or recursively unpacks one tuple target for
+each value from an iterable:
 
 ```python
 for value in values:
     print(value)
+
+for name, count in records:
+    print(name)
+    print(count)
 ```
 
 Use `for value in own values:` when the loop deliberately consumes a `Vec` or
@@ -215,7 +230,9 @@ Use `for value in own values:` when the loop deliberately consumes a `Vec` or
 loop-private source at entry. Reinitializing the consumed `values` binding in
 the body does not switch or truncate that active iteration.
 
-The target is one identifier; tuple/destructuring loop targets are not implemented. The loop binding is local to the body, does not escape, and cannot shadow a name already visible in the same scope.
+Every target leaf is local to the body, does not escape, and cannot shadow a
+name already visible in the same scope. A tuple target must match the yielded
+tuple shape exactly.
 
 Maintained iterable forms include:
 
@@ -231,6 +248,12 @@ Maintained iterable forms include:
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in borrow set:` | Explicit form of shared iteration. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
+
+When an iterable yields tuples, bare/shared collection iteration gives
+non-copy tuple leaves shared provenance; `own` collection iteration gives
+owned leaves; and bare Queue iteration receives an owned item and gives owned
+leaves. `borrow mut` iteration with a tuple target is rejected because the
+minimal tuple surface has no recursive element writeback.
 
 `for value in borrow mut set:` is not supported in Aurora 0.1. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
@@ -277,7 +300,13 @@ Every statement arm contains an indented suite. Inline statement arms such as `c
 
 Matches over enums and booleans must be exhaustive unless `_` covers the remainder. Integer, float, and string literal matches require `_` because their value spaces are open. Duplicate, unreachable, type-incompatible, or wrong-arity patterns are rejected.
 
-`match value` may consume a non-copy scrutinee. `match borrow value` retains ownership and exposes shared payload access. `match borrow mut value` permits payload mutation and writes the reconstructed enum value back to the matched mutable place on normal arm exit. See [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
+`match value` may consume a non-copy scrutinee. This includes a non-copy tuple,
+which is consumed as one whole value and unpacked into owned pattern bindings.
+`match borrow value` retains ownership and exposes shared enum-payload or tuple
+leaf access. `match borrow mut value` permits enum-payload mutation and
+writeback, but a tuple pattern is rejected because recursive mutable tuple
+writeback is not part of the minimal surface. See
+[Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
 
 ## `with` And Scoped Cleanup
 
@@ -472,8 +501,8 @@ direct lowering is contained rather than silently given different semantics.
 
 ## Limits And Implementation-Defined Behavior
 
-Suites require a real statement, loop targets are one identifier, loop `else`
-is unavailable, statement match arms cannot be inline, a statement may span
+Suites require a real statement, loop `else` is unavailable, statement match
+arms cannot be inline, a statement may span
 physical lines only through an open `(`, `[`, or `{`, backslash continuation is
 unavailable, and items cannot nest in suites. Range ownership
 modifiers are accepted but have no effect on copy `int32` iteration as recorded
@@ -483,7 +512,7 @@ above. No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression, return, and assertion statements,
 conditionals, loops, match, scoped cleanup, `pass`, imports, and entry-module
-top-level execution are implemented as described. Destructuring assignment or
-loop targets, loop `else`, exception statements, `yield`, `raise`, `async`, and
-nested declarations are unavailable; `try` remains an expression over
-`Result`.
+top-level execution are implemented as described. Tuple assignment/loop
+targets are Provisional under ADR-0026. Class/collection destructuring, loop
+`else`, exception statements, `yield`, `raise`, `async`, and nested
+declarations are unavailable; `try` remains an expression over `Result`.

@@ -16,12 +16,15 @@ The grammar uses an EBNF-style notation:
 
 `NEWLINE`, `INDENT`, `DEDENT`, and `EOF` are layout tokens produced by the lexer. `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`, `FSTRING`, and `BOOLEAN` are lexical tokens described below.
 
-Comma-separated source lists do not accept a trailing comma unless a future grammar explicitly adds one.
+Comma-separated source lists do not accept a trailing comma unless their
+production explicitly adds one. The singleton tuple forms `(value,)`, `(T,)`,
+and `(pattern,)` require their one comma; multi-element tuples do not accept a
+trailing comma.
 
 `NEWLINE` in the productions means a logical newline. A physical newline
 suppressed inside an open `(`, `[`, or `{` never reaches this grammar.
 Delimiter continuation changes token formation, not the expression
-productions; existing comma-separated source lists still reject a trailing comma.
+productions; it does not add a trailing comma to any list form.
 
 ## Lexical Grammar
 
@@ -132,7 +135,8 @@ trailing comma.
 ->
 ```
 
-There is no semicolon, tuple punctuation, assignment expression, exponentiation, unary plus, bitwise operator, lambda arrow, or conditional-expression operator.
+There is no semicolon, assignment expression, exponentiation, unary plus,
+bitwise operator, lambda arrow, or conditional-expression operator.
 
 ## Modules And Imports
 
@@ -171,11 +175,18 @@ item
 
 ```ebnf
 type
-    = [ "indirect" ], identifier-path,
-      [ "[", type-list, "]" ],
+    = [ "indirect" ], type-primary,
       [ "?" ] ;
 
+type-primary
+    = identifier-path, [ "[", type-list, "]" ]
+    | tuple-type ;
+
 type-list = type, { ",", type } ;
+
+tuple-type
+    = "(", type, ",", ")"
+    | "(", type, ",", type, { ",", type }, ")" ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -188,7 +199,13 @@ bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
 
-`T?` denotes `Option[T]`. Type and type-parameter lists are nonempty when brackets are present and do not accept trailing commas. `indirect` applies to the complete type reference that follows and is statically valid only where the recursive-field rules permit it.
+`T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
+type-parameter lists are nonempty when brackets are present and do not accept
+trailing commas. `(T,)` is a singleton tuple type; `(T)` is not a type. `()`
+and a trailing comma on a multi-element tuple type are rejected. Although the
+grammar places `indirect` before any type primary, it is statically valid only
+on the complete named type reference where recursive-field rules permit it;
+an `indirect` tuple type is rejected.
 
 ## Classes
 
@@ -340,11 +357,26 @@ assignment-statement
     = [ "mut" ], assignment-target,
       [ ":", type ],
       assignment-operator,
-      expression, statement-end ;
+      expression, statement-end
+    | unpack-target, "=", expression, statement-end ;
 
 assignment-target
     = identifier,
       { ".", identifier | "[", expression, "]" } ;
+
+unpack-target
+    = binding-target, ",", binding-target,
+      { ",", binding-target }
+    | "(", binding-target-list, ")" ;
+
+binding-target-list
+    = binding-target, ","
+    | binding-target, ",", binding-target,
+      { ",", binding-target } ;
+
+binding-target
+    = identifier
+    | "(", binding-target-list, ")" ;
 
 assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;
 
@@ -357,11 +389,14 @@ continue-statement   = "continue", NEWLINE ;
 expression-statement = expression, statement-end ;
 ```
 
-An annotation is valid only on a simple-name assignment target. Assignment
-targets cannot contain calls. There is no tuple/destructuring assignment.
-One-line suites are not supported. The optional top-level comma in an
-assertion belongs to `assert-statement`; neither operand consumes it as part of
-a tuple expression.
+An annotation is valid only on a simple-name assignment target. Place
+assignment targets cannot contain calls. An unpack target contains only names
+and recursively parenthesized binding-target lists; it uses plain `=`, has no
+annotation or leading `mut`, and must match one exact tuple shape. The
+top-level comma distinguishes `left, right = pair` from an expression.
+Parentheses group or nest an unpack target. One-line suites are not supported.
+The optional top-level comma in an assertion belongs to `assert-statement`;
+tuple operands must be parenthesized.
 
 ## Conditional And Loop Statements
 
@@ -375,15 +410,20 @@ while-statement
     = "while", expression, ":", NEWLINE, suite ;
 
 for-statement
-    = "for", identifier, "in",
+    = "for", loop-target, "in",
       [ "own" | "borrow", [ "mut" ] ],
       expression, ":", NEWLINE, suite ;
+
+loop-target = identifier | unpack-target ;
 ```
 
-The loop binding is one identifier. Destructuring loop targets and loop `else`
-clauses are not supported. Static semantics resolve the absent modifier by
-iterable kind. Explicit modifiers are rejected for Queue iteration because it
-is a receive operation rather than collection-place traversal.
+The loop target is one identifier or a recursively nested tuple unpack target.
+Tuple leaves inherit the yielded element's ownership provenance. A tuple
+target is rejected with `borrow mut` iteration because the minimal tuple
+surface has no recursive writeback. Loop `else` clauses are not supported.
+Static semantics resolve the absent modifier by iterable kind. Explicit
+modifiers are rejected for Queue iteration because it is a receive operation
+rather than collection-place traversal.
 
 ## `with` Statements
 
@@ -416,6 +456,7 @@ pattern
     | FLOAT
     | INTEGER
     | "-", (INTEGER | FLOAT)
+    | tuple-pattern
     | binding-pattern
     | variant-pattern ;
 
@@ -424,6 +465,11 @@ binding-pattern = IDENT ;
 variant-pattern
     = identifier-path,
       [ "(", [ pattern, { ",", pattern } ], ")" ] ;
+
+tuple-pattern
+    = "(", pattern, ",", ")"
+    | "(", pattern, ",", pattern,
+      { ",", pattern }, ")" ;
 ```
 
 Pattern parsing uses these contextual rules:
@@ -432,8 +478,13 @@ Pattern parsing uses these contextual rules:
 - one unparenthesized, unqualified name beginning with lowercase ASCII or `_` is a binding
 - a dotted name, a capitalized name, or any name followed by parentheses is a variant pattern
 - payload patterns are positional even when the variant declaration used named payload fields
+- a parenthesized comma form is a fixed-arity recursive tuple pattern
 
-There are no guards, alternatives, ranges, collection destructuring, rest patterns, named-payload patterns, duration patterns, or f-string patterns. Statement match arms always contain suites; `case pattern: statement` is not valid.
+There are no guards, alternatives, ranges, collection destructuring, rest
+patterns, named-payload patterns, duration patterns, or f-string patterns.
+`match borrow mut` rejects a tuple pattern because mutable tuple
+reconstruction/writeback is not part of the minimal surface. Statement match
+arms always contain suites; `case pattern: statement` is not valid.
 
 ## Expressions And Precedence
 
@@ -524,7 +575,7 @@ primary-expression
     | BOOLEAN
     | STRING
     | FSTRING
-    | "(", expression, ")"
+    | parenthesized-expression
     | list-literal
     | brace-literal
     | explicit-set-literal ;
@@ -540,9 +591,24 @@ brace-literal
 
 explicit-set-literal
     = "Set", "{", [ expression, { ",", expression } ], "}" ;
+
+parenthesized-expression
+    = "(", expression, ")"
+    | tuple-expression ;
+
+tuple-expression
+    = "(", expression, ",", ")"
+    | "(", expression, ",", expression,
+      { ",", expression }, ")" ;
 ```
 
-`(...)` is grouping, never a tuple. A nonempty brace literal is a set when its first element is not followed by `:`, otherwise it is a map. `{}` parses as an empty map but may be contextually typed as an empty `Set[T]`; `Set{}` is the unambiguous empty-set form.
+`(value)` is grouping and `(value,)` is a singleton tuple. Tuple value
+expressions require parentheses; an unparenthesized comma is accepted only in
+an unpack target. `()` and a trailing comma on a multi-element tuple are
+rejected. A nonempty brace literal is a set when its first element is not
+followed by `:`, otherwise it is a map. `{}` parses as an empty map but may be
+contextually typed as an empty `Set[T]`; `Set{}` is the unambiguous empty-set
+form.
 
 ## Explicit Specialization
 
@@ -600,10 +666,9 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline ordinary strings and f-strings
-- tuples and destructuring
 - lambdas, local item declarations, comprehensions, decorators, and attributes
 - wildcard/aliased/relative import syntax
-- trailing commas
+- ordinary trailing commas other than the required singleton-tuple comma
 - match guards, alternative patterns, and collection patterns
 - call-site `borrow` annotations
 - exception statements, `raise`, and `yield`

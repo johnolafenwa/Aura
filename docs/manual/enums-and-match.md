@@ -146,12 +146,24 @@ Expression arms may also use the inline grammar `case Pattern: expression`; stat
 At the top level of a match arm, Aurora 0.1 supports:
 
 - an enum variant pattern for an enum scrutinee
+- a recursively nested fixed-arity tuple pattern for a tuple scrutinee
 - a supported literal pattern for a scalar scrutinee
 - `_`
 
 A lowercase binding pattern is supported inside enum payload patterns, but a top-level catch-all binding such as `case value:` is not implemented. Use `_` when the whole value is intentionally ignored.
 
 Variant payload patterns must match the exact payload arity. A payload-carrying variant must bind or structurally match all payload positions; a payload-free variant accepts no subpatterns. Nested variant patterns are supported when their payload types are enums.
+
+Tuple patterns use `(left, right)` or singleton `(value,)` syntax and may nest
+other supported patterns:
+
+    match ((1, 2), true):
+        case ((left, right), flag):
+            print(left + right)
+            print(flag)
+
+The tuple arity and recursive shape must match exactly. Empty tuple patterns,
+multi-element trailing commas, and rest/star patterns are rejected.
 
 Each pattern binding is local to that arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
@@ -208,6 +220,11 @@ print("result is still owned")
 ```
 
 `match borrow mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected. A payload binding becomes stale if the exact matched place, its root, or an ancestor field is reassigned; a proven-disjoint sibling-field write remains valid.
+
+For tuple patterns, by-value matching consumes a non-copy tuple as one whole
+value and gives owned leaf bindings. `match borrow` retains the tuple and gives
+shared leaf provenance. `match borrow mut` with a tuple pattern is rejected;
+the minimal tuple surface has no recursive reconstruction and writeback rule.
 
 Borrowed payloads cannot be moved as owned values. Copy payloads are ordinary copies. The complete place and provenance rules are in [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-pattern-matching).
 
@@ -346,5 +363,6 @@ contextual builtin construction, structural copy/move classification,
 statement and expression matches, exhaustiveness, nested enum patterns, scalar
 literal patterns, wildcards, short variants, and borrowed matching are
 implemented for the post-Phase 1.5 surface. Live non-copy borrowed match
-results are reserved for the Phase 6 alias work. Guards, or-patterns, general
-destructuring, and arbitrary predicate patterns are unavailable.
+results are reserved for the Phase 6 alias work. Tuple patterns are Provisional
+under ADR-0026. Guards, or-patterns, class/collection destructuring beyond the
+tuple kernel, and arbitrary predicate patterns are unavailable.

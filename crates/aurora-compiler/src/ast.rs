@@ -1,6 +1,7 @@
 use crate::diag::Span;
 use crate::integer::IntegerValue;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize)]
@@ -164,6 +165,7 @@ pub struct Param {
 #[derive(Clone, Debug, Serialize)]
 pub enum Stmt {
     Assign(AssignStmt),
+    Destructure(DestructureStmt),
     Pass(PassStmt),
     Assert(AssertStmt),
     Return(ReturnStmt),
@@ -200,10 +202,44 @@ pub struct AssignStmt {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct DestructureStmt {
+    pub target: BindingTarget,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub enum AssignTarget {
     Name(String),
     Member { object: Box<Expr>, field: String },
     Index { object: Box<Expr>, index: Box<Expr> },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum BindingTarget {
+    Name {
+        name: String,
+        span: Span,
+    },
+    Tuple {
+        elements: Vec<BindingTarget>,
+        span: Span,
+    },
+}
+
+impl BindingTarget {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Name { span, .. } | Self::Tuple { span, .. } => *span,
+        }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Name { name, .. } => Some(name),
+            Self::Tuple { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -251,9 +287,16 @@ pub struct MatchExprArm {
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
     Variant(VariantPattern),
+    Tuple(TuplePattern),
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TuplePattern {
+    pub elements: Vec<Pattern>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -284,13 +327,31 @@ pub enum LiteralPatternKind {
     String(String),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct ForStmt {
-    pub binding: String,
+    pub target: BindingTarget,
     pub iterable: Expr,
     pub borrow_mode: Option<ReceiverKind>,
     pub body: Vec<Stmt>,
     pub span: Span,
+}
+
+impl Serialize for ForStmt {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("ForStmt", 5)?;
+        match &self.target {
+            BindingTarget::Name { name, .. } => state.serialize_field("binding", name)?,
+            BindingTarget::Tuple { .. } => state.serialize_field("target", &self.target)?,
+        }
+        state.serialize_field("iterable", &self.iterable)?;
+        state.serialize_field("borrow_mode", &self.borrow_mode)?;
+        state.serialize_field("body", &self.body)?;
+        state.serialize_field("span", &self.span)?;
+        state.end()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -342,6 +403,7 @@ pub enum ExprKind {
     Bool(bool),
     String(String),
     FString(Vec<FormatPart>),
+    Tuple(Vec<Expr>),
     List(Vec<Expr>),
     Set(Vec<Expr>),
     Map(Vec<MapEntryExpr>),
@@ -427,11 +489,76 @@ pub enum FormatPart {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum TypeRefKind {
+    Named { name: String, args: Vec<TypeRef> },
+    Tuple(Vec<TypeRef>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeRef {
-    pub name: String,
-    pub args: Vec<TypeRef>,
+    pub kind: TypeRefKind,
     pub indirect: bool,
     pub span: Span,
+}
+
+impl Serialize for TypeRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.kind {
+            TypeRefKind::Named { name, args } => {
+                let mut state = serializer.serialize_struct("TypeRef", 4)?;
+                state.serialize_field("name", name)?;
+                state.serialize_field("args", args)?;
+                state.serialize_field("indirect", &self.indirect)?;
+                state.serialize_field("span", &self.span)?;
+                state.end()
+            }
+            TypeRefKind::Tuple(elements) => {
+                let mut state = serializer.serialize_struct("TupleTypeRef", 3)?;
+                state.serialize_field("elements", elements)?;
+                state.serialize_field("indirect", &self.indirect)?;
+                state.serialize_field("span", &self.span)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl TypeRef {
+    pub fn named(name: impl Into<String>, args: Vec<TypeRef>, indirect: bool, span: Span) -> Self {
+        Self {
+            kind: TypeRefKind::Named {
+                name: name.into(),
+                args,
+            },
+            indirect,
+            span,
+        }
+    }
+
+    pub fn tuple(elements: Vec<TypeRef>, indirect: bool, span: Span) -> Self {
+        Self {
+            kind: TypeRefKind::Tuple(elements),
+            indirect,
+            span,
+        }
+    }
+
+    pub fn named_parts(&self) -> Option<(&str, &[TypeRef])> {
+        match &self.kind {
+            TypeRefKind::Named { name, args } => Some((name, args)),
+            TypeRefKind::Tuple(_) => None,
+        }
+    }
+
+    pub fn elements(&self) -> Option<&[TypeRef]> {
+        match &self.kind {
+            TypeRefKind::Tuple(elements) => Some(elements),
+            TypeRefKind::Named { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]

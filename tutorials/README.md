@@ -40,6 +40,7 @@ When the implemented language surface changes, update these in the same pass:
 23. [22-bytes.md](22-bytes.md)
 24. [23-assertions.md](23-assertions.md)
 25. [24-multiline-expressions.md](24-multiline-expressions.md)
+26. [25-tuples.md](25-tuples.md)
 
 ## Scope Today
 
@@ -74,8 +75,11 @@ The current tutorial set covers:
   source-located `AU4001` failures, and file-level `aura test` behavior
 - delimiter-based newline continuation inside `()`, `[]`, and `{}`, including
   multiline signatures, calls, grouping, indexing, and collection literals;
-  trailing commas, backslash continuation, and multiline f-strings remain
-  unavailable
+  ordinary trailing commas, backslash continuation, and multiline f-strings
+  remain unavailable (singleton tuples require their one comma)
+- fixed structural tuples with parenthesized value/type syntax, recursive
+  assignment/loop unpacking and patterns, whole-source move behavior, and
+  copy-only constant indexing
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

@@ -1,0 +1,7 @@
+def main():
+    pair = (1, 2)
+    singleton = (9,)
+
+    print(f"{pair}")
+    print(f"{singleton}")
+    print(pair[1])

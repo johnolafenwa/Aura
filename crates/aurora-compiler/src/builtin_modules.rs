@@ -16,22 +16,19 @@ fn builtin_span() -> Span {
 }
 
 fn type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args,
-        indirect: false,
-        span: builtin_span(),
-    }
+    TypeRef::named(name, args, false, builtin_span())
 }
 
 fn lower_type_ref(type_ref: &TypeRef) -> Type {
-    if type_ref.name == "None" {
-        return Type::Unit;
+    match &type_ref.kind {
+        crate::ast::TypeRefKind::Tuple(elements) => {
+            Type::Tuple(elements.iter().map(lower_type_ref).collect())
+        }
+        crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
+        crate::ast::TypeRefKind::Named { name, args } => {
+            Type::Named(name.clone(), args.iter().map(lower_type_ref).collect())
+        }
     }
-    Type::Named(
-        type_ref.name.to_string(),
-        type_ref.args.iter().map(lower_type_ref).collect(),
-    )
 }
 
 fn value_param(name: &str, ty: TypeRef) -> Param {

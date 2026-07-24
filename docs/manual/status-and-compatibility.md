@@ -11,7 +11,12 @@ The maintained language contract consists of:
 3. the compiler, runtime, CLI, and language server as conforming implementations
 4. categorized examples and Learn chapters as teaching material
 
-The Manual and executable suite are expected to agree. A divergence is a project defect, not an alternate language rule. The historical proposal is design history. Features mentioned only there—including `Channel`, `select`, detached spawn, tuples, attributes, and registry publishing—are not part of Aurora 0.1.
+The Manual and executable suite are expected to agree. A divergence is a
+project defect, not an alternate language rule. The historical proposal is
+design history. Features mentioned only there—including `Channel`, `select`,
+detached spawn, attributes, and registry publishing—are not part of Aurora
+0.1. Tuples are part of the maintained language only to the exact provisional
+extent recorded by ADR-0026 and [Tuples](/manual/tuples).
 
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 

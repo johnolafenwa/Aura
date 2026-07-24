@@ -153,12 +153,7 @@ fn collect_aurora_files(dir: &PathBuf) -> Vec<PathBuf> {
 }
 
 fn type_ref(name: &str) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-        indirect: false,
-        span: Span::new(1, 1),
-    }
+    TypeRef::named(name, Vec::new(), false, Span::new(1, 1))
 }
 
 fn checked_program(source: &str) -> crate::sema::Program {
@@ -3204,6 +3199,212 @@ fn analysis_records_variant_occurrences_inside_match_patterns() {
 }
 
 #[test]
+fn analysis_records_recursive_tuple_match_bindings_and_body_uses() {
+    let source = [
+        "def inspect(pair: (int32, (bool, String))):",
+        "    match borrow pair:",
+        "        case (left, (ready, text)):",
+        "            print(left)",
+        "            print(ready)",
+        "            print(text)",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (name, ty, use_line) in [
+        ("left", "int32", 3),
+        ("ready", "bool", 4),
+        ("text", "String", 5),
+    ] {
+        let definition = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == 2 && occurrence.hover.contains(&format!("local {name}: {ty}"))
+            })
+            .unwrap_or_else(|| panic!("missing tuple-pattern definition occurrence for `{name}`"));
+        assert_eq!(
+            definition.definition.as_ref().map(|range| range.line),
+            Some(2)
+        );
+
+        let use_occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == use_line
+                    && occurrence.hover.contains(&format!("local {name}: {ty}"))
+            })
+            .unwrap_or_else(|| panic!("missing tuple-pattern use occurrence for `{name}`"));
+        assert_eq!(
+            use_occurrence.definition.as_ref().map(|range| range.line),
+            Some(2)
+        );
+    }
+}
+
+#[test]
+fn analysis_records_enum_occurrences_nested_inside_tuple_patterns() {
+    let source = [
+        "enum Status:",
+        "    Ready(int32)",
+        "    Waiting",
+        "",
+        "def inspect(entry: (Status, bool)):",
+        "    match borrow entry:",
+        "        case (Status.Ready(code), true):",
+        "            print(code)",
+        "        case _:",
+        "            pass",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 6
+            && occurrence.hover.contains("variant Ready")
+            && occurrence.definition.as_ref().map(|range| range.line) == Some(1)
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 6
+            && occurrence.hover.contains("enum Status")
+            && occurrence.definition.as_ref().map(|range| range.line) == Some(0)
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 7
+            && occurrence.hover.contains("local code: int32")
+            && occurrence.definition.as_ref().map(|range| range.line) == Some(6)
+    }));
+}
+
+#[test]
+fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scope() {
+    let source = [
+        "def make() -> (int32, String):",
+        "    return (1, \"one\")",
+        "",
+        "def inspect():",
+        "    pair: (int32, String) = make()",
+        "    left, text = pair",
+        "    coords: (int32, int32) = (2, 3)",
+        "    chosen = coords[1]",
+        "    inferred = (4, \"four\")",
+        "    print(left)",
+        "    print(text.len())",
+        "    print(chosen)",
+        "    print(inferred)",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (name, ty, use_line) in [
+        ("left", "int32", 9),
+        ("text", "String", 10),
+        ("chosen", "int32", 11),
+        ("inferred", "(int64, String)", 12),
+    ] {
+        let occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == use_line
+                    && occurrence.hover.contains(&format!("binding {name}: {ty}"))
+            })
+            .unwrap_or_else(|| panic!("missing typed occurrence for `{name}`"));
+        assert_eq!(
+            occurrence.definition.as_ref().map(|range| range.line),
+            Some(match name {
+                "chosen" => 7,
+                "inferred" => 8,
+                _ => 5,
+            })
+        );
+    }
+
+    let member_line = source
+        .lines()
+        .position(|line| line.contains("text.len"))
+        .expect("source should contain String member access");
+    let character = source
+        .lines()
+        .nth(member_line)
+        .and_then(|line| line.find('.'))
+        .map(|index| index + 1)
+        .expect("source should contain a member dot");
+    let completions = complete_source(&source, member_line, character, Some('.'))
+        .expect("tuple-destructured String completion should succeed");
+    assert!(
+        completions
+            .iter()
+            .any(|completion| completion.name == "len"),
+        "tuple destructuring must place element types in the completion scope"
+    );
+
+    let tuple_type = Type::Tuple(vec![Type::named("int32"), Type::named("String")]);
+    assert_eq!(base_type_name(&tuple_type), "tuple");
+    assert_eq!(
+        tuple_type.type_arguments(),
+        &[Type::named("int32"), Type::named("String")]
+    );
+}
+
+#[test]
+fn analysis_preserves_tuple_recovery_for_invalid_patterns_and_grouped_indices() {
+    let pattern_source = [
+        "def inspect(flag: bool):",
+        "    match flag:",
+        "        case (_, true):",
+        "            pass",
+    ]
+    .join("\n");
+    let pattern_analysis = analyze_source(&pattern_source);
+    assert!(
+        pattern_analysis.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("tuple pattern requires a tuple scrutinee")
+        }),
+        "{:?}",
+        pattern_analysis.diagnostics
+    );
+
+    let index_source = [
+        "def index():",
+        "    pair = (1, 2)",
+        "    offset = 0",
+        "    print(pair[(offset)])",
+    ]
+    .join("\n");
+    let index_analysis = analyze_source(&index_source);
+    assert!(
+        index_analysis.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("tuple indices must be non-negative integer literals")
+        }),
+        "{:?}",
+        index_analysis.diagnostics
+    );
+}
+
+#[test]
 fn analysis_member_assignment_without_source_field_range_does_not_emit_occurrence() {
     let assignment_source = [
         "class Counter:",
@@ -3755,7 +3956,10 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         span: Span::new(6, 5),
     });
     let for_stmt = crate::ast::Stmt::For(crate::ast::ForStmt {
-        binding: "value".to_string(),
+        target: crate::ast::BindingTarget::Name {
+            name: "value".to_string(),
+            span: Span::new(9, 5),
+        },
         iterable: Expr {
             kind: ExprKind::Name("values".to_string()),
             span: Span::new(9, 14),

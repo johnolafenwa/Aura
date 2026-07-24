@@ -1,0 +1,5 @@
+error[AU2003]: tuple indices must be non-negative integer literals
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_index_negative.au:3:16
+  |
+3 |     print(pair[-1])
+  |                ^

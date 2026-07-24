@@ -202,6 +202,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(String),
+    Tuple(TupleValue),
     Vec(VecValue),
     Set(SetValue),
     Map(MapValue),
@@ -285,6 +286,12 @@ impl PartialEq for EnumVariantValue {
 #[derive(Clone, Debug)]
 pub struct VecValue {
     pub element_type: Type,
+    pub elements: Vec<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TupleValue {
+    pub element_types: Vec<Type>,
     pub elements: Vec<Value>,
 }
 
@@ -788,6 +795,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             }
             Value::Bool(_) => "bool".to_string(),
             Value::String(_) => "String".to_string(),
+            Value::Tuple(_) => "tuple".to_string(),
             Value::Vec(_) => "Vec".to_string(),
             Value::Set(_) => "Set".to_string(),
             Value::Map(_) => "Map".to_string(),
@@ -2173,6 +2181,7 @@ impl PartialEq for Value {
             (Value::Float(left), Value::Float(right)) => left == right,
             (Value::Bool(left), Value::Bool(right)) => left == right,
             (Value::String(left), Value::String(right)) => left == right,
+            (Value::Tuple(left), Value::Tuple(right)) => left == right,
             (Value::Vec(left), Value::Vec(right)) => left == right,
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
@@ -2215,6 +2224,20 @@ impl Value {
             Value::Float(value) => render_float(*value),
             Value::Bool(value) => value.to_string(),
             Value::String(value) => value.clone(),
+            Value::Tuple(tuple) => {
+                let mut rendered = String::from("(");
+                for (index, value) in tuple.elements.iter().enumerate() {
+                    if index > 0 {
+                        rendered.push_str(", ");
+                    }
+                    rendered.push_str(&value.render());
+                }
+                if tuple.elements.len() == 1 {
+                    rendered.push(',');
+                }
+                rendered.push(')');
+                rendered
+            }
             Value::Vec(values) => {
                 let mut rendered = String::from("[");
                 for (index, value) in values.elements.iter().enumerate() {
@@ -2400,6 +2423,11 @@ impl ChannelValue {
 pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
         Value::Channel(channel) => queues.push(channel.clone()),
+        Value::Tuple(tuple) => {
+            for element in &tuple.elements {
+                collect_queue_values(element, queues);
+            }
+        }
         Value::Vec(vector) => {
             for element in &vector.elements {
                 collect_queue_values(element, queues);

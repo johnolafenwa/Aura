@@ -15,6 +15,7 @@ Current copy categories are:
 - `bool`
 - `Duration`
 - `Queue[T]` and `Task[T]` handles
+- tuples whose every element type is copyable
 - `copy class` values whose fields are copyable
 - user enums whose every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when every payload type is copyable
@@ -32,6 +33,7 @@ print(b)
 
 Move values transfer ownership on by-value use. Current move categories include:
 
+- tuples with at least one move element
 - `String`
 - `Vec[T]`, `Map[K, V]`, and `Set[T]`
 - `random.Rng`
@@ -66,6 +68,12 @@ A non-copy value is consumed when used in an owned position, including:
 - a task-start argument copied or moved into task-owned capture storage
 
 An expression is evaluated before its move is recorded at that boundary. Aurora also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
+
+Unpacking a non-copy tuple is one whole-source move. The target leaves receive
+owned elements, but the source does not become a set of independently reusable
+positional partial-move places. A later use of the source is rejected with the
+ordinary move diagnostic. Unpacking a copy tuple copies its elements and keeps
+the source usable.
 
 ## Borrow Forms
 
@@ -211,6 +219,12 @@ match borrow result:
 
 `match borrow mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the exact scrutinee, its root, or an ancestor field invalidates payload bindings tied to the old value. A write to a proven-disjoint sibling field does not invalidate them.
 
+Tuple patterns follow a smaller rule. A by-value tuple match consumes the
+whole non-copy scrutinee and gives owned leaf bindings. `match borrow` retains
+the tuple and gives shared leaf provenance. Tuple patterns are rejected under
+`match borrow mut`; Aurora does not reconstruct and write back recursive tuple
+targets.
+
 Payload bindings are arm-local and cannot shadow a visible binding. Match typing and exhaustiveness are specified in [Enums And Pattern Matching](/manual/enums-and-match).
 
 ## Borrowed Iteration
@@ -235,6 +249,12 @@ binding; rebinding that source does not switch later receives. All three
 explicit ownership modifiers are rejected. The one-time handle selection is
 also accepted under ADR-0017. See
 [Concurrency](/manual/concurrency).
+
+When an iteration item is a tuple, recursive target leaves inherit the item
+provenance. Shared collection iteration gives shared non-copy leaves, `own`
+collection iteration gives owned leaves, and bare Queue iteration gives owned
+leaves because it receives the item. A tuple target is rejected with
+`borrow mut` iteration; recursive mutable tuple writeback is not defined.
 
 ## Clone
 

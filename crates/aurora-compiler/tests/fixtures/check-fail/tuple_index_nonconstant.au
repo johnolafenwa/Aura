@@ -1,0 +1,4 @@
+def main():
+    pair = (1, 2)
+    index = 0
+    print(pair[index])

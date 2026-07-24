@@ -1,0 +1,38 @@
+enum Maybe:
+    Some(bool)
+    None
+
+def classify(first: bool, second: bool):
+    match (first, second):
+        case (true, _):
+            print("first")
+        case (false, true):
+            print("second")
+        case (false, false):
+            print("neither")
+
+def classify_nested(flag: bool):
+    match ((flag, false),):
+        case ((true, _),):
+            print("nested true")
+        case ((false, _),):
+            print("nested false")
+
+def classify_maybe(value: Maybe):
+    match (value, "payload"):
+        case (Maybe.Some(true), _):
+            print("some true")
+        case (Maybe.Some(false), _):
+            print("some false")
+        case (Maybe.None, _):
+            print("none")
+
+def main():
+    classify(true, false)
+    classify(false, true)
+    classify(false, false)
+    classify_nested(true)
+    classify_nested(false)
+    classify_maybe(Maybe.Some(true))
+    classify_maybe(Maybe.Some(false))
+    classify_maybe(Maybe.None)

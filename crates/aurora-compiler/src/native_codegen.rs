@@ -334,6 +334,9 @@ struct NativeCodegen<'a> {
     cast_float_to_integer: FuncId,
     value_type_matches: FuncId,
     value_has_runtime_type: FuncId,
+    tuple_new: FuncId,
+    tuple_element: FuncId,
+    tuple_take_element: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
@@ -805,6 +808,9 @@ impl<'a> NativeCodegen<'a> {
             cast_float_to_integer => ("aurora_direct_cast_float_to_integer", [types::F64, types::I64, types::I64, types::I64], Some(types::I64)),
             value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
             value_has_runtime_type => ("aurora_direct_value_has_runtime_type", [types::I64], Some(types::I64)),
+            tuple_new => ("aurora_direct_tuple_new", [types::I64, types::I64], Some(types::I64)),
+            tuple_element => ("aurora_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
+            tuple_take_element => ("aurora_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aurora_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1191,6 +1197,9 @@ impl<'a> NativeCodegen<'a> {
             cast_float_to_integer,
             value_type_matches,
             value_has_runtime_type,
+            tuple_new,
+            tuple_element,
+            tuple_take_element,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -1987,6 +1996,15 @@ impl<'a> NativeCodegen<'a> {
         let value_has_runtime_type = self
             .object
             .declare_func_in_func(self.value_has_runtime_type, builder.func);
+        let tuple_new = self
+            .object
+            .declare_func_in_func(self.tuple_new, builder.func);
+        let tuple_element = self
+            .object
+            .declare_func_in_func(self.tuple_element, builder.func);
+        let tuple_take_element = self
+            .object
+            .declare_func_in_func(self.tuple_take_element, builder.func);
         let enum_variant = self
             .object
             .declare_func_in_func(self.enum_variant, builder.func);
@@ -2656,6 +2674,9 @@ impl<'a> NativeCodegen<'a> {
             cast_float_to_integer,
             value_type_matches,
             value_has_runtime_type,
+            tuple_new,
+            tuple_element,
+            tuple_take_element,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -3321,6 +3342,9 @@ struct FunctionCompiler<'a> {
     cast_float_to_integer: cranelift_codegen::ir::FuncRef,
     value_type_matches: cranelift_codegen::ir::FuncRef,
     value_has_runtime_type: cranelift_codegen::ir::FuncRef,
+    tuple_new: cranelift_codegen::ir::FuncRef,
+    tuple_element: cranelift_codegen::ir::FuncRef,
+    tuple_take_element: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
@@ -3868,6 +3892,28 @@ impl<'a> FunctionCompiler<'a> {
                 elements,
                 element_type,
             } => self.compile_vec_literal_for_target(elements, element_type, Some(target)),
+            Rvalue::TupleLiteral {
+                elements,
+                element_types,
+            } => {
+                let tuple_type = match target {
+                    DirectType::Opaque(Type::Tuple(target_elements)) => {
+                        Type::Tuple(target_elements.clone())
+                    }
+                    _ => Type::Tuple(element_types.clone()),
+                };
+                self.compile_tuple_literal(elements, element_types, tuple_type)
+            }
+            Rvalue::TupleElement {
+                tuple,
+                index,
+                element_type,
+            } => self.compile_tuple_element(tuple, *index, element_type),
+            Rvalue::TupleTakeElement {
+                place,
+                index,
+                element_type,
+            } => self.compile_take_tuple_element(place, *index, element_type),
             Rvalue::MapLiteral {
                 entries,
                 key_type,
@@ -6742,6 +6788,101 @@ impl<'a> FunctionCompiler<'a> {
 
     fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Value, Value), String> {
         declare_string_constant(self.object, self.string_data, &mut self.builder, bytes)
+    }
+
+    /// Compiles a tuple literal as one opaque aggregate handle.
+    ///
+    /// Frontend integration calls this from `Rvalue::TupleLiteral`; the
+    /// semantic tuple type is passed explicitly so the opaque result keeps its
+    /// exact structural runtime type. Elements are evaluated in source order,
+    /// coerced to their semantic element types, then transferred into the
+    /// aggregate. Destructive extraction is kept in a separate private-temp
+    /// helper so this path cannot create user-visible partial moves.
+    fn compile_tuple_literal(
+        &mut self,
+        elements: &[Operand],
+        element_types: &[Type],
+        tuple_type: Type,
+    ) -> std::result::Result<ValueRef, String> {
+        debug_assert_eq!(elements.len(), element_types.len());
+        let count = self.builder.ins().iconst(types::I64, elements.len() as i64);
+        let buffer = if elements.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer = self.builder.inst_results(buffer_inst)[0];
+            for (index, (element, element_type)) in elements.iter().zip(element_types).enumerate() {
+                let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+                let value = self.load_operand_for_target(element, &direct_type)?;
+                let value = self.coerce_value(value, &direct_type)?;
+                let value = self.ensure_opaque(value)?;
+                let transferred = self.transfer_owned_opaque_value(&value);
+                let index = self.builder.ins().iconst(types::I64, index as i64);
+                self.builder
+                    .ins()
+                    .call(self.arg_buffer_store_owned, &[buffer, index, transferred]);
+            }
+            buffer
+        };
+        let inst = self.builder.ins().call(self.tuple_new, &[buffer, count]);
+        let tuple =
+            self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), tuple_type.clone());
+        self.tag_opaque_runtime_type(&tuple, &tuple_type)?;
+        Ok(tuple)
+    }
+
+    /// Compiles a constant-index read of a Copy tuple element.
+    ///
+    /// The checker must reject projection when the selected element is
+    /// non-Copy. The runtime returns an independently owned boxed clone, which
+    /// is then coerced back to the element's direct representation.
+    fn compile_tuple_element(
+        &mut self,
+        tuple: &Operand,
+        index: usize,
+        element_type: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        validate_tuple_projection_operand(tuple)?;
+        let tuple = self.load_operand(tuple)?;
+        let tuple = self.ensure_opaque(tuple)?;
+        let index = self.builder.ins().iconst(types::I64, index as i64);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.tuple_element, &[tuple.values[0], index]);
+        let element = self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            element_type.clone(),
+        );
+        let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+        self.coerce_value(element, &direct_type)
+    }
+
+    /// Destructively extracts one element from a private captured tuple.
+    ///
+    /// Lowering must first move the entire user-visible source into a `%t...`
+    /// temporary. This operation may then empty selected slots while recursive
+    /// destructuring proceeds; no public source projection remains live.
+    fn compile_take_tuple_element(
+        &mut self,
+        place: &str,
+        index: usize,
+        element_type: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        validate_tuple_take_place(place)?;
+        let tuple = self.load_place(place)?;
+        let tuple = self.ensure_opaque(tuple)?;
+        let index = self.builder.ins().iconst(types::I64, index as i64);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.tuple_take_element, &[tuple.values[0], index]);
+        let element = self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            element_type.clone(),
+        );
+        let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+        self.coerce_value(element, &direct_type)
     }
 
     fn compile_enum_variant_for_target(
@@ -11313,6 +11454,14 @@ impl<'a> FunctionCompiler<'a> {
             Type::TypeParam(_) => Ok(self.builder.ins().iconst(types::I64, 1)),
             Type::Unit => self.value_matches_type(value, "None"),
             Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
+            Type::Tuple(_) => {
+                let pattern = if runtime_type_is_wildcard(ty) {
+                    render_runtime_type_pattern(ty)
+                } else {
+                    ty.to_string()
+                };
+                self.value_matches_type(value, &pattern)
+            }
             Type::Named(name, args) => {
                 if args.is_empty() {
                     return self.value_matches_type(value, name);
@@ -11761,6 +11910,7 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
     fn type_contains_unknown(ty: &Type) -> bool {
         match ty {
             Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
+            Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
             Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
         }
     }
@@ -11926,6 +12076,41 @@ fn validate_rvalue(
             }
             Ok(())
         }
+        Rvalue::TupleLiteral {
+            elements,
+            element_types,
+        } => {
+            if elements.len() != element_types.len() {
+                return Err(format!(
+                    "direct backend received tuple literal arity {} with {} element types",
+                    elements.len(),
+                    element_types.len()
+                ));
+            }
+            for (element, element_type) in elements.iter().zip(element_types) {
+                ensure_direct_type(element_type, classes, "tuple element")?;
+                validate_operand(element)?;
+            }
+            Ok(())
+        }
+        Rvalue::TupleElement {
+            tuple,
+            element_type,
+            ..
+        } => {
+            validate_tuple_projection_operand(tuple)?;
+            ensure_direct_type(element_type, classes, "tuple element")?;
+            Ok(())
+        }
+        Rvalue::TupleTakeElement {
+            place,
+            element_type,
+            ..
+        } => {
+            validate_tuple_take_place(place)?;
+            ensure_direct_type(element_type, classes, "tuple element")?;
+            Ok(())
+        }
         Rvalue::MapLiteral {
             entries,
             key_type,
@@ -12007,6 +12192,23 @@ fn validate_non_consuming_operand(
     Ok(())
 }
 
+fn validate_tuple_projection_operand(operand: &Operand) -> std::result::Result<(), String> {
+    validate_non_consuming_operand(operand, "tuple indexed access").map_err(|_| {
+        "direct backend refuses consuming tuple projection; indexed access only reads Copy elements"
+            .to_string()
+    })
+}
+
+fn validate_tuple_take_place(place: &str) -> std::result::Result<(), String> {
+    if place.starts_with("%t") {
+        return Ok(());
+    }
+    Err(
+        "destructive tuple extraction is internal to whole-tuple destructuring and requires a private captured temporary"
+            .to_string(),
+    )
+}
+
 fn ensure_direct_type(
     ty: &Type,
     classes: &HashMap<String, MirClass>,
@@ -12034,6 +12236,12 @@ fn direct_type_inner(
         Type::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Type::TypeParam(name) => Some(DirectType::Opaque(Type::TypeParam(name.clone()))),
         Type::Module(path) => Some(DirectType::Opaque(Type::Module(path.clone()))),
+        Type::Tuple(elements) => {
+            for element in elements {
+                direct_type_inner(element, classes, visiting)?;
+            }
+            Some(DirectType::Opaque(Type::Tuple(elements.clone())))
+        }
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
         }
@@ -12097,6 +12305,11 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
         Type::Named(_, args) => {
             for arg in args {
                 collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_type_params_from_type(element, collected);
             }
         }
         Type::Unit | Type::Module(_) => {}
@@ -12533,6 +12746,11 @@ fn infer_rvalue_type(
             "Vec".to_string(),
             vec![element_type.clone()],
         ))),
+        Rvalue::TupleLiteral { element_types, .. } => {
+            Some(DirectType::Opaque(Type::Tuple(element_types.clone())))
+        }
+        Rvalue::TupleElement { element_type, .. }
+        | Rvalue::TupleTakeElement { element_type, .. } => direct_type(element_type, classes),
         Rvalue::MapLiteral {
             key_type,
             value_type,
@@ -13857,6 +14075,23 @@ fn collect_direct_runtime_type_substitutions(
                 collect_direct_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
             }
         }
+        Type::Tuple(pattern_elements) => {
+            let Type::Tuple(actual_elements) = actual else {
+                return;
+            };
+            if pattern_elements.len() != actual_elements.len() {
+                return;
+            }
+            for (pattern_element, actual_element) in
+                pattern_elements.iter().zip(actual_elements.iter())
+            {
+                collect_direct_runtime_type_substitutions(
+                    pattern_element,
+                    actual_element,
+                    substitutions,
+                );
+            }
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -13878,6 +14113,7 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
         Type::TypeParam(_) => true,
         Type::Named(name, _) if name == "Unknown" => true,
         Type::Named(_, args) => args.iter().any(runtime_type_is_wildcard),
+        Type::Tuple(elements) => elements.iter().any(runtime_type_is_wildcard),
         Type::Unit | Type::Module(_) => false,
     }
 }
@@ -13894,6 +14130,17 @@ fn render_runtime_type_pattern(ty: &Type) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Type::Tuple(elements) => {
+            let rendered = elements
+                .iter()
+                .map(render_runtime_type_pattern)
+                .collect::<Vec<_>>();
+            match rendered.as_slice() {
+                [] => "()".to_string(),
+                [element] => format!("({},)", element),
+                _ => format!("({})", rendered.join(", ")),
+            }
+        }
         Type::Unit => "None".to_string(),
         Type::Module(path) => format!("module {path}"),
     }

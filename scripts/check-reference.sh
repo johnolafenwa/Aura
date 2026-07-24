@@ -11,6 +11,7 @@ required_pages=(
   static-semantics
   execution-model
   assertions
+  tuples
   bytes
   json
   randomness
@@ -67,7 +68,7 @@ grep -Fq 'fn retrying_network_worker_runs_with_computed_backoff_on_both_backends
 grep -Fq 'Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline does not' docs/manual/lexical-structure.md
 grep -Fq 'Backslash continuation is not implemented.' docs/manual/lexical-structure.md
 grep -Fq 'Ordinary strings and f-strings remain single-line' docs/manual/lexical-structure.md
-grep -Fq 'existing comma-separated source lists still reject a trailing comma' docs/manual/grammar.md
+grep -Fq 'it does not add a trailing comma to any list form' docs/manual/grammar.md
 grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
 grep -Fq '0025-newline-continuation-and-delimited-layout.md' architecture_docs/decisions/README.md
 test -s examples/basics/multiline_expressions.au
@@ -77,6 +78,20 @@ grep -Fq '[24-multiline-expressions.md]' tutorials/README.md
 grep -Fq 'Delimiter continuation, ignored continuation indentation' docs/manual/conformance.md
 grep -Fq 'compiler bridge analyzes and completes inside continued delimiters' tools/aurora-language-server/test/compiler_bridge.test.js
 grep -Fq 'Aurora newline indentation handles source delimiters' tools/vscode-aurora/test/package.test.js
+grep -Fq 'tuple-expression' docs/manual/grammar.md
+grep -Fq 'tuple-type' docs/manual/grammar.md
+grep -Fq 'unpack-target' docs/manual/grammar.md
+grep -Fq 'tuple-pattern' docs/manual/grammar.md
+grep -Fq 'Unpacking a non-copy tuple consumes the whole source exactly once' docs/manual/tuples.md
+grep -Fq 'Mutable-borrow iteration with a tuple target is rejected.' docs/manual/tuples.md
+grep -Fq 'no empty tuple, multi-element trailing tuple comma, tuple' docs/manual/tuples.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0026-minimal-tuples.md
+grep -Fq '0026-minimal-tuples.md' architecture_docs/decisions/README.md
+test -s examples/basics/tuples.au
+grep -Fq '`tuples.au`' examples/README.md
+grep -Fq 'examples/basics/tuples.au' README.md
+grep -Fq '[25-tuples.md]' tutorials/README.md
+grep -Fq 'the executable `docs/manual/tuples.md` fence' docs/manual/conformance.md
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md
@@ -275,6 +290,13 @@ if rg -U -n 'Newlines are not continuation|ordinary calls remain on one\s+physic
   tutorials \
   docs/learn; then
   echo "reference still describes delimiter continuation as unavailable" >&2
+  exit 1
+fi
+
+if rg -n 'expressions do not include tuples|tuples, callable types|Callable, closure, tuple|tuples and destructuring|Destructuring assignment or loop targets|detached spawn, tuples, attributes|tuple punctuation' \
+  docs/manual \
+  tutorials; then
+  echo "reference still describes the implemented tuple kernel as unavailable" >&2
   exit 1
 fi
 

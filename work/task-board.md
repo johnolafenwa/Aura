@@ -13,9 +13,24 @@ Last updated: 2026-07-24
   observable typed-completion recovery test for an escaped quote inside a
   continued call. No synthetic-coverage test, exclusion, or coverage-only
   production restructuring was added.
-- Remaining work: commit the completed newline-continuation decision; then
-  continue tuples, the remaining Phase 3.5 syntax/library tickets, Phase 4,
-  and V6.
+- Active tuple ticket: the parenthesized fixed-arity tuple implementation,
+  Provisional ADR-0026, normative Manual, maintained example/tutorial, and
+  executable-reference packet are integrated. Compiler, fixture, exact
+  MIR/direct behavior, language-server, reference-integrity, docs-build, and
+  diff checks pass. Product-aware boolean/enum/nested-tuple pattern
+  exhaustiveness and teaching diagnostics for recursive tuple fields are
+  included. Mutable tuple writeback, equality/order, tuple iteration/methods,
+  empty tuples, multi-element trailing commas, and dynamic indexing remain
+  outside this minimal ticket.
+- Exact tuple coverage passes at 62,917/65,489 lines
+  (96.072622883232299%), 4,097/4,225 functions (96.970414201183431%), and
+  92,077/97,666 regions (94.277435340855575%). The closure uses observable
+  diagnostic, exhaustiveness, ownership, import/generic, runtime, and native
+  dispatch behavior only. No synthetic-coverage test or exclusion was added;
+  parser/checker/MIR-validation-proven defensive branches were collapsed with
+  their invariant checks retained and justified in the dated work note.
+- Remaining work: run full CI and commit before conditional expressions and
+  the later Phase 3.5/Phase 4/V6 tickets.
 - Blocking status: there is no user-decision or language-semantics blocker. A transient macOS Code Signing subsystem failure was contained with temporary ad-hoc-signed toolchain copies and an output-signing linker wrapper under `/tmp`; repository binaries were not modified. A timing-based `wait_any` fixture assumption was replaced with an explicit Queue release signal, and the transitive PostCSS advisory was closed by the lockfile-only update from 8.5.10 to 8.5.22; `npm audit` now reports zero vulnerabilities.
 - Continuation policy: continue the authorized Batch 2 work without a duration cap until the scope is complete, the user redirects it, or a genuine external, semantic-decision, destructive-action, or safety blocker requires input. Elapsed time is not a stop condition.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.

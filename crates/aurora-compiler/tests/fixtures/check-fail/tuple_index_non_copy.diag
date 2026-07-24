@@ -1,0 +1,5 @@
+error[AU3005]: cannot consume non-copy tuple element `String` by indexing; unpack the tuple to move its elements
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_index_non_copy.au:3:11
+  |
+3 |     print(pair[0])
+  |           ^

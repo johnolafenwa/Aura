@@ -166,9 +166,17 @@ Aurora 0.1 recognizes:
 ->
 ```
 
-There is no semicolon. Multiple statements cannot share one physical line. Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment expressions, lambda arrow, tuple punctuation, or conditional-expression operator. The lexer chooses the longest operator spelling, so `//=` is one token rather than `//` followed by `=`.
+There is no semicolon. Multiple statements cannot share one physical line.
+Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment
+expressions, lambda arrow, or conditional-expression operator. The lexer
+chooses the longest operator spelling, so `//=` is one token rather than `//`
+followed by `=`.
 
-Comma-separated lists do not accept a trailing comma. This applies to arguments, parameters, imports, type arguments, generic parameters, enum payloads, patterns, collection elements, and trait lists.
+Comma-separated lists do not accept a trailing comma. This applies to
+arguments, parameters, imports, type arguments, generic parameters, enum
+payloads, collection elements, and trait lists. The tuple grammar is the one
+exception: its singleton value, type, target, and pattern forms require one
+comma, while multi-element tuples reject a trailing comma.
 
 ## Integer Literals
 
@@ -344,8 +352,8 @@ the same lexical language; there is no backend-specific lexer.
 ## Limits And Implementation-Defined Behavior
 
 Identifiers are ASCII, source is UTF-8, physical tabs are rejected,
-continuation requires an unmatched source delimiter, lists reject trailing
-commas, backslash continuation and multiline ordinary/f-strings are
+continuation requires an unmatched source delimiter, ordinary lists reject
+trailing commas, backslash continuation and multiline ordinary/f-strings are
 unavailable, and literal magnitude and parser-complexity caps are fixed by
 this chapter and [Current Limits](/manual/current-limits). Continuation
 indentation is not semantically significant, but delimiter matching, token
@@ -358,5 +366,6 @@ The forms described as accepted above are implemented. Delimiter continuation
 and its layout/diagnostic policy are Provisional under ADR-0025 pending the
 Batch 2 checkpoint review. Raw, byte, triple-quoted, and single-quoted
 f-strings; alternate integer bases; digit separators; block comments;
-semicolons; trailing commas; backslash continuation; and multiline string or
-f-string literals are unavailable, not partially implemented.
+semicolons; ordinary trailing commas other than the required singleton-tuple
+comma; backslash continuation; and multiline string or f-string literals are
+unavailable, not partially implemented.

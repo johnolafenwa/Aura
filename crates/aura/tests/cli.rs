@@ -155,6 +155,99 @@ fn write_temp_source(prefix: &str, source: &str) -> (TempDir, PathBuf) {
     (temp, source_path)
 }
 
+#[test]
+fn ast_json_preserves_legacy_named_and_loop_shapes_while_exposing_tuples() {
+    let source = [
+        "def named(items: Vec[int32]) -> int32:",
+        "    for item in items:",
+        "        pass",
+        "    return 0",
+        "",
+        "def tupled(items: Vec[(int32, String)]) -> (int32, String):",
+        "    for (number, text) in items:",
+        "        return (number, text)",
+        "    return (0, \"\")",
+    ]
+    .join("\n");
+
+    let mut child = Command::new(aura_bin())
+        .arg("ast-json")
+        .arg("--stdin")
+        .arg("/virtual/tuple_ast.au")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura ast-json");
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write tuple AST source");
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura ast-json output");
+    assert!(
+        output.status.success(),
+        "ast-json should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ast-json should return valid JSON");
+    let named = &json["items"][0]["Function"];
+    let named_type = &named["params"][0]["ty"];
+    assert_eq!(named_type["name"], "Vec");
+    assert_eq!(named_type["args"][0]["name"], "int32");
+    assert!(
+        named_type.get("kind").is_none(),
+        "named type references must retain the pre-tuple JSON shape"
+    );
+    let simple_loop = &named["body"][0]["For"];
+    assert_eq!(simple_loop["binding"], "item");
+    assert!(
+        simple_loop.get("target").is_none(),
+        "simple loops must retain the pre-tuple `binding` field"
+    );
+
+    let tupled = &json["items"][1]["Function"];
+    let tuple_parameter = &tupled["params"][0]["ty"]["args"][0];
+    assert_eq!(tuple_parameter["elements"][0]["name"], "int32");
+    assert_eq!(tuple_parameter["elements"][1]["name"], "String");
+    assert_eq!(
+        tupled["return_type"]["elements"].as_array().map(Vec::len),
+        Some(2)
+    );
+    let tuple_loop = &tupled["body"][0]["For"];
+    assert!(tuple_loop.get("binding").is_none());
+    assert_eq!(
+        tuple_loop["target"]["Tuple"]["elements"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+}
+
+#[test]
+fn generic_tuple_substitution_runs_in_mir_and_direct_backends() {
+    let source = [
+        "def swap[T, U](pair: own (T, U)) -> (U, T):",
+        "    left, right = pair",
+        "    return (right, left)",
+        "",
+        "def main() -> int32:",
+        "    result = swap((7, \"seven\"))",
+        "    label, number = result",
+        "    print(label)",
+        "    print(number)",
+        "    return 0",
+    ]
+    .join("\n");
+
+    assert_run_and_direct_source_stdout("aurora-cli-generic-tuples", &source, "seven\n7\n");
+}
+
 fn build_and_run_direct_source(
     prefix: &str,
     source: &str,

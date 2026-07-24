@@ -19,12 +19,7 @@ fn dummy_arg(name: Option<&str>) -> Argument {
 }
 
 fn dummy_type(name: &str) -> TypeRef {
-    TypeRef {
-        name: name.to_string(),
-        args: vec![],
-        indirect: false,
-        span: Span::new(1, 1),
-    }
+    TypeRef::named(name, vec![], false, Span::new(1, 1))
 }
 
 #[test]

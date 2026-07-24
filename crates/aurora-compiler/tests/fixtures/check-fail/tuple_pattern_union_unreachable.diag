@@ -1,0 +1,5 @@
+error[AU2999]: unreachable match arm
+ --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_pattern_union_unreachable.au:7:14
+  |
+7 |         case _:
+  |              ^

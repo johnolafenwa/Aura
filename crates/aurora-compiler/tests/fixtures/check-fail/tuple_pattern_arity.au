@@ -1,0 +1,6 @@
+def main():
+    match (1, 2):
+        case (left, right, third):
+            pass
+        case _:
+            pass

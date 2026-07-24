@@ -4,8 +4,9 @@ use super::{
     boxed_value, compare_values, current_cancellation, decode_bytes, eval_binary_value,
     eval_unary_value, extract_duration_nanoseconds, inferred_collection_type,
     int32_overflow_message, normalize_vec_index, render_bool, render_float, render_float32,
-    render_runtime_diagnostic, runtime_span, value_mut, value_ref, value_type_name,
-    with_cancellation_scope, OpaqueValue,
+    render_runtime_diagnostic, runtime_span, runtime_type_from_name,
+    runtime_type_pattern_from_name, runtime_type_pattern_matches, value_mut, value_ref,
+    value_type_name, with_cancellation_scope, OpaqueValue,
 };
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::{Diagnostic, Span};
@@ -17,7 +18,7 @@ use crate::runtime_value::{
     LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpDatagramValue, UdpSocketValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
@@ -54,6 +55,51 @@ fn duration_value(value: i64) -> *mut OpaqueValue {
 
 fn duration_nanoseconds_value(value: i128) -> *mut OpaqueValue {
     super::aurora_direct_duration_literal(value as i64, (value >> 64) as i64)
+}
+
+#[test]
+fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
+    assert_eq!(
+        runtime_type_from_name("(int32, String)"),
+        Type::Tuple(vec![Type::named("int32"), Type::named("String")])
+    );
+    assert_eq!(
+        runtime_type_from_name("Vec[(String,)]"),
+        Type::Named(
+            "Vec".to_string(),
+            vec![Type::Tuple(vec![Type::named("String")])]
+        )
+    );
+
+    let pattern = runtime_type_pattern_from_name("(?Element, ?Element)");
+    assert!(runtime_type_pattern_matches(
+        &pattern,
+        &Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
+        &mut BTreeMap::new(),
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &pattern,
+        &Type::Tuple(vec![Type::named("int64"), Type::named("String")]),
+        &mut BTreeMap::new(),
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &pattern,
+        &Type::named("int64"),
+        &mut BTreeMap::new(),
+    ));
+
+    let value = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int64"), Type::named("String")],
+        elements: vec![
+            Value::Int(IntegerValue::from_signed(1)),
+            Value::String("one".to_string()),
+        ],
+    });
+    assert_eq!(value_type_name(&value), "tuple");
+    assert_eq!(
+        inferred_collection_type(&value),
+        Type::Tuple(vec![Type::named("int64"), Type::named("String")])
+    );
 }
 
 fn string_vec(values: &[&str]) -> *mut OpaqueValue {
@@ -12407,4 +12453,275 @@ fn native_assert_failure_remains_primary_when_cleanup_traps() {
     assert_eq!(diagnostic.code, "AU4001");
     assert_eq!(diagnostic.message, "assertion failed");
     assert_eq!(diagnostic.span, Some(Span::new(12, 5)));
+}
+
+#[test]
+fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
+    fn tuple(elements: Vec<*mut OpaqueValue>) -> *mut OpaqueValue {
+        let count = elements.len();
+        let buffer = super::aurora_direct_arg_buffer_new(count as i64);
+        for (index, element) in elements.into_iter().enumerate() {
+            super::aurora_direct_arg_buffer_store_owned(buffer, index as i64, element as i64);
+        }
+        super::aurora_direct_tuple_new(buffer, count as i64)
+    }
+
+    let left = tuple(vec![int_value(7), string_value("seven")]);
+    let right = tuple(vec![int_value(7), string_value("seven")]);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            left,
+            b"(int64, String)".as_ptr(),
+            "(int64, String)".len(),
+        ),
+        1,
+        "an untagged tuple should infer its structural element types"
+    );
+    let equality = super::aurora_direct_binary_value(5, left, right);
+    assert!(expect_bool_boxed(equality));
+
+    let non_tuple = bool_value(true);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            non_tuple,
+            b"(?Element,)".as_ptr(),
+            "(?Element,)".len(),
+        ),
+        0,
+        "an untagged non-tuple must not satisfy a tuple type pattern"
+    );
+    unsafe {
+        release_value(non_tuple);
+    }
+
+    let projected = super::aurora_direct_tuple_element(left, 1);
+    unsafe {
+        release_value(equality);
+        release_value(left);
+    }
+    assert_eq!(
+        expect_string(projected),
+        "seven",
+        "projection must own an independent clone after the tuple is dropped"
+    );
+    unsafe {
+        release_value(projected);
+        release_value(right);
+    }
+
+    let owned_text = "destructured without cloning".repeat(8);
+    let owned_text_allocation = owned_text.as_ptr();
+    let captured = tuple(vec![boxed_value(Value::String(owned_text))]);
+    let taken = super::aurora_direct_tuple_take_element(captured, 0);
+    unsafe {
+        super::with_value(taken, |value| match value {
+            Value::String(text) => assert_eq!(
+                text.as_ptr(),
+                owned_text_allocation,
+                "destructive extraction must transfer the original allocation"
+            ),
+            other => panic!("expected destructured String, found {other:?}"),
+        });
+        super::with_value(captured, |value| match value {
+            Value::Tuple(tuple) => assert_eq!(
+                tuple.elements,
+                vec![Value::Unit],
+                "the private captured source slot must be consumed"
+            ),
+            other => panic!("expected captured tuple, found {other:?}"),
+        });
+    }
+    let captured_address = captured as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_element(captured_address as *mut OpaqueValue, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a destructively extracted slot must not remain publicly readable");
+    assert_eq!(
+        error.message,
+        "tuple element at index 0 has already been moved"
+    );
+    unsafe {
+        release_value(captured);
+    }
+    assert_eq!(
+        expect_string(taken),
+        "destructured without cloning".repeat(8)
+    );
+    unsafe {
+        release_value(taken);
+    }
+
+    let inner = tuple(vec![string_value("nested")]);
+    let nested = tuple(vec![int_value(9), inner]);
+    let nested_type = "(int64, (String,))";
+    super::aurora_direct_tag_value_type(nested, nested_type.as_ptr(), nested_type.len());
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            nested,
+            b"(?Number, (?Text,))".as_ptr(),
+            "(?Number, (?Text,))".len(),
+        ),
+        1,
+        "runtime tuple type patterns must parse and match recursively"
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            nested,
+            b"(?Same, (?Same,))".as_ptr(),
+            "(?Same, (?Same,))".len(),
+        ),
+        0,
+        "repeated type variables must retain their structural substitution"
+    );
+    unsafe {
+        release_value(nested);
+    }
+
+    let not_a_tuple = int_value(1);
+    let not_a_tuple_address = not_a_tuple as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_element(not_a_tuple_address as *mut OpaqueValue, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("projecting from a non-tuple should fail the active task");
+    assert_eq!(error.message, "expected tuple value, found `integer`");
+    unsafe {
+        release_value(not_a_tuple);
+    }
+
+    let singleton = tuple(vec![int_value(1)]);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(singleton, b"(int64,)".as_ptr(), "(int64,)".len(),),
+        1,
+        "singleton tuple runtime types must preserve the comma that distinguishes their arity"
+    );
+    let singleton_address = singleton as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_element(singleton_address as *mut OpaqueValue, 1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("out-of-bounds tuple projection should fail the active task");
+    assert_eq!(error.message, "tuple of length 1 has no element at index 1");
+    let singleton_address = singleton as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_element(singleton_address as *mut OpaqueValue, -1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("negative tuple projection should fail the active task");
+    assert_eq!(error.message, "invalid tuple element index");
+    unsafe {
+        release_value(singleton);
+    }
+
+    let error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_new(std::ptr::null_mut(), -1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("negative tuple arity should fail the active task");
+    assert_eq!(error.message, "invalid tuple element count");
+
+    let error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_new(std::ptr::null_mut(), 1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a missing non-empty tuple buffer should fail the active task");
+    assert_eq!(
+        error.message,
+        "direct runtime received a null tuple element buffer"
+    );
+
+    let buffer = super::aurora_direct_arg_buffer_new(1);
+    super::aurora_direct_arg_buffer_store_owned(buffer, 0, 0);
+    let buffer_address = buffer as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_tuple_new(buffer_address as *mut i64, 1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a null owned tuple element should fail the active task");
+    assert_eq!(
+        error.message,
+        "direct runtime received a null owned tuple element handle"
+    );
+
+    let not_a_tuple = int_value(2);
+    let not_a_tuple_address = not_a_tuple as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ =
+                super::aurora_direct_tuple_take_element(not_a_tuple_address as *mut OpaqueValue, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("destructive extraction from a non-tuple should fail the active task");
+    assert_eq!(error.message, "expected tuple value, found `integer`");
+    unsafe {
+        release_value(not_a_tuple);
+    }
+
+    let captured_negative = tuple(vec![int_value(3)]);
+    let captured_address = captured_negative as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ =
+                super::aurora_direct_tuple_take_element(captured_address as *mut OpaqueValue, -1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("negative destructive tuple extraction should fail the active task");
+    assert_eq!(error.message, "invalid tuple element index");
+    unsafe {
+        release_value(captured_negative);
+    }
+
+    let captured_bounds = tuple(vec![int_value(3)]);
+    let captured_address = captured_bounds as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ =
+                super::aurora_direct_tuple_take_element(captured_address as *mut OpaqueValue, 1);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("out-of-bounds destructive tuple extraction should fail the active task");
+    assert_eq!(error.message, "tuple of length 1 has no element at index 1");
+    unsafe {
+        release_value(captured_bounds);
+    }
+
+    let captured_repeat = tuple(vec![int_value(3)]);
+    let first = super::aurora_direct_tuple_take_element(captured_repeat, 0);
+    unsafe {
+        release_value(first);
+    }
+    let captured_address = captured_repeat as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ =
+                super::aurora_direct_tuple_take_element(captured_address as *mut OpaqueValue, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a tuple element cannot be destructively extracted twice");
+    assert_eq!(
+        error.message,
+        "tuple element at index 0 has already been moved"
+    );
+    unsafe {
+        release_value(captured_repeat);
+    }
 }
