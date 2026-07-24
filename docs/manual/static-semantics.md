@@ -126,6 +126,18 @@ Operator operands are not implicitly widened. An integer literal may be contextu
 
 `if` and `while` conditions must have exactly type `bool`. `and`, `or`, and `not` also require boolean results under the rules above. Aurora does not apply general truthiness conversion to strings, collections, resources, or user types.
 
+### Assertions
+
+An `assert` condition must have exactly type `bool`. Its optional message must
+have exactly type `String`. Both mismatches use `AU2002` at the retained
+`assert` keyword span.
+
+The checker evaluates the condition's ownership effects first. It checks an
+optional message from the resulting state, but because that expression is
+runtime-lazy, message-only moves and mutations are not applied to the
+fallthrough state. The statement itself has ordinary fallthrough and performs
+no lasting type or value refinement.
+
 ### Indexing And Members
 
 Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`

@@ -34,6 +34,113 @@ fn d4_string_indexing_remains_rejected() {
 }
 
 #[test]
+fn d3_assert_checks_exact_types_and_remains_fallthrough() {
+    crate::check_source(
+        r#"
+def verify(ready: bool, message: String):
+    assert ready
+    assert ready, message
+
+verify(true, "ready")
+"#,
+    )
+    .expect("both assertion forms and top-level assertions should check");
+
+    let bad_condition =
+        crate::check_source("assert 1\n").expect_err("assertion conditions must be exactly bool");
+    assert_eq!(
+        bad_condition.message,
+        "`assert` condition must have type `bool`, found `int64`"
+    );
+    assert_eq!(bad_condition.span, Some(Span::new(1, 1)));
+    assert_eq!(
+        bad_condition.help,
+        ["Aurora has no implicit truthiness; compare the value explicitly, for example `value != 0`"]
+    );
+
+    let bad_message = crate::check_source("assert true, 1\n")
+        .expect_err("assertion messages must be exactly String");
+    assert_eq!(
+        bad_message.message,
+        "`assert` message must have type `String`, found `int64`"
+    );
+    assert_eq!(bad_message.span, Some(Span::new(1, 1)));
+
+    let missing_return = crate::check_source("def verify() -> int32:\n    assert false\n")
+        .expect_err("even a constant-false assertion does not narrow control flow");
+    assert!(missing_return
+        .message
+        .contains("function `verify` is missing a return"));
+
+    let mixed_entry = crate::check_source("assert true\n\ndef main():\n    pass\n")
+        .expect_err("top-level assertions must preserve the explicit-main carve-out");
+    assert!(mixed_entry.message.contains(
+        "files cannot mix top-level statements, including declarations, with an explicit `main` function"
+    ));
+}
+
+#[test]
+fn d3_assert_keeps_condition_effects_and_discards_lazy_message_effects() {
+    let condition_move = crate::check_source(
+        r#"
+def consume_for_condition(value: own String) -> bool:
+    return true
+
+def main():
+    text = "aurora"
+    assert consume_for_condition(text)
+    print(text)
+"#,
+    )
+    .expect_err("condition ownership effects must persist after the assertion");
+    assert!(condition_move.message.contains("use of moved value `text`"));
+
+    let message_observes_post_condition = crate::check_source(
+        r#"
+def consume_for_condition(value: own String) -> bool:
+    return true
+
+def main():
+    text = "aurora"
+    assert consume_for_condition(text), text
+"#,
+    )
+    .expect_err("the message must be checked from the post-condition state");
+    assert!(message_observes_post_condition
+        .message
+        .contains("use of moved value `text`"));
+
+    crate::check_source(
+        r#"
+def consume_for_message(value: own String) -> String:
+    return value
+
+def main():
+    text = "aurora"
+    assert true, consume_for_message(text)
+    print(text)
+"#,
+    )
+    .expect("lazy message ownership effects must not leak into the fallthrough state");
+
+    let invalid_message_move = crate::check_source(
+        r#"
+def combine(first: own String, second: own String) -> String:
+    return first
+
+def main():
+    text = "aurora"
+    assert false, combine(text, text)
+"#,
+    )
+    .expect_err("lazy messages must still reject repeated ownership transfers internally");
+    assert_eq!(invalid_message_move.code, "AU2004");
+    assert!(invalid_message_move.message.contains(
+        "overlaps consumed argument for parameter `first`; consumed values must be exclusive"
+    ));
+}
+
+#[test]
 fn d6_parameter_defaults_resolve_once_from_declared_types() {
     let program = crate::check_source(
         r#"

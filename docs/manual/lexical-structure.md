@@ -29,7 +29,7 @@ The lexer recognizes these words specially:
 
 ```text
 class enum def trait impl import from mut borrow own indirect public
-return if elif else and or not match case for in while break
+return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
 

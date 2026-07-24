@@ -2,6 +2,10 @@
 
 This page indexes every maintained public builtin function, method, module type, and builtin enum documented by the manual. It is intentionally dense. Use the linked manual pages for examples and longer discussion.
 
+`assert condition` and `assert condition, message` are statements rather than
+callable APIs. Their exact typing, lazy-message, `AU4001`, cleanup, and
+backend-parity contract is indexed separately in [Assertions](/manual/assertions).
+
 ## Top-Level Builtins
 
 | API | Signature | Contract |

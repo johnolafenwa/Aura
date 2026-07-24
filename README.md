@@ -73,6 +73,8 @@ Current compiler workflow:
   - execute `Set[T]` literals, shared-borrow set iteration, and the maintained set method surface
 - `cargo run -p aura -- run examples/basics/pass_keyword.au`
   - execute the `pass` no-op statement in intentionally empty blocks
+- `cargo run -p aura -- run examples/basics/assertions.au`
+  - execute default/custom assertions with lazy messages and source-located failures
 - `cargo run -p aura -- run examples/modules/simple_import.au`
   - execute local file modules with `import`, `from ... import ...`, and `public` module boundaries
 - `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`

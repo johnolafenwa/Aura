@@ -5289,6 +5289,36 @@ impl<'a> FunctionChecker<'a> {
             match stmt {
                 Stmt::Assign(assign) => self.check_assign(assign, locals)?,
                 Stmt::Pass(_) => {}
+                Stmt::Assert(assert_stmt) => {
+                    let condition_ty = self.type_of_expr(&assert_stmt.condition, locals)?;
+                    if condition_ty != Type::named("bool") {
+                        return Err(Diagnostic::at(
+                            assert_stmt.span,
+                            format!(
+                                "`assert` condition must have type `bool`, found `{}`",
+                                condition_ty
+                            ),
+                        )
+                        .with_help(
+                            "Aurora has no implicit truthiness; compare the value explicitly, for example `value != 0`",
+                        ));
+                    }
+                    self.consume_value_expr(&assert_stmt.condition, locals)?;
+
+                    if let Some(message) = &assert_stmt.message {
+                        let mut message_locals = locals.clone();
+                        let message_ty = self.type_of_expr(message, &mut message_locals)?;
+                        if message_ty != Type::named("String") {
+                            return Err(Diagnostic::at(
+                                assert_stmt.span,
+                                format!(
+                                    "`assert` message must have type `String`, found `{}`",
+                                    message_ty
+                                ),
+                            ));
+                        }
+                    }
+                }
                 Stmt::Expr(expr_stmt) => {
                     self.type_of_expr(&expr_stmt.expr, locals)?;
                     self.consume_value_expr(&expr_stmt.expr, locals)?;

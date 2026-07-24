@@ -1,0 +1,8 @@
+def validate(value: bool, message: String):
+    assert value, message
+
+def main():
+    print("checking")
+    validate(2 + 2 == 4, "arithmetic changed")
+    assert true
+    print("all assertions passed")

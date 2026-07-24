@@ -1,0 +1,6 @@
+assert true
+assert false, "custom failure"
+
+def verify(value: bool, message: String):
+    assert value
+    assert value, message

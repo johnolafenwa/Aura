@@ -184,7 +184,13 @@ The current compiler supports these statement forms:
 - `break`
 - `continue`
 - `pass`
+- `assert condition` and `assert condition, message`
 - expression statements
+
+Assertion conditions must be exactly `bool`, and optional messages must be
+`String`. A true assertion does not evaluate its message. A false assertion
+traps with `AU4001` at the `assert` keyword, using `assertion failed` or the
+exact supplied message. Assertions are not stripped in any build mode.
 
 ## Expressions
 

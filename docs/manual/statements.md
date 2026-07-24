@@ -9,6 +9,7 @@ Aurora 0.1 statements are:
 - binding and assignment
 - expression statements
 - `return`
+- `assert`
 - `if` / `elif` / `else`
 - `while` and `for`
 - statement-form `match`
@@ -307,6 +308,35 @@ Nested cleanups run in reverse registration order. If the body is already failin
 
 This contract is shared by `aura run` through the maintained MIR runtime and by native builds through the maintained native execution paths. Backend parity tests enforce the common contract. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
 
+## `assert`
+
+An assertion checks an invariant and either continues or produces an
+unrecoverable runtime diagnostic:
+
+    assert ready
+    assert response_code == 200, "expected a successful response"
+
+The condition must have exactly type `bool`. The optional message must have
+exactly type `String`. The condition evaluates exactly once. A true condition
+falls through without evaluating the message. A false condition evaluates the
+message exactly once and traps with `AU4001`. Without a message, the exact
+failure text is `assertion failed`; otherwise the supplied String is preserved
+exactly, including an empty or whitespace-only value.
+
+The diagnostic points to the `assert` keyword. A trap produced while evaluating
+the condition or message occurs first and remains primary. Assertion failure
+runs active `with` cleanups, and the assertion remains primary if cleanup also
+fails.
+
+An assertion has ordinary fallthrough for static analysis. It does not refine
+the type or possible values of a later expression, and the compiler does not
+strip it in any build mode. Assertions are valid executable top-level
+statements in a script entry module; the ordinary rule against combining
+top-level execution with a local `main` still applies.
+
+See [Assertions](/manual/assertions) for the complete contract and executable
+example.
+
 ## `pass`
 
 `pass` performs no operation and produces no binding:
@@ -349,6 +379,8 @@ Parsing a statement shape does not make it legal in every context:
 - reassignment and compound assignment require a mutable existing place.
 - member and index assignment require a mutable base and cannot declare a type or use `mut`.
 - conditions require `bool` rather than truthiness.
+- assertion conditions require `bool`, and assertion messages require
+  `String`.
 - match arms must satisfy compatibility, reachability, and exhaustiveness rules.
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
@@ -369,7 +401,9 @@ Bindings infer or check one type, and reassignment preserves it. Conditions are
 exactly `bool`; return values match the enclosing signature; iterables determine
 their loop binding contract; match patterns are compatible, reachable, and
 exhaustive where required; and `with` accepts only the maintained cleanup
-contract. Contextual legality is checked after parsing.
+contract. Assertion conditions are exactly `bool` and messages are exactly
+`String`; an assertion does not refine later control flow. Contextual legality
+is checked after parsing.
 
 ## Runtime Semantics
 
@@ -385,8 +419,9 @@ Map key is absent; conditionals select at most one branch; loops test or
 receive before each body;
 a match evaluates its
 scrutinee once; and `with` registers cleanup only after resource construction
-succeeds. Control transfer runs every exited cleanup in reverse registration
-order.
+succeeds. An assertion evaluates its condition once, skips its message on
+success, and evaluates that message once before failing. Control transfer runs
+every exited cleanup in reverse registration order.
 
 ## Ownership And Evaluation Order
 
@@ -423,7 +458,8 @@ During execution, `AU4001` means a general statement trap, `AU4002` means
 numeric range, overflow, or underflow failure, `AU4003` means a bounds or lookup
 violation, `AU4004` means a zero divisor, and `AU4005` means a trapping resource
 or I/O failure, including cleanup failure when no earlier body failure remains
-primary.
+primary. A failed assertion is `AU4001`, uses `assertion failed` or the exact
+custom message, and points to its keyword.
 
 ## Backend Support
 
@@ -442,8 +478,9 @@ above. No statement evaluation order is implementation-defined.
 
 ## Status
 
-Bindings, assignments, expression and return statements, conditionals, loops,
-match, scoped cleanup, `pass`, imports, and entry-module top-level execution are
-implemented as described. Destructuring assignment or loop targets, loop
-`else`, `assert`, exception statements, `yield`, `raise`, `async`, and nested
-declarations are unavailable; `try` remains an expression over `Result`.
+Bindings, assignments, expression, return, and assertion statements,
+conditionals, loops, match, scoped cleanup, `pass`, imports, and entry-module
+top-level execution are implemented as described. Destructuring assignment or
+loop targets, loop `else`, exception statements, `yield`, `raise`, `async`, and
+nested declarations are unavailable; `try` remains an expression over
+`Result`.

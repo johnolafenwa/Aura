@@ -1784,10 +1784,14 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
+                let diagnostic = signal.0;
+                // A trapping cleanup must not replace the failure that caused this
+                // boundary to drain the remaining task-local cleanup registrations.
+                let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
                 if direct_runtime_error_capture_enabled() {
                     drain_direct_cleanup_stack();
                 }
-                fail_current_lightweight_task(signal.0)
+                fail_current_lightweight_task(diagnostic)
             }
             Err(payload) => std::panic::resume_unwind(payload),
         },
@@ -8489,6 +8493,31 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sqrt_f64(value: f64) -> f64 {
     task_runtime_boundary(|| value.sqrt())
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_assert_fail(message: i64, line: i64, column: i64) -> ! {
+    task_runtime_boundary(|| {
+        let message = if message == 0 {
+            "assertion failed".to_string()
+        } else {
+            let message = unsafe {
+                with_value(message as *mut OpaqueValue, |value| match value {
+                    Value::String(message) => Ok(message.clone()),
+                    other => Err(format!(
+                        "direct assertion message must be `String`, found `{}`",
+                        value_type_name(other)
+                    )),
+                })
+            };
+            message.unwrap_or_else(|error| runtime_error(error))
+        };
+        let diagnostic = match runtime_span(line, column) {
+            Some(span) => Diagnostic::coded_at("AU4001", span, message),
+            None => Diagnostic::coded("AU4001", message),
+        };
+        runtime_diagnostic_error(diagnostic)
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

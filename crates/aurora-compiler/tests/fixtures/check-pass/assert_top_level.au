@@ -1,0 +1,3 @@
+ready = true
+message = "top-level assertion"
+assert ready, message

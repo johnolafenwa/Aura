@@ -5,6 +5,7 @@
 // cannot be started at all.
 
 const KEYWORDS = [
+  "assert",
   "borrow",
   "break",
   "case",

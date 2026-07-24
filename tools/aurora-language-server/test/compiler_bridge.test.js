@@ -673,6 +673,83 @@ test("compiler bridge returns machine-readable analysis for a real example", asy
   assert.ok(analysis.symbols.some((symbol) => symbol.name === "Point"));
 });
 
+test("compiler bridge preserves assert operand occurrences and keyword completion", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-assert-"));
+  const source = [
+    "def main():",
+    "    ready = true",
+    "    message = \"ready assertion\"",
+    "    assert ready, message",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const conditionUse = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 3 &&
+        occurrence.start_character === 11 &&
+        occurrence.end_character === 16
+    );
+    const messageUse = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 3 &&
+        occurrence.start_character === 18 &&
+        occurrence.end_character === 25
+    );
+    assert.ok(conditionUse, "assert condition should expose its identifier use");
+    assert.ok(messageUse, "assert message should expose its identifier use");
+    assert.equal(conditionUse.hover, "```aurora\nbinding ready: bool\n```");
+    assert.equal(messageUse.hover, "```aurora\nbinding message: String\n```");
+    assert.equal(conditionUse.definition?.line, 1);
+    assert.equal(messageUse.definition?.line, 2);
+
+    const completions = await completeWithCompiler(mainUri, source, 3, 10, null);
+    assert.ok(
+      completions.some(
+        (completion) => completion.name === "assert" && completion.kind === "keyword"
+      ),
+      "compiler completion should include the assert keyword"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes invalid assert diagnostics at the keyword", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-invalid-assert-"));
+  const source = ["def main():", "    assert 1", ""].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostic.code, "AU2002");
+    assert.equal(
+      diagnostic.message,
+      "`assert` condition must have type `bool`, found `int64`"
+    );
+    assert.equal(diagnostic.source, "aurora-compiler");
+    assert.equal(diagnostic.severity, 1);
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 4 },
+      end: { line: 1, character: 5 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves real ownership provenance, help, and safe edits", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-ownership-diag-"));
   const source = "def take(value: String) -> String:\n    return value\n";

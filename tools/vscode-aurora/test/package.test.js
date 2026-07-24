@@ -16,6 +16,24 @@ test("extension bundle contains built extension and language server files", () =
   }
 });
 
+test("extension package includes the assertion-aware Aurora grammar", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
+  );
+  const grammarContribution = manifest.contributes.grammars.find(
+    (grammar) => grammar.language === "aurora"
+  );
+
+  assert.ok(manifest.files.includes("syntaxes/**"));
+  assert.equal(grammarContribution?.path, "./syntaxes/aurora.tmLanguage.json");
+  const packagedGrammar = fs.readFileSync(
+    path.join(extensionRoot, grammarContribution.path),
+    "utf8"
+  );
+  assert.match(packagedGrammar, /assert/);
+});
+
 test("language configuration indents block headers on enter without blank-line dedent", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const configurationPath = path.join(extensionRoot, "language-configuration.json");
@@ -46,6 +64,7 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.ok(keywordRule);
   assert.match(keywordRule.match, /and\|or\|not/);
   assert.match(keywordRule.match, /pass/);
+  assert.match(keywordRule.match, /assert/);
 });
 
 test("syntax grammar treats own as an Aurora storage modifier", () => {

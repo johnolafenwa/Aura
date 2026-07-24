@@ -1,0 +1,5 @@
+error[AU4001]: custom failure
+ --> crates/aurora-compiler/tests/fixtures/run-fail/assert_failure_custom.au:2:5
+  |
+2 |     assert false, "custom failure"
+  |     ^

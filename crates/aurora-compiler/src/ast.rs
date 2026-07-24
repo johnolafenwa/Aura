@@ -165,6 +165,7 @@ pub struct Param {
 pub enum Stmt {
     Assign(AssignStmt),
     Pass(PassStmt),
+    Assert(AssertStmt),
     Return(ReturnStmt),
     If(IfStmt),
     Match(MatchStmt),
@@ -178,6 +179,13 @@ pub enum Stmt {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PassStmt {
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AssertStmt {
+    pub condition: Expr,
+    pub message: Option<Expr>,
     pub span: Span,
 }
 

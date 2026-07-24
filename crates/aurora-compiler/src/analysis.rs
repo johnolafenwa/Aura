@@ -499,6 +499,7 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
                 Stmt::Pass(_)
+                | Stmt::Assert(_)
                 | Stmt::Return(_)
                 | Stmt::Break(_)
                 | Stmt::Continue(_)
@@ -1116,6 +1117,12 @@ impl<'a> AnalysisBuilder<'a> {
             Stmt::Return(ret) => {
                 if let Some(value) = &ret.value {
                     self.visit_expr(value, scope);
+                }
+            }
+            Stmt::Assert(assert_stmt) => {
+                self.visit_expr(&assert_stmt.condition, scope);
+                if let Some(message) = &assert_stmt.message {
+                    self.visit_expr(message, scope);
                 }
             }
             Stmt::If(if_stmt) => {
@@ -3262,8 +3269,8 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
-    "with", "return", "try", "public", "mut", "borrow", "own", "indirect", "copy", "break",
-    "continue", "pass",
+    "with", "return", "assert", "try", "public", "mut", "borrow", "own", "indirect", "copy",
+    "break", "continue", "pass",
 ];
 
 struct CompletionMeta {
@@ -3838,6 +3845,7 @@ fn block_contains_line(stmts: &[Stmt], line: usize) -> bool {
 fn stmt_start_line(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Assign(assign) => assign.span.line,
+        Stmt::Assert(assert_stmt) => assert_stmt.span.line,
         Stmt::Return(ret) => ret.span.line,
         Stmt::If(if_stmt) => if_stmt.span.line,
         Stmt::Match(match_stmt) => match_stmt.span.line,
@@ -3854,6 +3862,7 @@ fn stmt_start_line(stmt: &Stmt) -> usize {
 fn stmt_end_line(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Assign(assign) => assign.span.line,
+        Stmt::Assert(assert_stmt) => assert_stmt.span.line,
         Stmt::Return(ret) => ret.span.line,
         Stmt::If(if_stmt) => {
             let mut end = if_stmt.span.line;

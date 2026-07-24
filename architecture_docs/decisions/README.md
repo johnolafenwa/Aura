@@ -30,3 +30,4 @@ test locations that must prove completion.
 21. [ADR-0021: JSON value model and codec policy](0021-json-value-model-and-codec-policy.md)
 22. [ADR-0022: Implicit shared, `mut`, and `own` capability syntax](0022-implicit-shared-mut-own-capability-syntax.md) — proposed; not yet ratified or implemented
 23. [ADR-0023: Byte-vector codecs and hashing policy](0023-byte-vector-codecs-and-hashing-policy.md)
+24. [ADR-0024: Assertion evaluation and diagnostic policy](0024-assertion-evaluation-and-diagnostic-policy.md)

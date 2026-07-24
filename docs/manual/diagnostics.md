@@ -217,6 +217,13 @@ lowering. Output produced before a trap is not discarded: `aura run` leaves
 program standard output intact, renders the diagnostic on standard error, and
 exits unsuccessfully.
 
+A failed assertion is `AU4001` at the `assert` keyword location. The
+message is exactly `assertion failed` when omitted and otherwise exactly the
+evaluated String, including an empty or whitespace-only value. A failure while
+evaluating the condition or message remains primary. Active cleanup still
+runs, but a cleanup failure cannot replace an already established assertion
+diagnostic.
+
 The MIR runtime attaches the Aurora call chain to every trap. Frames name the
 Aurora function and its source span, ordered innermost first. If the trap occurs
 in a task, notes also identify that task's entry and its ancestry, including the

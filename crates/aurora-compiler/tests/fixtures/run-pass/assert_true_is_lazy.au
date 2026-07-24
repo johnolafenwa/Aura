@@ -1,0 +1,16 @@
+class Probe:
+    calls: int32
+
+    def condition(borrow mut self) -> bool:
+        self.calls += 1
+        return true
+
+    def message(borrow mut self) -> String:
+        self.calls += 100
+        return "message should stay lazy"
+
+def main():
+    mut probe = Probe(calls=0)
+    assert probe.condition(), probe.message()
+    assert true
+    print(probe.calls)

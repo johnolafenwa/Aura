@@ -14,7 +14,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Types](/manual/types): primitive types, `None`, `Duration`, generic types, copy and move categories, and type annotations.
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
 - [Expressions](/manual/expressions): operators, calls, indexing, member access, literals, `match` expressions, `try`, and f-strings.
-- [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, and top-level execution.
+- [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
+- [Assertions](/manual/assertions): exact boolean conditions, lazy messages,
+  `AU4001` failures, cleanup precedence, and backend behavior.
 - [Functions](/manual/functions): signatures, default/`own`/borrowed parameter
   modes, default arguments, named arguments, `main`, returns, and call binding.
 - [Classes](/manual/classes): fields, constructors, methods, receivers, associated methods, resources, and mutation.

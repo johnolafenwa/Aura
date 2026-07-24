@@ -1,0 +1,6 @@
+def verify(value: bool, message: String):
+    assert value
+    assert value, message
+
+def main():
+    verify(true, "checked")

@@ -74,6 +74,13 @@ replaces the earlier value and the key keeps its first insertion position.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
 
+An assertion evaluates its condition exactly once. A true condition skips the
+optional message and falls through. A false condition evaluates the message
+exactly once, then establishes the assertion failure before cleanup begins. A
+trap in either operand occurs first. Assertion-triggered cleanup follows the
+ordinary reverse-order rule, and a cleanup trap does not replace the assertion
+diagnostic.
+
 ## Calls And Returns
 
 A call evaluates and binds arguments, then transfers control to the target body or runtime builtin. Explicitly owned non-copy arguments have been moved at the call boundary; default-mode non-copy and explicitly borrowed arguments remain owned by the caller and are constrained for the duration of the call.

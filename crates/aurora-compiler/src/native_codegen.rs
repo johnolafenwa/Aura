@@ -224,6 +224,7 @@ struct NativeCodegen<'a> {
     print_bool: FuncId,
     print_value: FuncId,
     sqrt_f64: FuncId,
+    assert_fail: FuncId,
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
     fail_integer_overflow: FuncId,
@@ -694,6 +695,7 @@ impl<'a> NativeCodegen<'a> {
             print_bool => ("aurora_direct_print_bool", [types::I64], None),
             print_value => ("aurora_direct_print_value", [types::I64], None),
             sqrt_f64 => ("aurora_direct_sqrt_f64", [types::F64], Some(types::F64)),
+            assert_fail => ("aurora_direct_assert_fail", [types::I64, types::I64, types::I64], None),
             fail_division_by_zero => ("aurora_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_int32_overflow => ("aurora_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aurora_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
@@ -1079,6 +1081,7 @@ impl<'a> NativeCodegen<'a> {
             print_bool,
             print_value,
             sqrt_f64,
+            assert_fail,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -1677,6 +1680,9 @@ impl<'a> NativeCodegen<'a> {
         let sqrt_f64 = self
             .object
             .declare_func_in_func(self.sqrt_f64, builder.func);
+        let assert_fail = self
+            .object
+            .declare_func_in_func(self.assert_fail, builder.func);
         let fail_division_by_zero = self
             .object
             .declare_func_in_func(self.fail_division_by_zero, builder.func);
@@ -2541,6 +2547,7 @@ impl<'a> NativeCodegen<'a> {
             print_bool,
             print_value,
             sqrt_f64,
+            assert_fail,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -3205,6 +3212,7 @@ struct FunctionCompiler<'a> {
     print_bool: cranelift_codegen::ir::FuncRef,
     print_value: cranelift_codegen::ir::FuncRef,
     sqrt_f64: cranelift_codegen::ir::FuncRef,
+    assert_fail: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
@@ -3754,6 +3762,30 @@ impl<'a> FunctionCompiler<'a> {
             } => {
                 self.compile_for_range(binding, iterable, body_label, exit_label)?;
                 self.release_all_temporary_owned();
+            }
+            Terminator::AssertFail { message, span } => {
+                let message = match message {
+                    Some(message) => {
+                        let message = self.load_operand(message)?;
+                        match &message.ty {
+                            DirectType::Opaque(Type::Named(name, args))
+                                if name == "String" && args.is_empty() => {}
+                            other => {
+                                return Err(format!(
+                                    "direct backend expected an assertion message to be `String`, found `{}`",
+                                    render_direct_type(other)
+                                ))
+                            }
+                        }
+                        message.values[0]
+                    }
+                    None => self.builder.ins().iconst(types::I64, 0),
+                };
+                let (line, column) = self.span_values(Some(*span));
+                self.builder
+                    .ins()
+                    .call(self.assert_fail, &[message, line, column]);
+                self.builder.ins().trap(TrapCode::unwrap_user(1));
             }
             other => {
                 return Err(format!(
@@ -11834,6 +11866,11 @@ fn validate_function(
             }
             Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
+            Terminator::AssertFail { message, .. } => {
+                if let Some(message) = message {
+                    validate_operand(message)?;
+                }
+            }
             other => {
                 return Err(format!(
                     "direct backend does not yet support MIR terminator `{:?}`",

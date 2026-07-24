@@ -13335,3 +13335,176 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         None
     );
 }
+
+#[test]
+fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
+    for (message, expected) in [
+        (None, "assertion failed"),
+        (Some(Operand::String("custom".to_string())), "custom"),
+        (Some(Operand::String(String::new())), ""),
+        (Some(Operand::String(" \t ".to_string())), " \t "),
+    ] {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        let mut loop_state = HashMap::new();
+        let mut cleanups = Vec::new();
+        let result = runtime.execute_terminator(
+            "entry",
+            &Terminator::AssertFail {
+                message,
+                span: Span::new(7, 9),
+            },
+            &mut env,
+            &mut loop_state,
+            &mut cleanups,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("assert-fail terminators must trap"),
+        };
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, expected);
+        assert_eq!(error.span, Some(Span::new(7, 9)));
+    }
+}
+
+#[test]
+fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "message",
+        Type::named("String"),
+        Value::String("owned message".to_string()),
+    );
+    let mut loop_state = HashMap::new();
+    let mut cleanups = Vec::new();
+    let result = runtime.execute_terminator(
+        "entry",
+        &Terminator::AssertFail {
+            message: Some(Operand::MovePlace("message".to_string())),
+            span: Span::new(3, 5),
+        },
+        &mut env,
+        &mut loop_state,
+        &mut cleanups,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("assert-fail terminators must trap"),
+    };
+    assert_eq!(error.message, "owned message");
+    assert!(
+        env.place_ref("message").is_err(),
+        "an owned assertion message must be consumed exactly once"
+    );
+}
+
+#[test]
+fn source_assertion_custom_message_is_lazy_and_borrows_a_bare_string() {
+    let message = "borrowed assertion message that is long enough to own an allocation";
+    let source = format!(
+        r#"
+def unselected_message() -> String:
+    print("message must stay lazy")
+    return "unselected"
+
+def main():
+    message = "{message}"
+    assert true, unselected_message()
+    assert false, message
+"#
+    );
+    let module =
+        crate::lower_source_to_mir(&source).expect("custom-message assertions should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be lowered");
+    let failures = main
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            Terminator::AssertFail { message, span } => Some((message, span)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 2);
+    assert!(
+        matches!(failures[0].0, Some(Operand::Place(_))),
+        "the lazy call result should remain owned by its failure block"
+    );
+    assert_eq!(
+        failures[1],
+        (
+            &Some(Operand::Place("message".to_string())),
+            &Span::new(9, 5)
+        ),
+        "a bare non-copy message is borrowed rather than moved by assertion lowering"
+    );
+
+    let mut isolated_runtime = test_runtime();
+    let mut env = Env::default();
+    let owned_message = message.to_string();
+    let allocation = owned_message.as_ptr();
+    env.define_typed(
+        "message",
+        Type::named("String"),
+        Value::String(owned_message),
+    );
+    let mut loop_state = HashMap::new();
+    let mut cleanups = Vec::new();
+    let clone_count = super::mir_value_clone_count();
+    let result = isolated_runtime.execute_terminator(
+        "assert_fail",
+        &Terminator::AssertFail {
+            message: failures[1].0.clone(),
+            span: *failures[1].1,
+        },
+        &mut env,
+        &mut loop_state,
+        &mut cleanups,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("the source-lowered assertion terminator should trap"),
+    };
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, message);
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clone_count + 1,
+        "a borrowed message should be snapshotted exactly once for the owned diagnostic"
+    );
+    match env
+        .place_ref("message")
+        .expect("a borrowed assertion message must remain in its source place")
+    {
+        Value::String(value) => assert_eq!(
+            value.as_ptr(),
+            allocation,
+            "assertion diagnostics must not move or replace a borrowed String allocation"
+        ),
+        other => panic!("expected String, found {other:?}"),
+    }
+
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let mut runtime = MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+    let clone_count = super::mir_value_clone_count();
+    let error = runtime
+        .run_main()
+        .expect_err("the selected source assertion should trap");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, message);
+    assert_eq!(
+        stdout.lock().unwrap().as_str(),
+        "",
+        "the true assertion must not evaluate its message call"
+    );
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clone_count + 1,
+        "only the selected borrowed message should be snapshotted"
+    );
+}

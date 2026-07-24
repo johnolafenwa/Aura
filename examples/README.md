@@ -67,6 +67,12 @@ The examples are organized by topic so they can serve both as quick references a
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
+- `assertions.au`
+  - default and custom assertion statements on exact boolean conditions
+  - demonstrates the successful path without evaluating a failure
+  - prints:
+    - `checking`
+    - `all assertions passed`
 
 ### `collections/`
 

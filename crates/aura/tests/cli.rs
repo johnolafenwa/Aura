@@ -6790,3 +6790,218 @@ fn check_and_direct_backend_reject_queue_iteration_modifiers() {
         );
     }
 }
+
+fn run_and_direct_failure_outputs(prefix: &str, source: &str) -> [std::process::Output; 2] {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run assertion source");
+    assert!(
+        !run.status.success(),
+        "aura run should fail for assertion source"
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build assertion source with the direct backend");
+    assert!(
+        build.status.success(),
+        "direct assertion build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = generated_binary(&output_path)
+        .output()
+        .expect("failed to run direct assertion binary");
+    assert!(
+        !direct.status.success(),
+        "direct assertion binary should fail"
+    );
+
+    [run, direct]
+}
+
+#[test]
+fn assertions_preserve_exact_messages_in_run_and_direct_backends() {
+    for (name, suffix, expected_first_line) in [
+        ("default", "", "error[AU4001]: assertion failed"),
+        (
+            "custom",
+            ", \"custom assertion\"",
+            "error[AU4001]: custom assertion",
+        ),
+        ("empty", ", \"\"", "error[AU4001]: "),
+        ("whitespace", ", \"   \"", "error[AU4001]:    "),
+    ] {
+        let source = format!("def main():\n    assert false{suffix}\n");
+        for output in
+            run_and_direct_failure_outputs(&format!("aurora-assert-message-{name}"), &source)
+        {
+            assert!(output.stdout.is_empty(), "{name} should not print");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr).lines().next(),
+                Some(expected_first_line),
+                "{name} assertion message must be preserved exactly"
+            );
+        }
+    }
+}
+
+#[test]
+fn assertions_evaluate_condition_once_and_message_only_on_failure() {
+    let passing = r#"def lazy_message() -> String:
+    print("unexpected message")
+    return "unused"
+
+def main():
+    print("before")
+    assert true, lazy_message()
+    print("after")
+"#;
+    assert_run_and_direct_source_stdout(
+        "aurora-assert-lazy-passing-message",
+        passing,
+        "before\nafter\n",
+    );
+
+    let failing = r#"class Probe:
+    condition_calls: int32
+    message_calls: int32
+
+    def condition(borrow mut self) -> bool:
+        self.condition_calls += 1
+        print(f"condition {self.condition_calls}")
+        return false
+
+    def message(borrow mut self) -> String:
+        self.message_calls += 1
+        print(f"message {self.message_calls}")
+        return "evaluated once"
+
+def main():
+    mut probe = Probe(condition_calls=0, message_calls=0)
+    assert probe.condition(), probe.message()
+"#;
+    for output in run_and_direct_failure_outputs("aurora-assert-order", failing) {
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "condition 1\nmessage 1\n"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).lines().next(),
+            Some("error[AU4001]: evaluated once")
+        );
+    }
+}
+
+#[test]
+fn assertion_operand_traps_precede_assertion_failure() {
+    let condition_trap = r#"def condition() -> bool:
+    print("condition")
+    values: Vec[bool] = [true]
+    return values[5]
+
+def message() -> String:
+    print("message")
+    return "assertion should not run"
+
+def main():
+    assert condition(), message()
+"#;
+    for output in run_and_direct_failure_outputs("aurora-assert-condition-trap", condition_trap) {
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "condition\n");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("vector index `5` is out of bounds"));
+        assert!(!stderr.contains("assertion should not run"));
+    }
+
+    let message_trap = r#"def message() -> String:
+    print("message")
+    values: Vec[int32] = [1]
+    print(values[5])
+    return "assertion should not run"
+
+def main():
+    print("condition")
+    assert false, message()
+"#;
+    for output in run_and_direct_failure_outputs("aurora-assert-message-trap", message_trap) {
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "condition\nmessage\n"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("vector index `5` is out of bounds"));
+        assert!(!stderr.contains("assertion failed"));
+    }
+}
+
+#[test]
+fn assertion_failure_remains_primary_when_cleanup_also_traps() {
+    let source = r#"class Resource:
+    def close(borrow mut self):
+        print("close")
+        print(1 // 0)
+
+def main():
+    with resource = Resource():
+        print("body")
+        assert false, "body assertion"
+"#;
+
+    for output in run_and_direct_failure_outputs("aurora-assert-cleanup-primary", source) {
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "body\nclose\n");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).lines().next(),
+            Some("error[AU4001]: body assertion")
+        );
+    }
+}
+
+#[test]
+fn aura_test_treats_file_level_assertions_as_test_results() {
+    let temp = TempDir::new("aurora-file-assert-tests");
+    let passing_path = temp.path().join("passing.au");
+    fs::write(
+        &passing_path,
+        "def main():\n    assert true, \"passing assertion\"\n",
+    )
+    .expect("passing assertion test should write");
+    let passing = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&passing_path)
+        .output()
+        .expect("failed to run passing file-level assertion test");
+    assert!(
+        passing.status.success(),
+        "passing assertion test should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&passing.stderr)
+    );
+    assert!(String::from_utf8_lossy(&passing.stdout).contains("1 passed; 0 failed"));
+
+    let failing_path = temp.path().join("failing.au");
+    fs::write(
+        &failing_path,
+        "def main():\n    assert false, \"file-level assertion\"\n",
+    )
+    .expect("failing assertion test should write");
+    let failing = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&failing_path)
+        .output()
+        .expect("failed to run failing file-level assertion test");
+    assert!(
+        !failing.status.success(),
+        "failing assertion test should fail"
+    );
+    assert!(String::from_utf8_lossy(&failing.stdout).contains("0 passed; 1 failed"));
+    let stderr = String::from_utf8_lossy(&failing.stderr);
+    assert!(stderr.contains("FAILED"));
+    assert!(stderr.contains("error[AU4001]: file-level assertion"));
+    assert!(stderr.contains("assert false"));
+}

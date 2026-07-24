@@ -456,6 +456,10 @@ pub enum Terminator {
         arms: Vec<MirMatchArm>,
         otherwise: String,
     },
+    AssertFail {
+        message: Option<Operand>,
+        span: crate::diag::Span,
+    },
     Unreachable,
 }
 
@@ -1348,6 +1352,10 @@ impl<'a> Lowerer<'a> {
                 self.emit(Instruction::Eval { value });
                 true
             }
+            Stmt::Assert(assert_stmt) => {
+                self.lower_assert(assert_stmt);
+                true
+            }
             Stmt::Return(return_stmt) => {
                 let value = if let Some(value) = &return_stmt.value {
                     let return_type = self.return_type.clone();
@@ -1439,6 +1447,29 @@ impl<'a> Lowerer<'a> {
                 false
             }
         }
+    }
+
+    fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
+        let condition = self.lower_expr(&assert_stmt.condition);
+        let failure_block = self.new_block("assert_fail");
+        let continuation_block = self.new_block("assert_pass");
+        self.terminate(Terminator::Branch {
+            condition,
+            then_label: self.label(continuation_block),
+            else_label: self.label(failure_block),
+        });
+
+        self.switch_to(failure_block);
+        let message = assert_stmt
+            .message
+            .as_ref()
+            .map(|message| self.lower_expr(message));
+        self.terminate(Terminator::AssertFail {
+            message,
+            span: assert_stmt.span,
+        });
+
+        self.switch_to(continuation_block);
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {

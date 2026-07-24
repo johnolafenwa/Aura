@@ -12297,3 +12297,114 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
         7
     );
 }
+
+#[test]
+fn native_assert_failure_preserves_default_custom_empty_whitespace_and_span() {
+    let assert_diagnostic = |message: i64, line, column| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                super::aurora_direct_assert_fail(message, line, column);
+            })
+        })
+        .expect_err("assert failure should fail the active lightweight task")
+    };
+
+    let default = assert_diagnostic(0, 4, 7);
+    assert_eq!(default.code, "AU4001");
+    assert_eq!(default.message, "assertion failed");
+    assert_eq!(default.span, Some(Span::new(4, 7)));
+
+    for expected in ["custom", "", " \t "] {
+        let message = string_value(expected);
+        let diagnostic = assert_diagnostic(message as i64, 9, 3);
+        assert_eq!(diagnostic.code, "AU4001");
+        assert_eq!(diagnostic.message, expected);
+        assert_eq!(diagnostic.span, Some(Span::new(9, 3)));
+        unsafe {
+            release_value(message);
+        }
+    }
+}
+
+#[test]
+fn native_assert_failure_rejects_non_string_messages_without_consuming_them() {
+    let message = int_value(17);
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aurora_direct_assert_fail(message as i64, 6, 4);
+        })
+    })
+    .expect_err("an invalid assertion message should fail the active lightweight task");
+
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct assertion message must be `String`, found `integer`"
+    );
+    assert_eq!(diagnostic.span, None);
+    assert_eq!(
+        unsafe { &*message }.ref_count.load(Ordering::Acquire),
+        1,
+        "the exported assertion helper must borrow rather than consume its message argument"
+    );
+    unsafe {
+        release_value(message);
+    }
+}
+
+#[test]
+fn native_assert_failure_omits_spans_for_absent_or_invalid_coordinates() {
+    let assert_diagnostic = |message: i64, line, column| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                super::aurora_direct_assert_fail(message, line, column);
+            })
+        })
+        .expect_err("assert failure should fail the active lightweight task")
+    };
+
+    let default = assert_diagnostic(0, 0, 8);
+    assert_eq!(default.code, "AU4001");
+    assert_eq!(default.message, "assertion failed");
+    assert_eq!(default.span, None);
+
+    let message = string_value("coordinate-free");
+    let custom = assert_diagnostic(message as i64, 9, -1);
+    assert_eq!(custom.code, "AU4001");
+    assert_eq!(custom.message, "coordinate-free");
+    assert_eq!(custom.span, None);
+    assert_eq!(
+        unsafe { &*message }.ref_count.load(Ordering::Acquire),
+        1,
+        "building an unspanned diagnostic must not consume the borrowed custom message"
+    );
+    unsafe {
+        release_value(message);
+    }
+}
+
+#[test]
+fn native_assert_failure_remains_primary_when_cleanup_traps() {
+    unsafe extern "C-unwind" fn failing_cleanup(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        super::runtime_error("cleanup failed")
+    }
+
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let args = super::aurora_direct_arg_buffer_new(0);
+            super::aurora_direct_register_cleanup(
+                failing_cleanup as *const () as usize as i64,
+                args,
+                0,
+            );
+            super::aurora_direct_assert_fail(0, 12, 5);
+        })
+    })
+    .expect_err("assert failure should fail the active lightweight task");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "assertion failed");
+    assert_eq!(diagnostic.span, Some(Span::new(12, 5)));
+}

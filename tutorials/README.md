@@ -38,6 +38,7 @@ When the implemented language surface changes, update these in the same pass:
 21. [20-randomness.md](20-randomness.md)
 22. [21-json.md](21-json.md)
 23. [22-bytes.md](22-bytes.md)
+24. [23-assertions.md](23-assertions.md)
 
 ## Scope Today
 
@@ -68,6 +69,8 @@ The current tutorial set covers:
   payload extraction, and deterministic compact or pretty dumping
 - `Vec[uint8]` bytes, strict UTF-8 conversion, canonical hex/base64 codecs,
   typed malformed-input errors, and raw SHA-256
+- `assert condition` and `assert condition, message`, with lazy messages,
+  source-located `AU4001` failures, and file-level `aura test` behavior
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

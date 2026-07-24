@@ -130,6 +130,12 @@ Each response is one line containing the same `id` plus either `result` or an `e
 
 A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
+In the current file-level test model, each `.au` path is one test unit.
+Assertions that all pass leave the file successful. A failed assertion prints
+its ordinary `AU4001` source diagnostic, marks that file `FAILED`, and
+contributes to the failed count. Assertions are executed normally; `aura test`
+has no assertion-stripping option.
+
 ## VS Code And LSP
 
 The VS Code extension keeps one persistent `aura lsp` process for diagnostics, symbols, hover, go-to-definition, and completions. Requests are debounced, cancellable, version-guarded, and invalidated by dependency. If the compiler process cannot start, a small lexical recovery layer provides declarations and top-level completion; it intentionally does not duplicate compiler semantics.

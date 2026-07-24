@@ -1,5 +1,5 @@
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BreakStmt, ClassDecl,
+    Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BreakStmt, ClassDecl,
     ContinueStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
     FieldDecl, ForStmt, FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl,
     ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
@@ -742,6 +742,8 @@ impl Parser {
             ))
         } else if self.at_simple(&TokenKind::KwReturn) {
             self.parse_return_stmt()
+        } else if self.at_simple(&TokenKind::KwAssert) {
+            self.parse_assert_stmt()
         } else if self.at_simple(&TokenKind::KwPass) {
             self.parse_pass_stmt()
         } else if self.at_simple(&TokenKind::KwIf) {
@@ -774,6 +776,22 @@ impl Parser {
         };
         self.expect_statement_terminator()?;
         Ok(Stmt::Return(ReturnStmt { value, span }))
+    }
+
+    fn parse_assert_stmt(&mut self) -> Result<Stmt> {
+        let span = self.expect_keyword(TokenKind::KwAssert)?.span;
+        let condition = self.parse_non_tuple_expr()?;
+        let message = if self.eat_simple(&TokenKind::Comma).is_some() {
+            Some(self.parse_non_tuple_expr()?)
+        } else {
+            None
+        };
+        self.expect_statement_terminator()?;
+        Ok(Stmt::Assert(AssertStmt {
+            condition,
+            message,
+            span,
+        }))
     }
 
     fn parse_assign_stmt(&mut self) -> Result<Stmt> {
@@ -1184,12 +1202,22 @@ impl Parser {
 
     fn parse_expr(&mut self) -> Result<Expr> {
         self.enter_recursion("expression")?;
-        let result = self.parse_expr_inner();
+        let result = self.parse_non_tuple_expr_inner();
         self.exit_recursion();
         result
     }
 
-    fn parse_expr_inner(&mut self) -> Result<Expr> {
+    /// Parse an expression whose outermost form cannot consume a statement-level
+    /// comma. Tuple expressions will be layered above this entry point so
+    /// comma-delimited statement syntax can keep an explicit boundary.
+    fn parse_non_tuple_expr(&mut self) -> Result<Expr> {
+        self.enter_recursion("expression")?;
+        let result = self.parse_non_tuple_expr_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_non_tuple_expr_inner(&mut self) -> Result<Expr> {
         self.parse_or()
     }
 

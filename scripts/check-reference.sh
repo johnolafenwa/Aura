@@ -10,6 +10,7 @@ required_pages=(
   names-and-scopes
   static-semantics
   execution-model
+  assertions
   bytes
   json
   randomness
@@ -42,6 +43,15 @@ grep -Fq '`int` is an alias for `int64`' docs/manual/types.md
 grep -Fq 'Existing fixed `int32` contracts remain `int32`' docs/manual/types.md
 grep -Fq 'otherwise the literal defaults to `int64`' docs/manual/lexical-structure.md
 grep -Fq 'otherwise it defaults to `int64`' docs/manual/static-semantics.md
+grep -Fq 'assert-statement' docs/manual/grammar.md
+grep -Fq 'A failed assertion is `AU4001` at the `assert` keyword location.' docs/manual/diagnostics.md
+grep -Fq 'An assertion evaluates its condition exactly once.' docs/manual/execution-model.md
+grep -Fq 'An `assert` condition must have exactly type `bool`.' docs/manual/static-semantics.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md
+grep -Fq '0024-assertion-evaluation-and-diagnostic-policy.md' architecture_docs/decisions/README.md
+test -s examples/basics/assertions.au
+grep -Fq '`assertions.au`' examples/README.md
+grep -Fq '[23-assertions.md]' tutorials/README.md
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md

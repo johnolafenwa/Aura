@@ -67,6 +67,7 @@ export default defineConfig({
             { text: 'Static Semantics', link: '/manual/static-semantics' },
             { text: 'Expressions', link: '/manual/expressions' },
             { text: 'Statements', link: '/manual/statements' },
+            { text: 'Assertions', link: '/manual/assertions' },
             { text: 'Functions', link: '/manual/functions' },
             { text: 'Classes', link: '/manual/classes' },
             { text: 'Enums And Pattern Matching', link: '/manual/enums-and-match' },

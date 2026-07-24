@@ -10410,3 +10410,57 @@ def main() -> int32:
         .define_main_wrapper()
         .expect("main wrapper should support unit-return entrypoints");
 }
+
+#[test]
+fn direct_assertions_reference_the_dedicated_failure_helper() {
+    let source = r#"def main() -> int32:
+    assert false, "direct assertion"
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("assertion source should lower");
+    let object = emit_host_object_with_metadata(&mir, "/tmp/direct_assert.au", source)
+        .expect("assertion source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_assert_fail")),
+        "assert failures must use the diagnostic-preserving runtime helper: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
+    let make_module = |message| crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: Terminator::AssertFail {
+                    message,
+                    span: Span::new(2, 5),
+                },
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    emit_host_object(&make_module(Some(Operand::String("known".to_string()))))
+        .expect("literal assertion messages should validate");
+    let error = emit_host_object(&make_module(Some(Operand::Place("missing".to_string()))))
+        .expect_err("unknown assertion message places should be rejected");
+    assert!(
+        error.contains("does not know local `missing`"),
+        "unexpected validation error: {error}"
+    );
+}

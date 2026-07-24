@@ -45,6 +45,65 @@ fn d3_parser_accepts_int_alias_as_numeric_cast_target() {
 }
 
 #[test]
+fn d3_parser_preserves_assert_forms_keyword_span_and_comma_boundary() {
+    let bare = parse_stmt_from("assert ready\n").expect("bare assertion should parse");
+    let Stmt::Assert(bare) = bare else {
+        panic!("expected assertion statement");
+    };
+    assert_eq!(bare.span, Span::new(1, 1));
+    assert!(matches!(bare.condition.kind, ExprKind::Name(ref name) if name == "ready"));
+    assert!(bare.message.is_none());
+
+    let custom =
+        parse_stmt_from("assert left == right, message\n").expect("custom assertion should parse");
+    let Stmt::Assert(custom) = custom else {
+        panic!("expected assertion statement");
+    };
+    assert_eq!(custom.span, Span::new(1, 1));
+    assert!(matches!(
+        custom.condition.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Eq,
+            ..
+        }
+    ));
+    assert!(matches!(
+        custom.message,
+        Some(Expr {
+            kind: ExprKind::Name(ref name),
+            ..
+        }) if name == "message"
+    ));
+
+    let nested = parse_stmt_from("assert check(1, 2), format(3, 4)\n")
+        .expect("commas inside calls must not terminate either assertion expression");
+    assert!(matches!(
+        nested,
+        Stmt::Assert(AssertStmt {
+            condition:
+                Expr {
+                    kind: ExprKind::Call { ref args, .. },
+                    ..
+                },
+            message:
+                Some(Expr {
+                    kind: ExprKind::Call {
+                        args: ref message_args,
+                        ..
+                    },
+                    ..
+                }),
+            ..
+        }) if args.len() == 2 && message_args.len() == 2
+    ));
+
+    let missing_message =
+        parse_stmt_from("assert true,\n").expect_err("trailing assertion comma needs a message");
+    assert_eq!(missing_message.code, "AU1101");
+    assert_eq!(missing_message.span, Some(Span::new(1, 13)));
+}
+
+#[test]
 fn parser_preserves_duration_nanoseconds_and_keeps_literal_payloads_nonnegative() {
     for (source, expected_nanos) in [
         ("5ms", 5_000_000),

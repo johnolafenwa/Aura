@@ -31,6 +31,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/collections/map_basics.au
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/basics/pass_keyword.au
+./target/release/aura run examples/basics/assertions.au
 ./target/release/aura run examples/modules/simple_import.au
 ./target/release/aura run examples/packages/local_path_dependencies/app/src/main.au
 ./target/release/aura run examples/packages/workspace/app/src/main.au
@@ -133,7 +134,7 @@ aura deps update util
   - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
   - run a program through the MIR runtime
-  - this now includes the maintained `pass` statement and `sleep(duration)` builtin
+  - this now includes the maintained `pass` and `assert` statements and the `sleep(duration)` builtin
   - the maintained user-facing surface now also includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`

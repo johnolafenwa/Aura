@@ -3636,3 +3636,46 @@ fn contextual_none_equality_lowers_none_as_option_variants() {
 
     assert_eq!(contextual_none_count, 12);
 }
+
+#[test]
+fn assertions_lower_to_lazy_failure_blocks_with_keyword_spans() {
+    let source = r#"def main() -> int32:
+    assert true
+    assert false, "  exact message  "
+    return 0
+"#;
+    let module = crate::lower_source_to_mir(source).expect("assertions should lower to MIR");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be lowered");
+
+    let branches = main
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, Terminator::Branch { .. }))
+        .count();
+    assert_eq!(
+        branches, 2,
+        "each assertion must branch before its lazy failure message"
+    );
+
+    let failures = main
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            Terminator::AssertFail { message, span } => Some((message, span)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0], (&None, &Span::new(2, 5)));
+    assert_eq!(
+        failures[1],
+        (
+            &Some(Operand::String("  exact message  ".to_string())),
+            &Span::new(3, 5)
+        )
+    );
+}

@@ -495,6 +495,52 @@ fn machine_readable_analysis_covers_symbols_and_occurrences() {
 }
 
 #[test]
+fn d3_assert_analysis_visits_condition_and_lazy_message_without_defining_scope() {
+    let source = r#"
+def verify(ready: bool, message: String):
+    assert ready, message
+    assert ready
+"#;
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    // Analysis positions are zero-based: these are the uses on source lines
+    // three and four, not the parameter declarations on source line two.
+    for (line, start, end, hover) in [
+        (2, 11, 16, "param ready: bool"),
+        (2, 18, 25, "param message: String"),
+        (3, 11, 16, "param ready: bool"),
+    ] {
+        assert!(
+            analysis.occurrences.iter().any(|occurrence| {
+                occurrence.line == line
+                    && occurrence.start_character == start
+                    && occurrence.end_character == end
+                    && occurrence.hover.contains(hover)
+            }),
+            "missing assertion-use occurrence at {line}:{start}-{end}"
+        );
+    }
+
+    let module = crate::parser::parse(source).expect("assertions should parse");
+    let crate::ast::Item::Function(function) = &module.items[0] else {
+        panic!("expected function");
+    };
+    assert_eq!(stmt_start_line(&function.body[0]), 3);
+    assert_eq!(stmt_end_line(&function.body[0]), 3);
+
+    let completions =
+        complete_source("", 0, 0, None).expect("top-level completion should remain available");
+    assert!(completions
+        .iter()
+        .any(|completion| completion.kind == "keyword" && completion.name == "assert"));
+}
+
+#[test]
 fn machine_readable_analysis_reports_diagnostics() {
     let source = "def main():\n    print(total)\n";
     let analysis = analyze_source(source);

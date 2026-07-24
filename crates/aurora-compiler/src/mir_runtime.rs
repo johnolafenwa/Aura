@@ -2051,6 +2051,25 @@ impl MirRuntime {
                 }
                 Ok(BlockOutcome::Goto(otherwise.clone()))
             }
+            Terminator::AssertFail { message, span } => {
+                let message = match message {
+                    Some(message) => match self.evaluate_owned_operand(message, env)? {
+                        Value::String(message) => message,
+                        other => {
+                            return Err(Diagnostic::coded_at(
+                                "AU4001",
+                                *span,
+                                format!(
+                                    "MIR assertion message must evaluate to `String`, found `{}`",
+                                    other.render()
+                                ),
+                            ))
+                        }
+                    },
+                    None => "assertion failed".to_string(),
+                };
+                Err(Diagnostic::coded_at("AU4001", *span, message))
+            }
             Terminator::Unreachable => Err(Diagnostic::new("reached unreachable MIR block")),
         }
     }

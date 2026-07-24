@@ -45,7 +45,7 @@ The reserved token words are:
 
 ```text
 class enum def trait impl import from mut borrow own indirect public
-return if elif else and or not match case for in while break
+return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
 
@@ -302,6 +302,7 @@ suite = INDENT, statement, { statement }, DEDENT ;
 statement
     = assignment-statement
     | return-statement
+    | assert-statement
     | pass-statement
     | if-statement
     | match-statement
@@ -327,13 +328,19 @@ assignment-target
 assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;
 
 return-statement     = "return", [ expression ], statement-end ;
+assert-statement     = "assert", non-tuple-expression,
+                       [ ",", non-tuple-expression ], statement-end ;
 pass-statement       = "pass", NEWLINE ;
 break-statement      = "break", NEWLINE ;
 continue-statement   = "continue", NEWLINE ;
 expression-statement = expression, statement-end ;
 ```
 
-An annotation is valid only on a simple-name assignment target. Assignment targets cannot contain calls. There is no tuple/destructuring assignment. One-line suites are not supported.
+An annotation is valid only on a simple-name assignment target. Assignment
+targets cannot contain calls. There is no tuple/destructuring assignment.
+One-line suites are not supported. The optional top-level comma in an
+assertion belongs to `assert-statement`; neither operand consumes it as part of
+a tuple expression.
 
 ## Conditional And Loop Statements
 
@@ -424,7 +431,8 @@ From lowest to highest precedence:
 | 9 | primary | — |
 
 ```ebnf
-expression = or-expression ;
+expression           = non-tuple-expression ;
+non-tuple-expression = or-expression ;
 
 or-expression
     = and-expression, { "or", and-expression } ;
@@ -572,7 +580,7 @@ The grammar intentionally excludes:
 - trailing commas
 - match guards, alternative patterns, and collection patterns
 - call-site `borrow` annotations
-- `assert`, exception statements, `raise`, and `yield`
+- exception statements, `raise`, and `yield`
 - detached `spawn`, `select`, and proposal-only concurrency syntax
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aurora.

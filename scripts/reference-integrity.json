@@ -11,6 +11,9 @@
     "Status"
   ],
   "pages": {
+    "docs/manual/assertions.md": {
+      "kind": "feature"
+    },
     "docs/manual/api-index.md": {
       "kind": "structural",
       "reason": "Cross-feature API lookup table; normative contracts live on the linked feature pages."
@@ -119,6 +122,17 @@
     }
   },
   "blocks": {
+    "docs/manual/assertions.md#aurora-1": {
+      "sha256": "0dc68e0a09781c0c434ce0f2a5a84c30592f9c8687e66aa901668f783a9c755d",
+      "mode": "run",
+      "stdout": "before\nafter\n",
+      "stderr": ""
+    },
+    "docs/manual/assertions.md#text-1": {
+      "sha256": "29e05ee313594dc4806022f4669d6eeb5b548bafabea4b69b5ce1c10f2bd3811",
+      "mode": "illustrative",
+      "reason": "Pinned standard output from the preceding verified Aurora program."
+    },
     "docs/manual/bytes.md#aurora-1": {
       "sha256": "1a4efcbd921db58aa09ccf19b1ccc02806eccb342d26ced59349590b5c5d31f1",
       "mode": "run",
@@ -1260,7 +1274,7 @@
       "reason": "Normative lexical EBNF production fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#text-1": {
-      "sha256": "91d81095da41ec9555cd41c06a0ca5c780ef69dce19ed769b4d015f490746870",
+      "sha256": "2181a908837195ea579932f6d18b443d7ee3adce86cfaf363afaf4e9a4fed0d3",
       "mode": "illustrative",
       "reason": "Reserved-keyword catalog, not an Aurora compilation unit."
     },
@@ -1305,7 +1319,7 @@
       "reason": "Normative trait-and-implementation EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-9": {
-      "sha256": "b93e51852749372be20792d91ee19748a6604f0f1824b8a652202ffb0f00e06f",
+      "sha256": "61af07debce3461b87cbf93125023763e683143f573f8345e520a2d6d5505a0f",
       "mode": "illustrative",
       "reason": "Normative statement-and-assignment EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1325,7 +1339,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "3336f5a3575002928c3d650887e173593510626f18b029bbb874d154a3d5d71e",
+      "sha256": "ab4d439db1a4a0f0b0385f152c25daf4378b0a325992e60393ef851bf643527a",
       "mode": "illustrative",
       "reason": "Normative expression-precedence-and-call EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1350,7 +1364,7 @@
       "reason": "Normative identifier EBNF production interpreted by the lexical prose, not Aurora source."
     },
     "docs/manual/lexical-structure.md#text-1": {
-      "sha256": "91d81095da41ec9555cd41c06a0ca5c780ef69dce19ed769b4d015f490746870",
+      "sha256": "2181a908837195ea579932f6d18b443d7ee3adce86cfaf363afaf4e9a4fed0d3",
       "mode": "illustrative",
       "reason": "Reserved-keyword catalog, not an Aurora compilation unit."
     },
