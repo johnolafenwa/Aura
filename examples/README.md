@@ -181,6 +181,31 @@ The examples are organized by topic so they can serve both as quick references a
 - `control_plane_foundations.au`
   - typed JSON/TOML metadata, path operations, process-local counters, and structured log/trace events
   - prints the artifact path, deterministic JSON, TOML validity, and counter value
+- `retrying_network_worker.au`
+  - application-level HTTP retry policy over a loopback server: retry only
+    `503`, preserve terminal `429`, and return the final `503` without drawing
+    jitter or sleeping after the attempt budget is exhausted
+  - uses `random.Rng(42)`, exponential `Duration` backoff with deterministic
+    jitter, explicit five-second network/task deadlines, and scoped
+    `TaskGroup`, listener, exchange, and response resources
+  - the maintained CLI regression runs the example through both the MIR and
+    forced-direct backends and pins seven real loopback requests
+  - prints:
+    - `recover request 1`
+    - `recover retry 4ms`
+    - `recover request 2`
+    - `recover result 200`
+    - `rate request 1`
+    - `rate retry 6ms`
+    - `rate request 2`
+    - `rate result 429`
+    - `exhaust request 1`
+    - `exhaust retry 3ms`
+    - `exhaust request 2`
+    - `exhaust retry 5ms`
+    - `exhaust request 3`
+    - `exhaust result 503`
+    - `requests 7`
 
 ### `json/`
 

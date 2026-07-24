@@ -6273,6 +6273,69 @@ def main() -> int32:
 }
 
 #[test]
+fn retrying_network_worker_runs_with_computed_backoff_on_both_backends() {
+    let example = repo_root().join("examples/agents/retrying_network_worker.au");
+    let source = fs::read_to_string(&example)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", example.display()));
+
+    let expected = concat!(
+        "recover request 1\n",
+        "recover retry 4ms\n",
+        "recover request 2\n",
+        "recover result 200\n",
+        "rate request 1\n",
+        "rate retry 6ms\n",
+        "rate request 2\n",
+        "rate result 429\n",
+        "exhaust request 1\n",
+        "exhaust retry 3ms\n",
+        "exhaust request 2\n",
+        "exhaust retry 5ms\n",
+        "exhaust request 3\n",
+        "exhaust result 503\n",
+        "requests 7\n",
+    );
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-retrying-network-worker",
+        &source,
+        std::time::Duration::from_secs(20),
+        expected,
+    );
+
+    let retry_body = source
+        .split_once("def request_with_retry")
+        .and_then(|(_, rest)| rest.split_once("\ndef work"))
+        .map(|(body, _)| body)
+        .expect("example should define request_with_retry before work");
+
+    let marker = |needle: &str| {
+        retry_body
+            .find(needle)
+            .unwrap_or_else(|| panic!("retry worker should contain `{needle}`"))
+    };
+    let retryable_guard = marker("if status != 503:");
+    let final_attempt_guard = marker("if attempt == max_attempts:");
+    let jitter = marker("jitter = rng.next_int(0, 4) * 1ms");
+    let delay = marker("delay = backoff + jitter");
+    let retry_log = marker("print(f\"{name} retry {delay}\")");
+    let sleep = marker("sleep(delay)");
+    let double = marker("backoff = backoff * 2");
+
+    assert!(
+        retryable_guard < final_attempt_guard
+            && final_attempt_guard < jitter
+            && jitter < delay
+            && delay < retry_log
+            && retry_log < sleep
+            && sleep < double,
+        "the final-attempt guard must precede jitter, logging, sleep, and doubling"
+    );
+    assert_eq!(retry_body.matches("rng.next_int(0, 4)").count(), 1);
+    assert_eq!(retry_body.matches("sleep(delay)").count(), 1);
+}
+
+#[test]
 fn queue_iteration_without_registered_producers_exits() {
     let source = r#"
 def main() -> int32:

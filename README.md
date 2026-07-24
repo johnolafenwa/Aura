@@ -139,6 +139,12 @@ Current compiler workflow:
   - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
 - `cargo run -p aura -- run examples/agents/control_plane_foundations.au`
   - execute typed JSON/TOML metadata, path helpers, counters, and structured log/trace events
+- `cargo run -p aura -- run examples/agents/retrying_network_worker.au`
+  - execute an application-level HTTP retry worker that retries only `503`,
+    uses deterministic seed-42 jitter with exponential `Duration` backoff,
+    applies explicit deadlines, and closes its task/listener/response resources
+    through structured scopes; the maintained product regression pins the same
+    seven-request trace on the MIR and forced-direct backends
 - `cargo run -p aura -- run app.au -- --model small`
   - pass program arguments exposed through `sys.args()`
 - `cargo run -p aura -- new agent-app`

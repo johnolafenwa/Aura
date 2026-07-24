@@ -1,0 +1,112 @@
+import io
+import net
+import random
+
+def serve(listener: own net.HttpListener) -> Result[int32, io.Error]:
+    with server = listener:
+        mut recover_requests: int32 = 0
+        mut rate_requests: int32 = 0
+        mut total_requests: int32 = 0
+
+        while total_requests < 7:
+            exchange = try server.accept(timeout=5s)
+            with request = exchange:
+                path = request.path()
+                mut status: int32 = 404
+
+                if path == "/recover":
+                    recover_requests += 1
+                    if recover_requests < 2:
+                        status = 503
+                    else:
+                        status = 200
+                elif path == "/rate":
+                    rate_requests += 1
+                    if rate_requests < 2:
+                        status = 503
+                    else:
+                        status = 429
+                elif path == "/exhaust":
+                    status = 503
+
+                try request.respond_text(status, "", {})
+                total_requests += 1
+
+        return Result.Ok(total_requests)
+
+def request_with_retry(address: String, path: String, name: String, max_attempts: int32, initial_backoff: Duration, rng: borrow mut random.Rng) -> Result[int32, io.Error]:
+    mut attempt: int32 = 1
+    mut backoff = initial_backoff
+
+    while true:
+        print(f"{name} request {attempt}")
+        response = try net.http_request_text_timeout("GET", "http://" + address + path, "", {}, 5s)
+        mut status: int32 = 0
+        with http_response = response:
+            status = http_response.status()
+
+        if status != 503:
+            return Result.Ok(status)
+        if attempt == max_attempts:
+            return Result.Ok(status)
+
+        jitter = rng.next_int(0, 4) * 1ms
+        delay = backoff + jitter
+        print(f"{name} retry {delay}")
+        sleep(delay)
+        backoff = backoff * 2
+        attempt += 1
+
+    return Result.Ok(500)
+
+def work(address: String) -> Result[None, io.Error]:
+    mut rng = random.Rng(42)
+
+    recovered = try request_with_retry(address, "/recover", "recover", 3, 2ms, rng)
+    print(f"recover result {recovered}")
+
+    rate_limited = try request_with_retry(address, "/rate", "rate", 3, 4ms, rng)
+    print(f"rate result {rate_limited}")
+
+    exhausted = try request_with_retry(address, "/exhaust", "exhaust", 3, 2ms, rng)
+    print(f"exhaust result {exhausted}")
+
+    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        listener = try net.http_listen("127.0.0.1:0")
+        address = try listener.local_addr()
+        server = group.start(serve, listener)
+        worker = group.start(work, address)
+
+        match worker.result(timeout=5s):
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Error(message):
+                return Result.Err(io.Error.Other(message=message))
+            case TaskResult.TimedOut:
+                return Result.Err(io.Error.Other(message="worker timed out"))
+            case TaskResult.Cancelled:
+                return Result.Err(io.Error.Other(message="worker cancelled"))
+
+        match server.result(timeout=5s):
+            case TaskResult.Ready(result):
+                requests = try result
+                print(f"requests {requests}")
+            case TaskResult.Error(message):
+                return Result.Err(io.Error.Other(message=message))
+            case TaskResult.TimedOut:
+                return Result.Err(io.Error.Other(message="server timed out"))
+            case TaskResult.Cancelled:
+                return Result.Err(io.Error.Other(message="server cancelled"))
+
+        return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

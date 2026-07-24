@@ -52,6 +52,18 @@ grep -Fq '0024-assertion-evaluation-and-diagnostic-policy.md' architecture_docs/
 test -s examples/basics/assertions.au
 grep -Fq '`assertions.au`' examples/README.md
 grep -Fq '[23-assertions.md]' tutorials/README.md
+test -s examples/agents/retrying_network_worker.au
+grep -Fq 'random.Rng(42)' examples/agents/retrying_network_worker.au
+grep -Fq 'if status != 503:' examples/agents/retrying_network_worker.au
+grep -Fq 'if attempt == max_attempts:' examples/agents/retrying_network_worker.au
+grep -Fq 'while total_requests < 7:' examples/agents/retrying_network_worker.au
+grep -Fq 'request_with_retry(address, "/rate", "rate", 3, 4ms, rng)' examples/agents/retrying_network_worker.au
+grep -Fq 'retrying_network_worker.au' README.md
+grep -Fq '`retrying_network_worker.au`' examples/README.md
+grep -Fq 'retrying_network_worker.au' tutorials/13-concurrency.md
+grep -Fq 'retrying_network_worker.au' tutorials/19-io-and-networking.md
+grep -Fq 'retrying_network_worker_runs_with_computed_backoff_on_both_backends' docs/manual/conformance.md
+grep -Fq 'fn retrying_network_worker_runs_with_computed_backoff_on_both_backends()' crates/aura/tests/cli.rs
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md

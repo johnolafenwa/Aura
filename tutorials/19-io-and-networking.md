@@ -378,6 +378,23 @@ The maintained HTTP convenience surface includes:
 
 See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 
+### Application-Level Retries
+
+Aurora's HTTP helpers perform one request; retry classification and backoff are
+an application concern. The maintained
+[retrying network worker](../examples/agents/retrying_network_worker.au)
+retries only `503`, returns other statuses such as `429` unchanged, and returns
+the last `503` when its attempt budget is exhausted.
+
+The example uses `random.Rng(42)` for deterministic jitter, doubles a
+`Duration` backoff after each retry, and checks the final-attempt guard before
+the RNG draw, retry log, and `sleep(...)`. It makes seven real requests against
+an ephemeral loopback listener and applies explicit five-second deadlines to
+listener acceptance, HTTP requests, and task results. `TaskGroup` and `with`
+scopes ensure the worker, server, listener, exchanges, and responses are all
+closed deterministically. The CLI conformance test executes the exact trace on
+both the MIR and forced-direct backends.
+
 ## WebSockets
 
 The maintained WebSocket surface includes:

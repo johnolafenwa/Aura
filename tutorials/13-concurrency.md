@@ -269,6 +269,24 @@ For constructors, arithmetic, comparison, conversion, and sub-millisecond
 rendering, see
 [examples/concurrency/duration_arithmetic.au](../examples/concurrency/duration_arithmetic.au).
 
+### Backoff Without Hidden Final Delays
+
+Retry policy belongs in application code. The maintained
+[retrying network worker](../examples/agents/retrying_network_worker.au) retries
+only HTTP `503`, doubles a `Duration` backoff after each retry, and adds jitter
+from `random.Rng(42)` so its trace is reproducible.
+
+The worker checks both the response status and the final-attempt guard before
+drawing randomness, printing a retry, or calling `sleep(...)`. Exhausting three
+attempts therefore returns the last `503` immediately: there is no invisible
+fourth attempt and no final delay. A terminal non-retryable status such as
+`429` is returned immediately too.
+
+The example places the loopback server and worker in one `TaskGroup`, gives
+network and task waits explicit five-second deadlines, and scopes listeners,
+exchanges, and responses with `with`. Its maintained CLI regression pins the
+same seven-request trace through the MIR and forced-direct backends.
+
 ## Full Example
 
 ```python
@@ -306,6 +324,7 @@ See:
 - [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeout.au)
 - [examples/concurrency/queue_put_timeout.au](../examples/concurrency/queue_put_timeout.au)
 - [examples/concurrency/send_result.au](../examples/concurrency/send_result.au)
+- [examples/agents/retrying_network_worker.au](../examples/agents/retrying_network_worker.au)
 
 ## Current Limits
 
