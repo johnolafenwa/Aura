@@ -1000,6 +1000,128 @@ def main():
 }
 
 #[test]
+fn enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default() {
+    let output = crate::run_source(
+        r#"
+def main():
+    mut names = Vec[String]()
+    names.push("ada")
+    names.push("grace")
+    for index, name in enumerate(names):
+        print(f"{index}:{name}")
+
+    mut tags = Set[String]()
+    tags.insert("beta")
+    for index, tag in enumerate(tags):
+        print(f"set {index}:{tag}")
+
+    mut numbers = Vec[int32]()
+    numbers.push(1)
+    numbers.push(2)
+    numbers.push(3)
+    mut words = Vec[String]()
+    words.push("one")
+    words.push("two")
+    for number, word in zip(numbers, words):
+        print(f"{number}={word}")
+
+    for index, value in enumerate(numbers):
+        if index == 0:
+            continue
+        if value == 3:
+            break
+        print(f"skip {index}->{value}")
+
+    print(names.len())
+"#,
+    )
+    .expect("enumerate and zip should iterate in lockstep");
+    assert_eq!(
+        output.stdout,
+        "0:ada\n1:grace\nset 0:beta\n1=one\n2=two\nskip 1->2\n2\n"
+    );
+
+    for (source, code, message) in [
+        (
+            "def main():\n    for index, value in enumerate(range(3)):\n        print(index)\n",
+            "AU2002",
+            "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    for index, value in borrow enumerate(values):\n        print(index)\n",
+            "AU3002",
+            "`enumerate` iterates over the bare-loop borrow default; write `for ... in enumerate(...):` without an ownership modifier",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
+            "AU2004",
+            "`enumerate` takes 1 iterable, found 2",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    for first, second in zip(values):\n        print(first)\n",
+            "AU2004",
+            "`zip` takes 2 iterables, found 1",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    for index, value in enumerate(values=values):\n        print(index)\n",
+            "AU2004",
+            "`enumerate` takes positional iterables only",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    pairs = enumerate(values)\n    print(pairs)\n",
+            "AU2005",
+            "`enumerate` is a `for` loop form, not a value; write `for ... in enumerate(...):`",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("an invalid enumerate or zip form must be rejected");
+        assert_eq!(rejected.code, code, "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    // The iterables stay borrowed for the whole loop, and a non-copy element
+    // binding is a shared borrow rather than a move.
+    let frozen = crate::check_source(
+        "def main():\n    mut values = Vec[String]()\n    values.push(\"a\")\n    for index, value in enumerate(values):\n        values.push(value)\n",
+    )
+    .expect_err("mutating an iterable during a lockstep loop must be rejected");
+    assert_eq!(frozen.code, "AU3002");
+    assert!(
+        frozen
+            .message
+            .contains("cannot mutate `values` while `values` is borrowed for iteration"),
+        "{}",
+        frozen.message
+    );
+
+    let moved = crate::check_source(
+        "def take(value: own String) -> String:\n    return value\n\ndef main():\n    mut values = Vec[String]()\n    values.push(\"a\")\n    for index, value in enumerate(values):\n        print(take(value))\n",
+    )
+    .expect_err("a borrowed lockstep element must not be moved out");
+    assert_eq!(moved.code, "AU3002");
+    assert!(
+        moved.message.contains("cannot move borrowed value `value`"),
+        "{}",
+        moved.message
+    );
+
+    // A user definition shadows the loop form.
+    let shadowed = crate::run_source(
+        r#"
+def zip(left: Vec[int32], right: Vec[int32]) -> int32:
+    return left.len() as int32 + right.len() as int32
+
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    print(zip(values, values))
+"#,
+    )
+    .expect("a user function named `zip` should shadow the loop form");
+    assert_eq!(shadowed.stdout, "2\n");
+}
+
+#[test]
 fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
     // A default argument may not reference another parameter, wherever the
     // reference hides inside the expression.

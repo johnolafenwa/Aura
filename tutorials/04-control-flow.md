@@ -216,6 +216,35 @@ for value in borrow seen:
 
 See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
+## `enumerate` And `zip`
+
+`enumerate(...)` gives you the position alongside each value:
+
+```python
+hosts = ["alpha", "beta"]
+for index, host in enumerate(hosts):
+    print(f"{index}: {host}")
+```
+
+`zip(...)` walks two sequences together and stops at the shorter one:
+
+```python
+ports = [80, 443, 8080]
+for host, port in zip(hosts, ports):
+    print(f"{host}:{port}")
+```
+
+Both are `for` loop forms rather than values you can store, so writing
+`pairs = enumerate(hosts)` is rejected with guidance to use the loop spelling.
+Both read their operands by position, so each one must be a `Vec[T]` or a
+`Set[T]`, and both iterate over the bare-loop borrow default: no `own`,
+`borrow`, or `borrow mut` modifier, the operands stay borrowed for the whole
+loop, and a non-copy element binding cannot be moved out.
+
+If you define your own `enumerate` or `zip` function, yours wins.
+
+See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumerate_and_zip.au).
+
 ## Current Limits
 
 The current compiler supports `for` over:
@@ -225,9 +254,13 @@ The current compiler supports `for` over:
 - default/`borrow`/`own` `Set[T]`
 - `Queue[T]` (iterates until the queue closes)
 
+It also supports the `enumerate(seq)` and `zip(first, second)` loop forms over
+`Vec[T]` and `Set[T]`.
+
 Not yet supported:
 
 - user-defined iterable protocols
+- `enumerate` or `zip` over a `Range` or `Queue[T]`
 - `borrow mut Set[T]`
 - custom step values for `range`
 

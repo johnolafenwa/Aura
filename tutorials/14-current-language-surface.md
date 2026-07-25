@@ -237,6 +237,10 @@ The current compiler supports these expression forms:
 - comparison chains such as `low <= value < high`, where equality, ordering,
   and membership share one precedence level, every operand is evaluated at most
   once, and a false link short-circuits the rest
+- the compiler-known `for` iterable forms `enumerate(seq)`, yielding
+  `(int64, element)`, and `zip(first, second)`, which stops at the shorter
+  sequence; both take `Vec[T]` or `Set[T]` operands over the bare-loop borrow
+  default and are legal only as a `for` iterable
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block

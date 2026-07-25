@@ -1,0 +1,8 @@
+0:ada
+1:grace
+set 0:beta
+1=one
+2=two
+skip 1->2
+2
+3

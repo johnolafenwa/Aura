@@ -275,6 +275,14 @@ The examples are organized by topic so they can serve both as quick references a
     - `true`
     - `true`
     - `false`
+- `enumerate_and_zip.au`
+  - `for` over `enumerate(...)` and `zip(...)`, where `zip` stops at the shorter sequence
+  - prints:
+    - `0: alpha`
+    - `1: beta`
+    - `alpha:80`
+    - `beta:443`
+    - `3`
 - `for_range.au`
   - `for` loops over `range(...)`, plus `break` and `continue`
   - prints `7`
@@ -781,6 +789,7 @@ cargo run -p aura -- run examples/control_flow/match_literals.au
 cargo run -p aura -- run examples/control_flow/boolean_logic.au
 cargo run -p aura -- run examples/control_flow/conditional_expressions.au
 cargo run -p aura -- run examples/control_flow/membership_and_chains.au
+cargo run -p aura -- run examples/control_flow/enumerate_and_zip.au
 cargo run -p aura -- run examples/control_flow/while_break_continue.au
 cargo run -p aura -- run examples/enums/result_match.au
 cargo run -p aura -- run examples/enums/result_option.au

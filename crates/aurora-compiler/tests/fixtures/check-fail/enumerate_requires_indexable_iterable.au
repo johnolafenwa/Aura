@@ -1,0 +1,3 @@
+def main():
+    for index, value in enumerate(range(3)):
+        print(index)

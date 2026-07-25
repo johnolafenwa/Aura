@@ -1,0 +1,5 @@
+def main():
+    mut left = Vec[int32]()
+    mut right = Vec[int32]()
+    for first, second in borrow zip(left, right):
+        print(first)

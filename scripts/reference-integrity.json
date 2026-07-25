@@ -1288,36 +1288,37 @@
       "reason": "Iteration fragment: values is the collection supplied by the surrounding example."
     },
     "docs/manual/statements.md#aurora-14": {
+      "sha256": "f628eda3671db517bb268c3595a7e4a038d936aa0896c0cd07570ef6cf87a088",
+      "mode": "run",
+      "stdout": "0\n1\n80\n443\n",
+      "stderr": ""
+    },
+    "docs/manual/statements.md#aurora-15": {
       "sha256": "c4ed2cbe71384d984471bbdf596ed282ceaf0d267e48e89661c4a40942c30842",
       "mode": "run",
       "stdout": "1\n3\n",
       "stderr": ""
     },
-    "docs/manual/statements.md#aurora-15": {
+    "docs/manual/statements.md#aurora-16": {
       "sha256": "53753d6d347a01a32f3bd83ec7f21d897e3e507a4b098f5517b3eb3f0cd5c15a",
       "mode": "illustrative",
       "reason": "Match-statement fragment: result is the input supplied by the surrounding example."
     },
-    "docs/manual/statements.md#aurora-16": {
+    "docs/manual/statements.md#aurora-17": {
       "sha256": "4036e37959c5d9fced1ffb51cb5177a1ee29dfd3196737149a5deac5b5de6b06",
       "mode": "illustrative",
       "reason": "Scoped-cleanup fragment: it belongs inside a Result-returning function and relies on the fs import."
     },
-    "docs/manual/statements.md#aurora-17": {
+    "docs/manual/statements.md#aurora-18": {
       "sha256": "7d73b0ca2f46305a7dbcedb361f99ab6fe62b0a4d0b1df9d52cf8381e2075511",
       "mode": "illustrative",
       "reason": "TaskGroup syntax fragment: worker is an application callable supplied by the surrounding example."
     },
-    "docs/manual/statements.md#aurora-18": {
+    "docs/manual/statements.md#aurora-19": {
       "sha256": "8907d2d9ca146bcb2cbc015824ba899b0190ba961c8803748e0b330a001de5fc",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
-    },
-    "docs/manual/statements.md#aurora-19": {
-      "sha256": "d63a1e020a553e28b35cc2f7b3dd3c4b447ca77ae53cac0b79b3e249b5c95c0a",
-      "mode": "illustrative",
-      "reason": "Module-import example: it requires the multi-file util.math module tree described by the surrounding page."
     },
     "docs/manual/statements.md#aurora-2": {
       "sha256": "d8044bc40516f022962e455f12a03e98bd71b41b1b272c3da9862cf2dca7cd0f",
@@ -1326,6 +1327,11 @@
       "stderr": ""
     },
     "docs/manual/statements.md#aurora-20": {
+      "sha256": "d63a1e020a553e28b35cc2f7b3dd3c4b447ca77ae53cac0b79b3e249b5c95c0a",
+      "mode": "illustrative",
+      "reason": "Module-import example: it requires the multi-file util.math module tree described by the surrounding page."
+    },
+    "docs/manual/statements.md#aurora-21": {
       "sha256": "37edb6ce3a2558aca196dd0cdca5a6e3e02721488a7529ae5b29c7d622a0b57d",
       "mode": "run",
       "stdout": "hello\n",

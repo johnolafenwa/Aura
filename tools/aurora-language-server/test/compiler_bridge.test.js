@@ -912,6 +912,52 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
   }
 });
 
+test("compiler bridge preserves enumerate and zip loop operands", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-lockstep-"));
+  const source = [
+    "def report(hosts: Vec[String], ports: Vec[int32]):",
+    "    for index, host in enumerate(hosts):",
+    "        print(index)",
+    "    for host, port in zip(hosts, ports):",
+    "        print(port)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const hosts = analysis.occurrences.find(
+      (candidate) => candidate.line === 1 && candidate.start_character === 33
+    );
+    assert.ok(hosts, "missing enumerate operand occurrence");
+    assert.ok(hosts.hover.includes("param hosts: Vec[String]"));
+
+    const invalid = await analyzeWithCompiler(
+      mainUri,
+      [
+        "def main():",
+        "    for index, value in enumerate(range(3)):",
+        "        print(index)",
+        ""
+      ].join("\n")
+    );
+    assert.ok(invalid);
+    assert.equal(invalid.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(invalid, mainUri);
+    assert.equal(diagnostic.code, "AU2002");
+    assert.equal(
+      diagnostic.message,
+      "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves membership and comparison chain operands", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-membership-"));
   const source = [

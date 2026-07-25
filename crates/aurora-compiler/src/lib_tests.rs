@@ -454,6 +454,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         include_str!("../../../examples/control_flow/membership_and_chains.au"),
         "true\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\n",
     ),
+    (
+        "examples/control_flow/enumerate_and_zip.au",
+        include_str!("../../../examples/control_flow/enumerate_and_zip.au"),
+        "0: alpha\n1: beta\nalpha:80\nbeta:443\n3\n",
+    ),
 ];
 
 struct TempDir {

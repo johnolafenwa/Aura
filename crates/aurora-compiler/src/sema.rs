@@ -3792,6 +3792,47 @@ struct BorrowedCallPlace {
     origin_span: crate::diag::Span,
 }
 
+/// A compiler-known `for` iterable form.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LoopFormKind {
+    Enumerate,
+    Zip,
+}
+
+impl LoopFormKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Enumerate => "enumerate",
+            Self::Zip => "zip",
+        }
+    }
+
+    fn arity(self) -> usize {
+        match self {
+            Self::Enumerate => 1,
+            Self::Zip => 2,
+        }
+    }
+}
+
+struct LoopForm<'a> {
+    kind: LoopFormKind,
+    name: &'static str,
+    #[allow(dead_code)]
+    span: crate::diag::Span,
+    iterables: Vec<&'a Expr>,
+}
+
+/// The element type an index-addressable collection yields in a lockstep loop.
+pub(crate) fn lockstep_element_type(iterable_ty: &Type) -> Option<Type> {
+    match iterable_ty {
+        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
 /// One named field read out of a surrounding expression's result.
 #[derive(Clone, Copy)]
 struct ProjectedField<'a> {
@@ -5495,6 +5536,147 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// Recognizes the compiler-known `for` iterable forms `enumerate(xs)` and
+    /// `zip(xs, ys)`. A user definition of either name shadows the loop form.
+    fn loop_form<'e>(&self, iterable: &'e Expr) -> Result<Option<LoopForm<'e>>> {
+        let ExprKind::Call { callee, args } = &iterable.kind else {
+            return Ok(None);
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return Ok(None);
+        };
+        let kind = match name.as_str() {
+            "enumerate" => LoopFormKind::Enumerate,
+            "zip" => LoopFormKind::Zip,
+            _ => return Ok(None),
+        };
+        if self.functions.contains_key(name)
+            || self.resolve_class_info(name).is_some()
+            || self.resolve_enum_info(name).is_some()
+        {
+            return Ok(None);
+        }
+        let arity = kind.arity();
+        if args.len() != arity {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                iterable.span,
+                format!(
+                    "`{}` takes {} iterable{}, found {}",
+                    name,
+                    arity,
+                    if arity == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            ));
+        }
+        if let Some(named) = args.iter().find(|argument| argument.name.is_some()) {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                named.span,
+                format!("`{}` takes positional iterables only", name),
+            ));
+        }
+        Ok(Some(LoopForm {
+            kind,
+            name: kind.name(),
+            span: iterable.span,
+            iterables: args.iter().map(|argument| &argument.value).collect(),
+        }))
+    }
+
+    /// Checks `for ... in enumerate(xs):` and `for ... in zip(xs, ys):`. Both
+    /// iterate index-addressable collections in lockstep over the bare-loop
+    /// borrow default, so neither accepts an ownership modifier.
+    fn check_lockstep_for(
+        &self,
+        for_stmt: &crate::ast::ForStmt,
+        form: LoopForm<'_>,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<()> {
+        if for_stmt.borrow_mode.is_some() {
+            return Err(Diagnostic::at(
+                for_stmt.span,
+                format!(
+                    "`{}` iterates over the bare-loop borrow default; write `for ... in {}(...):` without an ownership modifier",
+                    form.name, form.name
+                ),
+            ));
+        }
+
+        let mut element_types = Vec::with_capacity(form.iterables.len() + 1);
+        if form.kind == LoopFormKind::Enumerate {
+            element_types.push(Type::named("int64"));
+        }
+        let mut any_non_copy = false;
+        for iterable in &form.iterables {
+            let iterable_ty = self.type_of_expr(iterable, locals)?;
+            let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    iterable.span,
+                    format!(
+                        "`{}` requires a `Vec[T]` or `Set[T]` iterable, found `{}`",
+                        form.name, iterable_ty
+                    ),
+                )
+                .with_help(
+                    "these loop forms read collections by position; iterate a `Range` or `Queue[T]` with the bare `for` form",
+                ));
+            };
+            any_non_copy = any_non_copy || !self.is_copy_type(&element_ty);
+            element_types.push(element_ty);
+        }
+
+        let binding_ty = Type::Tuple(element_types);
+        let binding_passing = if any_non_copy {
+            ReceiverKind::Borrow
+        } else {
+            ReceiverKind::Value
+        };
+
+        let mut body_locals = locals.clone();
+        for iterable in &form.iterables {
+            if let Some(place) = self.borrow_call_place(iterable) {
+                let root = place.root.clone();
+                if let Some(binding) = body_locals.get_mut(&root) {
+                    if place.is_root() {
+                        binding.assignable = false;
+                        binding.mutable_place = false;
+                        if binding.passing == ReceiverKind::Value {
+                            binding.passing = ReceiverKind::Borrow;
+                            binding.borrow_origin = Some(root);
+                            binding.borrow_label = None;
+                        }
+                    }
+                    binding.frozen_places.insert(place.clone(), iterable.span);
+                }
+            }
+        }
+
+        self.bind_target(
+            &for_stmt.target,
+            &binding_ty,
+            binding_passing,
+            false,
+            &mut body_locals,
+            "loop",
+        )?;
+        self.check_block(
+            &for_stmt.body,
+            &mut body_locals,
+            return_type,
+            loop_depth + 1,
+            allow_return,
+        )?;
+        self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
+        self.merge_control_flow_moves(locals, &[&body_locals]);
+        Ok(())
+    }
+
     fn bind_target(
         &self,
         target: &crate::ast::BindingTarget,
@@ -5802,6 +5984,17 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::For(for_stmt) => {
+                    if let Some(form) = self.loop_form(&for_stmt.iterable)? {
+                        self.check_lockstep_for(
+                            for_stmt,
+                            form,
+                            locals,
+                            return_type,
+                            loop_depth,
+                            allow_return,
+                        )?;
+                        continue;
+                    }
                     let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
                     if matches!(&iterable_ty, Type::Named(name, args) if name == "Queue" && args.len() == 1)
                         && for_stmt.borrow_mode.is_some()
@@ -12719,6 +12912,13 @@ impl<'a> FunctionChecker<'a> {
                 "AU2005",
                 span,
                 "strings use quoted literals; `String(...)` is not a constructor",
+            ),
+            Some(form @ ("enumerate" | "zip")) => Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "`{form}` is a `for` loop form, not a value; write `for ... in {form}(...):`"
+                ),
             ),
             Some("Some" | "None" | "Ok" | "Err" | "Closed") => Diagnostic::at(
                 span,

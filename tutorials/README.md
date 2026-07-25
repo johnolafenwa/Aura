@@ -66,6 +66,8 @@ The current tutorial set covers:
 - `in` and `not in` over `Vec`, `Set`, `Map` keys, and `String` substrings
 - Python-style chained comparisons such as `low <= value < high`, which
   evaluate each operand once and short-circuit
+- the `for ... in enumerate(seq):` and `for ... in zip(first, second):` loop
+  forms, where `zip` stops at the shorter sequence
 - `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation

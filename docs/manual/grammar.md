@@ -425,6 +425,13 @@ Static semantics resolve the absent modifier by iterable kind. Explicit
 modifiers are rejected for Queue iteration because it is a receive operation
 rather than collection-place traversal.
 
+The iterable position also recognizes two compiler-known call shapes,
+`enumerate(expression)` and `zip(expression, expression)`. They are not values
+and have no production outside this position; static semantics reject either
+name elsewhere, and a user declaration of the name shadows the loop form.
+Explicit ownership modifiers are rejected for both, because they iterate over
+the bare-loop borrow default.
+
 ## `with` Statements
 
 ```ebnf

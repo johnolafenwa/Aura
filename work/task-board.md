@@ -82,25 +82,32 @@ Last updated: 2026-07-25
   never take were removed with their invariants stated in the source.
 - Decision condition: the complete `npm run ci` gate is the final pre-commit
   proof for each ticket.
-- Resume point: the working tree is clean at `a96f115`, with every landed ticket
-  full-gated. The only untracked files are the two user-created files
+- Completed `enumerate`/`zip` ticket: both are compiler-known `for` iterable
+  forms with Provisional ADR-0029, restricted to `Vec[T]` and `Set[T]` operands
+  over the bare-loop borrow default. `enumerate` yields `(int64, element)` and
+  `zip` stops at the shorter operand. Both lower to one lockstep loop over the
+  position-indexed member the ordinary collection loop already uses, so the
+  direct backend needed no change. Fixtures, the maintained example and
+  tutorial, the normative Statements and Grammar rules, the conformance map, a
+  verified reference block, and the language-server bridge ride the same commit.
+  Its exact coverage gate passes at 64,313/66,939 lines (96.07702535143937%),
+  4,154/4,291 functions (96.80727103239339%), and 94,351/100,058 regions
+  (94.29630814127806%); no synthetic coverage test or exclusion was added.
+- Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
   `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
   The remaining authorized Batch 2 work is unstarted and stays in this exact
   dependency order:
-  1. `enumerate(xs)` and `zip(xs, ys)` as compiler-known `for` forms over the
-     bare-loop borrow default; `enumerate` yields `(int64, item)` and `zip`
-     stops at the shorter sequence.
-  2. `len(x)` delegating to `.len()` and `str(x)` producing the print/f-string
+  1. `len(x)` delegating to `.len()` and `str(x)` producing the print/f-string
      rendering, retiring the `python_len` and `python_str` hints to acceptance
      the same way the membership and chain hints were retired.
-  3. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
+  2. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
      in the same change so the MIR leg passes `--backend mir` explicitly.
-  4. The content-addressed native artifact cache with recorded cold-compile and
+  3. The content-addressed native artifact cache with recorded cold-compile and
      warm-launch benchmarks.
-  5. Function-level `aura test` discovery for `def test_*()`.
-  6. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
+  4. Function-level `aura test` discovery for `def test_*()`.
+  5. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
      document the cause, keeping both numbers in the benchmark baseline.
-  7. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+  6. The Batch 2 checkpoint report and the one-time downward-truncated coverage
      re-ratchet. Do not begin Phase 5.
 - Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
   `/private/tmp/aurora-phase4-checkpoint-package` is based on

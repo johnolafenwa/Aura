@@ -2386,7 +2386,179 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Recognizes the checked `enumerate`/`zip` loop forms. The checker has
+    /// already rejected every other shape, so this only has to classify.
+    fn lockstep_loop_iterables<'e>(&self, iterable: &'e Expr) -> Option<(bool, Vec<&'e Expr>)> {
+        let ExprKind::Call { callee, args } = &iterable.kind else {
+            return None;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return None;
+        };
+        let enumerated = match name.as_str() {
+            "enumerate" => true,
+            "zip" => false,
+            _ => return None,
+        };
+        if self.program.functions.contains_key(name) {
+            return None;
+        }
+        Some((
+            enumerated,
+            args.iter().map(|argument| &argument.value).collect(),
+        ))
+    }
+
+    /// Lowers `for ... in enumerate(xs):` and `for ... in zip(xs, ys):`. Both
+    /// read index-addressable collections in lockstep through the same
+    /// position-indexed member the ordinary loop uses, and stop as soon as any
+    /// one of them runs out.
+    fn lower_lockstep_for(
+        &mut self,
+        for_stmt: &crate::ast::ForStmt,
+        enumerated: bool,
+        iterables: &[&Expr],
+    ) {
+        let dispatch_block = self.new_block("for_lockstep");
+        let body_block = self.new_block("for_body");
+        let after_block = self.new_block("for_end");
+
+        let sources = iterables
+            .iter()
+            .map(|iterable| {
+                let element_ty = self
+                    .infer_expr_type(iterable)
+                    .as_ref()
+                    .and_then(crate::sema::lockstep_element_type)
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let object = self.lower_expr_at_sequence_point(iterable, None);
+                let receiver_place = self.render_place_expr_option(iterable);
+                (object, receiver_place, element_ty)
+            })
+            .collect::<Vec<_>>();
+
+        let index = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
+        self.switch_to(dispatch_block);
+
+        let mut element_operands = Vec::with_capacity(sources.len() + 1);
+        let mut element_types = Vec::with_capacity(sources.len() + 1);
+        if enumerated {
+            let position = self.new_typed_temp(Type::named("int64"));
+            self.emit(Instruction::Assign {
+                target: position.clone(),
+                value: Rvalue::Cast {
+                    value: Operand::Place(index.clone()),
+                    ty: Type::named("int64"),
+                    span: for_stmt.span,
+                },
+            });
+            element_operands.push(Operand::Place(position));
+            element_types.push(Type::named("int64"));
+        }
+
+        for (position, (object, receiver_place, element_ty)) in sources.iter().enumerate() {
+            let next_value =
+                self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+            self.emit(Instruction::Assign {
+                target: next_value.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: object.clone(),
+                        field: INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
+                        receiver_place: receiver_place.clone(),
+                    },
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Place(index.clone()),
+                        writeback_place: None,
+                    }],
+                },
+            });
+            let present_block = if position + 1 == sources.len() {
+                body_block
+            } else {
+                self.new_block("for_lockstep_next")
+            };
+            self.terminate(Terminator::Match {
+                scrutinee: Operand::Place(next_value.clone()),
+                arms: vec![
+                    MirMatchArm {
+                        enum_name: Some("Option".to_string()),
+                        variant_name: Some("Some".to_string()),
+                        wildcard: false,
+                        label: self.label(present_block),
+                    },
+                    MirMatchArm {
+                        enum_name: Some("Option".to_string()),
+                        variant_name: Some("None".to_string()),
+                        wildcard: false,
+                        label: self.label(after_block),
+                    },
+                ],
+                otherwise: self.label(after_block),
+            });
+            self.switch_to(present_block);
+            let element = self.new_typed_temp(element_ty.clone());
+            self.emit(Instruction::Assign {
+                target: element.clone(),
+                value: Rvalue::VariantPayload {
+                    scrutinee: Operand::Place(next_value),
+                    variant_name: "Some".to_string(),
+                    index: 0,
+                },
+            });
+            element_operands.push(Operand::Place(element));
+            element_types.push(element_ty.clone());
+        }
+
+        // Advancing here rather than at the loop tail keeps `continue` correct:
+        // every path back to the dispatch block has already moved past the
+        // position it just read.
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(index.clone()),
+                right: Operand::Int(1),
+                span: for_stmt.span,
+            },
+        });
+
+        let tuple_ty = Type::Tuple(element_types.clone());
+        let tuple_place = self.new_typed_temp(tuple_ty.clone());
+        self.emit(Instruction::Assign {
+            target: tuple_place.clone(),
+            value: Rvalue::TupleLiteral {
+                elements: element_operands,
+                element_types,
+            },
+        });
+
+        self.loop_stack.push(LoopLabels {
+            break_label: self.label(after_block),
+            continue_label: self.label(dispatch_block),
+            cleanup_depth: self.with_stack.len(),
+        });
+        self.lower_binding_target_from_place(&for_stmt.target, &tuple_place, &tuple_ty, false);
+        self.lower_stmts(&for_stmt.body);
+        if !self.current_terminated() {
+            self.terminate(Terminator::Goto(self.label(dispatch_block)));
+        }
+        self.loop_stack.pop();
+
+        self.switch_to(after_block);
+    }
+
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
+        if let Some((enumerated, iterables)) = self.lockstep_loop_iterables(&for_stmt.iterable) {
+            self.lower_lockstep_for(for_stmt, enumerated, &iterables);
+            return;
+        }
         let simple_target_name = match &for_stmt.target {
             BindingTarget::Name { name, .. } => Some(name.clone()),
             BindingTarget::Tuple { .. } => None,

@@ -248,6 +248,8 @@ Maintained iterable forms include:
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in borrow set:` | Explicit form of shared iteration. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
+| `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
+| `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
 
 When an iterable yields tuples, bare/shared collection iteration gives
 non-copy tuple leaves shared provenance; `own` collection iteration gives
@@ -263,6 +265,35 @@ and copies the Queue handle once at loop entry without freezing the source
 binding. Rebinding the source in the body does not switch later receives.
 Queue iteration ends according to close, cancellation, producer-completion,
 and task-failure rules defined in [Concurrency](/manual/concurrency).
+
+`enumerate` and `zip` are compiler-known loop forms rather than callable
+values. They are legal only as the iterable of a `for` statement; naming either
+one anywhere else reports `AU2005` and names the loop spelling. A user
+declaration of either name shadows the loop form, so an existing `def zip(...)`
+keeps its ordinary call meaning.
+
+Both forms read their operands by position, so each operand must be a `Vec[T]`
+or a `Set[T]`; a `Range` or `Queue[T]` operand reports `AU2002`. Both iterate
+over the bare-loop borrow default: an ownership modifier on the loop reports
+`AU3002`, every operand stays shared-borrowed and frozen for the whole loop,
+and a non-copy element binding is a shared borrow that cannot be moved out.
+`enumerate` takes exactly one operand and `zip` exactly two, positionally; any
+other arity or a named argument reports `AU2004`.
+
+`zip` stops as soon as any operand has no value at the current position, so it
+performs `min(len(first), len(second))` iterations and never observes the
+longer sequence's tail.
+
+```python
+hosts = ["alpha", "beta"]
+ports = [80, 443, 8080]
+
+for index, host in enumerate(hosts):
+    print(index)
+
+for host, port in zip(hosts, ports):
+    print(port)
+```
 
 The parser also accepts ownership modifiers before a `range(...)` expression.
 In Aurora 0.1 they do not change Range iteration: every form yields the same
