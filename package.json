@@ -17,6 +17,7 @@
     "test:scheduler-stress": "bash scripts/stress-scheduler.sh",
     "test:scheduler-model": "cargo test -p aurora-compiler --test scheduler_model",
     "bench:compiler": "cargo bench -p aurora-compiler --bench compiler_pipeline",
+    "bench:direct-integer-loops": "python3 scripts/bench-direct-integer-loops.py",
     "check:format": "cargo fmt --all --check",
     "check:clippy": "cargo clippy -p aurora-compiler -p aura -- -D warnings",
     "check:hygiene": "bash scripts/check-hygiene.sh",

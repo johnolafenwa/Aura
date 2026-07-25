@@ -5748,6 +5748,56 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_int32_range_check_still_traps_exactly_at_the_boundary() {
+    // The narrow range check is on the hot path of every `int32` operation, so
+    // it is written as one biased unsigned comparison rather than a two-sided
+    // signed pair. These cases pin that the cheaper form keeps the same exact
+    // boundary: the extremes are representable and one step past either end
+    // traps.
+    let accepted = crate::run_source(
+        r#"
+def main() -> int32:
+    mut high: int32 = 2147483646
+    high += 1
+    print(high)
+    mut low: int32 = -2147483647
+    low -= 1
+    print(low)
+    return 0
+"#,
+    )
+    .expect("the int32 extremes should be representable");
+    assert_eq!(accepted.stdout, "2147483647\n-2147483648\n");
+
+    for (source, value) in [
+        (
+            "def main() -> int32:\n    mut high: int32 = 2147483647\n    high += 1\n    return 0\n",
+            "2147483648",
+        ),
+        (
+            "def main() -> int32:\n    mut low: int32 = -2147483648\n    low -= 1\n    return 0\n",
+            "-2147483649",
+        ),
+    ] {
+        let trapped = crate::run_source(source).expect_err("one step past the range should trap");
+        assert_eq!(trapped.code, "AU4002", "{source}");
+        assert_eq!(
+            trapped.message,
+            format!("integer value `{value}` does not fit in `int32`"),
+            "{source}"
+        );
+    }
+
+    // The same program still lowers and emits through the direct backend.
+    let module = lower_source_to_mir(
+        "def main() -> int32:\n    mut index: int32 = 0\n    while index < 4:\n        index += 1\n    print(index)\n    return 0\n",
+    )
+    .expect("an int32 loop should lower");
+    let object = emit_host_object(&module).expect("an int32 loop should emit direct code");
+    assert!(!object.is_empty());
+}
+
+#[test]
 fn direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir() {
     let source = r#"
 trait Probe:

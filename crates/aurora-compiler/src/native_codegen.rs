@@ -6510,14 +6510,17 @@ impl<'a> FunctionCompiler<'a> {
         value: Value,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
-        let min = self.builder.ins().iconst(types::I64, i32::MIN as i64);
-        let max = self.builder.ins().iconst(types::I64, i32::MAX as i64);
-        let below = self.builder.ins().icmp(IntCC::SignedLessThan, value, min);
-        let above = self
-            .builder
-            .ins()
-            .icmp(IntCC::SignedGreaterThan, value, max);
-        let overflow = self.builder.ins().bor(below, above);
+        // `value` is an `int32` iff biasing it by `-i32::MIN` lands inside the
+        // unsigned 32-bit range. That is one add and one compare, where the
+        // signed two-sided form needs two constants, two compares, and an or.
+        // This check runs on the result of every narrow arithmetic operation,
+        // so its cost is what separated `int32` loops from `int64` ones, where
+        // the overflow flag comes free with the add.
+        let biased = self.builder.ins().iadd_imm(value, -(i32::MIN as i64));
+        let overflow =
+            self.builder
+                .ins()
+                .icmp_imm(IntCC::UnsignedGreaterThan, biased, u32::MAX as i64);
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder

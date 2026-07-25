@@ -136,13 +136,25 @@ Last updated: 2026-07-25
   (96.07857760806658%), 4,158/4,295 functions (96.81024447031432%), and
   94,490/100,201 regions (94.30045608327262%); no synthetic coverage test or
   exclusion was added.
+- Completed V6: the direct backend's narrow-width range check was a two-sided
+  signed comparison costing five instructions plus a branch on the result of
+  every `int32` operation, against `int64`'s single overflow-producing
+  instruction plus a branch. The check is now one biased unsigned comparison,
+  which took the ten-million iteration loop from 0.0697s to 0.0327s with
+  `int64` unchanged at 0.0111s, so the ratio moved from 6.05x to 2.95x. The
+  residual gap is the separate branch itself; closing it means giving narrow
+  widths their own arithmetic width, which is a backend representation change
+  rather than a contained fix. Both numbers are recorded in
+  `benchmarks/direct_integer_loops/README.md` and the benchmark is runnable as
+  `npm run bench:direct-integer-loops`. Its exact coverage gate passes at
+  64,409/67,039 lines (96.07691045510822%), 4,158/4,295 functions (96.81024447031432%),
+  and 94,472/100,184 regions (94.29849077697038%); no synthetic coverage test or
+  exclusion was added.
 - Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
   `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
   The remaining authorized Batch 2 work is unstarted and stays in this exact
   dependency order:
-  1. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
-     document the cause, keeping both numbers in the benchmark baseline.
-  2. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+  1. The Batch 2 checkpoint report and the one-time downward-truncated coverage
      re-ratchet. Do not begin Phase 5.
 - Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
   `/private/tmp/aurora-phase4-checkpoint-package` is based on
@@ -202,7 +214,7 @@ Last updated: 2026-07-25
 
 ## Todo
 
-- In Batch 2 with the Phase 4 native work, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
+- V6 is complete: the narrow-width range check was halved and both measurements are retained in `benchmarks/direct_integer_loops/README.md`. The remaining lead is narrow-width arithmetic in its own width, which is a backend representation change.
 - In Batch 3 frame work, add native direct-backend Aurora call-chain and task-ancestry backtraces, then remove the temporary parity normalization for the three supplemental MIR backtrace note families; primary trap code/message/span parity remains mandatory meanwhile.
 - In the same Batch 3 frame work, replace the current flat prose call-chain/task-ancestry `notes` entries with explicit structured frame lists in the diagnostic schema and its CLI/LSP bridges.
 - Publish signed 0.1 preview archives for every supported platform after the release workflow has passed on each target.

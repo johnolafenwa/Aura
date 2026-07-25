@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut high: int32 = 2147483646
+    high += 1
+    print(high)
+    high += 1
+    return 0

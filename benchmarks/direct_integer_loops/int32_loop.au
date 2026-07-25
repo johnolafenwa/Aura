@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut index: int32 = 0
+    while index < 10000000:
+        index += 1
+    print(index)
+    return 0
