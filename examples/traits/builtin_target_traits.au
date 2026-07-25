@@ -1,0 +1,22 @@
+trait Describe:
+    def describe(borrow self) -> String
+
+impl Describe for Vec[int32]:
+    def describe(borrow self) -> String:
+        return f"vec of {self.len()}"
+
+impl Describe for String:
+    def describe(borrow self) -> String:
+        return f"text of {self.len()}"
+
+def describe_through_bound[T: Describe](value: borrow T) -> String:
+    return value.describe()
+
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    print(values.describe())
+
+    text = "hello"
+    print(describe_through_bound(text))

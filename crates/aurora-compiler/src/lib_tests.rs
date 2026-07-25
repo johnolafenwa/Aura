@@ -444,6 +444,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         include_str!("../../../examples/traits/trait_associated_factory.au"),
         "7\n",
     ),
+    (
+        "examples/traits/builtin_target_traits.au",
+        include_str!("../../../examples/traits/builtin_target_traits.au"),
+        "vec of 2\ntext of 5\n",
+    ),
 ];
 
 struct TempDir {

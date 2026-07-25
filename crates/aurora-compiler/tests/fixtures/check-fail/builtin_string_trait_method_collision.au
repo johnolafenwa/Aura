@@ -1,0 +1,6 @@
+trait Probe:
+    def contains(borrow self, needle: String) -> bool
+
+impl Probe for String:
+    def contains(borrow self, needle: String) -> bool:
+        return false

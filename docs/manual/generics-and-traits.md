@@ -209,11 +209,16 @@ Aurora 0.1 has no explicit clone-safety annotation, generic clone-producing
 behavior belongs in a trait default body. An implementation that adds such a
 requirement is rejected with `AU3007`.
 
-An `impl` targeting `Queue[T]`, `Task[T]`, `TaskGroup`, or `random.Rng` MUST
+An `impl` targeting any builtin type MUST
 NOT explicitly define or inherit a trait method whose name is a builtin member
-of that target. Builtin member names are reserved for their runtime operation;
-a collision reports `AU2006` and the trait method must be renamed. This rule is
-applied after default trait methods are inherited.
+of that target. This covers the
+runtime handles `Queue[T]`, `Task[T]`, `TaskGroup`, `random.Rng`, `fs.File`,
+and the `net` and `process` handles, and equally the builtin value types such
+as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Duration`, and the scalar types.
+Builtin member names are reserved for their runtime operation; a collision
+reports `AU2006` and the trait method must be renamed. A trait method whose name
+does not collide still implements and dispatches normally on a builtin target.
+This rule is applied after default trait methods are inherited.
 
 ## Trait Method Dispatch
 
@@ -402,7 +407,7 @@ missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
 specialization, and substituted type mismatch. `AU2003` reports an unsupported
 operator when no builtin rule or applicable operator trait supplies it.
 `AU2004` reports call argument binding and the prohibition on ordinary default
-arguments in trait methods. `AU2006` reports builtin handle method collisions.
+arguments in trait methods. `AU2006` reports builtin method collisions.
 `AU2999` covers duplicate/invalid implementations, method-conformance or
 supertrait failure, unsupported implementation targets, and remaining
 generic/trait rejections. `AU3001` reports use after an owned generic or
@@ -421,9 +426,10 @@ divisor, and `AU4005` for a resource or I/O failure.
 Generic functions, classes, enums, methods, traits, supertraits, default trait
 bodies, generic and specialized implementations, operator dispatch, `Self`,
 and `From` conversion are implemented for MIR execution and direct native
-generation. User-trait dispatch on builtin `Queue[T]`, `Task[T]`, `TaskGroup`,
-and `random.Rng` values is maintained for noncolliding method names on both
-backends; builtin target members always retain builtin dispatch. The checker
+generation. User-trait dispatch on builtin values, including `Queue[T]`,
+`Task[T]`, `TaskGroup`, `random.Rng`, `String`, and the builtin collections, is
+maintained for noncolliding method names on both backends;
+builtin target members always retain builtin dispatch. The checker
 supplies one resolved specialization and implementation target to lowering,
 analysis, and the LSP, including inferred clone-safety obligations; the parity gate rejects backend-specific dispatch
 behavior.

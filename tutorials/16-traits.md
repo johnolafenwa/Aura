@@ -280,6 +280,40 @@ def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
 
 See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
+## Traits On Builtin Types
+
+A trait can also target a builtin type, not only your own classes and enums:
+
+```aurora
+trait Describe:
+    def describe(borrow self) -> String
+
+impl Describe for Vec[int32]:
+    def describe(borrow self) -> String:
+        return f"vec of {self.len()}"
+
+impl Describe for String:
+    def describe(borrow self) -> String:
+        return f"text of {self.len()}"
+```
+
+The one restriction is that the method name must not already be a builtin
+member of that target. Naming it `len` instead of `describe` would be rejected
+with `AU2006`, because the builtin `len` always wins at every call site and the
+trait body would silently never run:
+
+```text
+error[AU2006]: trait method `len` collides with builtin method `Vec.len`
+  = help: rename the trait method; builtin methods cannot be shadowed by trait implementations
+```
+
+This holds for every builtin target: the runtime handles such as `Queue[T]`,
+`Task[T]`, `TaskGroup`, `random.Rng`, and `fs.File`, and the builtin value
+types such as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Duration`, and the
+scalar types.
+
+See [examples/traits/builtin_target_traits.au](../examples/traits/builtin_target_traits.au).
+
 ## Current Limits
 
 The implemented trait surface supports:
@@ -293,6 +327,8 @@ The implemented trait surface supports:
 - specialized bounds like `T: Mapper[int32]`
 - multiple bounds with `T: A + B`
 - direct trait-method calls on concrete types
+- trait implementations for builtin targets, for method names that do not
+  collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
 - operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`

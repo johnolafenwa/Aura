@@ -2151,7 +2151,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 },
             );
         }
-        reject_builtin_handle_trait_method_collisions(impl_decl, &for_type, &methods)?;
+        reject_builtin_trait_method_collisions(impl_decl, &for_type, &methods)?;
         trait_impls.push(TraitImplInfo {
             module_name: module_name.clone(),
             decl: impl_decl.clone(),
@@ -2521,23 +2521,24 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     Ok(program)
 }
 
-fn reject_builtin_handle_trait_method_collisions(
+/// Rejects a trait implementation that would shadow a builtin method of its
+/// target. The rule covers every builtin target, not only the runtime handles:
+/// a shadowed builtin name is silently ignored at every call site, so the
+/// program does something other than what its source says.
+fn reject_builtin_trait_method_collisions(
     impl_decl: &ImplDecl,
     for_type: &Type,
     methods: &BTreeMap<String, TraitImplMethodInfo>,
 ) -> Result<()> {
-    let Type::Named(handle_name, _) = for_type else {
+    let Type::Named(target_name, _) = for_type else {
         return Ok(());
     };
-    if !matches!(
-        handle_name.as_str(),
-        "Queue" | "Task" | "TaskGroup" | "random.Rng"
-    ) {
+    if !is_builtin_type(target_name) && !preserves_qualified_builtin_type_name(target_name) {
         return Ok(());
     }
 
     for (method_name, method) in methods {
-        if BuiltinMember::resolve(handle_name, method_name).is_none() {
+        if BuiltinMember::resolve(target_name, method_name).is_none() {
             continue;
         }
 
@@ -2550,12 +2551,12 @@ fn reject_builtin_handle_trait_method_collisions(
             "AU2006",
             primary_span,
             format!(
-                "trait method `{method_name}` collides with builtin handle method \
-                 `{handle_name}.{method_name}`"
+                "trait method `{method_name}` collides with builtin method \
+                 `{target_name}.{method_name}`"
             ),
         )
         .with_help(
-            "rename the trait method; builtin handle methods cannot be shadowed by trait implementations",
+            "rename the trait method; builtin methods cannot be shadowed by trait implementations",
         );
         if explicit_method.is_none() {
             diagnostic = diagnostic.with_secondary(

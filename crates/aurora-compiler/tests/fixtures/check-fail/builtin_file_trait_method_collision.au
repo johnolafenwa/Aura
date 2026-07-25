@@ -1,0 +1,8 @@
+import fs
+
+trait Closer:
+    def close(borrow self) -> int64
+
+impl Closer for fs.File:
+    def close(borrow self) -> int64:
+        return 7

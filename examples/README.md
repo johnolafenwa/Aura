@@ -386,6 +386,11 @@ The examples are organized by topic so they can serve both as quick references a
 - `marker_trait.au`
   - empty marker traits declared with `pass`
   - prints `1`
+- `builtin_target_traits.au`
+  - trait implementations for builtin targets such as `Vec[int32]` and `String`, using method names that do not collide with a builtin member
+  - prints:
+    - `vec of 2`
+    - `text of 5`
 - `specialized_generic_impl.au`
   - specialized trait impls for concrete generic instances
   - prints `hello`
@@ -778,6 +783,7 @@ cargo run -p aura -- run examples/traits/multiple_bounds.au
 cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/traits/clone_safety_contract.au
+cargo run -p aura -- run examples/traits/builtin_target_traits.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/io/read_text_file.au

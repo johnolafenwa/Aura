@@ -2069,6 +2069,68 @@ impl CounterfeitRandom for random.Rng:
 }
 
 #[test]
+fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
+    for (source, expected) in [
+        (
+            "trait Sized:\n    def len(borrow self) -> int64\n\nimpl Sized for Vec[int32]:\n    def len(borrow self) -> int64:\n        return 99\n",
+            "Vec.len",
+        ),
+        (
+            "trait Probe:\n    def contains(borrow self, needle: String) -> bool\n\nimpl Probe for String:\n    def contains(borrow self, needle: String) -> bool:\n        return false\n",
+            "String.contains",
+        ),
+        (
+            "trait Lookup:\n    def get(borrow self, key: String) -> Option[String]\n\nimpl Lookup for Map[String, String]:\n    def get(borrow self, key: String) -> Option[String]:\n        return Option.None\n",
+            "Map.get",
+        ),
+        (
+            "import fs\n\ntrait Closer:\n    def close(borrow self) -> int64\n\nimpl Closer for fs.File:\n    def close(borrow self) -> int64:\n        return 7\n",
+            "fs.File.close",
+        ),
+        (
+            "trait Render:\n    def to_string(borrow self) -> String\n\nimpl Render for int32:\n    def to_string(borrow self) -> String:\n        return \"shadowed\"\n",
+            "int32.to_string",
+        ),
+    ] {
+        let collision = crate::check_source(source)
+            .expect_err("a builtin method name must not be shadowed by a trait implementation");
+        assert_eq!(collision.code, "AU2006", "{source}");
+        assert!(
+            collision
+                .message
+                .contains(&format!("collides with builtin method `{expected}`")),
+            "{source}: {}",
+            collision.message
+        );
+    }
+
+    let accepted = crate::run_source(
+        r#"
+trait Describe:
+    def describe(borrow self) -> String
+
+impl Describe for Vec[int32]:
+    def describe(borrow self) -> String:
+        return f"vec of {self.len()}"
+
+impl Describe for String:
+    def describe(borrow self) -> String:
+        return f"text of {self.len()}"
+
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    print(values.describe())
+    text = "hello"
+    print(text.describe())
+"#,
+    )
+    .expect("a trait method that does not collide keeps dispatching on a builtin target");
+    assert_eq!(accepted.stdout, "vec of 2\ntext of 5\n");
+}
+
+#[test]
 fn random_unavailable_secure_float_is_an_unknown_member() {
     let error = crate::check_source(
         "import random\n\ndef main() -> int32:\n    print(random.secure_float())\n    return 0\n",

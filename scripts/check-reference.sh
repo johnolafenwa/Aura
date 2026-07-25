@@ -214,6 +214,9 @@ grep -Fq '`value: T` | Shared borrow when `T` is non-copy' docs/manual/functions
 grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
 grep -Fq 'caller-invisible temporary' docs/manual/functions.md
 grep -Fq 'declaration-stable' docs/manual/generics-and-traits.md
+grep -Fq 'An `impl` targeting any builtin type MUST' docs/manual/generics-and-traits.md
+grep -Fq 'a collision' docs/manual/generics-and-traits.md
+grep -Fq 'does not collide still implements and dispatches normally on a builtin target' docs/manual/generics-and-traits.md
 grep -Fq 'NOT explicitly define or inherit a trait method whose name is a builtin member' docs/manual/generics-and-traits.md
 grep -Fq 'builtin target members always retain builtin dispatch' docs/manual/generics-and-traits.md
 grep -Fq 'for value in own values' docs/manual/statements.md

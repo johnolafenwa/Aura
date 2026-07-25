@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin handle method collision; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
@@ -36,10 +36,13 @@ yet have a narrower public category. It is a stable code, not permission for a
 tool to omit the code.
 
 `AU2006` identifies an explicit or inherited trait method whose name would
-shadow a builtin member on `Queue[T]`, `Task[T]`, `TaskGroup`, or
-`random.Rng`. Its guidance
-requires the trait method to be renamed; backend dispatch is never selected by
-which implementation happens to run first.
+shadow a builtin member of the implementation's builtin target. The rule covers
+every builtin target, from the runtime handles `Queue[T]`, `Task[T]`,
+`TaskGroup`, `random.Rng`, `fs.File`, and the `net` and `process` handles, to
+the builtin value types such as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
+`Duration`, and the scalar types. Its guidance requires the trait method to be
+renamed; backend dispatch is never selected by which implementation happens to
+run first.
 
 `AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.

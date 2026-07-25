@@ -52,8 +52,22 @@ Last updated: 2026-07-24
   no synthetic test or exclusion was added. Two duplicated ownership walks
   introduced by the replay repair were collapsed with their invariants retained
   and stated in the source.
+- Completed B2.0-b generalization: the ratified builtin no-shadowing rule now
+  covers every builtin target rather than the four named in the original repro.
+  `impl Sized for Vec[int32]` with a `len` method and `impl Probe for String`
+  with a `contains` method were reproduced as accepted programs whose trait body
+  was silently unreachable on both backends; both are now `AU2006` at check
+  time. The message generalizes to "builtin method", the direct backend's
+  existing `BuiltinMember` precedence guard already covers every receiver base,
+  and a noncolliding trait method still dispatches on a builtin target.
+  Fixtures, a cross-target compiler regression, the maintained example and
+  smoke oracle, the traits tutorial, the normative rule, the `AU2006` category
+  text, the conformance map, and the reference guard ride the same commit. Its
+  exact coverage gate passes at 63,750/66,358 lines (96.06980318876398%),
+  4,137/4,268 functions (96.9306466729147%), and 93,474/99,154 regions
+  (94.27153720475219%); no synthetic coverage test or exclusion was added.
 - Decision condition: the complete `npm run ci` gate is the final pre-commit
-  proof for this ticket. Membership/comparison chains are the next ordered
+  proof for each ticket. Membership/comparison chains are the next ordered
   ticket, followed by the remaining Phase 3.5/Phase 4/V6 work.
 - Dependency hygiene: GHSA-mh99-v99m-4gvg was published against every
   `brace-expansion` release through `5.0.7`, closing the fail-closed audit gate.
