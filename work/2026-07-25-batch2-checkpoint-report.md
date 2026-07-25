@@ -2,6 +2,13 @@
 
 Batch 2 of 5 is complete at its requested checkpoint. Phase 5 was not started.
 
+## Accepted checkpoint amendment
+
+ADR-0031 accepts `mir` as the default for the interactive `aura run` command
+and keeps `auto` as the default for artifact-producing `aura build`. This
+explicitly amends the original Phase 4 interim-`auto` clause. Forced
+MIR/direct parity remains an independent supported-platform release gate.
+
 ## Commits
 
 Every semantic commit passed the complete `npm run ci` gate before admission.
@@ -98,6 +105,8 @@ Four were added in this batch and need checkpoint disposition:
 Eight earlier Provisional ADRs remain open from prior batches: 0018, 0019, 0020,
 0021, 0023, 0024, 0025, and 0026.
 
+ADR-0031, the CLI backend-default checkpoint amendment, is Accepted.
+
 ADR-0029 and ADR-0030 make deliberately different shadowing choices, and the
 difference is the thing to ratify or reject together: a user declaration shadows
 `enumerate` and `zip`, because those are loop forms with no value meaning, while
@@ -126,11 +135,14 @@ covered by its maintained CLI regression through both backends.
 
 ## Backend default decision
 
-**Direct did not become `aura run`'s default. The default is `mir`.**
+**Direct did not become `aura run`'s default. ADR-0031 accepts `mir` as the
+default.**
 
-The blocker is not correctness. Forced-direct correctness is gated on every CI
-run by the full parity matrix over every run-pass and run-fail fixture. The
-blocker is cost, measured on this workstation with a hello-world program:
+This is an explicit amendment to the original interim-`auto` roadmap clause,
+not an undocumented exception. The blocker is not correctness. Forced-direct
+correctness is gated on every CI run by the full parity matrix over every
+run-pass and run-fail fixture. The blocker is product cost, measured on this
+workstation with a hello-world program:
 
 | Path | Wall clock |
 | --- | --- |
@@ -144,9 +156,10 @@ on a first touch is loading the binary: a direct hello-world executable is about
 57 MB of statically linked runtime. A cold miss still costs about 1.3s, and both
 CI and the test suites are dominated by programs seen once.
 
-So the remaining blocker for a native default is **binary size**, not compile
-time. That is recorded where the default is defined, so the decision is one
-constant away once binaries are small enough for a cheap first launch.
+So the remaining blocker for a native `run` default is **binary size**, not
+compile time. Promotion now requires ADR-0031's supported-platform parity,
+launch-cost, artifact-size, cache-reliability, and separate-ratification
+criteria. `aura build` remains native-oriented and defaults to `auto`.
 
 ## V6 findings
 
@@ -183,7 +196,7 @@ loop. The workload has to be a counter loop.
 
 | Commit | Lines | Functions | Regions |
 | --- | --- | --- | --- |
-| `f50b206` conditional expressions | 64,028/66,649 | 4,145/4,281 | 93,930/99,630 |
+| `f50b206` conditional expressions | 63,752/66,360 | 4,137/4,268 | 93,478/99,158 |
 | `2acdbb1` B2.0-b generalization | 63,750/66,358 | 4,137/4,268 | 93,474/99,154 |
 | `a96f115` membership and chains | 64,028/66,649 | 4,145/4,281 | 93,930/99,630 |
 | `575962c` `enumerate` and `zip` | 64,313/66,939 | 4,154/4,291 | 94,351/100,058 |
@@ -197,9 +210,12 @@ The floors stayed frozen at 96.06/96.79/94.15 for the whole batch.
 
 ## Final re-ratcheted floors
 
-One downward-truncated re-ratchet. The gate that admits this checkpoint
-measures 64,410/67,039 lines (96.0784021241367%), 4,158/4,295 functions
-(96.81024447031432%), and 94,473/100,184 regions (94.29948894034975%):
+One downward-truncated re-ratchet. The corrected checkpoint baseline uses the
+lower repeatable measurement from the V6 and independent verification gates:
+64,409/67,039 lines (96.07691045510822%), 4,158/4,295 functions
+(96.81024447031432%), and 94,472/100,184 regions (94.29849077697038%). The
+original report recorded one additional covered line and region; that
+run-to-run difference does not change any truncated floor:
 
 | Metric | Old floor | New floor |
 | --- | --- | --- |

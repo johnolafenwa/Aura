@@ -100,6 +100,11 @@ The commands you will use day to day are:
 
 Use `aura help` for the full list and `aura --version` to confirm which build you are on.
 
+`aura run` defaults to the MIR runtime for a fast edit-run loop. Use
+`--backend direct` to require native execution, or `--backend auto` to prefer
+native execution while visibly falling back to MIR when direct execution is
+unavailable.
+
 ## Building A Native Binary
 
 ```bash

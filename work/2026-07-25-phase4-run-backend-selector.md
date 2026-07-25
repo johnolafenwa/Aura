@@ -22,9 +22,9 @@ which is the recorded V4 invariant.
 
 ## Decision: the default stays `mir`
 
-The roadmap asks for `auto` as the interim default until forced-direct is
-proven across every runnable maintained fixture. Measured on this workstation,
-that interim default is not affordable yet:
+The original roadmap named `auto` as the interim default until forced-direct
+was proven across every runnable maintained fixture. Measured on this
+workstation, that interim default is not affordable for the edit-run path:
 
 | Backend | Hello-world `aura run` |
 | --- | --- |
@@ -36,12 +36,11 @@ defaulting to it would regress every `aura run` by about two orders of
 magnitude, and would multiply that cost across the 259-test CLI product suite
 and again under coverage instrumentation, where the compile is far slower.
 
-The blocker is therefore not correctness but warm-launch cost, and the
-content-addressed artifact cache is its precondition. The default is recorded
-in one named constant with that reasoning attached, so the cache ticket flips
-one value rather than re-deriving the decision. Forced-direct correctness is
-already gated independently by the full parity matrix, which runs every
-run-pass and run-fail fixture through the direct backend on every CI run.
+At the Batch 2 checkpoint, ADR-0031 accepted `mir` as the `aura run` default and
+explicitly amended the roadmap's interim-`auto` clause. `aura build` remains
+native-oriented and defaults to `auto`. Forced-direct correctness is gated
+independently by the full parity matrix, which runs every run-pass and run-fail
+fixture through the direct backend on every CI run.
 
 ## Verification
 
@@ -63,5 +62,6 @@ run-pass and run-fail fixture through the direct backend on every CI run.
 
 ## Follow-Up
 
-- Revisit the default in the artifact-cache ticket, where a warm launch should
-  make `auto` affordable.
+- Revisit the default only through ADR-0031's promotion criteria: supported-host
+  parity, acceptable cold and warm launch measurements, suitable artifact size,
+  reliable cache behavior, and a separately accepted decision.

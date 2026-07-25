@@ -238,6 +238,10 @@ if grep -Fq '<check|run|build' crates/aura/src/main.rs; then
 fi
 grep -Fq 'Class field defaults cannot call user-defined functions' docs/manual/current-limits.md
 test -s crates/aurora-compiler/tests/fixtures/check-fail/class_field_default_user_function_not_supported.au
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0031-cli-backend-defaults.md
+grep -Fq '0031-cli-backend-defaults.md' architecture_docs/decisions/README.md
+grep -Fq '`aura run --backend mir` executes the lowered MIR and is the default.' docs/manual/cli-and-tooling.md
+grep -Fq 'run_backend_parsing_defaults_to_mir_and_accepts_every_selector' crates/aura/src/main.rs
 grep -Fq 'Structured frame-list fields are deferred to Batch 3' docs/manual/current-limits.md
 grep -Fq 'notes as prose rather than parse them.' docs/manual/diagnostics.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0014-map-literals-and-indexing.md

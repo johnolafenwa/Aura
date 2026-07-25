@@ -256,7 +256,7 @@ Current `build` status:
 
 Current `run` status:
 
-- `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
+- `aura run` defaults to the MIR runtime for the current implemented Aurora surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
 - queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained poll-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 

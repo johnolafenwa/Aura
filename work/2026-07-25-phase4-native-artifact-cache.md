@@ -50,7 +50,7 @@ first touch is loading the binary itself: a direct hello-world executable is
 about 57 MB because it statically links the whole runtime, so its first launch
 is dominated by page-cache misses. Once resident it matches the MIR runtime.
 
-## Decision: the default still stays `mir`
+## Accepted checkpoint decision: the default stays `mir`
 
 The cache removes the steady-state cost but not the first-run cost. A cold
 miss is still about 1.3 seconds, and both CI and the test suites are dominated
@@ -58,9 +58,11 @@ by programs each seen once, so every one of them would pay a cold miss. The
 default therefore remains `mir`, and the named constant carrying that decision
 now records the cache measurements alongside the original reasoning.
 
-The remaining blocker for a native default is binary size rather than compile
-time: until a direct binary is small enough that its first launch is cheap,
-`auto` cannot be the default for one-shot programs.
+ADR-0031 accepts this split at the Batch 2 checkpoint and explicitly amends the
+original interim-`auto` roadmap clause. `aura build` remains native-oriented
+and defaults to `auto`. The remaining blocker for a native `run` default is
+binary size rather than compile time: until a direct binary is small enough
+that its first launch is cheap, `auto` is not suitable for one-shot programs.
 
 ## Verification
 
@@ -81,5 +83,6 @@ time: until a direct binary is small enough that its first launch is cheap,
 
 ## Follow-Up
 
-- Revisit the default if direct binaries become small enough for a cheap first
-  launch.
+- Revisit the default only through ADR-0031's supported-platform parity,
+  launch-cost, artifact-size, cache-reliability, and separate-ratification
+  criteria.

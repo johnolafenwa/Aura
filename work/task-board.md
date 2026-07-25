@@ -23,11 +23,17 @@ Last updated: 2026-07-25
   expressions, ADR-0028 membership and comparison chains, ADR-0029
   `enumerate`/`zip` loop forms, and ADR-0030 `len`/`str` builtins. Eight earlier
   Provisional ADRs remain open from prior batches.
-- Backend default: `aura run` stays on `mir`. The blocker is binary size, not
-  correctness or compile time; a direct hello-world executable is about 57 MB,
-  so a first launch costs about 0.8s even on a cache hit.
+- Accepted checkpoint amendment: ADR-0031 ratifies `mir` as the `aura run`
+  default for the edit-run path and retains `auto` as the `aura build` default.
+  It explicitly amends the original interim-`auto` roadmap clause without
+  weakening forced-backend parity. The blocker for a native `run` default is
+  binary size, not correctness or compile time; a direct hello-world executable
+  is about 57 MB, so a first launch costs about 0.8s even on a cache hit.
+- Corrected checkpoint coverage is 64,409/67,039 lines, 4,158/4,295 functions,
+  and 94,472/100,184 regions. The enforced floors remain
+  `96.07/96.81/94.29`, with LSP coverage at 100%.
 
-## Current Batch 2 Continuation
+## Batch 2 Implementation Record (completed)
 
 - Result: Phase 3 is complete and committed through `9ff7e82`, including Duration, deterministic and secure Randomness, recursive JSON, Bytes/codecs/SHA-256, assertion statements, and the maintained application-level retry worker. The editor completion/package repair remains committed at `f34b4de`, the ownership tutorial correction at `6665090`, and proposed future capability-syntax ADR-0022 at `929c0b8`; ADR-0022 is not implemented or mixed into Batch 2 semantics. Phase 3.5 newline continuation is complete and decision-gate green: the lexer tracks and validates nested `()`, `[]`, and `{}`, suppresses ordinary continuation layout while retaining physical spans, preserves delimited expression-`match` layout islands, and reports source-related pairing diagnostics. Parser coverage pins multiline signatures, calls, type arguments, grouping, indexing, and collection literals without changing the trailing-comma, backslash, or single-line string/f-string boundaries. Compiler analysis, the language server, and VS Code newline indentation preserve editor behavior across continued and incomplete source. The normative reference, Provisional ADR-0025, maintained example/tutorial, executable-reference gate, frozen coverage floors, forced-backend parity, and exact full-CI gate are aligned.
 - Current verification: focused Bytes tests, all fixture categories, language-server regression, executable reference integrity, docs build, `git diff --check`, and the complete exact-tree `npm run ci` gate pass. The exact Bytes-era `npm run coverage:compiler:check` gate passes all 251 instrumented CLI tests, 781 compiler library tests, and supporting suites at 60,768/63,252 lines (96.072851451337%), 3,968/4,091 functions (96.993400146663%), and 88,637/94,027 regions (94.267603986089%), above the frozen 96.06/96.79/94.15 floors. The Bytes coverage gap was closed with observable behavior/diagnostic/backend tests plus removal of unreachable validated-decoder and duplicate adapter branches; no synthetic test or coverage exclusion was added. For `assert`, all nine fixture categories, the focused 12-test compiler assertion suite, the CLI behavior matrix, the full 60-test language-server suite, the full 10-test extension suite, the 33-page executable reference-integrity gate, the docs build, the maintained example smoke, and the complete exact-tree `npm run ci` decision gate pass. The focused compiler coverage includes a source-starting lazy-message ownership regression, and editor coverage pins invalid `assert` diagnostics at the keyword. The exact `assert` coverage gate passes all 256 instrumented CLI tests, 795 compiler library tests, and supporting suites at 60,904/63,399 lines (96.06460669726651%), 3,976/4,099 functions (96.99926811417419%), and 88,875/94,275 regions (94.27207637231504%). Its five-line-only first-pass shortfall was closed with observable exported-runtime diagnostic and refcount tests; no synthetic test or coverage exclusion was added. The retry-worker CLI regression passes its exact 15-line oracle through both MIR execution and a forced-direct binary; it pins recovery, terminal `429`, final-attempt no-sleep/no-RNG ordering, explicit timeouts, and seven real loopback requests. Its exact coverage gate passes all 257 instrumented CLI tests, 795 compiler library tests, and supporting suites at 60,904/63,399 lines (96.06460669726651%), 3,976/4,099 functions (96.99926811417419%), and 88,875/94,275 regions (94.27207637231504%). No synthetic-coverage test, exclusion, or coverage-only production restructuring was added. Lightweight reference and diff checks plus the complete exact-tree `npm run ci` decision gate pass.
@@ -57,7 +63,7 @@ Last updated: 2026-07-25
 - Its complete `npm run ci` decision gate passed before commit, including
   forced MIR/direct parity, 100% LSP coverage, compiler coverage, reference,
   docs, audits, Clippy, and hygiene.
-- Active conditional-expression ticket: Python-style `a if condition else b`
+- Completed conditional-expression ticket: Python-style `a if condition else b`
   is integrated with Provisional ADR-0027, exact-bool checking, contextual arm
   unification, lazy one-arm execution, conservative ownership-state merging,
   MIR/direct lowering, compiler analysis/LSP coverage, fixtures, maintained
@@ -91,7 +97,7 @@ Last updated: 2026-07-25
   exact coverage gate passes at 63,750/66,358 lines (96.06980318876398%),
   4,137/4,268 functions (96.9306466729147%), and 93,474/99,154 regions
   (94.27153720475219%); no synthetic coverage test or exclusion was added.
-- Active membership/comparison-chain ticket: `in`, `not in`, and Python-style
+- Completed membership/comparison-chain ticket: `in`, `not in`, and Python-style
   chained comparisons are integrated with Provisional ADR-0028. Equality,
   ordering, and membership now share one precedence level and chain rather than
   left-folding; membership delegates to `contains` or `contains_key` over
