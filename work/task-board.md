@@ -103,18 +103,26 @@ Last updated: 2026-07-25
   exact coverage gate passes at 64,387/67,014 lines (96.07992359805414%),
   4,154/4,291 functions (96.80727103239339%), and 94,439/100,150 regions
   (94.29755366949576%); no synthetic coverage test or exclusion was added.
+- Completed Phase 4 selector ticket: `aura run --backend mir|direct|auto` is
+  implemented, with `direct` reporting build and launch failures rather than
+  degrading and `auto` degrading visibly. Both MIR legs of `backend_parity.rs`
+  now pass `--backend mir` explicitly. The default stays `mir`: `auto` pays a
+  full compile and link on every run, measured at 1.385s against 0.012s for
+  hello-world, so the artifact cache is the precondition for changing it. The
+  default lives in one named constant with that reasoning attached. Its exact
+  coverage gate passes at 64,388/67,014 lines (96.08141582355925%), 4,154/4,291
+  functions (96.80727103239339%), and 94,440/100,150 regions
+  (94.29855217174239%); no synthetic coverage test or exclusion was added.
 - Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
   `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
   The remaining authorized Batch 2 work is unstarted and stays in this exact
   dependency order:
-  1. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
-     in the same change so the MIR leg passes `--backend mir` explicitly.
-  2. The content-addressed native artifact cache with recorded cold-compile and
+  1. The content-addressed native artifact cache with recorded cold-compile and
      warm-launch benchmarks.
-  3. Function-level `aura test` discovery for `def test_*()`.
-  4. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
+  2. Function-level `aura test` discovery for `def test_*()`.
+  3. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
      document the cause, keeping both numbers in the benchmark baseline.
-  5. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+  4. The Batch 2 checkpoint report and the one-time downward-truncated coverage
      re-ratchet. Do not begin Phase 5.
 - Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
   `/private/tmp/aurora-phase4-checkpoint-package` is based on

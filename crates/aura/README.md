@@ -23,6 +23,7 @@ After the release build completes, run the binary directly:
 ```bash
 ./target/release/aura check examples/classes/point_distance.au
 ./target/release/aura run examples/classes/point_distance.au
+./target/release/aura run --backend direct examples/classes/point_distance.au
 ./target/release/aura run examples/control_flow/match_literals.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/basics/default_arguments.au

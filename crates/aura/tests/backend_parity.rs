@@ -182,7 +182,11 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
             .strip_prefix(&root)
             .expect("fixture should live under repo root");
         let mut mir = Command::new(&aura);
-        mir.current_dir(&root).arg("run").arg(relative);
+        mir.current_dir(&root)
+            .arg("run")
+            .arg("--backend")
+            .arg("mir")
+            .arg(relative);
         let mir = command_output_with_timeout(mir, Duration::from_secs(10));
         assert!(
             mir.status.success(),
@@ -237,7 +241,11 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
             .strip_prefix(&root)
             .expect("fixture should live under repo root");
         let mut mir = Command::new(&aura);
-        mir.current_dir(&root).arg("run").arg(relative);
+        mir.current_dir(&root)
+            .arg("run")
+            .arg("--backend")
+            .arg("mir")
+            .arg(relative);
         let mir = command_output_with_timeout(mir, Duration::from_secs(10));
         assert!(
             !mir.status.success(),

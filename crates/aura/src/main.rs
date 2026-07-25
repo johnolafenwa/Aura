@@ -88,7 +88,24 @@ fn main() {
                 None => (remaining.as_slice(), &[][..]),
             };
             let (diagnostic_format, input_args) = parse_diagnostic_format(input_args.to_vec());
+            let (run_backend, input_args) = parse_run_backend(input_args);
             let input = read_input(&mut input_args.into_iter());
+            if run_backend != RunBackend::Mir {
+                match run_through_native_backend(&input, program_args, run_backend) {
+                    NativeRunOutcome::Ran(code) => process::exit(code),
+                    NativeRunOutcome::Failed(message) => {
+                        let error = Diagnostic::new(message);
+                        emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
+                        process::exit(1);
+                    }
+                    NativeRunOutcome::FellBack(reason) => {
+                        eprintln!(
+                            "aura: direct backend unavailable; using the MIR runtime:\n{}",
+                            reason
+                        );
+                    }
+                }
+            }
             let stdout_sink = std::sync::Arc::new(|chunk: &str| write_stdout(chunk));
             let result = if input.from_stdin {
                 run_path_with_source_and_stdout_sink_and_program_args(
@@ -692,6 +709,141 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
         trigger,
         args[index..].to_vec(),
     )
+}
+
+/// The backend `aura run` uses to execute a program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunBackend {
+    /// Execute the lowered MIR directly.
+    Mir,
+    /// Build a native binary with the direct backend and execute it.
+    Direct,
+    /// Prefer the direct backend and fall back to the MIR runtime, reporting
+    /// the fallback on stderr.
+    Auto,
+}
+
+enum NativeRunOutcome {
+    /// The native binary ran to completion with this exit code.
+    Ran(i32),
+    /// The requested backend could not produce a binary.
+    Failed(String),
+    /// `auto` could not use the direct backend and the MIR runtime should run.
+    FellBack(String),
+}
+
+/// `aura run`'s default backend.
+///
+/// This stays on the MIR runtime rather than `auto` because `auto` currently
+/// pays a full direct compile and link on every run: about 1.4s against 0.012s
+/// for a hello-world program on this workstation. Making `auto` the default
+/// before warm launches are cheap would regress every `aura run` by two orders
+/// of magnitude. The content-addressed artifact cache is the precondition for
+/// revisiting it.
+const DEFAULT_RUN_BACKEND: RunBackend = RunBackend::Mir;
+
+fn parse_run_backend(args: Vec<String>) -> (RunBackend, Vec<String>) {
+    let mut backend = DEFAULT_RUN_BACKEND;
+    let mut rest = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--backend" {
+            index += 1;
+            let value = args
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| print_usage_and_exit(2));
+            backend = match value.as_str() {
+                "mir" => RunBackend::Mir,
+                "direct" => RunBackend::Direct,
+                "auto" => RunBackend::Auto,
+                _ => print_usage_and_exit(2),
+            };
+            index += 1;
+            continue;
+        }
+        rest.push(args[index].clone());
+        index += 1;
+    }
+    (backend, rest)
+}
+
+/// Builds and executes the program through the direct native backend. Under
+/// `auto` a build failure is reported as a fallback rather than an error, so
+/// the MIR runtime still runs the program.
+fn run_through_native_backend(
+    input: &Input,
+    program_args: &[String],
+    backend: RunBackend,
+) -> NativeRunOutcome {
+    let mir = if input.from_stdin {
+        lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
+    } else {
+        lower_path_to_mir(Path::new(&input.path))
+    };
+    let mir = match mir {
+        Ok(mir) => mir,
+        // A compile failure is the program's, not the backend's, so it is
+        // reported the same way whichever backend was requested.
+        Err(error) => return NativeRunOutcome::Failed(error.message),
+    };
+
+    let output_path = temporary_run_binary_path(&input.path);
+    let outcome = select_run_outcome(
+        backend,
+        || build_direct_native_binary(&input.path, &input.source, &mir, &output_path),
+        || {
+            process::Command::new(&output_path)
+                .args(program_args)
+                .status()
+                .map(|status| status.code().unwrap_or(1))
+                .map_err(|error| {
+                    format!(
+                        "failed to execute the direct binary `{}`: {}",
+                        output_path.display(),
+                        error
+                    )
+                })
+        },
+    );
+    let _ = fs::remove_file(&output_path);
+    outcome
+}
+
+/// Decides what a native run does when the build or the launch fails. Only
+/// `auto` degrades to the MIR runtime; a forced `direct` run reports the
+/// failure so a parity or benchmark caller never silently measures the wrong
+/// backend.
+fn select_run_outcome(
+    backend: RunBackend,
+    build: impl FnOnce() -> std::result::Result<(), String>,
+    execute: impl FnOnce() -> std::result::Result<i32, String>,
+) -> NativeRunOutcome {
+    let degrade = |reason: String| match backend {
+        RunBackend::Auto => NativeRunOutcome::FellBack(reason),
+        _ => NativeRunOutcome::Failed(reason),
+    };
+    if let Err(reason) = build() {
+        return degrade(reason);
+    }
+    match execute() {
+        Ok(code) => NativeRunOutcome::Ran(code),
+        Err(reason) => degrade(reason),
+    }
+}
+
+fn temporary_run_binary_path(source_path: &str) -> PathBuf {
+    let stem = Path::new(source_path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("aurora-run");
+    let unique = format!(
+        "aurora-run-{}-{}-{}",
+        stem,
+        std::process::id(),
+        system_time_nanos()
+    );
+    std::env::temp_dir().join(unique)
 }
 
 fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
@@ -1464,7 +1616,7 @@ fn usage_text() -> &'static str {
     "usage: aura <check|run> [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
-       or: aura run <file.au> [-- <program-args>...]\n\
+       or: aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]\n\
        or: aura build -o <output> [--backend auto|direct] [--format human|json] <file.au>\n\
        or: aura build -o <output> [--backend auto|direct] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
@@ -1502,10 +1654,11 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        configure_native_runtime_cargo, parse_static_library_artifact_path,
+        configure_native_runtime_cargo, parse_run_backend, parse_static_library_artifact_path,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
-        select_build_backend, write_unique_temp_file, write_unique_temp_file_with_writer,
-        BuildBackend, SelectedBuildBackend,
+        select_build_backend, select_run_outcome, write_unique_temp_file,
+        write_unique_temp_file_with_writer, BuildBackend, NativeRunOutcome, RunBackend,
+        SelectedBuildBackend,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -1595,6 +1748,65 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_backend_parsing_defaults_to_mir_and_accepts_every_selector() {
+        assert_eq!(
+            parse_run_backend(vec!["main.au".to_string()]),
+            (RunBackend::Mir, vec!["main.au".to_string()])
+        );
+        for (value, expected) in [
+            ("mir", RunBackend::Mir),
+            ("direct", RunBackend::Direct),
+            ("auto", RunBackend::Auto),
+        ] {
+            assert_eq!(
+                parse_run_backend(vec![
+                    "--backend".to_string(),
+                    value.to_string(),
+                    "main.au".to_string()
+                ]),
+                (expected, vec!["main.au".to_string()]),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_auto_run_degrades_to_the_mir_runtime() {
+        // A forced direct run reports a build failure instead of silently
+        // measuring the MIR runtime.
+        assert!(matches!(
+            select_run_outcome(
+                RunBackend::Direct,
+                || Err("no linker".to_string()),
+                || panic!("a failed build must not be executed"),
+            ),
+            NativeRunOutcome::Failed(reason) if reason == "no linker"
+        ));
+        assert!(matches!(
+            select_run_outcome(
+                RunBackend::Auto,
+                || Err("no linker".to_string()),
+                || panic!("a failed build must not be executed"),
+            ),
+            NativeRunOutcome::FellBack(reason) if reason == "no linker"
+        ));
+
+        // A launch failure degrades the same way a build failure does.
+        assert!(matches!(
+            select_run_outcome(
+                RunBackend::Auto,
+                || Ok(()),
+                || Err("exec failed".to_string()),
+            ),
+            NativeRunOutcome::FellBack(reason) if reason == "exec failed"
+        ));
+        assert!(matches!(
+            select_run_outcome(RunBackend::Direct, || Ok(()), || Ok(7)),
+            NativeRunOutcome::Ran(7)
+        ));
     }
 
     #[test]

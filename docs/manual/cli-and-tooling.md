@@ -19,7 +19,8 @@ aura check app.au
 | Command | Purpose |
 | --- | --- |
 | `aura check file.au` | Parse and type-check without executing. |
-| `aura run file.au` | Execute through the MIR runtime. |
+| `aura run file.au` | Execute through the MIR runtime, which is the default backend. |
+| `aura run --backend mir\|direct\|auto file.au` | Choose the execution backend explicitly. |
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura ast file.au` | Print the syntax tree. |
@@ -226,7 +227,9 @@ Human diagnostics render as `error[AU####]` with source context when a span is a
 
 ## Backend Support
 
-The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run` uses the MIR runtime. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; its lexical fallback is recovery-only and is not a second language implementation.
+The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run --backend mir` executes the lowered MIR and is the default. `aura run --backend direct` builds a native binary with the direct backend and executes it, reporting a build or launch failure as an error. `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime, printing the reason on standard error before the program runs; a forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, and exit code.
+
+The default remains `mir` because `auto` currently pays a full direct compile and link on every run. On the development workstation that is about 1.4 seconds against 0.012 seconds for a hello-world program, so defaulting to `auto` before warm launches are cheap would regress every `aura run` by two orders of magnitude. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; its lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained execution backend must have the same observable result or diagnostic in the other, subject only to the platform limits documented below.
 

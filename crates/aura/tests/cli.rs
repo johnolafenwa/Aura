@@ -1166,6 +1166,57 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
 }
 
 #[test]
+fn run_backend_selector_matches_across_mir_direct_and_auto() {
+    let source = "import sys\n\ndef main() -> int32:\n    print(\"selector\")\n    for arg in sys.args():\n        print(arg)\n    return 3\n";
+    let (_temp, source_path) = write_temp_source("aurora-run-backend-selector", source);
+    let expected = "selector\nalpha\nbeta\n";
+
+    for backend in ["mir", "direct", "auto"] {
+        let output = Command::new(aura_bin())
+            .arg("run")
+            .arg("--backend")
+            .arg(backend)
+            .arg(source_path.display().to_string())
+            .arg("--")
+            .arg("alpha")
+            .arg("beta")
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run aura run --backend {backend}: {error}"));
+
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{backend} stdout, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(3), "{backend} exit code");
+    }
+
+    // The default is still the MIR runtime, and it agrees with every explicit
+    // selector.
+    let default_run = Command::new(aura_bin())
+        .arg("run")
+        .arg(source_path.display().to_string())
+        .arg("--")
+        .arg("alpha")
+        .arg("beta")
+        .output()
+        .expect("failed to run aura run with the default backend");
+    assert_eq!(String::from_utf8_lossy(&default_run.stdout), expected);
+    assert_eq!(default_run.status.code(), Some(3));
+
+    let rejected = Command::new(aura_bin())
+        .arg("run")
+        .arg("--backend")
+        .arg("interpreter")
+        .arg(source_path.display().to_string())
+        .output()
+        .expect("failed to run aura run with an unknown backend");
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("--backend mir|direct|auto"));
+}
+
+#[test]
 fn compile_commands_accept_membership_and_comparison_chains() {
     let (temp, source_path) = write_temp_source(
         "aurora-membership-and-chains",
