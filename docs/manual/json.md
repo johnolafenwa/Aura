@@ -290,8 +290,9 @@ Parse/runtime materialization and dump/runtime conversion additionally accept
 at most 262,144 JSON value nodes, counting the root and values but not object
 keys.
 
-Derived class or enum schemas, generated codecs, schema validation,
-MessagePack, CBOR, Protobuf, and other binary formats are unavailable.
+Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
+Schema validation, MessagePack, CBOR, Protobuf, and other binary formats are
+also unavailable.
 Codec-controlled collection/string growth and both runtime conversion trees use
 fallible allocation and map failure to `AU4005`. An unrecoverable host allocator
 failure inside Rust, the operating system, or dependency-owned scratch work
@@ -306,5 +307,4 @@ exact gap-fill semantics remain Provisional under ADR-0021 pending the Phase 3
 checkpoint review.
 
 The older `is_valid`, `stringify_map`, and `parse_string_map` helpers remain
-implemented compatibility surface. Derived schemas and streaming codecs remain
-future work.
+implemented compatibility surface. Streaming codecs remain future work.

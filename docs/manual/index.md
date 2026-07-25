@@ -15,7 +15,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility, bindings, block scope, no-shadowing, and member lookup.
 - [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic types, copy and move categories, and type annotations.
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
-- [Expressions](/manual/expressions): operators, calls, indexing, member access, literals, `match` expressions, `try`, and f-strings.
+- [Expressions](/manual/expressions): operators, calls, indexing, member access,
+  literals, conditional expressions, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
   unpacking and patterns, whole-source ownership, and constant indexing.

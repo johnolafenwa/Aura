@@ -124,7 +124,11 @@ Operator operands are not implicitly widened. An integer literal may be contextu
 
 ### Conditions
 
-`if` and `while` conditions must have exactly type `bool`. `and`, `or`, and `not` also require boolean results under the rules above. Aurora does not apply general truthiness conversion to strings, collections, resources, or user types.
+`if` and `while` conditions, including the condition in
+`value if condition else alternative`, must have exactly type `bool`. `and`,
+`or`, and `not` also require boolean results under the rules above. Aurora does
+not apply general truthiness conversion to strings, collections, resources, or
+user types.
 
 ### Assertions
 
@@ -228,6 +232,12 @@ A match pattern must be compatible with the scrutinee type. Variant payload subp
 
 Matches over enums and booleans must be exhaustive unless `_` covers the remainder. Literal matches over open numeric/string domains require `_`. Every arm of a match expression must produce the same result type, using the surrounding expected type where available.
 
+A conditional expression checks both value arms against one result type.
+Surrounding expected context applies to both arms. Without such context, a
+context-dependent literal may adopt the type established by the other arm; no
+rule widens or converts an already-bound value. The condition is checked first,
+then each arm starts from the resulting ownership state.
+
 ## Generics, Traits, And Implementations
 
 Traits are nominal interfaces. A bound `T: A + B` requires an applicable implementation of each trait after substitution. Supertraits are inherited requirements.
@@ -261,7 +271,10 @@ is safe.
 
 `break` and `continue` are valid only inside `for` or `while`. A loop-local binding does not escape. Moving a non-copy outer value for the first time inside a repeatable loop is rejected unless the checker can prove the path does not create an invalid next iteration.
 
-An `if`, statement match, or match expression checks branches independently and merges move/partial-move state conservatively across reachable paths. A non-`None` function is rejected when any reachable path can fall through without returning.
+An `if`, statement match, match expression, or conditional expression checks
+branches independently and merges move/partial-move state conservatively
+across reachable paths. A non-`None` function is rejected when any reachable
+path can fall through without returning.
 
 ## `with` Resources
 

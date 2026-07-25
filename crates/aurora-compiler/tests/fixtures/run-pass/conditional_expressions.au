@@ -1,0 +1,49 @@
+def condition(value: bool) -> bool:
+    print("condition")
+    return value
+
+def then_value() -> int32:
+    print("then")
+    return 10
+
+def else_value() -> int32:
+    print("else")
+    return 20
+
+def display(value: String):
+    print(value)
+
+def take_text(value: own String) -> String:
+    return value
+
+def select_owned_text(flag: bool, text: own String) -> String:
+    return take_text(text) if flag else text
+
+def select_owned_text_match(flag: bool, text: own String) -> String:
+    return match flag:
+        case true: take_text(text)
+        case false: text
+
+def nested_collection_size(ready: bool) -> int32:
+    values = [4, 5]
+    selected = ([], 1) if ready else (values, 2)
+    items, code = selected
+    return items.len()
+
+def main():
+    print(then_value() if condition(true) else else_value())
+    print(then_value() if condition(false) else else_value())
+    print(1 if false else 2 if true else 3)
+    print((1 if false else 4) + 5)
+    print(f"choice={7 if true else 8}")
+    left = "left"
+    right = "right"
+    display(left if true else right)
+    print(left)
+    print(right)
+    print(nested_collection_size(true))
+    print(nested_collection_size(false))
+    print(select_owned_text(true, "call arm"))
+    print(select_owned_text(false, "direct arm"))
+    print(select_owned_text_match(true, "match call arm"))
+    print(select_owned_text_match(false, "match direct arm"))

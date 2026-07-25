@@ -92,6 +92,26 @@ grep -Fq '`tuples.au`' examples/README.md
 grep -Fq 'examples/basics/tuples.au' README.md
 grep -Fq '[25-tuples.md]' tutorials/README.md
 grep -Fq 'the executable `docs/manual/tuples.md` fence' docs/manual/conformance.md
+grep -Fq 'conditional-expression' docs/manual/grammar.md
+grep -Fq 'The condition is evaluated first, exactly once' docs/manual/expressions.md
+grep -Fq 'The unselected arm performs no' docs/manual/execution-model.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0027-conditional-expressions.md
+grep -Fq '0027-conditional-expressions.md' architecture_docs/decisions/README.md
+test -s examples/control_flow/conditional_expressions.au
+grep -Fq '`conditional_expressions.au`' examples/README.md
+grep -Fq 'examples/control_flow/conditional_expressions.au' README.md
+grep -Fq 'examples/control_flow/conditional_expressions.au' tutorials/04-control-flow.md
+grep -Fq 'Conditional-expression precedence' docs/manual/conformance.md
+grep -Fq '`value if condition else alternative`' tutorials/14-current-language-surface.md
+grep -Fq 'conditional expressions' tutorials/README.md
+grep -Fq 'conditional expressions' docs/manual/index.md
+grep -Fq 'ADR-0027' docs/manual/status-and-compatibility.md
+grep -Fq 'compiler bridge preserves conditional operands and bool diagnostics' tools/aurora-language-server/test/compiler_bridge.test.js
+test -s crates/aurora-compiler/tests/fixtures/check-pass/conditional_expression_contexts.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/conditional_expressions.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_condition_must_be_bool.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_arm_type_mismatch.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md
@@ -139,6 +159,9 @@ grep -Fq 'JSON input-data failures are typed `json.Error` values' docs/manual/di
 grep -Fq 'recursive JSON parse/dump semantics' docs/manual/conformance.md
 grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0021-json-value-model-and-codec-policy.md
 grep -Fq '0021-json-value-model-and-codec-policy.md' architecture_docs/decisions/README.md
+grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.' docs/manual/json.md
+grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.' tutorials/21-json.md
+grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.' architecture_docs/decisions/0021-json-value-model-and-codec-policy.md
 test -s examples/json/dynamic_values.au
 grep -Fq '`dynamic_values.au`' examples/README.md
 grep -Fq '[21-json.md]' tutorials/README.md
@@ -197,8 +220,8 @@ grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
 grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
-grep -Fq '`AU3005` rejects a direct `Vec` or `Map` indexed read' docs/manual/diagnostics.md
-grep -Fq '`AU3006` rejects the corresponding indexed compound' docs/manual/diagnostics.md
+grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
+grep -Fq 'corresponding `Vec` or `Map` indexed compound assignment' docs/manual/diagnostics.md
 grep -Fq 'code: "AU3005"' crates/aurora-compiler/src/diag.rs
 grep -Fq 'code: "AU3006"' crates/aurora-compiler/src/diag.rs
 grep -Fq 'or: aura build -o <output>' crates/aura/src/main.rs
@@ -216,7 +239,24 @@ grep -Fq 'Structured frame-list fields are deferred to Batch 3' docs/manual/curr
 grep -Fq 'notes as prose rather than parse them.' docs/manual/diagnostics.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0014-map-literals-and-indexing.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0015-explicit-and-default-argument-order.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0016-retained-noncopy-expression-borrows.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0017-iteration-source-selection.md
+grep -Fq 'Checkpoint disposition (historical): ADR-0014 through ADR-0017 are Accepted.' work/task-board.md
+grep -Fq 'retained_receiver_nested_consumption_repro' docs/manual/conformance.md
+grep -Fq 'retained_argument_nested_consumption_repro' docs/manual/conformance.md
+grep -Fq 'method_receiver_rejects_nested_argument_consumption' docs/manual/conformance.md
+grep -Fq 'retained_parameter_rejects_nested_argument_consumption' docs/manual/conformance.md
+for fixture in \
+  retained_receiver_nested_consumption_repro \
+  retained_argument_nested_consumption_repro \
+  method_receiver_rejects_nested_argument_consumption \
+  retained_parameter_rejects_nested_argument_consumption; do
+  test -s "crates/aurora-compiler/tests/fixtures/check-fail/${fixture}.au"
+  test -s "crates/aurora-compiler/tests/fixtures/check-fail/${fixture}.diag"
+done
+for namespace in io fs net process bytes json sys path toml log trace metrics random; do
+  grep -Fq -- "- \`${namespace}\`" tutorials/14-current-language-surface.md
+done
 grep -Fq 'default temporary lives until the call completes' docs/manual/execution-model.md
 grep -Fq 'push(value: own T)' docs/manual/api-index.md
 grep -Fq 'set(key: own K, value: own V)' docs/manual/api-index.md

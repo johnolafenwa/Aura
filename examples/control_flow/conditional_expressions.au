@@ -1,0 +1,9 @@
+def describe(score: int32) -> String:
+    return "high" if score >= 80 else "mid" if score >= 50 else "low"
+
+def main():
+    ready = true
+    print("ready" if ready else "waiting")
+    print(describe(91))
+    print(describe(65))
+    print(describe(20))

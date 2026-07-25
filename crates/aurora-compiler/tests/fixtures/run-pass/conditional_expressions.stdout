@@ -1,0 +1,18 @@
+condition
+then
+10
+condition
+else
+20
+2
+9
+choice=7
+left
+left
+right
+0
+2
+call arm
+direct arm
+match call arm
+match direct arm

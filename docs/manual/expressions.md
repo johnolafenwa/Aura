@@ -85,6 +85,7 @@ Except for short-circuit boolean operators and control-flow expressions, evaluat
 - collection elements are evaluated in source order
 - each map key is evaluated before its value, and entries are evaluated in source order
 - f-string interpolations are evaluated from left to right
+- a conditional expression evaluates its condition first and then exactly one arm
 - a match scrutinee is evaluated once, before arm selection
 
 Evaluation order matters when an expression moves a value, mutates through a
@@ -106,15 +107,16 @@ The following table runs from lowest to highest precedence:
 
 | Level | Form | Associativity |
 | --- | --- | --- |
-| 1 | `or` | left |
-| 2 | `and` | left |
-| 3 | prefix `not` | right |
-| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
-| 5 | `+`, `-` | left |
-| 6 | `*`, `/`, `//`, `%` | left |
-| 7 | prefix `match`, `try`, unary `-` | prefix/right |
-| 8 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
-| 9 | primary expression | — |
+| 1 | `value if condition else alternative` | right |
+| 2 | `or` | left |
+| 3 | `and` | left |
+| 4 | prefix `not` | right |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 6 | `+`, `-` | left |
+| 7 | `*`, `/`, `//`, `%` | left |
+| 8 | prefix `match`, `try`, unary `-` | prefix/right |
+| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 10 | primary expression | — |
 
 Arithmetic and boolean chains are left-folded. For example:
 
@@ -149,6 +151,34 @@ inside = lower < value and value < upper
 - `left or right` evaluates `right` only when `left` is `false`
 
 `not value` evaluates its operand and negates the boolean result. A matching operator trait may provide `not` for a supported user type, as described under [Generics And Traits](/manual/generics-and-traits#operator-traits).
+
+## Conditional Expressions
+
+The Python-style form `value if condition else alternative` selects one value.
+For example, `label = "ready" if ready else "waiting"` chooses one `String`.
+
+The condition is evaluated first, exactly once, and must have type `bool`.
+When it is `true`, only `value` is evaluated; when it is `false`, only
+`alternative` is evaluated. Both arms must have one static result type.
+Surrounding expected context flows into both arms, so contextual literals such
+as integer literals, `None`, and empty collections can adopt that type. This
+context is structural: an empty collection nested inside a tuple arm adopts
+the corresponding concrete nested type from the other arm or the surrounding
+expected type. Contextual typing never implicitly converts an already-bound
+value.
+
+The form has lower precedence than `or` and associates to the right.
+`a or b if ready else c` means `(a or b) if ready else c`, while
+`a if first else b if second else c` means
+`a if first else (b if second else c)`.
+
+Both arms are checked even when the condition is a literal. Ownership state is
+checked independently for each arm and merged conservatively afterward. A
+non-copy value moved by either arm is therefore unavailable after the
+conditional expression. The surrounding use determines whether an arm is
+moved: passing the result to an ordinary shared-borrow parameter borrows the
+selected arm and preserves both source owners, while assignment, return, or an
+`own` parameter consumes the selected value.
 
 ## Arithmetic And Comparison
 
@@ -460,20 +490,20 @@ Bare builtin variants such as `Ok`, `Err`, `Some`, or `None` are accepted only w
 
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include comprehensions, lambdas, conditional
-expressions, assignment expressions, call-site borrow annotations, non-numeric
-casts, or ordinary trailing commas. The required singleton-tuple comma is the
-one tuple-specific exception. If a form is absent from
-[Grammar](/manual/grammar), it is not part of the implemented expression
-language.
+Aurora 0.1 expressions do not include comprehensions, lambdas, assignment
+expressions, call-site borrow annotations, non-numeric casts, or ordinary
+trailing commas. The required singleton-tuple comma is the one tuple-specific
+exception. If a form is absent from [Grammar](/manual/grammar), it is not part
+of the implemented expression language.
 
 ## Grammar
 
 Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
-`match`, `try`, collection, constructor, and f-string expression productions
-are normative in [Grammar](/manual/grammar). The precedence and associativity
-table above resolves every accepted operator sequence. A spelling absent from
-those productions is not accepted as an implicit extension.
+conditional, `match`, `try`, collection, constructor, and f-string expression
+productions are normative in [Grammar](/manual/grammar). The precedence and
+associativity table above resolves every accepted operator sequence. A
+spelling absent from those productions is not accepted as an implicit
+extension.
 
 ## Typing Rules
 
@@ -489,7 +519,8 @@ single result type on every arm.
 Operands and call arguments evaluate left to right, with each copy or move
 argument result captured before the next argument's side effects. Named enum
 arguments evaluate in source order and then bind to declaration-order payload
-slots. `and` and `or` short circuit. A member receiver is evaluated before
+slots. `and` and `or` short circuit. Conditional expressions evaluate the
+condition first and exactly one selected arm. A member receiver is evaluated before
 arguments; an index base is evaluated before its index; collection entries
 preserve source order; a match scrutinee evaluates once; and each f-string
 interpolation renders immediately before the next begins.
@@ -549,11 +580,11 @@ implementation-defined choice.
 
 The expression forms defined positively in this chapter are implemented.
 Delimiter continuation is implemented under Provisional ADR-0025; it does not
-add a new expression AST form.
-Lambdas, comprehensions, conditional and assignment expressions, general
-callables, nonnumeric casts, and call-site ownership modifiers are unavailable.
-The minimal tuple surface is Provisional under ADR-0026. `in` is reserved as a
-loop keyword but is unavailable as an
-expression operator. Chained comparisons are deliberately rejected rather
-than given Python semantics. Parser migration hints for any of these spellings
-do not make them language features.
+add a new expression AST form. Conditional expressions are implemented under
+Provisional ADR-0027.
+The minimal tuple surface is Provisional under ADR-0026. Lambdas,
+comprehensions, assignment expressions, general callables, nonnumeric casts,
+and call-site ownership modifiers are unavailable. `in` is reserved as a loop
+keyword but is unavailable as an expression operator. Chained comparisons are
+deliberately rejected rather than given Python semantics. Parser migration
+hints for any of these spellings do not make them language features.

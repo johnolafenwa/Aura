@@ -257,6 +257,14 @@ The examples are organized by topic so they can serve both as quick references a
 - `if_elif_else.au`
   - boolean conditions and branching
   - prints `high`
+- `conditional_expressions.au`
+  - Python-style `value if condition else alternative` selection, including
+    right-associated nesting
+  - prints:
+    - `ready`
+    - `high`
+    - `mid`
+    - `low`
 - `for_range.au`
   - `for` loops over `range(...)`, plus `break` and `continue`
   - prints `7`
@@ -756,6 +764,7 @@ cargo run -p aura -- run examples/classes/mutating_methods.au
 cargo run -p aura -- run examples/control_flow/for_range.au
 cargo run -p aura -- run examples/control_flow/match_literals.au
 cargo run -p aura -- run examples/control_flow/boolean_logic.au
+cargo run -p aura -- run examples/control_flow/conditional_expressions.au
 cargo run -p aura -- run examples/control_flow/while_break_continue.au
 cargo run -p aura -- run examples/enums/result_match.au
 cargo run -p aura -- run examples/enums/result_option.au

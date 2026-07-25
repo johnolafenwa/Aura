@@ -1457,6 +1457,15 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(left, scope);
                 self.visit_expr(right, scope);
             }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.visit_expr(then_expr, scope);
+                self.visit_expr(condition, scope);
+                self.visit_expr(else_expr, scope);
+            }
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
@@ -2631,6 +2640,59 @@ impl<'a> AnalysisBuilder<'a> {
                     })
             }
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
+            ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let then_ty = self.infer_expr_type(then_expr, scope);
+                let else_ty = self.infer_expr_type(else_expr, scope);
+                match (then_ty, else_ty) {
+                    (None, other) | (other, None) => other,
+                    (Some(then_ty), Some(else_ty)) if then_ty == else_ty => Some(then_ty),
+                    (Some(Type::Unit), Some(else_ty)) => Some(else_ty),
+                    (Some(then_ty), Some(Type::Unit)) => Some(then_ty),
+                    (Some(then_ty), Some(else_ty))
+                        if analysis_type_contains_unknown(&then_ty)
+                            && !analysis_type_contains_unknown(&else_ty) =>
+                    {
+                        Some(else_ty)
+                    }
+                    (Some(then_ty), Some(else_ty))
+                        if analysis_type_contains_unknown(&else_ty)
+                            && !analysis_type_contains_unknown(&then_ty) =>
+                    {
+                        Some(then_ty)
+                    }
+                    (Some(_), Some(else_ty))
+                        if analysis_is_integer_literal(then_expr)
+                            && analysis_is_numeric_type(&else_ty) =>
+                    {
+                        Some(else_ty)
+                    }
+                    (Some(then_ty), Some(_))
+                        if analysis_is_integer_literal(else_expr)
+                            && analysis_is_numeric_type(&then_ty) =>
+                    {
+                        Some(then_ty)
+                    }
+                    (Some(_), Some(else_ty))
+                        if analysis_is_float_literal(then_expr)
+                            && !analysis_is_float_literal(else_expr)
+                            && analysis_is_float_type(&else_ty) =>
+                    {
+                        Some(else_ty)
+                    }
+                    (Some(then_ty), Some(_))
+                        if analysis_is_float_literal(else_expr)
+                            && !analysis_is_float_literal(then_expr)
+                            && analysis_is_float_type(&then_ty) =>
+                    {
+                        Some(then_ty)
+                    }
+                    (Some(then_ty), Some(_)) => Some(then_ty),
+                }
+            }
             ExprKind::Match { arms, .. } => arms
                 .first()
                 .and_then(|arm| self.infer_expr_type(&arm.value, scope)),
@@ -3249,6 +3311,65 @@ fn base_type_name(ty: &Type) -> &str {
         Type::Tuple(_) => "tuple",
         Type::Named(name, _) => name.as_str(),
     }
+}
+
+fn analysis_is_integer_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Group(inner) => analysis_is_integer_literal(inner),
+        ExprKind::Unary {
+            op: crate::ast::UnaryOp::Neg,
+            expr: inner,
+        } => matches!(inner.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}
+
+fn analysis_is_float_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Float(_) => true,
+        ExprKind::Group(inner) => analysis_is_float_literal(inner),
+        _ => false,
+    }
+}
+
+fn analysis_type_contains_unknown(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, _) if name == "Unknown")
+        || matches!(ty, Type::Named(_, args) if args.iter().any(analysis_type_contains_unknown))
+        || matches!(ty, Type::Tuple(elements) if elements.iter().any(analysis_type_contains_unknown))
+}
+
+fn analysis_is_numeric_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name, args)
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "int128"
+                        | "intsize"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "uint128"
+                        | "uintsize"
+                        | "float32"
+                        | "float64"
+                )
+    )
+}
+
+fn analysis_is_float_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name, args)
+            if args.is_empty() && matches!(name.as_str(), "float32" | "float64")
+    )
 }
 
 trait TypeExt {

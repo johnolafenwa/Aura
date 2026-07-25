@@ -77,3 +77,9 @@ hidden cost.
   write bases.
 - `method_receiver_borrow_rejects_nested_argument_mutation.au` pins the
   receiver/argument boundary.
+- `retained_receiver_nested_consumption_repro.au`,
+  `retained_argument_nested_consumption_repro.au`,
+  `method_receiver_rejects_nested_argument_consumption.au`, and
+  `retained_parameter_rejects_nested_argument_consumption.au` pin B2.0-a
+  containment when a nested call consumes a retained receiver or earlier
+  argument.

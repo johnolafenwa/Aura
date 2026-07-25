@@ -1361,7 +1361,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "ab4d439db1a4a0f0b0385f152c25daf4378b0a325992e60393ef851bf643527a",
+      "sha256": "fb1476c7fc570db4a2bb93ae7b3accc211954de6b5fe1ffe9cf57b0a7302776f",
       "mode": "illustrative",
       "reason": "Normative expression-precedence-and-call EBNF fragment interpreted by the grammar prose, not Aurora source."
     },

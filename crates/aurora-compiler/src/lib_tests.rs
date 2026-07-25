@@ -245,6 +245,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "80\n20\n",
     ),
     (
+        "examples/control_flow/conditional_expressions.au",
+        include_str!("../../../examples/control_flow/conditional_expressions.au"),
+        "ready\nhigh\nmid\nlow\n",
+    ),
+    (
         "examples/basics/borrow_parameters.au",
         include_str!("../../../examples/basics/borrow_parameters.au"),
         "41\n42\n42\n",

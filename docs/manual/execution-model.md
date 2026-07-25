@@ -192,6 +192,21 @@ The scrutinee is evaluated exactly once. Arms are considered in source order. Th
 
 A match expression evaluates only its selected arm and produces that arm's value. Static exhaustiveness ensures a checked match has a selected arm for every permitted input.
 
+## Conditional Expressions
+
+For `value if condition else alternative`, the runtime evaluates `condition`
+first and exactly once. A true result evaluates and produces `value`; a false
+result evaluates and produces `alternative`. The unselected arm performs no
+calls, moves, mutations, I/O, allocation, or runtime failures.
+
+Static checking still analyzes both arms and merges their ownership effects.
+This conservative merge prevents later use of a non-copy value that may have
+been moved on the selected path. MIR and direct lowering use an explicit
+condition branch and a single typed join value; a backend must not eagerly
+evaluate either arm. When the surrounding operation takes a shared borrow, the
+join does not consume the selected source value, so both source owners remain
+available after the borrow ends.
+
 ## `try`
 
 `try expression` evaluates one `Result[T, E]` value:

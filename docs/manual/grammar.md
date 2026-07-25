@@ -136,7 +136,7 @@ trailing comma.
 ```
 
 There is no semicolon, assignment expression, exponentiation, unary plus,
-bitwise operator, lambda arrow, or conditional-expression operator.
+bitwise operator, or lambda arrow.
 
 ## Modules And Imports
 
@@ -492,19 +492,24 @@ From lowest to highest precedence:
 
 | Level | Form | Associativity |
 | --- | --- | --- |
-| 1 | `or` | left |
-| 2 | `and` | left |
-| 3 | prefix `not` | right |
-| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
-| 5 | `+`, `-` | left |
-| 6 | `*`, `/`, `//`, `%` | left |
-| 7 | prefix `match`, `try`, unary `-` | right/prefix |
-| 8 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
-| 9 | primary | — |
+| 1 | conditional expression | right |
+| 2 | `or` | left |
+| 3 | `and` | left |
+| 4 | prefix `not` | right |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 6 | `+`, `-` | left |
+| 7 | `*`, `/`, `//`, `%` | left |
+| 8 | prefix `match`, `try`, unary `-` | right/prefix |
+| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 10 | primary | — |
 
 ```ebnf
 expression           = non-tuple-expression ;
-non-tuple-expression = or-expression ;
+non-tuple-expression = conditional-expression ;
+
+conditional-expression
+    = or-expression,
+      [ "if", or-expression, "else", conditional-expression ] ;
 
 or-expression
     = and-expression, { "or", and-expression } ;
@@ -557,7 +562,10 @@ numeric-type
     | "float32" | "float64" ;
 ```
 
-Arithmetic and Boolean chains are left-folded. The optional comparison suffix
+Conditional expressions associate to the right, their condition is an
+`or-expression`, and their two value arms may contain nested conditional
+expressions through grouping or the recursive alternative arm. Arithmetic and
+Boolean chains are left-folded. The optional comparison suffix
 permits exactly one unparenthesized equality or ordering operator. Ordering,
 equality, and mixed chains are rejected rather than left-folded or given
 Python-style chained-comparison semantics; write the repeated operations with

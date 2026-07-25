@@ -560,6 +560,915 @@ fn d4_string_indexing_remains_rejected() {
 }
 
 #[test]
+fn conditional_expressions_require_bool_unify_arms_and_merge_branch_moves() {
+    crate::check_source(
+        r#"
+def choose(flag: bool, count: int32) -> int32:
+    return count if flag else 2
+
+def ratio(flag: bool) -> float64:
+    return 1 if flag else 2.5
+
+def maybe(flag: bool) -> Option[int32]:
+    return None if flag else Option.Some(7)
+"#,
+    )
+    .expect("expected types should flow into both conditional arms");
+
+    let condition_error = crate::check_source("def main():\n    print(\"yes\" if 1 else \"no\")\n")
+        .expect_err("conditional conditions must be exactly bool");
+    assert_eq!(condition_error.code, "AU2002");
+    assert_eq!(
+        condition_error.message,
+        "conditional expression condition must have type `bool`, found `int64`"
+    );
+    assert_eq!(
+        condition_error.help,
+        ["Aurora has no implicit truthiness; compare the value explicitly"]
+    );
+
+    let arm_error = crate::check_source("def main():\n    print(1 if true else \"no\")\n")
+        .expect_err("conditional arms must have one static type");
+    assert_eq!(arm_error.code, "AU2002");
+    assert_eq!(
+        arm_error.message,
+        "conditional expression arms must have one type; expected `int64`, found `String`"
+    );
+
+    let move_error = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def main():
+    text = "aurora"
+    selected = take(text) if true else "fallback"
+    print(selected)
+    print(text)
+"#,
+    )
+    .expect_err("a value moved on one conditional path is not definitely reusable");
+    assert_eq!(move_error.code, "AU3001");
+    assert!(move_error.message.contains("use of moved value `text`"));
+}
+
+#[test]
+fn conditional_expression_inference_is_symmetric_for_contextual_values_and_literals() {
+    crate::check_source(
+        r#"
+def choose(
+    flag: bool,
+    exact_integer: int32,
+    reverse_integer: int32,
+    exact_float: float32,
+    reverse_float: float32,
+    values: own Vec[int32],
+    reverse_values: own Vec[int32],
+    tuple_values: own Vec[int32]
+):
+    left_empty = [] if flag else values
+    right_empty = reverse_values if flag else []
+    nested_empty = ([], 1) if flag else (tuple_values, 2)
+    left_none = None if flag else Option.Some(exact_integer)
+    right_none = Option.Some(reverse_integer) if flag else None
+    left_integer = (-1) if flag else exact_integer
+    right_integer = reverse_integer if flag else (-2)
+    promoted_integer = 1 if flag else exact_float
+    reverse_promoted_integer = reverse_float if flag else 2
+    left_float = (1.5) if flag else exact_float
+    right_float = reverse_float if flag else (2.5)
+    same_type = exact_integer if flag else reverse_integer
+"#,
+    )
+    .expect("either conditional arm should provide the contextual result type");
+
+    let both_unknown = crate::check_source("def main():\n    values = [] if true else []\n")
+        .expect_err("two empty conditional list arms still lack an element type");
+    assert_eq!(both_unknown.code, "AU2002");
+    assert!(
+        both_unknown
+            .message
+            .contains("empty list literals require an expected `Vec[T]` type"),
+        "{}",
+        both_unknown.message
+    );
+
+    let annotated_mismatch =
+        crate::check_source("def choose(flag: bool) -> int32:\n    return None if flag else 1\n")
+            .expect_err("an explicit result type should diagnose the first mismatching arm");
+    assert_eq!(annotated_mismatch.code, "AU2002");
+    assert_eq!(
+        annotated_mismatch.message,
+        "conditional expression arm expects `int32`, found `None`"
+    );
+}
+
+#[test]
+fn conditional_defaults_reject_references_from_every_operand() {
+    for (source, operand) in [
+        (
+            "def choose(value: bool, result: int32 = 1 if value else 2):\n    pass\n",
+            "condition",
+        ),
+        (
+            "def choose(value: int32, result: int32 = value if true else 2):\n    pass\n",
+            "then arm",
+        ),
+        (
+            "def choose(value: int32, result: int32 = 1 if true else value):\n    pass\n",
+            "else arm",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("a default must not depend on another parameter");
+        assert_eq!(diagnostic.code, "AU2004", "{operand}");
+        assert!(
+            diagnostic.message.contains("default argument")
+                && diagnostic.message.contains("parameter `value`"),
+            "{operand}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn consuming_a_conditional_moves_values_from_both_possible_arms() {
+    for (source, moved_name) in [
+        (
+            r#"
+def consume(value: own String):
+    pass
+
+def exercise(flag: bool):
+    left = "left"
+    right = "right"
+    consume(left if flag else right)
+    print(left)
+"#,
+            "left",
+        ),
+        (
+            r#"
+def consume(value: own String):
+    pass
+
+def exercise(flag: bool):
+    left = "left"
+    right = "right"
+    consume(left if flag else right)
+    print(right)
+"#,
+            "right",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("each possible owned conditional result must be treated as moved");
+        assert_eq!(diagnostic.code, "AU3001", "{moved_name}");
+        assert!(
+            diagnostic
+                .message
+                .contains(&format!("use of moved value `{moved_name}`")),
+            "{moved_name}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+fn assert_conditional_single_consumption(expression: &str) {
+    let source = format!(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def choose(flag: bool, text: own String) -> String:
+    selected = {expression}
+    return selected
+"#
+    );
+    crate::check_source(&source).unwrap_or_else(|diagnostic| {
+        panic!(
+            "each conditional path consumes `text` exactly once for `{expression}`: {}",
+            diagnostic.message
+        )
+    });
+}
+
+#[test]
+fn conditional_consumption_keeps_direct_else_arm_branch_local() {
+    assert_conditional_single_consumption("take(text) if flag else text");
+}
+
+#[test]
+fn conditional_consumption_keeps_direct_then_arm_branch_local() {
+    assert_conditional_single_consumption("text if flag else take(text)");
+}
+
+fn assert_match_single_consumption(then_value: &str, else_value: &str) {
+    let source = format!(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def choose(flag: bool, text: own String) -> String:
+    selected = match flag:
+        case true: {then_value}
+        case false: {else_value}
+    return selected
+"#
+    );
+    crate::check_source(&source).unwrap_or_else(|diagnostic| {
+        panic!(
+            "each match path consumes `text` exactly once for `{then_value}` / `{else_value}`: {}",
+            diagnostic.message
+        )
+    });
+}
+
+#[test]
+fn match_consumption_keeps_direct_false_arm_branch_local() {
+    assert_match_single_consumption("take(text)", "text");
+}
+
+#[test]
+fn match_consumption_keeps_direct_true_arm_branch_local() {
+    assert_match_single_consumption("text", "take(text)");
+}
+
+#[test]
+fn borrowed_conditional_result_preserves_internal_arm_consumption() {
+    let diagnostic = crate::check_source(
+        r#"
+def consume_and_label(value: own String) -> String:
+    return "used"
+
+def observe(value: String):
+    pass
+
+def exercise(flag: bool, spent: own String):
+    observe(consume_and_label(spent) if flag else "idle")
+    print(spent)
+"#,
+    )
+    .expect_err("borrowing the result must not erase consumption performed inside an arm");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `spent`"));
+}
+
+#[test]
+fn borrowed_match_result_preserves_internal_arm_consumption() {
+    let diagnostic = crate::check_source(
+        r#"
+def consume_and_label(value: own String) -> String:
+    return "used"
+
+def observe(value: String):
+    pass
+
+def exercise(flag: bool, spent: own String):
+    observe(match flag:
+        case true: consume_and_label(spent)
+        case false: "idle"
+    )
+    print(spent)
+"#,
+    )
+    .expect_err("borrowing a match result must retain consumption performed inside an arm");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `spent`"));
+}
+
+#[test]
+fn composite_and_projected_arguments_conflict_with_a_retained_shared_argument() {
+    for (source, consumed) in [
+        (
+            "def hold(shared: Vec[int32], taken: own (Vec[int32], int32)):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, (values, 1))\n",
+            "values",
+        ),
+        (
+            "def hold(shared: Vec[int32], taken: own Vec[Vec[int32]]):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, [values])\n",
+            "values",
+        ),
+        (
+            "def hold(shared: String, taken: own Set[String]):\n    pass\n\ndef exercise(text: own String):\n    hold(text, {text})\n",
+            "text",
+        ),
+        (
+            "def hold(shared: String, taken: own Map[String, String]):\n    pass\n\ndef exercise(text: own String, other: own String):\n    hold(text, {other: text})\n",
+            "text",
+        ),
+        (
+            "class Holder:\n    text: String\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (left if flag else right).text)\n",
+            "left.text",
+        ),
+        (
+            "class Holder:\n    text: String\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (match flag:\n        case true: left\n        case false: right\n    ).text)\n",
+            "left.text",
+        ),
+        (
+            "class Holder:\n    text: String\n\nenum Choice:\n    First\n    Second\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(choice: own Choice, left: own Holder, right: own Holder):\n    hold(left.text, (match choice:\n        case Choice.First: left\n        case Choice.Second: right\n    ).text)\n",
+            "left.text",
+        ),
+        (
+            "def hold(shared: Vec[int32], taken: own Vec[Vec[int32]]):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, ([values]))\n",
+            "values",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(
+            "a place reached through a composite or branch argument must conflict with a retained shared argument",
+        );
+        assert_eq!(diagnostic.code, "AU3002", "{source}");
+        assert!(
+            diagnostic.message
+                == format!(
+                    "cannot consume `{consumed}` while `{consumed}` remains shared-borrowed by the parameter `shared`"
+                ),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn conditional_inference_exchanges_set_and_map_literal_shapes() {
+    let output = crate::run_source(
+        r#"
+def main():
+    flag = true
+    numbers: Set[int32] = {1, 2} if flag else {3}
+    lookup: Map[String, int32] = {"a": 1} if flag else {"b": 2}
+    print(numbers.len())
+    print(lookup.len())
+"#,
+    )
+    .expect("peer set and map literal arms should infer one result type");
+    assert_eq!(output.stdout, "2\n1\n");
+
+    let grouped = crate::run_source(
+        r#"
+def main():
+    flag = false
+    value: float64 = 1 if flag else (2.0)
+    print(value)
+"#,
+    )
+    .expect("a grouped floating arm should still widen the integer arm");
+    assert_eq!(grouped.stdout, "2.0\n");
+
+    // Without an annotation the arms must agree through their own shapes.
+    let unannotated = crate::run_source(
+        r#"
+def main():
+    flag = true
+    scale = 1.5
+    pair = ([1], 7) if flag else ([2], 8)
+    lists = [1, 2] if flag else [3, 4]
+    numbers = {1, 2} if flag else {3, 4}
+    lookup = {"a": 1} if flag else {"b": 2}
+    widened = scale if flag else ((2.0))
+    print(pair[1])
+    print(lists.len())
+    print(numbers.len())
+    print(lookup.len())
+    print(widened)
+"#,
+    )
+    .expect("peer tuple, list, set, and map arms should infer one result type");
+    assert_eq!(unannotated.stdout, "7\n2\n2\n1\n1.5\n");
+}
+
+#[test]
+fn a_projected_branch_result_field_is_consumed_from_every_arm() {
+    let output = crate::run_source(
+        r#"
+class Holder:
+    text: String
+
+def take(value: own String) -> String:
+    return value
+
+def project(flag: bool, left: own Holder, right: own Holder) -> String:
+    return take((left if flag else right).text)
+
+def project_match(flag: bool, left: own Holder, right: own Holder) -> String:
+    return take((match flag:
+        case true: left
+        case false: right
+    ).text)
+
+def main():
+    print(project(true, Holder(text="a"), Holder(text="b")))
+    print(project_match(false, Holder(text="c"), Holder(text="d")))
+"#,
+    )
+    .expect("a field projected from a conditional or match result should be movable");
+    assert_eq!(output.stdout, "a\nd\n");
+
+    let pattern_arms = crate::run_source(
+        r#"
+class Holder:
+    text: String
+
+enum Choice:
+    First
+    Second
+
+def take(value: own String) -> String:
+    return value
+
+def keep(holder: own Holder) -> String:
+    return holder.text
+
+def project_enum(choice: own Choice, left: own Holder, right: own Holder) -> String:
+    return take((match choice:
+        case Choice.First: left
+        case Choice.Second: right
+    ).text)
+
+def choose_enum(choice: own Choice, left: own Holder, right: own Holder) -> String:
+    return keep(match choice:
+        case Choice.First: left
+        case Choice.Second: right
+    )
+
+def main():
+    print(project_enum(Choice.First, Holder(text="a"), Holder(text="b")))
+    print(choose_enum(Choice.Second, Holder(text="c"), Holder(text="d")))
+"#,
+    )
+    .expect("pattern match arms should transfer both projected fields and whole results");
+    assert_eq!(pattern_arms.stdout, "a\nd\n");
+}
+
+#[test]
+fn owned_result_consumption_keeps_enum_variant_paths_out_of_place_tracking() {
+    crate::check_source(
+        r#"
+import json
+import io
+
+enum Shape:
+    Empty
+    Filled(int64)
+
+def describe(shape: own Shape) -> String:
+    match shape:
+        case Shape.Empty:
+            return "empty"
+        case Shape.Filled(size):
+            return f"filled {size}"
+
+def main():
+    err: io.Error = io.Error.NotFound
+    print(err)
+    print(json.dumps(json.Value.Null))
+    values = [json.Value.Null]
+    print(json.dumps(json.Value.Array(values)))
+    print(describe(Shape.Empty))
+"#,
+    )
+    .expect("module-qualified and user enum variant paths stay consumable in every position");
+}
+
+#[test]
+fn conditional_result_consumption_preserves_preexisting_moves() {
+    let diagnostic = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def exercise(
+    flag: bool,
+    already: own String,
+    left: own String,
+    right: own String
+):
+    saved = take(already)
+    selected = left if flag else right
+    print(already)
+"#,
+    )
+    .expect_err("result-arm consumption must retain move state from before the conditional");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `already`"));
+}
+
+#[test]
+fn conditional_condition_moves_are_visible_to_both_result_arms() {
+    for expression in [
+        "text if consume_flag(text) else \"fallback\"",
+        "\"fallback\" if consume_flag(text) else text",
+    ] {
+        let source = format!(
+            r#"
+def consume_flag(value: own String) -> bool:
+    return true
+
+def exercise(text: own String):
+    selected = {expression}
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("a condition-side move must be the baseline for both result arms");
+        assert_eq!(diagnostic.code, "AU3001", "{expression}");
+        assert!(
+            diagnostic.message.contains("use of moved value `text`"),
+            "{expression}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn conditional_result_consumption_preserves_unrelated_partial_moves() {
+    crate::check_source(
+        r#"
+class Pair:
+    left: String
+    right: String
+
+def take(value: own String) -> String:
+    return value
+
+def choose(flag: bool, pair: own Pair, fallback: own String):
+    moved_left = take(pair.left)
+    selected = pair.right if flag else fallback
+"#,
+    )
+    .expect("an earlier field move must not poison a disjoint conditional result field");
+}
+
+#[test]
+fn conditional_arm_still_rejects_an_internal_move_followed_by_direct_reuse() {
+    let diagnostic = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def exercise(flag: bool, text: own String):
+    selected = (take(text), text) if flag else ("fallback", "other")
+"#,
+    )
+    .expect_err("a move and later direct use on the same arm must remain invalid");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `text`"));
+}
+
+#[test]
+fn conditional_arm_rejects_direct_consumption_followed_by_an_internal_move() {
+    let diagnostic = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def exercise(flag: bool, text: own String):
+    selected = (text, take(text)) if flag else ("fallback", "other")
+"#,
+    )
+    .expect_err("a direct result move followed by an internal move on one arm must be rejected");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `text`"));
+}
+
+#[test]
+fn conditional_result_consumption_interleaves_nested_composite_elements() {
+    for body in [
+        r#"selected = (text if flag else "fallback", take(text))"#,
+        r#"consume_pair((text if flag else "fallback", take(text)))"#,
+    ] {
+        let source = format!(
+            r#"
+def take(value: own String) -> String:
+    return value
+
+def consume_pair(value: own (String, String)):
+    pass
+
+def exercise(flag: bool, text: own String):
+    {body}
+"#
+        );
+        let diagnostic = crate::check_source(&source).expect_err(
+            "a nested branch-result move must be visible to the following composite element",
+        );
+        assert_eq!(diagnostic.code, "AU3001", "{body}");
+        assert!(
+            diagnostic.message.contains("use of moved value `text`"),
+            "{body}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn consuming_a_field_of_a_conditional_result_moves_each_possible_field() {
+    for reused in ["left", "right"] {
+        let source = format!(
+            r#"
+class Holder:
+    text: String
+
+def take(value: own String):
+    pass
+
+def exercise(flag: bool, left: own Holder, right: own Holder):
+    take((left if flag else right).text)
+    print({reused}.text)
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("each projected conditional result arm must transfer its field");
+        assert_eq!(diagnostic.code, "AU3001", "{reused}");
+        assert!(
+            diagnostic.message.contains("use of moved field `text`")
+                && diagnostic.message.contains(&format!("from `{reused}`")),
+            "{reused}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn consuming_a_field_of_a_match_result_moves_each_possible_field() {
+    for reused in ["left", "right"] {
+        let source = format!(
+            r#"
+class Holder:
+    text: String
+
+def exercise(flag: bool, left: own Holder, right: own Holder):
+    selected = (match flag:
+        case true: left
+        case false: right
+    ).text
+    print({reused}.text)
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("each projected match result arm must transfer its field");
+        assert_eq!(diagnostic.code, "AU3001", "{reused}");
+        assert!(
+            diagnostic.message.contains("use of moved field `text`")
+                && diagnostic.message.contains(&format!("from `{reused}`")),
+            "{reused}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn match_arm_rejects_direct_consumption_followed_by_an_internal_move() {
+    let diagnostic = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def exercise(flag: bool, text: own String):
+    selected = match flag:
+        case true: (text, take(text))
+        case false: ("fallback", "other")
+"#,
+    )
+    .expect_err(
+        "a direct result move followed by an internal move on one match arm must be rejected",
+    );
+    assert_eq!(diagnostic.code, "AU3001");
+    assert!(diagnostic.message.contains("use of moved value `text`"));
+}
+
+#[test]
+fn conditional_inference_recursively_unifies_peer_tuple_and_generic_literals() {
+    crate::check_source(
+        r#"
+def choose(
+    flag: bool,
+    left: own Vec[int32],
+    right: own Vec[int32]
+):
+    nested_literals = ([1], right.clone()) if flag else (left.clone(), [2])
+"#,
+    )
+    .expect(
+        "corresponding tuple and generic positions should exchange literal context recursively",
+    );
+}
+
+#[test]
+fn conditional_inference_combines_complementary_empty_collection_context() {
+    crate::check_source(
+        r#"
+def choose(
+    flag: bool,
+    left: own Vec[int32],
+    right: own Vec[int32]
+):
+    nested_empty = ([], right) if flag else (left, [])
+"#,
+    )
+    .expect("each empty collection should receive context from its corresponding peer position");
+}
+
+#[test]
+fn conditional_inference_recurses_through_collection_shapes() {
+    crate::check_source(
+        r#"
+def choose(
+    flag: bool,
+    left: own Vec[int32],
+    right: own Vec[int32]
+):
+    nested_list = [([], right.clone())] if flag else [(left.clone(), [])]
+    nested_set = Set{([], right.clone())} if flag else Set{(left.clone(), [])}
+    nested_map = {1: ([], right)} if flag else {2: (left, [])}
+"#,
+    )
+    .expect("peer collection shapes should exchange nested contextual element types");
+}
+
+#[test]
+fn conditional_inference_speculation_uses_isolated_result_replay() {
+    crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def choose(
+    outer: bool,
+    left_flag: bool,
+    right_flag: bool,
+    left: own String,
+    right: own String
+):
+    selected = take(take(left) if left_flag else left) if outer else take(take(right) if right_flag else right)
+"#,
+    )
+    .expect("speculative arm typing must preserve exactly-once nested result consumption");
+}
+
+#[test]
+fn try_consumes_each_possible_conditional_result_source() {
+    for reused in ["left", "right"] {
+        let source = format!(
+            r#"
+def observe(value: Result[String, String]):
+    pass
+
+def exercise(
+    flag: bool,
+    left: own Result[String, String],
+    right: own Result[String, String]
+) -> Result[None, String]:
+    text = try (left if flag else right)
+    observe({reused})
+    return Result.Ok(None)
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("`try` must consume each possible non-copy Result source");
+        assert_eq!(diagnostic.code, "AU3001", "{reused}");
+        assert!(
+            diagnostic
+                .message
+                .contains(&format!("use of moved value `{reused}`")),
+            "{reused}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn conditional_borrowed_returns_require_one_compatible_source() {
+    crate::check_source(
+        r#"
+def choose(flag: bool, source: borrow[src] String) -> borrow[src] String:
+    return source if flag else source
+"#,
+    )
+    .expect("both conditional arms may return the same borrowed source");
+
+    let incompatible = crate::check_source(
+        r#"
+def choose(
+    flag: bool,
+    left: borrow[left] String,
+    right: borrow[right] String
+) -> borrow[left] String:
+    return left if flag else right
+"#,
+    )
+    .expect_err("a conditional borrowed return cannot switch between unrelated sources");
+    assert_eq!(incompatible.code, "AU3002");
+    assert!(
+        incompatible
+            .message
+            .contains("borrowed return expression must come from"),
+        "{}",
+        incompatible.message
+    );
+}
+
+#[test]
+fn conditional_operands_participate_in_retained_access_conflicts() {
+    for (conditional, position) in [
+        ("1 if consume_flag(box) else 0", "condition"),
+        ("consume_value(box) if flag else 0", "then arm"),
+        ("0 if flag else consume_value(box)", "else arm"),
+    ] {
+        let source = format!(
+            r#"
+class Box:
+    value: int32
+
+def inspect(value: borrow Box, result: int32):
+    pass
+
+def consume_flag(value: own Box) -> bool:
+    return true
+
+def consume_value(value: own Box) -> int32:
+    return value.value
+
+def exercise(flag: bool):
+    box = Box(value=1)
+    inspect(box, {conditional})
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("a retained borrow must conflict with nested conditional consumption");
+        assert_eq!(diagnostic.code, "AU3002", "{position}");
+        assert!(
+            diagnostic.message.contains("cannot consume")
+                && diagnostic.message.contains("shared-borrowed"),
+            "{position}: {}",
+            diagnostic.message
+        );
+    }
+
+    for (conditional, position) in [
+        ("1 if box.ready else 0", "condition"),
+        ("box.value if flag else 0", "then arm"),
+        ("0 if flag else box.value", "else arm"),
+    ] {
+        let source = format!(
+            r#"
+class Box:
+    ready: bool
+    value: int32
+
+def mutate(value: borrow mut Box, observed: int32):
+    pass
+
+def exercise(flag: bool):
+    mut box = Box(ready=true, value=1)
+    mutate(box, {conditional})
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("a retained mutable borrow must conflict with a conditional place read");
+        assert_eq!(diagnostic.code, "AU3002", "{position}");
+        assert!(
+            diagnostic.message.contains("cannot borrow")
+                && diagnostic.message.contains("mutably borrowed"),
+            "{position}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn conditional_result_places_participate_in_call_access_conflicts() {
+    for call in [
+        "shared_then_owned(value, value if flag else other)",
+        "shared_then_owned(value if flag else other, value)",
+        "owned_then_shared(value if flag else other, value)",
+        "owned_then_shared(value, value if flag else other)",
+    ] {
+        let source = format!(
+            r#"
+def shared_then_owned(shared: String, consumed: own String):
+    pass
+
+def owned_then_shared(consumed: own String, shared: String):
+    pass
+
+def exercise(flag: bool, value: own String, other: own String):
+    {call}
+"#
+        );
+        let diagnostic = crate::check_source(&source)
+            .expect_err("a possible conditional result move must conflict with a shared argument");
+        assert_eq!(diagnostic.code, "AU3002", "{call}");
+        assert!(
+            (diagnostic.message.contains("cannot consume")
+                && diagnostic.message.contains("shared-borrowed"))
+                || (diagnostic.message.contains("cannot borrow")
+                    && diagnostic.message.contains("reserved for consumption")),
+            "{call}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
 fn d3_assert_checks_exact_types_and_remains_fallthrough() {
     crate::check_source(
         r#"

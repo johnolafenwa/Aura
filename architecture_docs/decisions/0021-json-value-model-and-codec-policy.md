@@ -111,9 +111,9 @@ categories must also agree across the MIR and direct backends.
 - Existing `json.is_valid`, `json.stringify_map`, and
   `json.parse_string_map` remain supported with their existing contracts.
   This addition does not silently change their acceptance or error behavior.
-- Derived class or enum schemas, generated codecs, arbitrary-precision JSON
-  numbers, streaming parse/dump APIs, and binary serialization formats remain
-  outside Phase 3.
+- Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
+  Arbitrary-precision JSON numbers, streaming parse/dump APIs, and binary
+  serialization formats remain outside Phase 3.
 
 These choices remain Provisional pending the Phase 3 checkpoint review. The
 compiler, both maintained backends, analysis service, fixtures, maintained

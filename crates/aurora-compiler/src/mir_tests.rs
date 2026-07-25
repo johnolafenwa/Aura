@@ -4192,3 +4192,167 @@ fn assertions_lower_to_lazy_failure_blocks_with_keyword_spans() {
         )
     );
 }
+
+#[test]
+fn conditional_expressions_lower_to_a_typed_branch_and_join() {
+    let source = r#"
+def condition() -> bool:
+    return true
+
+def left() -> int32:
+    return 10
+
+def right() -> int32:
+    return 20
+
+def choose() -> int32:
+    return left() if condition() else right()
+
+def main() -> int32:
+    return choose()
+"#;
+    let module =
+        crate::lower_source_to_mir(source).expect("conditional expression should lower to MIR");
+    let choose = module
+        .functions
+        .iter()
+        .find(|function| function.name == "choose")
+        .expect("choose should be lowered");
+
+    let branch = choose
+        .blocks
+        .iter()
+        .find_map(|block| match &block.terminator {
+            Terminator::Branch {
+                then_label,
+                else_label,
+                ..
+            } => Some((then_label, else_label)),
+            _ => None,
+        })
+        .expect("conditional should lower to one branch");
+    assert!(branch.0.contains("conditional_then"));
+    assert!(branch.1.contains("conditional_else"));
+    assert!(choose
+        .blocks
+        .iter()
+        .any(|block| block.label.contains("conditional_join")));
+    assert!(choose
+        .local_types
+        .iter()
+        .any(|local| { local.ty == Type::named("int32") && local.name.starts_with("%t") }));
+}
+
+#[test]
+fn owned_conditional_values_move_only_the_selected_arm_into_the_join() {
+    let source = r#"
+def choose(flag: bool, left: own String, right: own String) -> String:
+    selected = left if flag else right
+    return selected
+"#;
+    let module =
+        crate::lower_source_to_mir(source).expect("owned conditional expression should lower");
+    let choose = module
+        .functions
+        .iter()
+        .find(|function| function.name == "choose")
+        .expect("choose should be lowered");
+
+    let moved_places = choose
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Use(Operand::MovePlace(place)),
+                ..
+            } => Some(place.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        moved_places
+            .iter()
+            .filter(|place| **place == "left" || **place == "right")
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["left", "right"],
+        "each branch must transfer its own source into the shared result"
+    );
+    assert!(
+        choose.blocks.iter().any(|block| {
+            matches!(
+                &block.terminator,
+                Terminator::Return(Operand::MovePlace(place)) if place == "selected"
+            )
+        }),
+        "returning the selected String must transfer the joined value"
+    );
+}
+
+#[test]
+fn conditional_result_inference_uses_the_concrete_arm_in_either_position() {
+    let source = r#"
+def make_values() -> Vec[int32]:
+    return [7]
+
+def choose(flag: bool, exact: float32):
+    integer_left = 1 if flag else exact
+    integer_right = exact if flag else 1
+    float_left = 1.5 if flag else exact
+    float_right = exact if flag else 1.5
+    empty_left = [] if flag else make_values()
+    empty_right = make_values() if flag else []
+    none_left = None if flag else Option.Some(7)
+    none_right = Option.Some(7) if flag else None
+    nested_empty = ([], 1) if flag else (make_values(), 2)
+"#;
+    let module = crate::lower_source_to_mir(source)
+        .expect("conditional arms should inherit the concrete peer type");
+    let choose = module
+        .functions
+        .iter()
+        .find(|function| function.name == "choose")
+        .expect("choose should be lowered");
+
+    let expected = [
+        ("integer_left", Type::named("float32")),
+        ("integer_right", Type::named("float32")),
+        ("float_left", Type::named("float32")),
+        ("float_right", Type::named("float32")),
+        (
+            "empty_left",
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        ),
+        (
+            "empty_right",
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        ),
+        (
+            "none_left",
+            Type::Named("Option".to_string(), vec![Type::named("int64")]),
+        ),
+        (
+            "none_right",
+            Type::Named("Option".to_string(), vec![Type::named("int64")]),
+        ),
+        (
+            "nested_empty",
+            Type::Tuple(vec![
+                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::named("int64"),
+            ]),
+        ),
+    ];
+    for (name, ty) in expected {
+        assert_eq!(
+            choose
+                .local_types
+                .iter()
+                .find(|local| local.name == name)
+                .map(|local| &local.ty),
+            Some(&ty),
+            "{name} should keep the concrete conditional result type"
+        );
+    }
+}

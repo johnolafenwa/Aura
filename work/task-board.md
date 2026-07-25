@@ -13,7 +13,7 @@ Last updated: 2026-07-24
   observable typed-completion recovery test for an escaped quote inside a
   continued call. No synthetic-coverage test, exclusion, or coverage-only
   production restructuring was added.
-- Active tuple ticket: the parenthesized fixed-arity tuple implementation,
+- Completed tuple ticket (`1380b8d`): the parenthesized fixed-arity tuple implementation,
   Provisional ADR-0026, normative Manual, maintained example/tutorial, and
   executable-reference packet are integrated. Compiler, fixture, exact
   MIR/direct behavior, language-server, reference-integrity, docs-build, and
@@ -29,20 +29,57 @@ Last updated: 2026-07-24
   dispatch behavior only. No synthetic-coverage test or exclusion was added;
   parser/checker/MIR-validation-proven defensive branches were collapsed with
   their invariant checks retained and justified in the dated work note.
-- Remaining work: run full CI and commit before conditional expressions and
-  the later Phase 3.5/Phase 4/V6 tickets.
+- Its complete `npm run ci` decision gate passed before commit, including
+  forced MIR/direct parity, 100% LSP coverage, compiler coverage, reference,
+  docs, audits, Clippy, and hygiene.
+- Active conditional-expression ticket: Python-style `a if condition else b`
+  is integrated with Provisional ADR-0027, exact-bool checking, contextual arm
+  unification, lazy one-arm execution, conservative ownership-state merging,
+  MIR/direct lowering, compiler analysis/LSP coverage, fixtures, maintained
+  example/tutorial, and the normative reference packet.
+- A full-suite audit of the corrected pre-expression ownership replay found and
+  closed three reachable regressions before admission: enum-variant and
+  module-qualified paths such as `io.Error.NotFound` and `json.Value.Null` were
+  rejected as field reads; module-rooted namespace paths were resolved as
+  call-argument places; and copy-typed `borrow mut` arguments lost their
+  retained access while the new source-ordered rejection displaced the
+  parameter-aware same-level overlap diagnostic. The complete compiler,
+  fixture, and 259-test CLI product suites are green on the repaired tree.
+- Exact conditional coverage passes at 63,752/66,360 lines
+  (96.06992163954189%), 4,137/4,268 functions (96.9306466729147%), and
+  93,478/99,158 regions (94.27176828899331%). The closure uses observable
+  semantic, diagnostic, ownership, editor, runtime, and backend-parity tests;
+  no synthetic test or exclusion was added. Two duplicated ownership walks
+  introduced by the replay repair were collapsed with their invariants retained
+  and stated in the source.
+- Decision condition: the complete `npm run ci` gate is the final pre-commit
+  proof for this ticket. Membership/comparison chains are the next ordered
+  ticket, followed by the remaining Phase 3.5/Phase 4/V6 work.
+- Dependency hygiene: GHSA-mh99-v99m-4gvg was published against every
+  `brace-expansion` release through `5.0.7`, closing the fail-closed audit gate.
+  It has no lockfile-only fix, so `c8` moved to `^12.0.0` and
+  `vscode-languageclient` to `^10.1.0`, taking the patched
+  `minimatch@^10` -> `brace-expansion@5.0.8` chain; the extension's declared
+  minimum editor version moved from 1.90 to 1.91 to match. `npm audit` reports
+  zero vulnerabilities and the LSP, LSP-coverage, and extension gates stay green.
 - Blocking status: there is no user-decision or language-semantics blocker. A transient macOS Code Signing subsystem failure was contained with temporary ad-hoc-signed toolchain copies and an output-signing linker wrapper under `/tmp`; repository binaries were not modified. A timing-based `wait_any` fixture assumption was replaced with an explicit Queue release signal, and the transitive PostCSS advisory was closed by the lockfile-only update from 8.5.10 to 8.5.22; `npm audit` now reports zero vulnerabilities.
 - Continuation policy: continue the authorized Batch 2 work without a duration cap until the scope is complete, the user redirects it, or a genuine external, semantic-decision, destructive-action, or safety blocker requires input. Elapsed time is not a stop condition.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
 - Coverage rule: floors stay frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only and one downward-truncated re-ratchet at sign-off.
 
-## Latest Completed Milestone
+## Batch 1 Reference-Freeze Checkpoint (historical)
 
 - Result: Batch 1 of 5 is complete at the reference-freeze checkpoint: P1-P5, the shared structured diagnostic system, MIR call/task backtraces, the executable normative Manual, four provisional semantic gap-fill ADRs, and the one-time coverage re-ratchet all landed together. No Batch 2 or Phase 3 work started.
-- Provisional review: ADR-0014 (Map literals/indexing), ADR-0015 (supplied/default argument order), ADR-0016 (retained non-copy expression borrows), and ADR-0017 (one-time iteration source selection) await checkpoint ratification.
+- Checkpoint disposition (historical): ADR-0014 through ADR-0017 are Accepted.
+  ADR-0014, ADR-0015, and ADR-0017 were accepted at the Batch 2 entry gate;
+  ADR-0016's text was accepted there and its status became Accepted when
+  B2.0-a closed the recorded implementation defect.
 - Final compiler coverage: 53,769/55,971 lines (96.065820%), 3,324/3,434 functions (96.796738%), and 78,212/83,064 regions (94.158721%). Enforced floors are 96.06% / 96.79% / 94.15% by downward truncation; LSP coverage remains 100%.
 - Quality result: the exact full `npm run ci` gate passes, including the 242-test CLI product suite, 552-test compiler library suite, forced MIR/direct parity matrix, LSP and extension suites, instrumented tests, 29-page reference integrity, docs build, audit, Clippy, and hygiene. No synthetic-coverage test or coverage exclusion was added.
-- Next: ratify or reverse ADR-0014 through ADR-0017 before Batch 2. V6 remains in Batch 2 with Phase 4 native work; native backtraces remain in Batch 3 frame work.
+- Historical next step (completed): the ADR-0014 through ADR-0017 disposition
+  gate was completed before Batch 2 implementation continued. V6 remains in
+  Batch 2 with Phase 4 native work; native backtraces remain in Batch 3 frame
+  work.
 
 ## Previous Completed Milestone
 

@@ -1,0 +1,3 @@
+def main():
+    value = "yes" if 1 else "no"
+    print(value)

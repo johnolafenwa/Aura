@@ -1,8 +1,9 @@
 use super::{
-    BindingTarget, ClassDecl, EnumDecl, Expr, ExprKind, FieldDecl, ForStmt, FunctionDecl, ImplDecl,
-    Item, ReceiverKind, TraitDecl, TypeRef,
+    BinaryOp, BindingTarget, ClassDecl, EnumDecl, Expr, ExprKind, FieldDecl, ForStmt, FunctionDecl,
+    ImplDecl, Item, ReceiverKind, TraitDecl, TypeRef,
 };
 use crate::diag::Span;
+use serde_json::json;
 use std::collections::BTreeMap;
 
 fn dummy_type(name: &str) -> TypeRef {
@@ -192,6 +193,45 @@ fn type_ref_json_preserves_named_shape_and_exposes_tuple_elements() {
 }
 
 #[test]
+fn adding_conditional_expressions_preserves_existing_expression_json_shapes() {
+    let span = Span::new(3, 5);
+    let existing = Expr {
+        kind: ExprKind::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr {
+                kind: ExprKind::Name("value".to_string()),
+                span,
+            }),
+            right: Box::new(Expr {
+                kind: ExprKind::Int(1),
+                span,
+            }),
+        },
+        span,
+    };
+
+    assert_eq!(
+        serde_json::to_value(existing).expect("serialize existing expression"),
+        json!({
+            "kind": {
+                "Binary": {
+                    "op": "Add",
+                    "left": {
+                        "kind": {"Name": "value"},
+                        "span": {"line": 3, "column": 5}
+                    },
+                    "right": {
+                        "kind": {"Int": 1},
+                        "span": {"line": 3, "column": 5}
+                    }
+                }
+            },
+            "span": {"line": 3, "column": 5}
+        })
+    );
+}
+
+#[test]
 fn for_stmt_json_preserves_simple_binding_shape_and_exposes_tuple_targets() {
     let span = Span::new(4, 5);
     let iterable = Expr {
@@ -238,4 +278,49 @@ fn for_stmt_json_preserves_simple_binding_shape_and_exposes_tuple_targets() {
         tuple_json.get("target"),
         Some(serde_json::Value::Object(target)) if target.contains_key("Tuple")
     ));
+}
+
+#[test]
+fn conditional_expression_json_shape_names_all_three_operands() {
+    let span = Span::new(8, 9);
+    let conditional = Expr {
+        kind: ExprKind::Conditional {
+            then_expr: Box::new(Expr {
+                kind: ExprKind::String("yes".to_string()),
+                span,
+            }),
+            condition: Box::new(Expr {
+                kind: ExprKind::Bool(true),
+                span,
+            }),
+            else_expr: Box::new(Expr {
+                kind: ExprKind::String("no".to_string()),
+                span,
+            }),
+        },
+        span,
+    };
+
+    assert_eq!(
+        serde_json::to_value(conditional).expect("serialize conditional expression"),
+        json!({
+            "kind": {
+                "Conditional": {
+                    "then_expr": {
+                        "kind": {"String": "yes"},
+                        "span": {"line": 8, "column": 9}
+                    },
+                    "condition": {
+                        "kind": {"Bool": true},
+                        "span": {"line": 8, "column": 9}
+                    },
+                    "else_expr": {
+                        "kind": {"String": "no"},
+                        "span": {"line": 8, "column": 9}
+                    }
+                }
+            },
+            "span": {"line": 8, "column": 9}
+        })
+    );
 }

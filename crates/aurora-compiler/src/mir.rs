@@ -107,6 +107,22 @@ fn is_integer_literal_expr(expr: &Expr) -> bool {
     }
 }
 
+fn is_float_literal_expr(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Float(_) => true,
+        ExprKind::Group(inner) => is_float_literal_expr(inner),
+        _ => false,
+    }
+}
+
+fn type_contains_unknown(ty: &Type) -> bool {
+    match ty {
+        Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
+        Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::TypeParam(_) | Type::Unit | Type::Module(_) => false,
+    }
+}
+
 fn contextual_float_literal_operand(
     value: u128,
     negative: bool,
@@ -3218,6 +3234,20 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, None),
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                let expected = self.infer_expr_type(expr);
+                self.lower_conditional_expr(
+                    then_expr,
+                    condition,
+                    else_expr,
+                    expected.as_ref(),
+                    false,
+                )
+            }
             ExprKind::Match {
                 scrutinee,
                 borrow_mode,
@@ -3286,6 +3316,11 @@ impl<'a> Lowerer<'a> {
                 }
                 _ => self.lower_tuple_literal(elements, None),
             },
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => self.lower_conditional_expr(then_expr, condition, else_expr, expected, false),
             ExprKind::Int(value) => {
                 if let Some(value) = expected
                     .and_then(|expected| contextual_float_literal_operand(*value, false, expected))
@@ -3378,6 +3413,30 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_for_owned_value(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let ExprKind::Conditional {
+            then_expr,
+            condition,
+            else_expr,
+        } = &expr.kind
+        {
+            let value_type = expected
+                .cloned()
+                .or_else(|| self.infer_conditional_result_type(then_expr, else_expr))
+                .unwrap_or_else(|| Type::named("Unknown"));
+            let value = self.lower_conditional_expr(
+                then_expr,
+                condition,
+                else_expr,
+                Some(&value_type),
+                true,
+            );
+            return match value {
+                Operand::Place(place) if !type_is_copy_in_program(&value_type, self.program) => {
+                    Operand::MovePlace(place)
+                }
+                other => other,
+            };
+        }
         let value_type = if Self::is_contextual_none_expr(expr) {
             match expected {
                 Some(expected) => Some(expected.clone()),
@@ -3590,6 +3649,59 @@ impl<'a> Lowerer<'a> {
         self.emit(Instruction::Assign {
             target: result.clone(),
             value: Rvalue::Use(right_value),
+        });
+        self.terminate(Terminator::Goto(self.label(join_block)));
+
+        self.switch_to(join_block);
+        Operand::Place(result)
+    }
+
+    fn lower_conditional_expr(
+        &mut self,
+        then_expr: &Expr,
+        condition_expr: &Expr,
+        else_expr: &Expr,
+        expected: Option<&Type>,
+        arms_owned: bool,
+    ) -> Operand {
+        let result_ty = expected
+            .cloned()
+            .or_else(|| self.infer_conditional_result_type(then_expr, else_expr))
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let result = self.new_typed_temp(result_ty.clone());
+        let then_block = self.new_block("conditional_then");
+        let else_block = self.new_block("conditional_else");
+        let join_block = self.new_block("conditional_join");
+
+        let condition =
+            self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
+        self.terminate(Terminator::Branch {
+            condition,
+            then_label: self.label(then_block),
+            else_label: self.label(else_block),
+        });
+
+        self.switch_to(then_block);
+        let then_value = if arms_owned {
+            self.lower_expr_for_owned_value(then_expr, Some(&result_ty))
+        } else {
+            self.lower_expr_with_expected(then_expr, Some(&result_ty))
+        };
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Use(then_value),
+        });
+        self.terminate(Terminator::Goto(self.label(join_block)));
+
+        self.switch_to(else_block);
+        let else_value = if arms_owned {
+            self.lower_expr_for_owned_value(else_expr, Some(&result_ty))
+        } else {
+            self.lower_expr_with_expected(else_expr, Some(&result_ty))
+        };
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Use(else_value),
         });
         self.terminate(Terminator::Goto(self.label(join_block)));
 
@@ -5387,9 +5499,64 @@ impl<'a> Lowerer<'a> {
                     self.operator_return_type_for_binary(&left_ty, &right_ty, *op)
                 }
             }
+            ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => self.infer_conditional_result_type(then_expr, else_expr),
             ExprKind::Match { arms, .. } => arms
                 .first()
                 .and_then(|arm| self.infer_expr_type(&arm.value)),
+        }
+    }
+
+    fn infer_conditional_result_type(&self, then_expr: &Expr, else_expr: &Expr) -> Option<Type> {
+        let then_ty = self.infer_expr_type(then_expr);
+        let else_ty = self.infer_expr_type(else_expr);
+        match (then_ty, else_ty) {
+            (None, other) | (other, None) => other,
+            (Some(then_ty), Some(else_ty)) if then_ty == else_ty => Some(then_ty),
+            (Some(Type::Unit), Some(else_ty)) => Some(else_ty),
+            (Some(then_ty), Some(Type::Unit)) => Some(then_ty),
+            (Some(then_ty), Some(else_ty))
+                if type_contains_unknown(&then_ty) && !type_contains_unknown(&else_ty) =>
+            {
+                Some(else_ty)
+            }
+            (Some(then_ty), Some(else_ty))
+                if type_contains_unknown(&else_ty) && !type_contains_unknown(&then_ty) =>
+            {
+                Some(then_ty)
+            }
+            (Some(_), Some(else_ty))
+                if is_integer_literal_expr(then_expr)
+                    && (is_float_type(&else_ty)
+                        || crate::sema::integer_type_bounds(&else_ty).is_some()) =>
+            {
+                Some(else_ty)
+            }
+            (Some(then_ty), Some(_))
+                if is_integer_literal_expr(else_expr)
+                    && (is_float_type(&then_ty)
+                        || crate::sema::integer_type_bounds(&then_ty).is_some()) =>
+            {
+                Some(then_ty)
+            }
+            (Some(_), Some(else_ty))
+                if is_float_literal_expr(then_expr)
+                    && !is_float_literal_expr(else_expr)
+                    && is_float_type(&else_ty) =>
+            {
+                Some(else_ty)
+            }
+            (Some(then_ty), Some(_))
+                if is_float_literal_expr(else_expr)
+                    && !is_float_literal_expr(then_expr)
+                    && is_float_type(&then_ty) =>
+            {
+                Some(then_ty)
+            }
+            (Some(then_ty), Some(_)) => Some(then_ty),
         }
     }
 

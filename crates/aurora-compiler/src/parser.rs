@@ -1312,7 +1312,37 @@ impl Parser {
     }
 
     fn parse_non_tuple_expr_inner(&mut self) -> Result<Expr> {
-        self.parse_or()
+        self.parse_conditional()
+    }
+
+    fn parse_conditional(&mut self) -> Result<Expr> {
+        let then_expr = self.parse_or()?;
+        let Some(if_token) = self.eat_simple(&TokenKind::KwIf) else {
+            return Ok(then_expr);
+        };
+
+        self.enter_recursion("conditional expression")?;
+        let result = (|| {
+            let condition = self.parse_or()?;
+            if self.eat_simple(&TokenKind::KwElse).is_none() {
+                return Err(parse_error(
+                    if_token.span,
+                    "conditional expression requires `else` and an alternative value",
+                ));
+            }
+            let else_expr = self.parse_conditional()?;
+            let span = then_expr.span;
+            Ok(Expr {
+                kind: ExprKind::Conditional {
+                    then_expr: Box::new(then_expr),
+                    condition: Box::new(condition),
+                    else_expr: Box::new(else_expr),
+                },
+                span,
+            })
+        })();
+        self.exit_recursion();
+        result
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
@@ -2686,6 +2716,15 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         ExprKind::Binary { left, right, .. } => {
             offset_expr_span(left, line, column_offset);
             offset_expr_span(right, line, column_offset);
+        }
+        ExprKind::Conditional {
+            then_expr,
+            condition,
+            else_expr,
+        } => {
+            offset_expr_span(then_expr, line, column_offset);
+            offset_expr_span(condition, line, column_offset);
+            offset_expr_span(else_expr, line, column_offset);
         }
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {

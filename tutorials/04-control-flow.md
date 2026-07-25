@@ -30,6 +30,31 @@ allowed = is_admin or is_owner
 
 See [examples/control_flow/boolean_logic.au](../examples/control_flow/boolean_logic.au).
 
+## Conditional Expressions
+
+Use `value if condition else alternative` when a branch chooses one value:
+
+```python
+label = "ready" if ready else "waiting"
+```
+
+The condition is evaluated first and must be `bool`. Aurora then evaluates
+exactly one arm. Both arms must produce the same static type; an expected type
+from a return, annotation, or call argument is used to type literals in both
+arms.
+
+Conditional expressions bind less tightly than `or` and associate to the
+right. A nested expression therefore reads as an `if`/`elif` choice:
+
+```python
+label = "high" if score >= 80 else "mid" if score >= 50 else "low"
+```
+
+Moving a non-copy value in either arm makes that value unavailable after the
+conditional, because either runtime path may be selected.
+
+See [examples/control_flow/conditional_expressions.au](../examples/control_flow/conditional_expressions.au).
+
 ## `while`
 
 ```python

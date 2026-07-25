@@ -168,7 +168,7 @@ Aurora 0.1 recognizes:
 
 There is no semicolon. Multiple statements cannot share one physical line.
 Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment
-expressions, lambda arrow, or conditional-expression operator. The lexer
+expressions, or lambda arrow. The lexer
 chooses the longest operator spelling, so `//=` is one token rather than `//`
 followed by `=`.
 

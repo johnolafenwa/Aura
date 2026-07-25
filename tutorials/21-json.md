@@ -161,9 +161,10 @@ does not accept comments, trailing commas, leading-zero integers, `NaN`, or
 infinities.
 
 `json.Value` is useful when the shape is genuinely dynamic or checked by
-application code. Aurora does not yet derive JSON schemas or codecs from user
-classes and enums, and it has no streaming JSON API or arbitrary-precision
-number type.
+application code.
+
+Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
+Aurora also has no streaming JSON API or arbitrary-precision number type.
 
 The older `json.is_valid`, `json.stringify_map`, and
 `json.parse_string_map` helpers remain available for existing flat

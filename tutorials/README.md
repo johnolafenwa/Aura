@@ -61,6 +61,8 @@ The current tutorial set covers:
 - `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
+- conditional expressions such as `value if condition else alternative`, with
+  exact-`bool` conditions and lazy selection of one arm
 - `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation

@@ -2988,6 +2988,13 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
             default_argument_references_param(left, param_names)
                 .or_else(|| default_argument_references_param(right, param_names))
         }
+        ExprKind::Conditional {
+            then_expr,
+            condition,
+            else_expr,
+        } => default_argument_references_param(condition, param_names)
+            .or_else(|| default_argument_references_param(then_expr, param_names))
+            .or_else(|| default_argument_references_param(else_expr, param_names)),
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
@@ -3726,6 +3733,12 @@ struct LocalBinding {
     frozen_places: BTreeMap<PlacePath, crate::diag::Span>,
 }
 
+#[derive(Clone)]
+struct ExprResultEntry {
+    locals: HashMap<String, LocalBinding>,
+    expected: Option<Type>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BorrowSourceInfo {
     origin: String,
@@ -3739,6 +3752,33 @@ struct BorrowedCallPlace {
     passing: ReceiverKind,
     param_name: String,
     origin_span: crate::diag::Span,
+}
+
+/// One named field read out of a surrounding expression's result.
+#[derive(Clone, Copy)]
+struct ProjectedField<'a> {
+    name: &'a str,
+    span: crate::diag::Span,
+}
+
+/// The parts of an expression-form `match` that its typing needs.
+#[derive(Clone, Copy)]
+struct MatchExprParts<'a> {
+    scrutinee: &'a Expr,
+    borrow_mode: Option<ReceiverKind>,
+    arms: &'a [MatchExprArm],
+    span: crate::diag::Span,
+}
+
+/// How the surrounding expression uses a branching expression's result.
+#[derive(Clone, Copy)]
+enum BranchResultUse<'a> {
+    /// The result is produced without transferring ownership at this point.
+    Inspected,
+    /// The result itself is consumed by the surrounding expression.
+    Consumed,
+    /// One field of the result is consumed by the surrounding expression.
+    ProjectedField(ProjectedField<'a>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3775,6 +3815,7 @@ struct FunctionChecker<'a> {
     implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_mut_places: Rc<RefCell<Vec<PlacePath>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
+    expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
 }
 
 #[derive(Clone)]
@@ -4169,6 +4210,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_mut_places: Rc::new(RefCell::new(Vec::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
+            expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -4199,6 +4241,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
+            expr_result_entries: self.expr_result_entries.clone(),
         }
     }
 
@@ -4228,6 +4271,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
+            expr_result_entries: self.expr_result_entries.clone(),
         }
     }
 
@@ -4253,6 +4297,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
+            expr_result_entries: self.expr_result_entries.clone(),
         }
     }
 
@@ -4278,6 +4323,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
             rng_clone_obligations: sink,
+            expr_result_entries: self.expr_result_entries.clone(),
         }
     }
 
@@ -4561,122 +4607,121 @@ impl<'a> FunctionChecker<'a> {
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        let key = expr as *const Expr as usize;
+        let Some(entry) = self.expr_result_entries.borrow_mut().remove(&key) else {
+            return self.consume_value_expr_raw(expr, locals);
+        };
+
+        // Type checking and ownership transfer are separate at most call
+        // sites. Replaying from the state immediately before this expression
+        // lets owned result transfer happen in source order with moves caused
+        // while evaluating the expression itself. Isolate entries created by
+        // replay so they can serve nested owned arguments without reusing or
+        // leaking entries from the original type-check pass.
+        let post_typecheck = locals.clone();
+        let mut replay_locals = entry.locals;
+        let saved_entries = std::mem::take(&mut *self.expr_result_entries.borrow_mut());
+        let replay_result =
+            self.type_expr_consuming_result(expr, &mut replay_locals, entry.expected.as_ref());
+        *self.expr_result_entries.borrow_mut() = saved_entries;
+        replay_result?;
+        self.merge_control_flow_moves(locals, &[&post_typecheck, &replay_locals]);
+        Ok(())
+    }
+
+    fn consume_value_expr_raw(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => Ok(()),
             ExprKind::Name(name) => self.consume_binding(name, expr.span, locals),
-            ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
-            ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
-            ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
-            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
-                for element in elements {
-                    self.consume_value_expr(element, locals)?;
-                }
-                Ok(())
-            }
-            ExprKind::Set(elements) => {
-                for element in elements {
-                    self.consume_value_expr(element, locals)?;
-                }
-                Ok(())
-            }
-            ExprKind::Map(entries) => {
-                for entry in entries {
-                    self.consume_value_expr(&entry.key, locals)?;
-                    self.consume_value_expr(&entry.value, locals)?;
-                }
-                Ok(())
-            }
+            ExprKind::Group(inner) => self.consume_value_expr_raw(inner, locals),
+            ExprKind::Specialize { expr, .. } => self.consume_value_expr_raw(expr, locals),
             ExprKind::Member { object, field } => {
                 if self.is_payload_free_variant_expr(expr) {
                     return Ok(());
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
-                if !self.is_copy_type(&member_ty) {
-                    if let Some(name) = self.borrowed_root_binding_name(object, locals) {
-                        let mut diagnostic = Diagnostic::at(
-                            expr.span,
-                            format!(
-                                "cannot move non-copy field `{}` out of borrowed value `{}`",
-                                field, name
-                            ),
-                        );
-                        if let Some(origin) =
-                            locals.get(&name).and_then(|binding| binding.borrowed_at)
-                        {
-                            diagnostic = diagnostic
-                                .with_secondary(origin, format!("`{}` is borrowed here", name));
-                        }
-                        let clone_supported = self.type_supports_builtin_clone(&member_ty);
-                        diagnostic = diagnostic.with_help(if clone_supported {
-                            format!(
-                                "take `{}` as `own {}` when the field should be moved, or call `.clone()` on the field to return an independent value",
-                                name, object_ty
-                            )
-                        } else {
-                            format!(
-                                "take `{}` as `own {}` when this non-cloneable field should be moved",
-                                name, object_ty
-                            )
-                        });
-                        if clone_supported {
-                            let insertion = crate::diag::Span::new(
-                                expr.span.line,
-                                expr.span.column.saturating_add(field.chars().count()),
-                            );
-                            diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
-                        }
-                        return Err(diagnostic);
-                    }
-                    if let Some(path) = self.member_access_path(expr) {
-                        self.ensure_place_not_frozen_for_move(&path, expr.span, locals)?;
-                        if let Some(binding) = locals.get_mut(&path.root) {
-                            if binding.managed_resource {
-                                return Err(Diagnostic::at(
-                                    expr.span,
-                                    format!(
-                                        "cannot move non-copy field `{}` out of managed `with` resource `{}`",
-                                        field, path.root
-                                    ),
-                                ));
-                            }
-                            binding.moved_fields.insert(path.projections, expr.span);
-                        }
-                    }
-                }
-                Ok(())
-            }
-            ExprKind::Match {
-                scrutinee,
-                borrow_mode,
-                arms,
-            } => {
-                let match_borrow_mut_place = if *borrow_mode == Some(ReceiverKind::BorrowMut) {
-                    self.borrow_call_place(scrutinee)
-                } else {
-                    None
-                };
-                let scrutinee_ty = self.type_of_expr_without_move_state(scrutinee, locals, None)?;
-                let mut arm_states = Vec::with_capacity(arms.len());
-                for arm in arms {
-                    let mut arm_locals = locals.clone();
-                    self.bind_pattern_locals(
-                        &arm.pattern,
-                        &scrutinee_ty,
-                        &mut arm_locals,
-                        *borrow_mode,
-                        match_borrow_mut_place.as_ref(),
-                    )?;
-                    self.consume_value_expr(&arm.value, &mut arm_locals)?;
-                    arm_states.push(arm_locals);
-                }
-                let branch_states = arm_states.iter().collect::<Vec<_>>();
-                self.merge_control_flow_moves(locals, &branch_states);
-                Ok(())
+                self.consume_typed_member_value_expr(
+                    expr, object, field, &object_ty, &member_ty, locals,
+                )
             }
             ExprKind::Index { .. } => self.type_of_expr(expr, locals).map(|_| ()),
+            // Composite, branching, and fallible results have one branch-aware
+            // walk. Reaching it from here means the expression is consumed
+            // without a recorded pre-expression state, so the walk starts from
+            // the current state instead of a replayed one.
+            _ if Self::result_consumption_needs_replay(expr) => self
+                .type_expr_consuming_result(expr, locals, None)
+                .map(|_| ()),
             _ => Ok(()),
         }
+    }
+
+    fn consume_typed_member_value_expr(
+        &self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        object_ty: &Type,
+        member_ty: &Type,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if self.is_copy_type(member_ty) {
+            return Ok(());
+        }
+        if let Some(name) = self.borrowed_root_binding_name(object, locals) {
+            let mut diagnostic = Diagnostic::at(
+                expr.span,
+                format!(
+                    "cannot move non-copy field `{}` out of borrowed value `{}`",
+                    field, name
+                ),
+            );
+            if let Some(origin) = locals.get(&name).and_then(|binding| binding.borrowed_at) {
+                diagnostic =
+                    diagnostic.with_secondary(origin, format!("`{}` is borrowed here", name));
+            }
+            let clone_supported = self.type_supports_builtin_clone(member_ty);
+            diagnostic = diagnostic.with_help(if clone_supported {
+                format!(
+                    "take `{}` as `own {}` when the field should be moved, or call `.clone()` on the field to return an independent value",
+                    name, object_ty
+                )
+            } else {
+                format!(
+                    "take `{}` as `own {}` when this non-cloneable field should be moved",
+                    name, object_ty
+                )
+            });
+            if clone_supported {
+                let insertion = crate::diag::Span::new(
+                    expr.span.line,
+                    expr.span.column.saturating_add(field.chars().count()),
+                );
+                diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+            }
+            return Err(diagnostic);
+        }
+        if let Some(path) = self.member_access_path(expr) {
+            self.ensure_place_not_frozen_for_move(&path, expr.span, locals)?;
+            if let Some(binding) = locals.get_mut(&path.root) {
+                if binding.managed_resource {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!(
+                            "cannot move non-copy field `{}` out of managed `with` resource `{}`",
+                            field, path.root
+                        ),
+                    ));
+                }
+                binding.moved_fields.insert(path.projections, expr.span);
+            }
+        }
+        Ok(())
     }
 
     fn consume_match_scrutinee_expr(
@@ -6546,6 +6591,250 @@ impl<'a> FunctionChecker<'a> {
         self.type_of_expr_hint(expr, locals, None)
     }
 
+    /// Replays an expression from the ownership state that preceded it so the
+    /// transfer of its owned result happens in source order with the moves the
+    /// expression itself performs.
+    ///
+    /// A replay only ever runs after `type_of_expr_hint` accepted the same
+    /// expression under the same expected type, and typing does not depend on
+    /// move state, so every type rule this walk would restate is already
+    /// proven. The walk therefore reproduces the accepted result type and
+    /// reports ownership diagnostics only; restating the type rules here would
+    /// add unreachable branches and a second place for them to drift.
+    fn type_expr_consuming_result(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.type_expr_consuming_result(inner, locals, expected),
+            ExprKind::Cast { expr: inner, .. } => {
+                let ty = self.type_of_expr_hint(expr, locals, expected)?;
+                self.consume_value_expr(inner, locals)?;
+                Ok(ty)
+            }
+            ExprKind::Try(inner) => {
+                let ty = self.type_of_expr_hint(expr, locals, expected)?;
+                self.consume_value_expr(inner, locals)?;
+                Ok(ty)
+            }
+            ExprKind::Tuple(elements) => {
+                let expected_elements = match expected {
+                    Some(Type::Tuple(expected_elements))
+                        if expected_elements.len() == elements.len() =>
+                    {
+                        Some(expected_elements.as_slice())
+                    }
+                    _ => None,
+                };
+                let element_types = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        self.type_expr_consuming_result(
+                            element,
+                            locals,
+                            expected_elements.and_then(|types| types.get(index)),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Type::Tuple(element_types))
+            }
+            ExprKind::List(elements) => {
+                let mut element_ty = expected.and_then(vec_element_type).cloned();
+                for element in elements {
+                    let actual =
+                        self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    element_ty.get_or_insert(actual);
+                }
+                Ok(Type::Named(
+                    "Vec".to_string(),
+                    vec![element_ty.unwrap_or(Type::Unit)],
+                ))
+            }
+            ExprKind::Set(elements) => {
+                let mut element_ty = expected.and_then(set_element_type).cloned();
+                for element in elements {
+                    let actual =
+                        self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    element_ty.get_or_insert(actual);
+                }
+                Ok(Type::Named(
+                    "Set".to_string(),
+                    vec![element_ty.unwrap_or(Type::Unit)],
+                ))
+            }
+            ExprKind::Map(entries) => {
+                if entries.is_empty() {
+                    if let Some(Type::Named(name, args)) = expected {
+                        if name == "Set" && args.len() == 1 {
+                            return Ok(Type::Named("Set".to_string(), vec![args[0].clone()]));
+                        }
+                    }
+                }
+                let mut key_ty = expected
+                    .and_then(map_key_value_types)
+                    .map(|(key_ty, _)| key_ty.clone());
+                let mut value_ty = expected
+                    .and_then(map_key_value_types)
+                    .map(|(_, value_ty)| value_ty.clone());
+                for entry in entries {
+                    let actual_key =
+                        self.type_expr_consuming_result(&entry.key, locals, key_ty.as_ref())?;
+                    key_ty.get_or_insert(actual_key);
+                    let actual_value =
+                        self.type_expr_consuming_result(&entry.value, locals, value_ty.as_ref())?;
+                    value_ty.get_or_insert(actual_value);
+                }
+                Ok(Type::Named(
+                    "Map".to_string(),
+                    vec![key_ty.unwrap_or(Type::Unit), value_ty.unwrap_or(Type::Unit)],
+                ))
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.type_of_expr(condition, locals)?;
+                let result_ty =
+                    self.conditional_result_hint(then_expr, else_expr, locals, expected)?;
+                let mut then_locals = locals.clone();
+                self.type_expr_consuming_result(then_expr, &mut then_locals, Some(&result_ty))?;
+                let mut else_locals = locals.clone();
+                self.type_expr_consuming_result(else_expr, &mut else_locals, Some(&result_ty))?;
+                self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
+                Ok(result_ty)
+            }
+            ExprKind::Member { object, field } if Self::member_projects_branch_result(object) => {
+                let (_, member_ty) =
+                    self.type_member_result_consuming(object, field, expr.span, locals, None)?;
+                Ok(member_ty)
+            }
+            ExprKind::Match {
+                scrutinee,
+                borrow_mode,
+                arms,
+            } => self.type_of_match_expr(
+                MatchExprParts {
+                    scrutinee,
+                    borrow_mode: *borrow_mode,
+                    arms,
+                    span: expr.span,
+                },
+                locals,
+                expected,
+                BranchResultUse::Consumed,
+            ),
+            _ => {
+                let ty = self.type_of_expr_hint(expr, locals, expected)?;
+                self.consume_value_expr_raw(expr, locals)?;
+                Ok(ty)
+            }
+        }
+    }
+
+    fn type_member_result_consuming(
+        &self,
+        object: &Expr,
+        field: &str,
+        member_span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_object: Option<&Type>,
+    ) -> Result<(Type, Type)> {
+        match &object.kind {
+            ExprKind::Group(inner) => self.type_member_result_consuming(
+                inner,
+                field,
+                member_span,
+                locals,
+                expected_object,
+            ),
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.type_of_expr(condition, locals)?;
+                let object_ty =
+                    self.conditional_result_hint(then_expr, else_expr, locals, expected_object)?;
+
+                let mut then_locals = locals.clone();
+                let (_, then_member_ty) = self.type_member_result_consuming(
+                    then_expr,
+                    field,
+                    member_span,
+                    &mut then_locals,
+                    Some(&object_ty),
+                )?;
+
+                let mut else_locals = locals.clone();
+                self.type_member_result_consuming(
+                    else_expr,
+                    field,
+                    member_span,
+                    &mut else_locals,
+                    Some(&object_ty),
+                )?;
+                self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
+                Ok((object_ty, then_member_ty))
+            }
+            ExprKind::Match {
+                scrutinee,
+                borrow_mode,
+                arms,
+            } => {
+                let object_ty = self.type_of_match_expr(
+                    MatchExprParts {
+                        scrutinee,
+                        borrow_mode: *borrow_mode,
+                        arms,
+                        span: object.span,
+                    },
+                    locals,
+                    expected_object,
+                    BranchResultUse::ProjectedField(ProjectedField {
+                        name: field,
+                        span: member_span,
+                    }),
+                )?;
+                let member_ty = self.resolve_member_type(&object_ty, field, member_span)?;
+                Ok((object_ty, member_ty))
+            }
+            _ => {
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if let Some(expected_object) = expected_object {
+                    if object_ty != *expected_object {
+                        return Ok((
+                            object_ty.clone(),
+                            self.resolve_member_type(&object_ty, field, member_span)?,
+                        ));
+                    }
+                }
+                let member_ty = self.resolve_member_type(&object_ty, field, member_span)?;
+                let member_expr = Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(object.clone()),
+                        field: field.to_string(),
+                    },
+                    span: member_span,
+                };
+                if !self.is_payload_free_variant_expr(&member_expr) {
+                    self.consume_typed_member_value_expr(
+                        &member_expr,
+                        object,
+                        field,
+                        &object_ty,
+                        &member_ty,
+                        locals,
+                    )?;
+                }
+                Ok((object_ty, member_ty))
+            }
+        }
+    }
+
     fn type_of_expr_without_move_state(
         &self,
         expr: &Expr,
@@ -6559,7 +6848,10 @@ impl<'a> FunctionChecker<'a> {
             binding.moved_fields.clear();
             binding.stale_match_borrow_mut_place = None;
         }
-        self.type_of_expr_hint(expr, &mut snapshot, expected)
+        let saved_entries = std::mem::take(&mut *self.expr_result_entries.borrow_mut());
+        let result = self.type_of_expr_hint(expr, &mut snapshot, expected);
+        *self.expr_result_entries.borrow_mut() = saved_entries;
+        result
     }
 
     fn is_contextual_none_expr(expr: &Expr) -> bool {
@@ -6582,12 +6874,218 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn is_float_literal_expr(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Float(_) => true,
+            ExprKind::Group(inner) => Self::is_float_literal_expr(inner),
+            _ => false,
+        }
+    }
+
+    fn conditional_result_hint(
+        &self,
+        then_expr: &Expr,
+        else_expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        if let Some(expected) = expected {
+            return Ok(expected.clone());
+        }
+
+        if let ExprKind::Group(inner) = &then_expr.kind {
+            return self.conditional_result_hint(inner, else_expr, locals, None);
+        }
+        if let ExprKind::Group(inner) = &else_expr.kind {
+            return self.conditional_result_hint(then_expr, inner, locals, None);
+        }
+        if let (ExprKind::Tuple(then_elements), ExprKind::Tuple(else_elements)) =
+            (&then_expr.kind, &else_expr.kind)
+        {
+            if then_elements.len() == else_elements.len() {
+                let element_types = then_elements
+                    .iter()
+                    .zip(else_elements)
+                    .map(|(then_element, else_element)| {
+                        self.conditional_result_hint(then_element, else_element, locals, None)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                return Ok(Type::Tuple(element_types));
+            }
+        }
+        if let (ExprKind::List(then_elements), ExprKind::List(else_elements)) =
+            (&then_expr.kind, &else_expr.kind)
+        {
+            if !then_elements.is_empty() && then_elements.len() == else_elements.len() {
+                let element_types = then_elements
+                    .iter()
+                    .zip(else_elements)
+                    .map(|(then_element, else_element)| {
+                        self.conditional_result_hint(then_element, else_element, locals, None)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if let Some(element_ty) = element_types.first() {
+                    if element_types.iter().all(|actual| actual == element_ty) {
+                        return Ok(Type::Named("Vec".to_string(), vec![element_ty.clone()]));
+                    }
+                }
+            }
+        }
+        if let (ExprKind::Set(then_elements), ExprKind::Set(else_elements)) =
+            (&then_expr.kind, &else_expr.kind)
+        {
+            if !then_elements.is_empty() && then_elements.len() == else_elements.len() {
+                let element_types = then_elements
+                    .iter()
+                    .zip(else_elements)
+                    .map(|(then_element, else_element)| {
+                        self.conditional_result_hint(then_element, else_element, locals, None)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if let Some(element_ty) = element_types.first() {
+                    if element_types.iter().all(|actual| actual == element_ty) {
+                        return Ok(Type::Named("Set".to_string(), vec![element_ty.clone()]));
+                    }
+                }
+            }
+        }
+        if let (ExprKind::Map(then_entries), ExprKind::Map(else_entries)) =
+            (&then_expr.kind, &else_expr.kind)
+        {
+            if !then_entries.is_empty() && then_entries.len() == else_entries.len() {
+                let entry_types = then_entries
+                    .iter()
+                    .zip(else_entries)
+                    .map(|(then_entry, else_entry)| {
+                        Ok((
+                            self.conditional_result_hint(
+                                &then_entry.key,
+                                &else_entry.key,
+                                locals,
+                                None,
+                            )?,
+                            self.conditional_result_hint(
+                                &then_entry.value,
+                                &else_entry.value,
+                                locals,
+                                None,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if let Some((key_ty, value_ty)) = entry_types.first() {
+                    if entry_types.iter().all(|(actual_key, actual_value)| {
+                        actual_key == key_ty && actual_value == value_ty
+                    }) {
+                        return Ok(Type::Named(
+                            "Map".to_string(),
+                            vec![key_ty.clone(), value_ty.clone()],
+                        ));
+                    }
+                }
+            }
+        }
+
+        let then_guess = self.type_of_expr_without_move_state(then_expr, locals, None);
+        let else_guess = self.type_of_expr_without_move_state(else_expr, locals, None);
+        let (then_ty, else_ty) = match (then_guess, else_guess) {
+            (Ok(then_ty), Ok(else_ty)) => (then_ty, else_ty),
+            (Err(_), Ok(else_ty)) => return Ok(else_ty),
+            (Ok(then_ty), Err(_)) => return Ok(then_ty),
+            (Err(error), Err(_)) => return Err(error),
+        };
+
+        if then_ty == else_ty {
+            return Ok(then_ty);
+        }
+        let then_adopts_else = self
+            .type_of_expr_without_move_state(then_expr, locals, Some(&else_ty))
+            .is_ok_and(|actual| actual == else_ty);
+        let else_adopts_then = self
+            .type_of_expr_without_move_state(else_expr, locals, Some(&then_ty))
+            .is_ok_and(|actual| actual == then_ty);
+        match (then_adopts_else, else_adopts_then) {
+            (true, false) => return Ok(else_ty),
+            (false, true) => return Ok(then_ty),
+            _ => {}
+        }
+        if Self::is_contextual_none_expr(then_expr) {
+            return Ok(else_ty);
+        }
+        if Self::is_contextual_none_expr(else_expr) {
+            return Ok(then_ty);
+        }
+        if Self::is_integer_literal_expr(then_expr)
+            && (is_float_type(&else_ty) || is_integer_type(&else_ty))
+        {
+            return Ok(else_ty);
+        }
+        if Self::is_integer_literal_expr(else_expr)
+            && (is_float_type(&then_ty) || is_integer_type(&then_ty))
+        {
+            return Ok(then_ty);
+        }
+        if Self::is_float_literal_expr(then_expr)
+            && !Self::is_float_literal_expr(else_expr)
+            && is_float_type(&else_ty)
+        {
+            return Ok(else_ty);
+        }
+        if Self::is_float_literal_expr(else_expr)
+            && !Self::is_float_literal_expr(then_expr)
+            && is_float_type(&then_ty)
+        {
+            return Ok(then_ty);
+        }
+        Ok(then_ty)
+    }
+
+    fn result_consumption_needs_replay(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Member { object, .. } => Self::member_projects_branch_result(object),
+            kind => matches!(
+                kind,
+                ExprKind::Group(_)
+                    | ExprKind::Cast { .. }
+                    | ExprKind::Tuple(_)
+                    | ExprKind::List(_)
+                    | ExprKind::Set(_)
+                    | ExprKind::Map(_)
+                    | ExprKind::Conditional { .. }
+                    | ExprKind::Match { .. }
+                    | ExprKind::Try(_)
+            ),
+        }
+    }
+
+    /// A member access only needs branch-aware result consumption when its
+    /// object is a branching expression whose owned result is produced by more
+    /// than one arm. Ordinary member paths — including module-qualified and
+    /// enum-variant paths, which are not value objects at all — keep using the
+    /// direct consumption path.
+    fn member_projects_branch_result(object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::Group(inner) => Self::member_projects_branch_result(inner),
+            ExprKind::Conditional { .. } | ExprKind::Match { .. } => true,
+            _ => false,
+        }
+    }
+
     fn type_of_expr_hint(
         &self,
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if Self::result_consumption_needs_replay(expr) {
+            self.expr_result_entries.borrow_mut().insert(
+                expr as *const Expr as usize,
+                ExprResultEntry {
+                    locals: locals.clone(),
+                    expected: expected.cloned(),
+                },
+            );
+        }
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => {
                 if let Some(expected_ty) = expected {
@@ -6823,13 +7321,71 @@ impl<'a> FunctionChecker<'a> {
                 };
                 Ok(Type::Named("Map".to_string(), vec![key_ty, value_ty]))
             }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                let condition_ty = self.type_of_expr(condition, locals)?;
+                if condition_ty != Type::named("bool") {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        condition.span,
+                        format!(
+                            "conditional expression condition must have type `bool`, found `{}`",
+                            condition_ty
+                        ),
+                    )
+                    .with_help("Aurora has no implicit truthiness; compare the value explicitly"));
+                }
+
+                let result_ty =
+                    self.conditional_result_hint(then_expr, else_expr, locals, expected)?;
+                let mut then_locals = locals.clone();
+                let then_ty =
+                    self.type_of_expr_hint(then_expr, &mut then_locals, Some(&result_ty))?;
+                if then_ty != result_ty {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        then_expr.span,
+                        format!(
+                            "conditional expression arm expects `{}`, found `{}`",
+                            result_ty, then_ty
+                        ),
+                    ));
+                }
+
+                let mut else_locals = locals.clone();
+                let else_ty =
+                    self.type_of_expr_hint(else_expr, &mut else_locals, Some(&result_ty))?;
+                if else_ty != result_ty {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        else_expr.span,
+                        format!(
+                            "conditional expression arms must have one type; expected `{}`, found `{}`",
+                            result_ty, else_ty
+                        ),
+                    ));
+                }
+                self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
+                Ok(result_ty)
+            }
             ExprKind::Match {
                 scrutinee,
                 borrow_mode,
                 arms,
-            } => {
-                self.type_of_match_expr(scrutinee, *borrow_mode, arms, expr.span, locals, expected)
-            }
+            } => self.type_of_match_expr(
+                MatchExprParts {
+                    scrutinee,
+                    borrow_mode: *borrow_mode,
+                    arms,
+                    span: expr.span,
+                },
+                locals,
+                expected,
+                BranchResultUse::Inspected,
+            ),
             ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
             ExprKind::Specialize {
                 expr: base,
@@ -12597,15 +13153,42 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Types one `match` arm value the way the surrounding expression uses the
+    /// match result.
+    fn type_of_match_arm_value(
+        &self,
+        value: &Expr,
+        arm_locals: &mut HashMap<String, LocalBinding>,
+        result_ty: Option<&Type>,
+        result_use: BranchResultUse<'_>,
+    ) -> Result<Type> {
+        match result_use {
+            BranchResultUse::ProjectedField(field) => Ok(self
+                .type_member_result_consuming(value, field.name, field.span, arm_locals, result_ty)?
+                .0),
+            BranchResultUse::Consumed => {
+                self.type_expr_consuming_result(value, arm_locals, result_ty)
+            }
+            BranchResultUse::Inspected => match result_ty {
+                Some(expected_ty) => self.type_of_expr_hint(value, arm_locals, Some(expected_ty)),
+                None => self.type_of_expr(value, arm_locals),
+            },
+        }
+    }
+
     fn type_of_match_expr(
         &self,
-        scrutinee: &Expr,
-        borrow_mode: Option<ReceiverKind>,
-        arms: &[MatchExprArm],
-        span: crate::diag::Span,
+        parts: MatchExprParts<'_>,
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
+        result_use: BranchResultUse<'_>,
     ) -> Result<Type> {
+        let MatchExprParts {
+            scrutinee,
+            borrow_mode,
+            arms,
+            span,
+        } = parts;
         let active_match_borrow = if borrow_mode == Some(ReceiverKind::BorrowMut) {
             self.begin_match_borrow_mut(scrutinee, span, locals)?
         } else {
@@ -12783,11 +13366,12 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
-                    let arm_ty = if let Some(expected_ty) = result_ty.as_ref() {
-                        self.type_of_expr_hint(&arm.value, &mut arm_locals, Some(expected_ty))?
-                    } else {
-                        self.type_of_expr(&arm.value, &mut arm_locals)?
-                    };
+                    let arm_ty = self.type_of_match_arm_value(
+                        &arm.value,
+                        &mut arm_locals,
+                        result_ty.as_ref(),
+                        result_use,
+                    )?;
                     if let Some(expected_ty) = result_ty.as_ref() {
                         if arm_ty != *expected_ty {
                             return Err(Diagnostic::at(
@@ -12932,11 +13516,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
-                let arm_ty = if let Some(expected_ty) = result_ty.as_ref() {
-                    self.type_of_expr_hint(&arm.value, &mut arm_locals, Some(expected_ty))?
-                } else {
-                    self.type_of_expr(&arm.value, &mut arm_locals)?
-                };
+                let arm_ty = self.type_of_match_arm_value(
+                    &arm.value,
+                    &mut arm_locals,
+                    result_ty.as_ref(),
+                    result_use,
+                )?;
                 if let Some(expected_ty) = result_ty.as_ref() {
                     if arm_ty != *expected_ty {
                         return Err(Diagnostic::at(
@@ -13394,6 +13979,22 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(source)
             }
+            ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let then_source = self.expr_borrow_info(then_expr, locals)?;
+                let else_source = self.expr_borrow_info(else_expr, locals)?;
+                match (then_source, else_source) {
+                    (Some(then_source), Some(else_source))
+                        if self.borrow_sources_compatible(&then_source, &else_source) =>
+                    {
+                        Ok(Some(then_source))
+                    }
+                    _ => Ok(None),
+                }
+            }
             _ => Ok(None),
         }
     }
@@ -13423,6 +14024,153 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    fn collect_result_place_accesses(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        passing: ReceiverKind,
+        label: &str,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        match &expr.kind {
+            ExprKind::Name(_) => {
+                let Some(path) = self.borrow_call_place(expr) else {
+                    return Ok(());
+                };
+                let Some(ty) = self.place_path_type(&path, locals, expr.span)? else {
+                    return Ok(());
+                };
+                if Self::result_place_access_is_retained(passing, self.is_copy_type(&ty)) {
+                    places.push(BorrowedCallPlace {
+                        path,
+                        passing,
+                        param_name: label.to_string(),
+                        origin_span: expr.span,
+                    });
+                }
+                Ok(())
+            }
+            ExprKind::Member { object, field } => self.collect_projected_member_result_accesses(
+                object,
+                ProjectedField {
+                    name: field,
+                    span: expr.span,
+                },
+                locals,
+                passing,
+                label,
+                places,
+            ),
+            ExprKind::Group(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. }
+            | ExprKind::Try(inner) => {
+                self.collect_result_place_accesses(inner, locals, passing, label, places)
+            }
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    self.collect_result_place_accesses(element, locals, passing, label, places)?;
+                }
+                Ok(())
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.collect_result_place_accesses(&entry.key, locals, passing, label, places)?;
+                    self.collect_result_place_accesses(
+                        &entry.value,
+                        locals,
+                        passing,
+                        label,
+                        places,
+                    )?;
+                }
+                Ok(())
+            }
+            ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.collect_result_place_accesses(then_expr, locals, passing, label, places)?;
+                self.collect_result_place_accesses(else_expr, locals, passing, label, places)
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.collect_result_place_accesses(&arm.value, locals, passing, label, places)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// A copy-typed argument passed by value leaves no retained access, but a
+    /// copy-typed place passed as `borrow` or `borrow mut` still aliases the
+    /// place for the rest of the call.
+    fn result_place_access_is_retained(passing: ReceiverKind, is_copy: bool) -> bool {
+        !(is_copy && passing == ReceiverKind::Value)
+    }
+
+    fn collect_projected_member_result_accesses(
+        &self,
+        object: &Expr,
+        field: ProjectedField<'_>,
+        locals: &HashMap<String, LocalBinding>,
+        passing: ReceiverKind,
+        label: &str,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        match &object.kind {
+            ExprKind::Group(inner) => self.collect_projected_member_result_accesses(
+                inner, field, locals, passing, label, places,
+            ),
+            ExprKind::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.collect_projected_member_result_accesses(
+                    then_expr, field, locals, passing, label, places,
+                )?;
+                self.collect_projected_member_result_accesses(
+                    else_expr, field, locals, passing, label, places,
+                )
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.collect_projected_member_result_accesses(
+                        &arm.value, field, locals, passing, label, places,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => {
+                let member_expr = Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(object.clone()),
+                        field: field.name.to_string(),
+                    },
+                    span: field.span,
+                };
+                let Some(path) = self.borrow_call_place(&member_expr) else {
+                    return Ok(());
+                };
+                let Some(ty) = self.place_path_type(&path, locals, field.span)? else {
+                    return Ok(());
+                };
+                if Self::result_place_access_is_retained(passing, self.is_copy_type(&ty)) {
+                    places.push(BorrowedCallPlace {
+                        path,
+                        passing,
+                        param_name: label.to_string(),
+                        origin_span: field.span,
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn collect_expr_call_places(
         &self,
         expr: &Expr,
@@ -13443,6 +14191,15 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Binary { left, right, .. } => {
                 self.collect_expr_call_places(left, locals, places, include_consumed)?;
                 self.collect_expr_call_places(right, locals, places, include_consumed)
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.collect_expr_call_places(condition, locals, places, include_consumed)?;
+                self.collect_expr_call_places(then_expr, locals, places, include_consumed)?;
+                self.collect_expr_call_places(else_expr, locals, places, include_consumed)
             }
             ExprKind::Call { callee, args } => {
                 self.collect_expr_call_places(callee, locals, places, include_consumed)?;
@@ -13526,6 +14283,15 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Binary { left, right, .. } => {
                 self.collect_expr_place_reads(left, locals, label, places);
                 self.collect_expr_place_reads(right, locals, label, places);
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.collect_expr_place_reads(condition, locals, label, places);
+                self.collect_expr_place_reads(then_expr, locals, label, places);
+                self.collect_expr_place_reads(else_expr, locals, label, places);
             }
             ExprKind::Call { callee, args } => {
                 self.collect_expr_place_reads(callee, locals, label, places);
@@ -13788,6 +14554,12 @@ impl<'a> FunctionChecker<'a> {
         let Some(binding) = locals.get(&path.root) else {
             return Ok(None);
         };
+        // A module-rooted path is a namespace or enum-variant path such as
+        // `json.Value.Null`, not an owned place, so it never participates in
+        // borrow or move tracking.
+        if matches!(binding.ty, Type::Module(_)) {
+            return Ok(None);
+        }
         let mut ty = binding.ty.clone();
         for projection in &path.projections.0 {
             match projection {
@@ -16147,7 +16919,7 @@ impl<'a> FunctionChecker<'a> {
 
         let mut enclosing_accesses = seeded_borrowed_places.clone();
         for (
-            (((argument, _actual, _nested_moved, _nested_borrowed), expected), param_decl),
+            (((argument, _actual, _nested_moved, _nested_borrowed), _expected), param_decl),
             param_passing,
         ) in resolved_args
             .iter()
@@ -16158,21 +16930,21 @@ impl<'a> FunctionChecker<'a> {
             let Some(argument) = *argument else {
                 continue;
             };
-            let expected = substitute_type(expected, &substitutions);
-            if let Some(access) = self.retained_call_place_access(
+            let label = format!("parameter `{}`", param_decl.name);
+            self.collect_result_place_accesses(
                 &argument.value,
-                &expected,
+                locals,
                 param_passing,
-                &format!("parameter `{}`", param_decl.name),
-            ) {
-                enclosing_accesses.push(access);
-            }
+                &label,
+                &mut enclosing_accesses,
+            )?;
         }
         for (_argument, _actual, _nested_moved, nested_borrowed) in &resolved_args {
             self.reject_retained_access_overlap(&enclosing_accesses, nested_borrowed)?;
         }
 
         let mut source_order_accesses = seeded_borrowed_places.clone();
+        let mut branch_only_accesses: Vec<BorrowedCallPlace> = Vec::new();
         for source_argument in args {
             let Some(index) = resolved_args.iter().position(|(argument, _, _, _)| {
                 argument.is_some_and(|argument| std::ptr::eq(argument, source_argument))
@@ -16187,23 +16959,35 @@ impl<'a> FunctionChecker<'a> {
                 "argument read",
                 &mut point_reads,
             );
-            let expected = substitute_type(&param_types[index], &substitutions);
-            let direct_access = self.retained_call_place_access(
+            let label = format!("parameter `{}`", param_decls[index].name);
+            let mut direct_accesses = Vec::new();
+            self.collect_result_place_accesses(
                 &source_argument.value,
-                &expected,
+                locals,
                 param_passings[index],
-                &format!("parameter `{}`", param_decls[index].name),
-            );
-            if let Some(direct_access) = &direct_access {
+                &label,
+                &mut direct_accesses,
+            )?;
+            for direct_access in &direct_accesses {
                 point_reads.retain(|read| {
                     read.path != direct_access.path || read.origin_span != direct_access.origin_span
                 });
             }
             self.reject_retained_access_overlap(&source_order_accesses, &point_reads)?;
-
-            if let Some(access) = direct_access {
-                source_order_accesses.push(access);
-            }
+            // An argument that is itself a place is compared pairwise below,
+            // where a parameter-aware diagnostic is produced, so this
+            // source-ordered pass only reports it against places that the
+            // pairwise pass cannot see: the extra places contributed by an
+            // earlier branching or composite argument.
+            let whole_argument_place = self.borrow_call_place(&source_argument.value);
+            let (whole_accesses, branch_accesses): (Vec<_>, Vec<_>) = direct_accesses
+                .iter()
+                .cloned()
+                .partition(|access| whole_argument_place.as_ref() == Some(&access.path));
+            self.reject_retained_access_overlap(&branch_only_accesses, &whole_accesses)?;
+            self.reject_retained_access_overlap(&source_order_accesses, &branch_accesses)?;
+            source_order_accesses.extend(direct_accesses);
+            branch_only_accesses.extend(branch_accesses);
         }
 
         let mut borrowed_places = seeded_borrowed_places;

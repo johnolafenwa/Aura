@@ -227,6 +227,10 @@ The current compiler supports these expression forms:
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
 - `try expr`
+- conditional expressions written `value if condition else alternative`; the
+  condition must be exactly `bool`, is evaluated once, and selects exactly one
+  lazily evaluated arm. Both arms must have one static result type. This form
+  has the lowest expression precedence and associates to the right.
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block
@@ -314,8 +318,15 @@ Current builtin module namespaces:
 - `fs`
 - `net`
 - `process`
+- `random`
+- `sys`
+- `path`
 - `bytes`
 - `json`
+- `toml`
+- `log`
+- `metrics`
+- `trace`
 
 Current builtin `range(...)` notes:
 

@@ -53,6 +53,8 @@ Current compiler workflow:
   - execute user-defined instance and associated methods
 - `cargo run -p aura -- run examples/control_flow/match_literals.au`
   - execute statement-form `match` over literal `bool`, integer, and `String` cases
+- `cargo run -p aura -- run examples/control_flow/conditional_expressions.au`
+  - execute lazy Python-style conditional expressions with one unified result type
 - `cargo run -p aura -- run examples/enums/result_match.au`
   - execute enum construction plus exhaustive `match`
 - `cargo run -p aura -- run examples/enums/result_option.au`

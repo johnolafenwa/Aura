@@ -15,14 +15,15 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
 design history. Features mentioned only there—including `Channel`, `select`,
 detached spawn, attributes, and registry publishing—are not part of Aurora
-0.1. Tuples are part of the maintained language only to the exact provisional
-extent recorded by ADR-0026 and [Tuples](/manual/tuples).
+0.1. Tuples and conditional expressions are part of the maintained language
+only to the exact provisional extents recorded by ADR-0026, ADR-0027,
+[Tuples](/manual/tuples), and [Expressions](/manual/expressions#conditional-expressions).
 
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy
 
-The ratified correctness-recovery and Phase 1.5 semantic re-defaults are the final pre-reference language changes for 0.1. Outside those recorded ADR decisions, syntax expansion is frozen for the hardening cycle. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.1 remains untagged.
+The ratified correctness-recovery and Phase 1.5 semantic re-defaults are the final pre-reference language changes for 0.1. Outside explicitly recorded ADR decisions, syntax expansion is frozen for the hardening cycle. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.1 remains untagged.
 
 The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
 including a compatible extension, requires an ADR and must update the normative

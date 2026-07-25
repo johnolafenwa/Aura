@@ -361,6 +361,52 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
 }
 
 #[test]
+fn conditional_expressions_are_low_precedence_and_right_associative() {
+    let expression = parse_expression("a or b if c else d if e else f or g")
+        .expect("conditional expression should parse");
+    let ExprKind::Conditional {
+        then_expr,
+        condition,
+        else_expr,
+    } = expression.kind
+    else {
+        panic!("expected outer conditional expression");
+    };
+    assert!(matches!(
+        then_expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Or,
+            ..
+        }
+    ));
+    assert!(matches!(condition.kind, ExprKind::Name(ref name) if name == "c"));
+    assert!(matches!(
+        else_expr.kind,
+        ExprKind::Conditional {
+            else_expr,
+            ..
+        } if matches!(
+            else_expr.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Or,
+                ..
+            }
+        )
+    ));
+}
+
+#[test]
+fn conditional_expression_requires_else_arm() {
+    let error = parse_expression("value if ready")
+        .expect_err("a conditional expression without `else` must be rejected");
+    assert_eq!(
+        error.message,
+        "conditional expression requires `else` and an alternative value"
+    );
+    assert_eq!(error.span, Some(Span::new(1, 7)));
+}
+
+#[test]
 fn d3_parser_preserves_assert_forms_keyword_span_and_comma_boundary() {
     let bare = parse_stmt_from("assert ready\n").expect("bare assertion should parse");
     let Stmt::Assert(bare) = bare else {

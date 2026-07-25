@@ -41,11 +41,14 @@ shadow a builtin member on `Queue[T]`, `Task[T]`, `TaskGroup`, or
 requires the trait method to be renamed; backend dispatch is never selected by
 which implementation happens to run first.
 
-`AU3005` rejects a direct `Vec` or `Map` indexed read whose stored type is
-non-copy; use the explicit cloned `get` surface when the stored type is
-clone-safe, or transfer ownership with `remove` where available. `AU3006` rejects the corresponding indexed compound
-assignment because read-modify-write would otherwise require a hidden clone or
-destructive move of the stored value.
+`AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
+element or value, and constant tuple indexing that selects a non-copy element.
+For collections, use the explicit cloned `get` surface when the stored type is
+clone-safe, or transfer ownership with `remove` where available. For tuples,
+unpack the whole tuple to move its non-copy elements. `AU3006` rejects the
+corresponding `Vec` or `Map` indexed compound assignment because
+read-modify-write would otherwise require a hidden clone or destructive move
+of the stored value.
 
 `AU3007` rejects an operation that would duplicate non-cloneable state. The
 current protected state is `random.Rng`, and the check follows it through

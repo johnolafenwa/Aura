@@ -536,6 +536,116 @@ def verify(ready: bool, message: String):
 }
 
 #[test]
+fn conditional_expression_analysis_visits_all_operands_and_keeps_result_type() {
+    let source = r#"def choose(ready: bool, left: String, right: String) -> String:
+    selected = left.clone() if ready else right.clone()
+    return selected
+"#;
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for (start, end, hover) in [
+        (15, 19, "param left: String"),
+        (31, 36, "param ready: bool"),
+        (42, 47, "param right: String"),
+    ] {
+        assert!(
+            analysis.occurrences.iter().any(|occurrence| {
+                occurrence.line == 1
+                    && occurrence.start_character == start
+                    && occurrence.end_character == end
+                    && occurrence.hover.contains(hover)
+            }),
+            "missing conditional operand occurrence at {start}-{end}"
+        );
+    }
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("binding selected: String")));
+}
+
+#[test]
+fn conditional_expression_analysis_uses_the_contextual_arm_type() {
+    let source = r#"def choose(
+    ready: bool,
+    exact_float: float32,
+    reverse_float: float32,
+    exact_integer: int32,
+    reverse_integer: int32,
+    values: own Vec[int32],
+    reverse_values: own Vec[int32],
+    tuple_values: own Vec[int32]
+):
+    decimal = (1.5) if ready else exact_float
+    reverse_decimal = reverse_float if ready else (2.5)
+    promoted_integer = 1 if ready else exact_float
+    reverse_promoted_integer = reverse_float if ready else 2
+    negative_integer = (-1) if ready else exact_integer
+    reverse_negative_integer = reverse_integer if ready else (-2)
+    integers = [] if ready else values
+    reverse_integers = reverse_values if ready else []
+    nested_integers = ([], 1) if ready else (tuple_values, 2)
+    optional = None if ready else Option.Some(exact_integer)
+    reverse_optional = Option.Some(reverse_integer) if ready else None
+"#;
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for expected_hover in [
+        "binding decimal: float32",
+        "binding reverse_decimal: float32",
+        "binding promoted_integer: float32",
+        "binding reverse_promoted_integer: float32",
+        "binding negative_integer: int32",
+        "binding reverse_negative_integer: int32",
+        "binding integers: Vec[int32]",
+        "binding reverse_integers: Vec[int32]",
+        "binding nested_integers: (Vec[int32], int64)",
+        "binding optional: Option[int32]",
+        "binding reverse_optional: Option[int32]",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing conditional result hover `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+}
+
+#[test]
+fn conditional_expression_result_type_drives_member_completion() {
+    for source in [
+        "def inspect(flag: bool, values: own Vec[int32]):\n    selected = [] if flag else values\n    selected.\n",
+        "def inspect(flag: bool, values: own Vec[int32]):\n    selected = values if flag else []\n    selected.\n",
+    ] {
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("selected."))
+            .expect("completion source should contain a member marker");
+        let character = source.lines().nth(line_index).unwrap().len();
+        let completions = complete_source(source, line_index, character, Some('.'))
+            .expect("conditional result member completion should work");
+        assert!(
+            completions.iter().any(|item| item.name == "push"),
+            "Vec completion should be preserved through either conditional arm"
+        );
+        assert!(completions.iter().any(|item| item.name == "len"));
+    }
+}
+
+#[test]
 fn machine_readable_analysis_reports_diagnostics() {
     let source = "def main():\n    print(total)\n";
     let analysis = analyze_source(source);

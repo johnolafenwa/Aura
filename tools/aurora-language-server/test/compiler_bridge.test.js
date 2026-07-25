@@ -912,6 +912,57 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
   }
 });
 
+test("compiler bridge preserves conditional operands and bool diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-conditional-"));
+  const source = [
+    "def choose(ready: bool, left: String, right: String) -> String:",
+    "    return left.clone() if ready else right.clone()",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [start, end, hover] of [
+      [11, 15, "param left: String"],
+      [27, 32, "param ready: bool"],
+      [38, 43, "param right: String"]
+    ]) {
+      const occurrence = analysis.occurrences.find(
+        (candidate) =>
+          candidate.line === 1 &&
+          candidate.start_character === start &&
+          candidate.end_character === end
+      );
+      assert.ok(occurrence, `missing conditional occurrence at ${start}-${end}`);
+      assert.ok(occurrence.hover.includes(hover));
+    }
+
+    const invalid = await analyzeWithCompiler(
+      mainUri,
+      ["def main():", "    value = \"yes\" if 1 else \"no\"", ""].join("\n")
+    );
+    assert.ok(invalid);
+    assert.equal(invalid.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(invalid, mainUri);
+    assert.equal(diagnostic.code, "AU2002");
+    assert.equal(
+      diagnostic.message,
+      "conditional expression condition must have type `bool`, found `int64`"
+    );
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 21 },
+      end: { line: 1, character: 22 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves real ownership provenance, help, and safe edits", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-ownership-diag-"));
   const source = "def take(value: String) -> String:\n    return value\n";

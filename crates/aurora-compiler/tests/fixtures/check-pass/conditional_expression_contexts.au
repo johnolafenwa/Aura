@@ -1,0 +1,13 @@
+def choose_count(ready: bool) -> int32:
+    return 1 if ready else 2
+
+def choose_ratio(ready: bool) -> float64:
+    return 1 if ready else 2.5
+
+def choose_optional(ready: bool) -> Option[int32]:
+    return None if ready else Option.Some(7)
+
+def main():
+    print(choose_count(true))
+    print(choose_ratio(false))
+    print(choose_optional(true))

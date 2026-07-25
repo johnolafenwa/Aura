@@ -420,6 +420,11 @@ pub enum ExprKind {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Conditional {
+        then_expr: Box<Expr>,
+        condition: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
     Call {
         callee: Box<Expr>,
         args: Vec<Argument>,
