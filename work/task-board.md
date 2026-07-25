@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-24
+Last updated: 2026-07-25
 
 ## Current Batch 2 Continuation
 
@@ -81,8 +81,37 @@ Last updated: 2026-07-24
   closure is observable behavior only, and two branches the replay walk could
   never take were removed with their invariants stated in the source.
 - Decision condition: the complete `npm run ci` gate is the final pre-commit
-  proof for each ticket. `enumerate`/`zip` is the next ordered ticket, followed
-  by `len`/`str` and the remaining Phase 4/V6 work.
+  proof for each ticket.
+- Resume point: the working tree is clean at `a96f115`, with every landed ticket
+  full-gated. The only untracked files are the two user-created files
+  `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
+  The remaining authorized Batch 2 work is unstarted and stays in this exact
+  dependency order:
+  1. `enumerate(xs)` and `zip(xs, ys)` as compiler-known `for` forms over the
+     bare-loop borrow default; `enumerate` yields `(int64, item)` and `zip`
+     stops at the shorter sequence.
+  2. `len(x)` delegating to `.len()` and `str(x)` producing the print/f-string
+     rendering, retiring the `python_len` and `python_str` hints to acceptance
+     the same way the membership and chain hints were retired.
+  3. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
+     in the same change so the MIR leg passes `--backend mir` explicitly.
+  4. The content-addressed native artifact cache with recorded cold-compile and
+     warm-launch benchmarks.
+  5. Function-level `aura test` discovery for `def test_*()`.
+  6. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
+     document the cause, keeping both numbers in the benchmark baseline.
+  7. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+     re-ratchet. Do not begin Phase 5.
+- Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
+  `/private/tmp/aurora-phase4-checkpoint-package` is based on
+  `55628413459015bd0b1c4b9e107e2347382df288` and has not been rebased onto any
+  of the four tickets landed since. Treat it as reference material to re-derive
+  from, not as a patch series to apply, and re-verify its cache, selector,
+  test-discovery, and benchmark behavior against the current tree.
+- Backend-default note: bare `aura run` remains `auto`. Do not switch the
+  default to direct unless forced-direct passes every runnable maintained
+  fixture on supported platforms; otherwise keep `auto` with visible fallback
+  and record what blocks it.
 - Dependency hygiene: GHSA-mh99-v99m-4gvg was published against every
   `brace-expansion` release through `5.0.7`, closing the fail-closed audit gate.
   It has no lockfile-only fix, so `c8` moved to `^12.0.0` and
