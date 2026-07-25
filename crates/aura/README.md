@@ -146,9 +146,16 @@ aura deps update util
 - `aura fmt [--check] [path ...]`
   - normalize line endings/trailing whitespace/final newlines, or verify without writing
 - `aura test [--timeout-ms N] [path ...]`
-  - run package-aware Aurora test programs; defaults to `tests/` and a 30-second per-file timeout
+  - run package-aware Aurora tests; defaults to `tests/` and a 30-second per-test timeout
+  - a file declaring `def test_*()` functions reports one result per function, labelled `path::function`
+  - a file declaring none keeps the file-level model and reports one result for the path
 - `aura lsp`
   - run the persistent JSON-lines compiler service for editor tooling
+- `aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]`
+  - `mir` executes the lowered MIR and is the default
+  - `direct` builds a native binary and runs it, reporting build or launch failures rather than degrading
+  - `auto` prefers `direct` and degrades to the MIR runtime, printing the reason first
+  - successful native builds are cached by content under `AURORA_CACHE_DIR`, defaulting to `~/.cache/aurora/native`
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`

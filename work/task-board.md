@@ -126,14 +126,23 @@ Last updated: 2026-07-25
   exact coverage gate passes at 64,396/67,022 lines (96.08188356062189%),
   4,155/4,292 functions (96.80801491146319%), and 94,455/100,165 regions
   (94.29940598013278%); no synthetic coverage test or exclusion was added.
+- Completed function-level `aura test` discovery: a file declaring
+  parameterless `def test_*()` functions reports one result per function through
+  a new named-entry path in the MIR runtime, so each test uses the same runtime,
+  scheduler, and trap handling as an ordinary run. Helpers and parameterized
+  functions are not discovered, a failing assertion reports its message and span
+  against the file, and a file declaring no test functions keeps the file-level
+  model unchanged. Its exact coverage gate passes at 64,413/67,042 lines
+  (96.07857760806658%), 4,158/4,295 functions (96.81024447031432%), and
+  94,490/100,201 regions (94.30045608327262%); no synthetic coverage test or
+  exclusion was added.
 - Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
   `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
   The remaining authorized Batch 2 work is unstarted and stays in this exact
   dependency order:
-  1. Function-level `aura test` discovery for `def test_*()`.
-  2. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
+  1. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
      document the cause, keeping both numbers in the benchmark baseline.
-  3. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+  2. The Batch 2 checkpoint report and the one-time downward-truncated coverage
      re-ratchet. Do not begin Phase 5.
 - Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
   `/private/tmp/aurora-phase4-checkpoint-package` is based on

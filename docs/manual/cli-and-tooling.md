@@ -31,7 +31,7 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aurora.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aurora source whitespace or verify formatting. |
-| `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` test programs; defaults to `tests/` and a 30-second per-file timeout. |
+| `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
 | `aura version` / `aura --version` | Print version. |
@@ -131,11 +131,20 @@ Each response is one line containing the same `id` plus either `result` or an `e
 
 A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
-In the current file-level test model, each `.au` path is one test unit.
-Assertions that all pass leave the file successful. A failed assertion prints
-its ordinary `AU4001` source diagnostic, marks that file `FAILED`, and
-contributes to the failed count. Assertions are executed normally; `aura test`
-has no assertion-stripping option.
+A test file that declares one or more parameterless `def test_*()` functions
+reports one result per function, labelled `path::function`. Each function runs
+on its own worker under the shared timeout, through the same runtime, scheduler,
+and trap handling an ordinary run uses. A function with parameters or a receiver
+is not a test, and neither is any other declaration in the file.
+
+A file that declares no `def test_*()` function keeps the file-level model: the
+path itself is one test unit, entered at `main` or at its top-level statements.
+Both models coexist, so adding a test function to a file changes only that file.
+
+Assertions that all pass leave a test successful. A failed assertion prints its
+ordinary `AU4001` source diagnostic against the file, marks that test `FAILED`,
+and contributes to the failed count. Assertions are executed normally;
+`aura test` has no assertion-stripping option.
 
 ## VS Code And LSP
 
@@ -237,7 +246,7 @@ Backend parity is a release gate. A construct accepted by one maintained executi
 
 ## Limits And Implementation-Defined Behavior
 
-Native linking requires a supported host C compiler and the installed Aurora runtime layout described above. `ast`, `ast-json`, and `mir` are inspection formats, not stable serialization APIs. The formatter currently normalizes the maintained whitespace surface; it is not a configurable style engine. `aura test` runs `.au` programs as test units rather than discovering functions by annotation, and a timed-out worker cannot be forcibly stopped inside the CLI process.
+Native linking requires a supported host C compiler and the installed Aurora runtime layout described above. `ast`, `ast-json`, and `mir` are inspection formats, not stable serialization APIs. The formatter currently normalizes the maintained whitespace surface; it is not a configurable style engine. `aura test` discovers tests by the `test_` name prefix rather than by annotation, and a timed-out worker cannot be forcibly stopped inside the CLI process.
 
 Filesystem path interpretation, process exit-code width, executable format, linker selection, and availability of Unix-only APIs follow the maintained host platform. Package graph, source-size, recursion, runtime, and backend limits are collected in [Current Limits](/manual/current-limits).
 

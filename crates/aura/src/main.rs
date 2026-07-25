@@ -488,53 +488,157 @@ fn handle_test_command(args: Vec<String>) {
             eprintln!("failed to read `{}`: {error}", path.display());
             process::exit(1);
         });
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let test_path = path.clone();
-        std::thread::Builder::new()
-            .name(format!("aura-test-{}", path.display()))
-            .stack_size(64 * 1024 * 1024)
-            .spawn(move || {
-                let _ = sender.send(run_path(&test_path));
-            })
-            .unwrap_or_else(|error| {
-                eprintln!("failed to start test `{}`: {error}", path.display());
-                process::exit(1);
-            });
-        match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                failed += 1;
-                eprintln!("FAILED {} (timed out after {timeout_ms}ms)", path.display());
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                failed += 1;
-                eprintln!("FAILED {} (test worker disconnected)", path.display());
-            }
-            Ok(Ok(output)) => {
-                let success = match output.value {
-                    Value::Int(code) => code.as_i128() == Some(0),
-                    _ => true,
-                };
-                if success {
-                    passed += 1;
-                    write_stdout(&format!("ok {}\n", path.display()));
-                } else {
-                    failed += 1;
-                    eprintln!("FAILED {} (non-zero main return)", path.display());
-                }
-            }
-            Ok(Err(error)) => {
+
+        // A file declaring `def test_*()` reports one result per function; a
+        // file without any keeps reporting one result for the file itself, so
+        // existing main-style tests are unaffected.
+        let module = match lower_path_to_mir(&path) {
+            Ok(module) => Some(module),
+            Err(error) => {
                 failed += 1;
                 eprintln!(
                     "FAILED {}\n{}",
                     path.display(),
                     error.render_with_source(&path.display().to_string(), &source)
                 );
+                continue;
             }
+        };
+        let cases = module
+            .as_ref()
+            .map(discovered_test_functions)
+            .unwrap_or_default();
+
+        if cases.is_empty() {
+            let rendered = path.display().to_string();
+            let outcome = run_test_case(&path, module.clone(), None, timeout_ms);
+            record_test_outcome(
+                &rendered,
+                &rendered,
+                &source,
+                outcome,
+                &mut passed,
+                &mut failed,
+            );
+            continue;
+        }
+
+        let rendered = path.display().to_string();
+        for case in cases {
+            let outcome = run_test_case(&path, module.clone(), Some(case.clone()), timeout_ms);
+            let label = format!("{rendered}::{case}");
+            record_test_outcome(
+                &label,
+                &rendered,
+                &source,
+                outcome,
+                &mut passed,
+                &mut failed,
+            );
         }
     }
     write_stdout(&format!("{passed} passed; {failed} failed\n"));
     if failed > 0 {
         process::exit(1);
+    }
+}
+
+/// The parameterless `def test_*()` functions declared by a lowered module, in
+/// declaration order.
+fn discovered_test_functions(module: &MirModule) -> Vec<String> {
+    module
+        .functions
+        .iter()
+        .filter(|function| {
+            function.name.starts_with("test_")
+                && function.params.is_empty()
+                && function.receiver.is_none()
+        })
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+enum TestOutcome {
+    Passed,
+    Failed(String),
+    Trapped(Diagnostic),
+}
+
+/// Runs one test case on its own thread with the shared timeout, so a hanging
+/// test is reported rather than stalling the run.
+fn run_test_case(
+    path: &Path,
+    module: Option<MirModule>,
+    entry: Option<String>,
+    timeout_ms: u64,
+) -> TestOutcome {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let test_path = path.to_path_buf();
+    let started = std::thread::Builder::new()
+        .name(format!("aura-test-{}", path.display()))
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let result = match (module, entry) {
+                (Some(module), Some(entry)) => {
+                    aurora_compiler::run_mir_entry(&module, Some(&entry), None, Vec::new())
+                }
+                _ => run_path(&test_path),
+            };
+            let _ = sender.send(result);
+        });
+    if let Err(error) = started {
+        return TestOutcome::Failed(format!("failed to start test: {error}"));
+    }
+
+    match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            TestOutcome::Failed(format!("timed out after {timeout_ms}ms"))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            TestOutcome::Failed("test worker disconnected".to_string())
+        }
+        Ok(Ok(output)) => {
+            let success = match output.value {
+                Value::Int(code) => code.as_i128() == Some(0),
+                _ => true,
+            };
+            if success {
+                TestOutcome::Passed
+            } else {
+                TestOutcome::Failed("non-zero main return".to_string())
+            }
+        }
+        Ok(Err(error)) => TestOutcome::Trapped(error),
+    }
+}
+
+/// Reports one test result and updates the running totals. A trapped test
+/// renders its diagnostic against the source, so a failed `assert` shows its
+/// message and span rather than only a failure count.
+fn record_test_outcome(
+    label: &str,
+    render_path: &str,
+    source: &str,
+    outcome: TestOutcome,
+    passed: &mut usize,
+    failed: &mut usize,
+) {
+    match outcome {
+        TestOutcome::Passed => {
+            *passed += 1;
+            write_stdout(&format!("ok {label}\n"));
+        }
+        TestOutcome::Failed(reason) => {
+            *failed += 1;
+            eprintln!("FAILED {label} ({reason})");
+        }
+        TestOutcome::Trapped(error) => {
+            *failed += 1;
+            eprintln!(
+                "FAILED {label}\n{}",
+                error.render_with_source(render_path, source)
+            );
+        }
     }
 }
 

@@ -29,7 +29,8 @@ pub use analysis::{
 pub use diag::{Diagnostic, Result, Span};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
-    run as run_mir, run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
+    run as run_mir, run_entry_with_stdout_sink_and_program_args as run_mir_entry,
+    run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
 pub use native_codegen::{

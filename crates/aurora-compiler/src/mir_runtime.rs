@@ -83,6 +83,22 @@ pub fn run_with_stdout_sink_and_program_args(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
+    run_entry_with_stdout_sink_and_program_args(module, None, stdout_sink, program_args)
+}
+
+/// Runs `module`, entering at `entry` instead of its ordinary entry point.
+///
+/// `entry` names a parameterless top-level function. It exists so a test runner
+/// can execute one `def test_*()` at a time through exactly the same runtime,
+/// scheduler, and trap handling an ordinary run uses, rather than a parallel
+/// execution path that could diverge.
+pub fn run_entry_with_stdout_sink_and_program_args(
+    module: &MirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    let entry = entry.map(|name| name.to_string());
     let module = module.clone();
     let program_args = Arc::new(program_args);
     let handle = match thread::Builder::new()
@@ -92,6 +108,7 @@ pub fn run_with_stdout_sink_and_program_args(
                 let stdout = Arc::new(Mutex::new(String::new()));
                 let task_stdout = stdout.clone();
                 let task_stdout_sink = stdout_sink.clone();
+                let task_entry = entry.clone();
                 let value_result = if module_uses_lightweight_tasks(&module) {
                     run_lightweight_root_task(move || {
                         let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
@@ -101,7 +118,7 @@ pub fn run_with_stdout_sink_and_program_args(
                             CancellationContext::default(),
                             program_args,
                         );
-                        runtime.run_main()
+                        runtime.run_entry(task_entry.as_deref())
                     })
                 } else {
                     let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
@@ -111,7 +128,7 @@ pub fn run_with_stdout_sink_and_program_args(
                         CancellationContext::default(),
                         program_args,
                     );
-                    runtime.run_main()
+                    runtime.run_entry(entry.as_deref())
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
                 match value_result {
@@ -1520,6 +1537,20 @@ impl MirRuntime {
         } else {
             best
         }
+    }
+
+    /// Enters the module at `entry`, or at its ordinary entry point when
+    /// `entry` is absent.
+    fn run_entry(&mut self, entry: Option<&str>) -> Result<Value> {
+        let Some(entry) = entry else {
+            return self.run_main();
+        };
+        let Some(function) = self.functions.get(entry).cloned() else {
+            return Err(Diagnostic::new(format!(
+                "no entry function named `{entry}` was found"
+            )));
+        };
+        Ok(self.call_function(&function, None, Vec::new())?.value)
     }
 
     fn run_main(&mut self) -> Result<Value> {

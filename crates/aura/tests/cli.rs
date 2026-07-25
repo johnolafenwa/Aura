@@ -7267,6 +7267,57 @@ def main():
 }
 
 #[test]
+fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
+    let temp = TempDir::new("aurora-test-discovery");
+    let tests = temp.path().join("tests");
+    fs::create_dir_all(&tests).expect("test directory should create");
+
+    fs::write(
+        tests.join("functions.au"),
+        "def test_adds():\n    assert 1 + 1 == 2\n\ndef test_membership():\n    values = [1, 2]\n    assert 2 in values\n\ndef test_reports_failure():\n    assert 1 == 2, \"one is not two\"\n\ndef helper() -> int32:\n    return 1\n",
+    )
+    .expect("function test source should write");
+    fs::write(
+        tests.join("legacy.au"),
+        "def main() -> int32:\n    print(\"legacy\")\n    return 0\n",
+    )
+    .expect("legacy test source should write");
+
+    let run = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .arg("test")
+        .output()
+        .expect("failed to run aura test");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+
+    // Each `def test_*()` is its own result, named by file and function.
+    assert!(
+        stdout.contains("::test_adds"),
+        "expected a per-function result, stdout was:\n{stdout}"
+    );
+    assert!(stdout.contains("::test_membership"), "{stdout}");
+    // A file without any `def test_*()` still reports one result for the file.
+    assert!(stdout.contains("legacy.au"), "{stdout}");
+    assert!(
+        !stdout.contains("::helper") && !stderr.contains("::helper"),
+        "a non-test function must not be discovered"
+    );
+
+    // A failing assertion reports its message and span, not just a count.
+    assert!(
+        stderr.contains("::test_reports_failure"),
+        "expected the failing function to be named, stderr was:\n{stderr}"
+    );
+    assert!(stderr.contains("one is not two"), "{stderr}");
+    assert!(stderr.contains("functions.au:9:5"), "{stderr}");
+
+    assert!(stdout.contains("3 passed; 1 failed"), "{stdout}");
+    assert!(!run.status.success(), "a failing test must fail the run");
+}
+
+#[test]
 fn aura_test_treats_file_level_assertions_as_test_results() {
     let temp = TempDir::new("aurora-file-assert-tests");
     let passing_path = temp.path().join("passing.au");
