@@ -2,6 +2,31 @@
 
 Last updated: 2026-07-25
 
+## Batch 2 Checkpoint (complete)
+
+- Result: Batch 2 of 5 is complete at its requested checkpoint. Phase 5 was not
+  started. B2.0 is fully closed, Phase 3 was already complete on entry, Phase
+  3.5 is complete through conditional expressions, membership and comparison
+  chains, `enumerate`/`zip`, and `len`/`str`, and Phase 4 is complete through
+  the `aura run` backend selector, the content-addressed artifact cache, and
+  function-level `aura test` discovery. V6 is diagnosed and halved.
+- The full checkpoint report is `work/2026-07-25-batch2-checkpoint-report.md`.
+  It carries the B2.0 disposition with repro results, per-phase evidence, the
+  Provisional ADR list, the retired-hint list, the worker example path, the
+  backend-default decision and its measurements, the V6 findings, coverage per
+  logical decision commit, the re-ratcheted floors, and the recommended
+  movements between Batches 3 to 5.
+- Coverage floors are re-ratcheted once, by downward truncation from the final
+  measurement, to lines/functions/regions `96.07/96.81/94.29`. The
+  language-server gate remains enforced at 100%.
+- Four Provisional ADRs need checkpoint disposition: ADR-0027 conditional
+  expressions, ADR-0028 membership and comparison chains, ADR-0029
+  `enumerate`/`zip` loop forms, and ADR-0030 `len`/`str` builtins. Eight earlier
+  Provisional ADRs remain open from prior batches.
+- Backend default: `aura run` stays on `mir`. The blocker is binary size, not
+  correctness or compile time; a direct hello-world executable is about 57 MB,
+  so a first launch costs about 0.8s even on a cache hit.
+
 ## Current Batch 2 Continuation
 
 - Result: Phase 3 is complete and committed through `9ff7e82`, including Duration, deterministic and secure Randomness, recursive JSON, Bytes/codecs/SHA-256, assertion statements, and the maintained application-level retry worker. The editor completion/package repair remains committed at `f34b4de`, the ownership tutorial correction at `6665090`, and proposed future capability-syntax ADR-0022 at `929c0b8`; ADR-0022 is not implemented or mixed into Batch 2 semantics. Phase 3.5 newline continuation is complete and decision-gate green: the lexer tracks and validates nested `()`, `[]`, and `{}`, suppresses ordinary continuation layout while retaining physical spans, preserves delimited expression-`match` layout islands, and reports source-related pairing diagnostics. Parser coverage pins multiline signatures, calls, type arguments, grouping, indexing, and collection literals without changing the trailing-comma, backslash, or single-line string/f-string boundaries. Compiler analysis, the language server, and VS Code newline indentation preserve editor behavior across continued and incomplete source. The normative reference, Provisional ADR-0025, maintained example/tutorial, executable-reference gate, frozen coverage floors, forced-backend parity, and exact full-CI gate are aligned.
@@ -150,33 +175,16 @@ Last updated: 2026-07-25
   64,409/67,039 lines (96.07691045510822%), 4,158/4,295 functions (96.81024447031432%),
   and 94,472/100,184 regions (94.29849077697038%); no synthetic coverage test or
   exclusion was added.
-- Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
-  `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
-  The remaining authorized Batch 2 work is unstarted and stays in this exact
-  dependency order:
-  1. The Batch 2 checkpoint report and the one-time downward-truncated coverage
-     re-ratchet. Do not begin Phase 5.
-- Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
-  `/private/tmp/aurora-phase4-checkpoint-package` is based on
-  `55628413459015bd0b1c4b9e107e2347382df288` and has not been rebased onto any
-  of the four tickets landed since. Treat it as reference material to re-derive
-  from, not as a patch series to apply, and re-verify its cache, selector,
-  test-discovery, and benchmark behavior against the current tree.
-- Backend-default note: bare `aura run` remains `auto`. Do not switch the
-  default to direct unless forced-direct passes every runnable maintained
-  fixture on supported platforms; otherwise keep `auto` with visible fallback
-  and record what blocks it.
-- Dependency hygiene: GHSA-mh99-v99m-4gvg was published against every
-  `brace-expansion` release through `5.0.7`, closing the fail-closed audit gate.
-  It has no lockfile-only fix, so `c8` moved to `^12.0.0` and
-  `vscode-languageclient` to `^10.1.0`, taking the patched
-  `minimatch@^10` -> `brace-expansion@5.0.8` chain; the extension's declared
-  minimum editor version moved from 1.90 to 1.91 to match. `npm audit` reports
-  zero vulnerabilities and the LSP, LSP-coverage, and extension gates stay green.
-- Blocking status: there is no user-decision or language-semantics blocker. A transient macOS Code Signing subsystem failure was contained with temporary ad-hoc-signed toolchain copies and an output-signing linker wrapper under `/tmp`; repository binaries were not modified. A timing-based `wait_any` fixture assumption was replaced with an explicit Queue release signal, and the transitive PostCSS advisory was closed by the lockfile-only update from 8.5.10 to 8.5.22; `npm audit` now reports zero vulnerabilities.
-- Continuation policy: continue the authorized Batch 2 work without a duration cap until the scope is complete, the user redirects it, or a genuine external, semantic-decision, destructive-action, or safety blocker requires input. Elapsed time is not a stop condition.
+- Resume point: Batch 2 is complete at its checkpoint and every landed ticket is
+  full-gated. The only untracked files are the two user-created files
+  `hello.text` and `personal/file_ops.au`, which were never staged.
+- Phase 4 note: the prepared Phase 4/V6 scratch history under `/private/tmp` was
+  based on a commit predating every ticket landed in this batch. It was treated
+  as reference material rather than applied; the selector, cache, function-test
+  discovery, and V6 work in this batch were derived against the current tree and
+  gated here.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
-- Coverage rule: floors stay frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only and one downward-truncated re-ratchet at sign-off.
+- Coverage rule: floors stayed frozen at lines/functions/regions `96.06/96.79/94.15` through the batch, with behavior-focused tests only. The one downward-truncated re-ratchet at sign-off has been applied, raising them to `96.07/96.81/94.29`.
 
 ## Batch 1 Reference-Freeze Checkpoint (historical)
 
@@ -210,7 +218,7 @@ Last updated: 2026-07-25
 
 - Stabilize the frozen 0.1 technical-preview surface through compatibility fixes, parity regressions, and preview-user feedback rather than adding more language syntax.
 - Keep the categorized example library, manual, and `tutorials/` synchronized with the implemented language subset whenever behavior changes.
-- Preserve the Batch 1 checkpoint compiler lines/functions/regions floor at `96.06/96.79/94.15` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
+- Preserve the Batch 2 checkpoint compiler lines/functions/regions floor at `96.07/96.81/94.29` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
 
 ## Todo
 
