@@ -68,6 +68,8 @@ The current tutorial set covers:
   evaluate each operand once and short-circuit
 - the `for ... in enumerate(seq):` and `for ... in zip(first, second):` loop
   forms, where `zip` stops at the shorter sequence
+- the builtin functions `len(value)`, delegating to the value's own `len()`,
+  and `str(value)`, producing the print rendering
 - `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation

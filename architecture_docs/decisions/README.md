@@ -36,3 +36,4 @@ test locations that must prove completion.
 27. [ADR-0027: Conditional expressions](0027-conditional-expressions.md)
 28. [ADR-0028: Membership operators and comparison chains](0028-membership-and-comparison-chains.md)
 29. [ADR-0029: `enumerate` and `zip` loop forms](0029-enumerate-and-zip-loop-forms.md)
+30. [ADR-0030: `len` and `str` builtins](0030-len-and-str-builtins.md)

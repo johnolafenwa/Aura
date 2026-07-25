@@ -23,6 +23,8 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `parse_int32` | `parse_int32(text: String) -> Result[int32, String]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: String) -> Result[int64, String]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: String) -> Result[float64, String]` | Parses a 64-bit float. |
+| `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]) -> int64` | Delegates to the value's own `len()` member. |
+| `str` | `str(value) -> String` | Renders `value` exactly as `print` and f-string interpolation render it. |
 
 ## Scalars And String
 

@@ -15,6 +15,10 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
 design history. Features mentioned only there—including `Channel`, `select`,
 detached spawn, attributes, and registry publishing—are not part of Aurora
+Adding `len` and `str` to the maintained builtin functions also reserves both
+names: a program that previously declared its own `def len(...)` or
+`def str(...)` is now rejected, the same way redefining `print` or `abs` is.
+
 0.1. Tuples, conditional expressions, membership and comparison chains, and the
 `enumerate`/`zip` loop forms are part of the maintained language only to the
 exact provisional extents recorded by ADR-0026, ADR-0027, ADR-0028, ADR-0029,

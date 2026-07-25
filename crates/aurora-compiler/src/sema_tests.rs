@@ -1000,6 +1000,88 @@ def main():
 }
 
 #[test]
+fn len_delegates_to_the_value_and_str_renders_it() {
+    let output = crate::run_source(
+        r#"
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    mut ages = Map[String, int32]()
+    ages.set("ada", 36)
+    mut tags = Set[String]()
+    tags.insert("beta")
+
+    print(len(values))
+    print(len("hello"))
+    print(len(ages))
+    print(len(tags))
+
+    print(str(1))
+    print(str(2.5))
+    print(str(true))
+    print(str(values))
+    print(str(Option.Some(7)))
+
+    rendered = str(42)
+    print(len(rendered))
+"#,
+    )
+    .expect("len should delegate and str should render");
+    assert_eq!(
+        output.stdout,
+        "2\n5\n1\n1\n1\n2.5\ntrue\n[1, 2]\nOption.Some(7)\n2\n"
+    );
+
+    // `str` renders exactly what an f-string interpolation renders.
+    let matches_interpolation = crate::run_source(
+        r#"
+def main():
+    mut values = Vec[int32]()
+    values.push(7)
+    print(str(values) == f"{values}")
+    print(str(2.5) == f"{2.5}")
+"#,
+    )
+    .expect("str should match f-string rendering");
+    assert_eq!(matches_interpolation.stdout, "true\ntrue\n");
+
+    for (source, code, message) in [
+        (
+            "def main():\n    print(len(1))\n",
+            "AU2002",
+            "`len(...)` expects a value with a `len()` member, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    print(len(values, values))\n",
+            "AU2004",
+            "`len` expects 1 argument, found 2",
+        ),
+    ] {
+        let rejected =
+            crate::check_source(source).expect_err("an invalid `len` call must be rejected");
+        assert_eq!(rejected.code, code, "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    // Both names are builtin function names and cannot be redefined, the same
+    // way `abs` and `print` cannot.
+    for name in ["len", "str"] {
+        let source = format!(
+            "def {name}(value: Vec[int32]) -> int32:\n    return 0\n\ndef main():\n    pass\n"
+        );
+        let rejected = crate::check_source(&source)
+            .expect_err("a builtin function name must not be redefined");
+        assert_eq!(rejected.code, "AU2999", "{name}");
+        assert_eq!(
+            rejected.message,
+            format!("`{name}` is a builtin function name and cannot be redefined"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default() {
     let output = crate::run_source(
         r#"

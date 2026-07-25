@@ -1,0 +1,11 @@
+def main():
+    mut hosts = Vec[String]()
+    hosts.push("alpha")
+    hosts.push("beta")
+
+    print(len(hosts))
+    print(len("aurora"))
+
+    summary = str(len(hosts))
+    print(summary)
+    print(str(hosts))

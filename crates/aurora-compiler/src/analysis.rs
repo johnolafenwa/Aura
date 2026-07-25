@@ -4097,6 +4097,8 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Sleep => Some(Type::Unit),
         BuiltinFunction::WaitAny => None,
         BuiltinFunction::WaitAll => None,
+        BuiltinFunction::Len => Some(Type::named("int64")),
+        BuiltinFunction::Str => Some(Type::named("String")),
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,

@@ -912,6 +912,45 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
   }
 });
 
+test("compiler bridge preserves len and str builtin calls", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-len-str-"));
+  const source = [
+    "def report(hosts: Vec[String]):",
+    "    print(len(hosts))",
+    "    print(str(hosts))",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const operand = analysis.occurrences.find(
+      (candidate) => candidate.line === 1 && candidate.start_character === 14
+    );
+    assert.ok(operand, "missing len operand occurrence");
+    assert.ok(operand.hover.includes("param hosts: Vec[String]"));
+
+    const invalid = await analyzeWithCompiler(
+      mainUri,
+      ["def main():", "    print(len(1))", ""].join("\n")
+    );
+    assert.ok(invalid);
+    assert.equal(invalid.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(invalid, mainUri);
+    assert.equal(diagnostic.code, "AU2002");
+    assert.equal(
+      diagnostic.message,
+      "`len(...)` expects a value with a `len()` member, found `int64`"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves enumerate and zip loop operands", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-lockstep-"));
   const source = [

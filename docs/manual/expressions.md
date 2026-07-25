@@ -235,6 +235,30 @@ Duration equality and ordering compare that signed count. The language has no
 `-Duration` rule. Use `Duration.ms(-1)` when a negative value is needed, and
 remember that negative values are not valid host waits.
 
+## `len` And `str`
+
+`len(value)` and `str(value)` are maintained builtin functions, not syntax.
+
+`len(value)` delegates to the value's own `len()` member and produces `int64`.
+Every type that provides `len()` is accepted — `String`, `Vec[T]`, `Map[K, V]`,
+and `Set[T]` in Aurora 0.1 — and a value without that member is rejected with
+`AU2002`. `len(value)` and `value.len()` mean the same thing and produce the
+same value; neither is a shorthand that changes ownership, because `len()`
+borrows its receiver.
+
+`str(value)` produces the same `String` that `print(value)` writes and that
+`f"{value}"` interpolates. It accepts any value the renderer accepts, so it is
+total over the maintained surface rather than restricted to scalars.
+
+```python
+hosts = ["alpha", "beta"]
+print(len(hosts))
+print(str(len(hosts)))
+```
+
+Both names are builtin function names and, like `print` and `abs`, cannot be
+redefined by a program.
+
 ## Membership And Comparison Chains
 
 `value in container` and `value not in container` test membership and produce

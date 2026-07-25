@@ -93,21 +93,28 @@ Last updated: 2026-07-25
   Its exact coverage gate passes at 64,313/66,939 lines (96.07702535143937%),
   4,154/4,291 functions (96.80727103239339%), and 94,351/100,058 regions
   (94.29630814127806%); no synthetic coverage test or exclusion was added.
+- Completed `len`/`str` ticket: both are maintained builtin functions with
+  Provisional ADR-0030. `len` delegates to the value's own `len()` member and
+  produces `int64`, with its domain defined by that member rather than a list;
+  `str` is total over the renderable surface and produces the same `String` as
+  `print` and f-string interpolation. Both lower by delegation, so the direct
+  backend needed no change. Both names are now reserved, which is recorded as a
+  source-compatibility change on the status page. This completes Phase 3.5. Its
+  exact coverage gate passes at 64,387/67,014 lines (96.07992359805414%),
+  4,154/4,291 functions (96.80727103239339%), and 94,439/100,150 regions
+  (94.29755366949576%); no synthetic coverage test or exclusion was added.
 - Resume point: every landed ticket is full-gated. The only untracked files are the two user-created files
   `hello.text` and `personal/file_ops.au`, which are intentionally never staged.
   The remaining authorized Batch 2 work is unstarted and stays in this exact
   dependency order:
-  1. `len(x)` delegating to `.len()` and `str(x)` producing the print/f-string
-     rendering, retiring the `python_len` and `python_str` hints to acceptance
-     the same way the membership and chain hints were retired.
-  2. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
+  1. Phase 4 `aura run --backend mir|direct|auto`, updating `backend_parity.rs`
      in the same change so the MIR leg passes `--backend mir` explicitly.
-  3. The content-addressed native artifact cache with recorded cold-compile and
+  2. The content-addressed native artifact cache with recorded cold-compile and
      warm-launch benchmarks.
-  4. Function-level `aura test` discovery for `def test_*()`.
-  5. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
+  3. Function-level `aura test` discovery for `def test_*()`.
+  4. V6: diagnose the direct int32 10M-loop against int64, fix if contained or
      document the cause, keeping both numbers in the benchmark baseline.
-  6. The Batch 2 checkpoint report and the one-time downward-truncated coverage
+  5. The Batch 2 checkpoint report and the one-time downward-truncated coverage
      re-ratchet. Do not begin Phase 5.
 - Phase 4 note for the next session: the prepared Phase 4/V6 scratch history at
   `/private/tmp/aurora-phase4-checkpoint-package` is based on

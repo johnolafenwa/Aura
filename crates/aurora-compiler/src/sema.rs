@@ -9704,6 +9704,43 @@ impl<'a> FunctionChecker<'a> {
                             vec![task_args[0].clone()],
                         ))
                     }
+                    BuiltinFunction::Len => {
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `len` should bind exactly one argument",
+                        )?;
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        let Type::Named(receiver_name, _) = &value_ty else {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                value_arg.span,
+                                format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
+                            ));
+                        };
+                        if BuiltinMember::resolve(receiver_name, "len").is_none() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                value_arg.span,
+                                format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
+                            )
+                            .with_help(
+                                "`len` delegates to the value's own `len()`; `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` provide it",
+                            ));
+                        }
+                        Ok(Type::named("int64"))
+                    }
+                    BuiltinFunction::Str => {
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `str` should bind exactly one argument",
+                        )?;
+                        self.type_of_expr(&value_arg.value, locals)?;
+                        Ok(Type::named("String"))
+                    }
                     BuiltinFunction::Abs => {
                         let value_arg = required_ordered_arg(
                             &ordered_args,
@@ -12898,16 +12935,6 @@ impl<'a> FunctionChecker<'a> {
         };
 
         match bare_name {
-            Some("len") => Diagnostic::coded_at(
-                "AU2005",
-                span,
-                "Python-style `len(value)` is not available yet; use `value.len()` today",
-            ),
-            Some("str") => Diagnostic::coded_at(
-                "AU2005",
-                span,
-                "Python-style `str(value)` is not available yet; use a double-quoted f-string today",
-            ),
             Some("String") => Diagnostic::coded_at(
                 "AU2005",
                 span,

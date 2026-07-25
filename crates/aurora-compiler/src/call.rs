@@ -378,6 +378,8 @@ pub enum BuiltinFunction {
     ParseInt32,
     ParseInt64,
     ParseFloat64,
+    Len,
+    Str,
 }
 
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
@@ -387,6 +389,8 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Sleep,
     BuiltinFunction::WaitAny,
     BuiltinFunction::WaitAll,
+    BuiltinFunction::Len,
+    BuiltinFunction::Str,
     BuiltinFunction::Abs,
     BuiltinFunction::Min,
     BuiltinFunction::Max,
@@ -412,6 +416,8 @@ impl BuiltinFunction {
             "parse_int32" => Some(Self::ParseInt32),
             "parse_int64" => Some(Self::ParseInt64),
             "parse_float64" => Some(Self::ParseFloat64),
+            "len" => Some(Self::Len),
+            "str" => Some(Self::Str),
             _ => None,
         }
     }
@@ -431,6 +437,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "parse_int32",
             Self::ParseInt64 => "parse_int64",
             Self::ParseFloat64 => "parse_float64",
+            Self::Len => "len",
+            Self::Str => "str",
         }
     }
 
@@ -449,6 +457,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "parse_int32(text: String) -> Result[int32, String]",
             Self::ParseInt64 => "parse_int64(text: String) -> Result[int64, String]",
             Self::ParseFloat64 => "parse_float64(text: String) -> Result[float64, String]",
+            Self::Len => "len(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64",
+            Self::Str => "str(value) -> String",
         }
     }
 
@@ -473,6 +483,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "Parses a `String` into an `int32`, returning `Result.Err(String)` on failure.",
             Self::ParseInt64 => "Parses a `String` into an `int64`, returning `Result.Err(String)` on failure.",
             Self::ParseFloat64 => "Parses a `String` into a `float64`, returning `Result.Err(String)` on failure.",
+            Self::Len => "Returns the length of a value that has a `len()` member, delegating to that member.",
+            Self::Str => "Renders a value the way `print` and f-string interpolation render it.",
         }
     }
 
@@ -529,6 +541,13 @@ impl BuiltinFunction {
             Self::WaitAny | Self::WaitAll => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &TASK_LIST_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::Len | Self::Str => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &PRINT_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,

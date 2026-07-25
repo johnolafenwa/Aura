@@ -1,0 +1,22 @@
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    mut ages = Map[String, int32]()
+    ages.set("ada", 36)
+    mut tags = Set[String]()
+    tags.insert("beta")
+
+    print(len(values))
+    print(len("hello"))
+    print(len(ages))
+    print(len(tags))
+
+    print(str(1))
+    print(str(2.5))
+    print(str(true))
+    print(str(values))
+    print(str(Option.Some(7)))
+
+    rendered = str(42)
+    print(len(rendered))

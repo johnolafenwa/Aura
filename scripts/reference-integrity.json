@@ -481,50 +481,55 @@
       "reason": "Expression-form catalog: the lines are independent grammar examples and include placeholder names, not one program."
     },
     "docs/manual/expressions.md#aurora-10": {
+      "sha256": "de832b5ea4407554b4ac7d2fa9406b5c5256eef5e85063449637e214258bcedc",
+      "mode": "illustrative",
+      "reason": "Specialization catalog: Box and identity are declarations from other feature examples."
+    },
+    "docs/manual/expressions.md#aurora-11": {
       "sha256": "f65af4e0fcedc8bfda28e335627b002a7920a23d205840942164eb4e8e422d9d",
       "mode": "illustrative",
       "reason": "Member-access catalog: point and Status are declarations supplied by surrounding examples."
     },
-    "docs/manual/expressions.md#aurora-11": {
+    "docs/manual/expressions.md#aurora-12": {
       "sha256": "9f6ecc2bb0aa67e7c846712bbd048fd230dc24e6bc55fc1e2fe81a2f6a1ff07b",
       "mode": "illustrative",
       "reason": "Indexing catalog: values and counts are placeholder collections."
     },
-    "docs/manual/expressions.md#aurora-12": {
+    "docs/manual/expressions.md#aurora-13": {
       "sha256": "2cf8957f3339e556772ab793feffec62f71aede21bc6537147d66d8528bf4b60",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-13": {
+    "docs/manual/expressions.md#aurora-14": {
       "sha256": "ea4f045829fa961f7e49837d2274bf31a62ef63ff4b9297c1a6eda12e09d8694",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-14": {
+    "docs/manual/expressions.md#aurora-15": {
       "sha256": "c07ebbede8cb3d845cc3d1c1fcaa17daad2082b91eac83fad02420f115799ddb",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-15": {
+    "docs/manual/expressions.md#aurora-16": {
       "sha256": "7b6c3c1a0afd6ca4454e0ff9c3c4d8ce5865c7115fcc5cd53bb458e122e87771",
       "mode": "illustrative",
       "reason": "Match-expression fragment: code is an input supplied by the surrounding example."
     },
-    "docs/manual/expressions.md#aurora-16": {
+    "docs/manual/expressions.md#aurora-17": {
       "sha256": "179e67ed326f0a47771ba6811fc4e684648d03fad95dc5a4549f95fe1fed1335",
       "mode": "illustrative",
       "reason": "Multiline match-expression fragment: code is an input supplied by the surrounding example."
     },
-    "docs/manual/expressions.md#aurora-17": {
+    "docs/manual/expressions.md#aurora-18": {
       "sha256": "88bb3a54b02bfe83f57f5cf277137b5328730b4634afe2958d820f8e97d1e64d",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-18": {
+    "docs/manual/expressions.md#aurora-19": {
       "sha256": "4e65195fd6eecb27de3050339dd6993b31b11ac7bf5cedcb8cd3937322ef65eb",
       "mode": "illustrative",
       "reason": "Enum-construction catalog: Status is a user enum declared on another feature page."
@@ -541,36 +546,37 @@
       "stderr": ""
     },
     "docs/manual/expressions.md#aurora-4": {
+      "sha256": "500cbf4deec73e46675f0d94d858a7e1bd818c30c30fa66c9079290dd3aeef6c",
+      "mode": "run",
+      "stdout": "2\n2\n",
+      "stderr": ""
+    },
+    "docs/manual/expressions.md#aurora-5": {
       "sha256": "33264f6aec549e4d2e452acec3d8837b0e2483ab49e3c647986de3b50facf91c",
       "mode": "run",
       "stdout": "true\ntrue\ntrue\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-5": {
+    "docs/manual/expressions.md#aurora-6": {
       "sha256": "1ab085f4c14369e69897dda9a810bd80cb90b25fd1c55f99b1227587820b26c9",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/expressions.md#aurora-6": {
+    "docs/manual/expressions.md#aurora-7": {
       "sha256": "c4a9345391bdb94ad8240549df33a60a393628806dedea5f60fcdef5c0632eca",
       "mode": "illustrative",
       "reason": "Cast catalog: the final expression uses left and right placeholders, so the block is not standalone."
     },
-    "docs/manual/expressions.md#aurora-7": {
+    "docs/manual/expressions.md#aurora-8": {
       "sha256": "ba24084af6bc4048e642c10c687a47c4e372ef44bfe54280da742fac689d1eff",
       "mode": "illustrative",
       "reason": "Postfix-form catalog: users, value, and the result context are placeholders rather than a complete program."
     },
-    "docs/manual/expressions.md#aurora-8": {
+    "docs/manual/expressions.md#aurora-9": {
       "sha256": "adba6dd2c82f4c34282326e4d30061d56c1b910c33ed0d446a36306ac6e184b5",
       "mode": "illustrative",
       "reason": "Call-form catalog: replace and process calls are independent examples with application context omitted."
-    },
-    "docs/manual/expressions.md#aurora-9": {
-      "sha256": "de832b5ea4407554b4ac7d2fa9406b5c5256eef5e85063449637e214258bcedc",
-      "mode": "illustrative",
-      "reason": "Specialization catalog: Box and identity are declarations from other feature examples."
     },
     "docs/manual/expressions.md#text-1": {
       "sha256": "ae9c457879d8fd24cbf15dd5bab9b33ca0126d5f1b29839dd1c444d91f2ad011",

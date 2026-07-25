@@ -80,6 +80,13 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `80`
     - `20`
+- `len_and_str.au`
+  - `len(value)` delegating to the value's own `len()`, and `str(value)` producing the print rendering
+  - prints:
+    - `2`
+    - `6`
+    - `2`
+    - `[alpha, beta]`
 - `tuples.au`
   - fixed tuple values and return types, whole-source unpacking, copy-only
     constant indexing, tuple-target iteration, and a recursive tuple pattern
@@ -790,6 +797,7 @@ cargo run -p aura -- run examples/control_flow/boolean_logic.au
 cargo run -p aura -- run examples/control_flow/conditional_expressions.au
 cargo run -p aura -- run examples/control_flow/membership_and_chains.au
 cargo run -p aura -- run examples/control_flow/enumerate_and_zip.au
+cargo run -p aura -- run examples/basics/len_and_str.au
 cargo run -p aura -- run examples/control_flow/while_break_continue.au
 cargo run -p aura -- run examples/enums/result_match.au
 cargo run -p aura -- run examples/enums/result_option.au

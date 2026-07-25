@@ -4130,6 +4130,40 @@ impl<'a> Lowerer<'a> {
         };
 
         match &base_callee.kind {
+            // `len` and `str` are spelled as free calls but defined by
+            // delegation, so they lower to the member call and the rendering
+            // the language already has rather than to new runtime entry points.
+            ExprKind::Name(name)
+                if (name == "len" || name == "str")
+                    && !self.program.functions.contains_key(name)
+                    && self.resolve_class_info(name).is_none() =>
+            {
+                let argument = args
+                    .first()
+                    .expect("`len` and `str` bind exactly one argument before lowering");
+                if name == "len" {
+                    let object = self.lower_expr_at_sequence_point(&argument.value, None);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object,
+                                field: "len".to_string(),
+                                receiver_place: self.render_place_expr_option(&argument.value),
+                            },
+                            args: Vec::new(),
+                        },
+                    });
+                } else {
+                    let value = self.lower_expr_at_sequence_point(&argument.value, None);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::FormatString {
+                            parts: vec![MirFormatPart::Value(value)],
+                        },
+                    });
+                }
+            }
             ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                 let class = self
                     .resolve_class_info(name)
@@ -5470,6 +5504,12 @@ impl<'a> Lowerer<'a> {
                                     _ => None,
                                 }
                             });
+                        }
+                        if name == "len" {
+                            return Some(Type::named("int64"));
+                        }
+                        if name == "str" {
+                            return Some(Type::named("String"));
                         }
                         if name == "abs" || name == "min" || name == "max" || name == "sqrt" {
                             return args
