@@ -98,6 +98,6 @@ For a step-by-step guide inside the repo, see `tools/vscode-aurora/INSTALL.md`.
 ### Requirements
 
 - Node.js 22 or later is recommended for the current workspace scripts.
-- VS Code 1.90 or later.
+- VS Code 1.91 or later.
 
 As the compiler grows, this extension should stay a thin client while the Aurora language server becomes the canonical place for editor intelligence.
