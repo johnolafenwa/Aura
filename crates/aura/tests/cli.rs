@@ -1166,6 +1166,97 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
 }
 
 #[test]
+fn native_run_cache_reuses_one_binary_and_keys_on_the_program() {
+    let cache = TempDir::new("aurora-native-cache");
+    let source = "def main() -> int32:\n    print(\"cached\")\n    return 0\n";
+    let (_temp, source_path) = write_temp_source("aurora-native-cache-run", source);
+
+    let run = |path: &std::path::Path| {
+        Command::new(aura_bin())
+            .env("AURORA_CACHE_DIR", cache.path())
+            .arg("run")
+            .arg("--backend")
+            .arg("direct")
+            .arg(path.display().to_string())
+            .output()
+            .expect("failed to run aura run --backend direct")
+    };
+
+    // The key covers the runtime archive by design, so a build that settles a
+    // stale archive legitimately produces a different key than the run before
+    // it. Settle the runtime first, then measure the program cache alone.
+    let settle = run(&source_path);
+    assert!(
+        settle.status.success(),
+        "settling run failed, stderr was:\n{}",
+        String::from_utf8_lossy(&settle.stderr)
+    );
+    fs::remove_dir_all(cache.path()).expect("cache directory should be removable");
+
+    let cold = run(&source_path);
+    assert!(
+        cold.status.success(),
+        "cold run failed, stderr was:\n{}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
+
+    let entries = |label: &str| {
+        let mut found = fs::read_dir(cache.path().join("programs"))
+            .unwrap_or_else(|error| panic!("{label}: cache directory should exist: {error}"))
+            .map(|entry| entry.expect("cache entry should be readable").file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        found.sort();
+        found
+    };
+
+    let after_cold = entries("cold");
+    assert_eq!(
+        after_cold.len(),
+        1,
+        "one cached binary, found {after_cold:?}"
+    );
+    // A published entry is never a staged temporary.
+    assert!(
+        !after_cold[0].starts_with('.'),
+        "cache published a staged name: {after_cold:?}"
+    );
+
+    let warm = run(&source_path);
+    assert!(warm.status.success());
+    assert_eq!(String::from_utf8_lossy(&warm.stdout), "cached\n");
+    assert_eq!(
+        entries("warm"),
+        after_cold,
+        "a warm run must reuse the cached binary rather than publish another"
+    );
+
+    // Changing the program changes the content key, so the cache gains a
+    // second entry rather than launching the stale binary.
+    let (_changed_temp, changed_path) = write_temp_source(
+        "aurora-native-cache-changed",
+        "def main() -> int32:\n    print(\"changed\")\n    return 0\n",
+    );
+    let changed = run(&changed_path);
+    assert!(changed.status.success());
+    assert_eq!(String::from_utf8_lossy(&changed.stdout), "changed\n");
+    let after_change = entries("changed");
+    assert_eq!(
+        after_change.len(),
+        2,
+        "a changed program should key to a new entry, found {after_change:?}"
+    );
+
+    // The runtime archive identity is memoized beside the programs, not among
+    // them, so its bookkeeping can never be mistaken for a content key.
+    assert!(
+        cache.path().join("runtime-identity").is_file(),
+        "the runtime identity memo should be recorded at the cache root"
+    );
+}
+
+#[test]
 fn run_backend_selector_matches_across_mir_direct_and_auto() {
     let source = "import sys\n\ndef main() -> int32:\n    print(\"selector\")\n    for arg in sys.args():\n        print(arg)\n    return 3\n";
     let (_temp, source_path) = write_temp_source("aurora-run-backend-selector", source);

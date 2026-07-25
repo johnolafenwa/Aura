@@ -37,6 +37,16 @@ pub use native_codegen::{
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
 };
 pub use runtime_value::{RunOutput, Value};
+
+/// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = bytes_codec::sha256_bytes(bytes).expect("SHA-256 output always fits its buffer");
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
+}
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};

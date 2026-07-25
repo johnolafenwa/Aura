@@ -734,12 +734,13 @@ enum NativeRunOutcome {
 
 /// `aura run`'s default backend.
 ///
-/// This stays on the MIR runtime rather than `auto` because `auto` currently
-/// pays a full direct compile and link on every run: about 1.4s against 0.012s
-/// for a hello-world program on this workstation. Making `auto` the default
-/// before warm launches are cheap would regress every `aura run` by two orders
-/// of magnitude. The content-addressed artifact cache is the precondition for
-/// revisiting it.
+/// This stays on the MIR runtime rather than `auto`. With the content-addressed
+/// cache in place a warm launch of a resident binary matches the MIR runtime at
+/// 0.01s, but a cold miss still costs about 1.3s, and CI and the test suites are
+/// dominated by programs each seen once. A first touch of a fresh binary also
+/// costs about 0.8s, because a direct hello-world executable is roughly 57 MB of
+/// statically linked runtime. The remaining blocker for a native default is
+/// therefore binary size rather than compile time.
 const DEFAULT_RUN_BACKEND: RunBackend = RunBackend::Mir;
 
 fn parse_run_backend(args: Vec<String>) -> (RunBackend, Vec<String>) {
@@ -788,26 +789,53 @@ fn run_through_native_backend(
         Err(error) => return NativeRunOutcome::Failed(error.message),
     };
 
+    let cache_key = native_cache_key(&mir);
+    if let Some(cached) = cache_key.as_deref().and_then(cached_native_binary) {
+        // A warm launch skips compiling and linking entirely. The key covers
+        // every input that can change the binary, so a hit is the binary this
+        // run would have produced.
+        return match launch_native_binary(&cached, program_args) {
+            Ok(code) => NativeRunOutcome::Ran(code),
+            Err(reason) => match backend {
+                RunBackend::Auto => NativeRunOutcome::FellBack(reason),
+                _ => NativeRunOutcome::Failed(reason),
+            },
+        };
+    }
+
     let output_path = temporary_run_binary_path(&input.path);
     let outcome = select_run_outcome(
         backend,
-        || build_direct_native_binary(&input.path, &input.source, &mir, &output_path),
         || {
-            process::Command::new(&output_path)
-                .args(program_args)
-                .status()
-                .map(|status| status.code().unwrap_or(1))
-                .map_err(|error| {
-                    format!(
-                        "failed to execute the direct binary `{}`: {}",
-                        output_path.display(),
-                        error
-                    )
-                })
+            build_direct_native_binary(&input.path, &input.source, &mir, &output_path).inspect(
+                |()| {
+                    if let Some(key) = cache_key.as_deref() {
+                        store_native_binary(key, &output_path);
+                    }
+                },
+            )
         },
+        || launch_native_binary(&output_path, program_args),
     );
     let _ = fs::remove_file(&output_path);
     outcome
+}
+
+fn launch_native_binary(
+    binary: &Path,
+    program_args: &[String],
+) -> std::result::Result<i32, String> {
+    process::Command::new(binary)
+        .args(program_args)
+        .status()
+        .map(|status| status.code().unwrap_or(1))
+        .map_err(|error| {
+            format!(
+                "failed to execute the direct binary `{}`: {}",
+                binary.display(),
+                error
+            )
+        })
 }
 
 /// Decides what a native run does when the build or the launch fails. Only
@@ -829,6 +857,158 @@ fn select_run_outcome(
     match execute() {
         Ok(code) => NativeRunOutcome::Ran(code),
         Err(reason) => degrade(reason),
+    }
+}
+
+/// The directory holding cached native binaries. `AURORA_CACHE_DIR` overrides
+/// the default so a sandbox or a test can keep its own cache.
+fn native_cache_root() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("AURORA_CACHE_DIR") {
+        let explicit = PathBuf::from(explicit);
+        return (!explicit.as_os_str().is_empty()).then_some(explicit);
+    }
+    let home = std::env::var_os("HOME")?;
+    let home = PathBuf::from(home);
+    if home.as_os_str().is_empty() {
+        return None;
+    }
+    Some(home.join(".cache").join("aurora").join("native"))
+}
+
+/// Content-addressed identity of a native build.
+///
+/// Every input that can change the emitted binary contributes: the cache
+/// format, this compiler's version, the host target, the backend, the runtime
+/// archive's identity, and the complete lowered program. Lowering already
+/// incorporates the entry source and every resolved dependency source, so
+/// hashing the module covers the whole dependency set without walking it
+/// again. Returning `None` disables caching rather than risking a key that
+/// omits an input.
+fn native_cache_key(mir: &MirModule) -> Option<String> {
+    let lowered = serde_json::to_vec(mir).ok()?;
+    let runtime = runtime_archive_identity();
+    let mut material = Vec::with_capacity(lowered.len() + 256);
+    for part in [
+        NATIVE_CACHE_FORMAT.as_bytes(),
+        env!("CARGO_PKG_VERSION").as_bytes(),
+        std::env::consts::ARCH.as_bytes(),
+        std::env::consts::OS.as_bytes(),
+        b"direct",
+        runtime.as_bytes(),
+    ] {
+        material.extend_from_slice(part);
+        material.push(0);
+    }
+    material.extend_from_slice(&lowered);
+    Some(aurora_compiler::sha256_hex(&material))
+}
+
+const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v1";
+
+/// The linked runtime archive's identity, by content.
+///
+/// Modification time alone is not usable here: a direct build re-runs the
+/// runtime's `cargo` invocation, which can restamp an archive whose bytes did
+/// not change, and that would invalidate every cached program on the next run.
+/// The content hash is memoized against the cheap `(length, mtime)` stamp, so
+/// the expensive read happens only when the archive actually changes on disk.
+fn runtime_archive_identity() -> String {
+    let Ok(path) = resolve_static_library_path(repo_root(), current_profile()) else {
+        return "unresolved".to_string();
+    };
+    let Ok(metadata) = fs::metadata(&path) else {
+        return format!("{}:missing", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let stamp = format!("{}:{}:{}", path.display(), metadata.len(), modified);
+
+    let memo = native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO));
+    if let Some(memo) = memo.as_ref() {
+        if let Some(hash) = read_runtime_identity_memo(memo, &stamp) {
+            return hash;
+        }
+    }
+
+    let Ok(contents) = fs::read(&path) else {
+        return stamp;
+    };
+    let hash = aurora_compiler::sha256_hex(&contents);
+    if let Some(memo) = memo.as_ref() {
+        write_runtime_identity_memo(memo, &stamp, &hash);
+    }
+    hash
+}
+
+const RUNTIME_IDENTITY_MEMO: &str = "runtime-identity";
+
+fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<String> {
+    let recorded = fs::read_to_string(memo).ok()?;
+    let (recorded_stamp, hash) = recorded.split_once('\n')?;
+    (recorded_stamp == stamp).then(|| hash.trim().to_string())
+}
+
+fn write_runtime_identity_memo(memo: &Path, stamp: &str, hash: &str) {
+    let Some(parent) = memo.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let staged = parent.join(format!(
+        ".{}-{}-{}",
+        RUNTIME_IDENTITY_MEMO,
+        std::process::id(),
+        system_time_nanos()
+    ));
+    if fs::write(&staged, format!("{stamp}\n{hash}\n")).is_err() {
+        let _ = fs::remove_file(&staged);
+        return;
+    }
+    if fs::rename(&staged, memo).is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+}
+
+/// Cached program binaries live under their own directory so the cache can
+/// hold its own bookkeeping without either colliding with a content key.
+const NATIVE_CACHE_PROGRAMS: &str = "programs";
+
+/// Returns the cached binary for `key` when one is present.
+fn cached_native_binary(key: &str) -> Option<PathBuf> {
+    let candidate = native_cache_root()?.join(NATIVE_CACHE_PROGRAMS).join(key);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Publishes `built` into the cache under `key`.
+///
+/// The binary is linked into place through a unique temporary name and then
+/// renamed, so a concurrent run either sees no entry or a complete one, and
+/// never launches a half-written executable. A failure to publish is not a
+/// build failure: the run continues with the binary it already has.
+fn store_native_binary(key: &str, built: &Path) {
+    let Some(root) = native_cache_root().map(|root| root.join(NATIVE_CACHE_PROGRAMS)) else {
+        return;
+    };
+    if fs::create_dir_all(&root).is_err() {
+        return;
+    }
+    let staged = root.join(format!(
+        ".{}-{}-{}",
+        key,
+        std::process::id(),
+        system_time_nanos()
+    ));
+    if fs::copy(built, &staged).is_err() {
+        let _ = fs::remove_file(&staged);
+        return;
+    }
+    if fs::rename(&staged, root.join(key)).is_err() {
+        let _ = fs::remove_file(&staged);
     }
 }
 
