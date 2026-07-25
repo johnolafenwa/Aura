@@ -1,6 +1,6 @@
 use super::{
-    BinaryOp, BindingTarget, ClassDecl, EnumDecl, Expr, ExprKind, FieldDecl, ForStmt, FunctionDecl,
-    ImplDecl, Item, ReceiverKind, TraitDecl, TypeRef,
+    BinaryOp, BindingTarget, ClassDecl, CompareLink, CompareOp, EnumDecl, Expr, ExprKind,
+    FieldDecl, ForStmt, FunctionDecl, ImplDecl, Item, ReceiverKind, TraitDecl, TypeRef,
 };
 use crate::diag::Span;
 use serde_json::json;
@@ -229,6 +229,124 @@ fn adding_conditional_expressions_preserves_existing_expression_json_shapes() {
             "span": {"line": 3, "column": 5}
         })
     );
+}
+
+#[test]
+fn membership_and_comparison_chain_json_shapes_are_stable() {
+    let span = Span::new(2, 11);
+    let operator_span = Span::new(2, 13);
+    let membership = Expr {
+        kind: ExprKind::Membership {
+            value: Box::new(Expr {
+                kind: ExprKind::Int(1),
+                span,
+            }),
+            container: Box::new(Expr {
+                kind: ExprKind::Name("ports".to_string()),
+                span: Span::new(2, 16),
+            }),
+            negated: true,
+            operator_span,
+        },
+        span,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&membership).expect("membership should serialize"),
+        json!({
+            "kind": {
+                "Membership": {
+                    "value": {
+                        "kind": {"Int": 1},
+                        "span": {"line": 2, "column": 11}
+                    },
+                    "container": {
+                        "kind": {"Name": "ports"},
+                        "span": {"line": 2, "column": 16}
+                    },
+                    "negated": true,
+                    "operator_span": {"line": 2, "column": 13}
+                }
+            },
+            "span": {"line": 2, "column": 11}
+        })
+    );
+
+    let chain = Expr {
+        kind: ExprKind::CompareChain {
+            first: Box::new(Expr {
+                kind: ExprKind::Int(1),
+                span,
+            }),
+            links: vec![
+                CompareLink {
+                    op: CompareOp::Less,
+                    op_span: Span::new(2, 13),
+                    operand: Expr {
+                        kind: ExprKind::Int(2),
+                        span: Span::new(2, 15),
+                    },
+                },
+                CompareLink {
+                    op: CompareOp::LessEq,
+                    op_span: Span::new(2, 17),
+                    operand: Expr {
+                        kind: ExprKind::Int(3),
+                        span: Span::new(2, 20),
+                    },
+                },
+            ],
+        },
+        span,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&chain).expect("comparison chain should serialize"),
+        json!({
+            "kind": {
+                "CompareChain": {
+                    "first": {
+                        "kind": {"Int": 1},
+                        "span": {"line": 2, "column": 11}
+                    },
+                    "links": [
+                        {
+                            "op": "Less",
+                            "op_span": {"line": 2, "column": 13},
+                            "operand": {
+                                "kind": {"Int": 2},
+                                "span": {"line": 2, "column": 15}
+                            }
+                        },
+                        {
+                            "op": "LessEq",
+                            "op_span": {"line": 2, "column": 17},
+                            "operand": {
+                                "kind": {"Int": 3},
+                                "span": {"line": 2, "column": 20}
+                            }
+                        }
+                    ]
+                }
+            },
+            "span": {"line": 2, "column": 11}
+        })
+    );
+
+    // Every comparison operator maps to its binary counterpart except the two
+    // membership operators, which have no binary form.
+    for (op, expected) in [
+        (CompareOp::Eq, Some(BinaryOp::Eq)),
+        (CompareOp::NotEq, Some(BinaryOp::NotEq)),
+        (CompareOp::Less, Some(BinaryOp::Less)),
+        (CompareOp::LessEq, Some(BinaryOp::LessEq)),
+        (CompareOp::Greater, Some(BinaryOp::Greater)),
+        (CompareOp::GreaterEq, Some(BinaryOp::GreaterEq)),
+        (CompareOp::In, None),
+        (CompareOp::NotIn, None),
+    ] {
+        assert_eq!(op.as_binary_op(), expected, "{op:?}");
+    }
 }
 
 #[test]

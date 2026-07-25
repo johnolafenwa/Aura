@@ -1,0 +1,4 @@
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    print("x" in values)

@@ -55,6 +55,50 @@ conditional, because either runtime path may be selected.
 
 See [examples/control_flow/conditional_expressions.au](../examples/control_flow/conditional_expressions.au).
 
+## Membership Tests
+
+`in` and `not in` ask whether a container holds a value:
+
+```python
+ports = [80, 443]
+print(443 in ports)
+print(8080 not in ports)
+```
+
+The container decides what the test means and what the value must be:
+
+| Container | Tests | Value must be |
+| --- | --- | --- |
+| `Vec[T]` | element membership | `T` |
+| `Set[T]` | element membership | `T` |
+| `Map[K, V]` | key membership | `K` |
+| `String` | substring containment | `String` |
+
+Membership reads both operands and moves neither, so a non-copy container and
+a non-copy value are both still usable afterwards. A container Aurora cannot
+test reports `AU2003`, and a value of the wrong type reports `AU2002`.
+
+## Chained Comparisons
+
+Comparisons chain the way they do in Python, so a range check reads as one
+expression:
+
+```python
+def in_range(value: int32, low: int32, high: int32) -> bool:
+    return low <= value < high
+```
+
+`low <= value < high` means `low <= value and value < high`, except that
+`value` is evaluated only once. The chain stops at its first false link, so the
+operands after it are never evaluated. Equality, ordering, and membership all
+chain at the same level, so `a == b < c` is also one chain.
+
+The checker still checks every operand as if it were evaluated. A chain that
+would move a value only on a path short-circuiting skips is rejected, which is
+the same conservative rule the other branching forms use.
+
+See [examples/control_flow/membership_and_chains.au](../examples/control_flow/membership_and_chains.au).
+
 ## `while`
 
 ```python

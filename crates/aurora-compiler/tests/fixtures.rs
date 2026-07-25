@@ -91,6 +91,18 @@ fn check_path_fail_fixtures_match_expected_diagnostics() {
 fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
     for fixture in fixture_files("python-hints") {
         let source = read(&fixture);
+        // A retired hint keeps its fixture and asserts that the Python form is
+        // now accepted, so the family still pins every migrated shape.
+        if fixture.with_extension("accept").exists() {
+            check_source(&source).unwrap_or_else(|error| {
+                panic!(
+                    "{} retired its migration hint and should type-check: {}",
+                    fixture.display(),
+                    error
+                )
+            });
+            continue;
+        }
         let error = match check_source(&source) {
             Ok(_) => panic!("{} should produce a migration hint", fixture.display()),
             Err(error) => error,

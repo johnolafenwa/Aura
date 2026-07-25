@@ -522,10 +522,10 @@ not-expression
 
 comparison-expression
     = additive-expression,
-      [ comparison-operator, additive-expression ] ;
+      { comparison-operator, additive-expression } ;
 
 comparison-operator
-    = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+    = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
 
 additive-expression
     = multiplicative-expression,
@@ -565,12 +565,13 @@ numeric-type
 Conditional expressions associate to the right, their condition is an
 `or-expression`, and their two value arms may contain nested conditional
 expressions through grouping or the recursive alternative arm. Arithmetic and
-Boolean chains are left-folded. The optional comparison suffix
-permits exactly one unparenthesized equality or ordering operator. Ordering,
-equality, and mixed chains are rejected rather than left-folded or given
-Python-style chained-comparison semantics; write the repeated operations with
-`and`. `not a == b` means `not (a == b)`. Casts bind more tightly than
-arithmetic.
+Boolean chains are left-folded. Equality, ordering, and membership share the
+one comparison level and chain the Python way rather than left-folding, so
+`a < b <= c` is one chain of two links over three operands. A chain of `n`
+operators means the conjunction of its `n` adjacent comparisons, with each
+operand evaluated at most once. `not a == b` means `not (a == b)`, because
+prefix `not` binds looser than the comparison level, while `a not in b` is one
+comparison operator. Casts bind more tightly than arithmetic.
 
 ## Primary Expressions And Literals
 

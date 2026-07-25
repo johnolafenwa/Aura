@@ -448,6 +448,55 @@ pub enum ExprKind {
         borrow_mode: Option<ReceiverKind>,
         arms: Vec<MatchExprArm>,
     },
+    /// `value in container` or `value not in container`.
+    Membership {
+        value: Box<Expr>,
+        container: Box<Expr>,
+        negated: bool,
+        operator_span: Span,
+    },
+    /// Two or more comparison operators applied in one chain, as in
+    /// `a < b <= c`. A single comparison keeps its `Binary` or `Membership`
+    /// form.
+    CompareChain {
+        first: Box<Expr>,
+        links: Vec<CompareLink>,
+    },
+}
+
+/// One `operator operand` step of a comparison chain.
+#[derive(Clone, Debug, Serialize)]
+pub struct CompareLink {
+    pub op: CompareOp,
+    pub op_span: Span,
+    pub operand: Expr,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum CompareOp {
+    Eq,
+    NotEq,
+    Less,
+    LessEq,
+    Greater,
+    GreaterEq,
+    In,
+    NotIn,
+}
+
+impl CompareOp {
+    /// The equivalent binary operator, for every comparison except membership.
+    pub fn as_binary_op(self) -> Option<BinaryOp> {
+        match self {
+            Self::Eq => Some(BinaryOp::Eq),
+            Self::NotEq => Some(BinaryOp::NotEq),
+            Self::Less => Some(BinaryOp::Less),
+            Self::LessEq => Some(BinaryOp::LessEq),
+            Self::Greater => Some(BinaryOp::Greater),
+            Self::GreaterEq => Some(BinaryOp::GreaterEq),
+            Self::In | Self::NotIn => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

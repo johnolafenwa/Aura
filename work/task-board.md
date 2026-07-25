@@ -66,9 +66,23 @@ Last updated: 2026-07-24
   exact coverage gate passes at 63,750/66,358 lines (96.06980318876398%),
   4,137/4,268 functions (96.9306466729147%), and 93,474/99,154 regions
   (94.27153720475219%); no synthetic coverage test or exclusion was added.
+- Active membership/comparison-chain ticket: `in`, `not in`, and Python-style
+  chained comparisons are integrated with Provisional ADR-0028. Equality,
+  ordering, and membership now share one precedence level and chain rather than
+  left-folding; membership delegates to `contains` or `contains_key` over
+  `Vec`, `Set`, `Map` keys, and `String`; chains evaluate every operand at most
+  once and short-circuit at the first false link. Five `AU2005` hints are
+  retired to pass-through acceptance through a new `.accept` fixture marker.
+  Fixtures, the maintained example and tutorial, the normative Manual and
+  Grammar, the conformance map, verified reference blocks, and the
+  language-server bridge ride the same commit. Its exact coverage gate passes at
+  64,028/66,649 lines (96.06745787633723%), 4,145/4,281 functions
+  (96.82317215603831%), and 93,930/99,630 regions (94.27883167720566%); the
+  closure is observable behavior only, and two branches the replay walk could
+  never take were removed with their invariants stated in the source.
 - Decision condition: the complete `npm run ci` gate is the final pre-commit
-  proof for each ticket. Membership/comparison chains are the next ordered
-  ticket, followed by the remaining Phase 3.5/Phase 4/V6 work.
+  proof for each ticket. `enumerate`/`zip` is the next ordered ticket, followed
+  by `len`/`str` and the remaining Phase 4/V6 work.
 - Dependency hygiene: GHSA-mh99-v99m-4gvg was published against every
   `brace-expansion` release through `5.0.7`, closing the fail-closed audit gate.
   It has no lockfile-only fix, so `c8` moved to `^12.0.0` and

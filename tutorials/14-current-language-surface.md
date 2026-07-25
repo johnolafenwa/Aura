@@ -231,6 +231,12 @@ The current compiler supports these expression forms:
   condition must be exactly `bool`, is evaluated once, and selects exactly one
   lazily evaluated arm. Both arms must have one static result type. This form
   has the lowest expression precedence and associates to the right.
+- `value in container` and `value not in container` over `Vec[T]` and `Set[T]`
+  elements, `Map[K, V]` keys, and `String` substrings; both operands are read
+  and neither is moved
+- comparison chains such as `low <= value < high`, where equality, ordering,
+  and membership share one precedence level, every operand is evaluated at most
+  once, and a false link short-circuits the rest
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block

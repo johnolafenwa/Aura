@@ -15,9 +15,10 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
 design history. Features mentioned only there—including `Channel`, `select`,
 detached spawn, attributes, and registry publishing—are not part of Aurora
-0.1. Tuples and conditional expressions are part of the maintained language
-only to the exact provisional extents recorded by ADR-0026, ADR-0027,
-[Tuples](/manual/tuples), and [Expressions](/manual/expressions#conditional-expressions).
+0.1. Tuples, conditional expressions, and membership and comparison chains are
+part of the maintained language only to the exact provisional extents recorded
+by ADR-0026, ADR-0027, ADR-0028, [Tuples](/manual/tuples), and
+[Expressions](/manual/expressions#conditional-expressions).
 
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 

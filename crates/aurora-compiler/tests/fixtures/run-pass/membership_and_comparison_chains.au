@@ -1,0 +1,30 @@
+def trace(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    print(1 in values)
+    print(3 in values)
+    print(3 not in values)
+
+    mut names = Set[String]()
+    names.insert("aurora")
+    print("aurora" in names)
+    print("other" not in names)
+
+    mut ages = Map[String, int32]()
+    ages.set("ada", 36)
+    print("ada" in ages)
+    print("bob" in ages)
+
+    text = "hello world"
+    print("world" in text)
+    print("zzz" not in text)
+
+    print(trace("a", 1) < trace("b", 2) <= trace("c", 3))
+    print(trace("a", 5) < trace("b", 2) <= trace("c", 3))
+    print(1 == 1 == 1)
+    print(3 > 2 >= 2)

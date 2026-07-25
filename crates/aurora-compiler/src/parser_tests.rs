@@ -574,25 +574,59 @@ fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() 
 }
 
 #[test]
-fn chained_comparison_diagnostics_point_at_the_second_operator() {
-    for (source, expected_column) in [
-        ("1 < 2 < 3", 7),
-        ("1 == 1 == 1", 8),
-        ("1 < 2 == 2", 7),
-        ("1 == 1 < 2", 8),
+fn comparison_chains_keep_every_operator_at_one_precedence_level() {
+    for (source, expected_ops, expected_columns) in [
+        (
+            "1 < 2 < 3",
+            vec![CompareOp::Less, CompareOp::Less],
+            vec![3, 7],
+        ),
+        (
+            "1 == 1 == 1",
+            vec![CompareOp::Eq, CompareOp::Eq],
+            vec![3, 8],
+        ),
+        (
+            "1 < 2 == 2",
+            vec![CompareOp::Less, CompareOp::Eq],
+            vec![3, 7],
+        ),
+        (
+            "1 == 1 < 2",
+            vec![CompareOp::Eq, CompareOp::Less],
+            vec![3, 8],
+        ),
+        (
+            "1 in xs not in ys",
+            vec![CompareOp::In, CompareOp::NotIn],
+            vec![3, 9],
+        ),
     ] {
-        let diagnostic = parse_expression(source).expect_err("comparison chain should be rejected");
-        assert_eq!(diagnostic.code, "AU2005", "{source}");
+        let expr = parse_expression(source).expect("a comparison chain should parse");
+        let ExprKind::CompareChain { links, .. } = &expr.kind else {
+            panic!("{source} should parse as one comparison chain, found {expr:?}");
+        };
         assert_eq!(
-            diagnostic.span,
-            Some(Span::new(1, expected_column)),
+            links.iter().map(|link| link.op).collect::<Vec<_>>(),
+            expected_ops,
             "{source}"
         );
         assert_eq!(
-            diagnostic.message,
-            "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release",
+            links
+                .iter()
+                .map(|link| link.op_span.column)
+                .collect::<Vec<_>>(),
+            expected_columns,
             "{source}"
         );
+    }
+
+    for (source, expected_negated) in [("1 in xs", false), ("1 not in xs", true)] {
+        let expr = parse_expression(source).expect("a membership test should parse");
+        let ExprKind::Membership { negated, .. } = &expr.kind else {
+            panic!("{source} should parse as a membership test, found {expr:?}");
+        };
+        assert_eq!(*negated, expected_negated, "{source}");
     }
 }
 

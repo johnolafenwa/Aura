@@ -1,11 +1,11 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
-    BreakStmt, ClassDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl,
-    EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FormatPart, FunctionDecl,
-    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LiteralPattern, LiteralPatternKind,
-    MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp,
-    VariantPattern, WhileStmt, WithStmt,
+    BreakStmt, ClassDecl, CompareLink, CompareOp, ContinueStmt, DestructureStmt, EnumDecl,
+    EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt,
+    FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item,
+    LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module,
+    Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef,
+    TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -17,24 +17,6 @@ type ParsedTypeParams = (Vec<String>, TypeParamBounds);
 
 fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU1101", span, message)
-}
-
-fn chained_comparison_diagnostic(span: Span) -> Diagnostic {
-    Diagnostic::coded_at(
-        "AU2005",
-        span,
-        "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release",
-    )
-}
-
-fn is_unparenthesized_ordering_comparison(expr: &Expr) -> bool {
-    matches!(
-        &expr.kind,
-        ExprKind::Binary {
-            op: BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq,
-            ..
-        }
-    )
 }
 
 pub fn parse(source: &str) -> Result<Module> {
@@ -1396,7 +1378,7 @@ impl Parser {
             self.check_expression_chain_limit(operator_spans.len())?;
         }
 
-        let mut value = self.parse_equality()?;
+        let mut value = self.parse_comparison_chain()?;
         while let Some(span) = operator_spans.pop() {
             value = Expr {
                 kind: ExprKind::Unary {
@@ -1410,9 +1392,12 @@ impl Parser {
         Ok(value)
     }
 
-    fn parse_equality(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_comparison()?;
-        let mut chain_len = 0usize;
+    /// Parses the Python-shaped comparison level. Equality, ordering, and
+    /// membership share one precedence and chain left to right, so
+    /// `a < b <= c` is one chain rather than a comparison of a comparison.
+    fn parse_comparison_chain(&mut self) -> Result<Expr> {
+        let first = self.parse_additive()?;
+        let mut links: Vec<CompareLink> = Vec::new();
 
         loop {
             if let Some(token) = self.eat_simple(&TokenKind::KwIs) {
@@ -1422,102 +1407,75 @@ impl Parser {
                     "`is` is not supported; use `== None` or `match` for optional values",
                 ));
             }
-            let op = if let Some(token) = self.eat_simple(&TokenKind::EqEq) {
-                Some((BinaryOp::Eq, token.span))
-            } else if let Some(token) = self.eat_simple(&TokenKind::NotEq) {
-                Some((BinaryOp::NotEq, token.span))
-            } else {
-                None
-            };
-
-            let Some((op, operator_span)) = op else {
+            let Some((op, op_span)) = self.eat_comparison_operator() else {
                 break;
             };
-            if chain_len > 0 || is_unparenthesized_ordering_comparison(&expr) {
-                return Err(chained_comparison_diagnostic(operator_span));
-            }
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right_start = self.index;
-            let right = self.parse_comparison()?;
-            if is_unparenthesized_ordering_comparison(&right) {
-                let second_operator_span = self.tokens[right_start..self.index]
-                    .iter()
-                    .find(|token| {
-                        matches!(
-                            token.kind,
-                            TokenKind::Less
-                                | TokenKind::LessEq
-                                | TokenKind::Greater
-                                | TokenKind::GreaterEq
-                        )
-                    })
-                    .map(|token| token.span)
-                    .unwrap_or(operator_span);
-                return Err(chained_comparison_diagnostic(second_operator_span));
-            }
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
+            self.check_expression_chain_limit(links.len().saturating_add(1))?;
+            let operand = self.parse_additive()?;
+            links.push(CompareLink {
+                op,
+                op_span,
+                operand,
+            });
         }
 
-        Ok(expr)
+        if links.is_empty() {
+            return Ok(first);
+        }
+        let span = first.span;
+        if links.len() == 1 {
+            let CompareLink {
+                op,
+                op_span,
+                operand,
+            } = links.remove(0);
+            let kind = match op.as_binary_op() {
+                Some(op) => ExprKind::Binary {
+                    op,
+                    left: Box::new(first),
+                    right: Box::new(operand),
+                },
+                None => ExprKind::Membership {
+                    value: Box::new(first),
+                    container: Box::new(operand),
+                    negated: op == CompareOp::NotIn,
+                    operator_span: op_span,
+                },
+            };
+            return Ok(Expr { kind, span });
+        }
+
+        Ok(Expr {
+            kind: ExprKind::CompareChain {
+                first: Box::new(first),
+                links,
+            },
+            span,
+        })
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_additive()?;
-        let mut chain_len = 0usize;
-
-        loop {
-            if self.at_simple(&TokenKind::KwIn)
-                || (self.at_simple(&TokenKind::KwNot)
-                    && matches!(self.peek_kind(1), Some(TokenKind::KwIn)))
-            {
-                return Err(Diagnostic::coded_at(
-                    "AU2005",
-                    self.current_span(),
-                    "`in` is not available yet; use `.contains(...)` today; native `in` arrives in a later Aurora release",
-                ));
-            }
-            let op = if let Some(token) = self.eat_simple(&TokenKind::Less) {
-                Some((BinaryOp::Less, token.span))
-            } else if let Some(token) = self.eat_simple(&TokenKind::LessEq) {
-                Some((BinaryOp::LessEq, token.span))
-            } else if let Some(token) = self.eat_simple(&TokenKind::Greater) {
-                Some((BinaryOp::Greater, token.span))
-            } else if let Some(token) = self.eat_simple(&TokenKind::GreaterEq) {
-                Some((BinaryOp::GreaterEq, token.span))
-            } else {
-                None
-            };
-
-            let Some((op, operator_span)) = op else {
-                break;
-            };
-            if chain_len > 0 {
-                return Err(chained_comparison_diagnostic(operator_span));
-            }
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right = self.parse_additive()?;
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
+    /// Consumes one comparison operator, including the two-token `not in`.
+    fn eat_comparison_operator(&mut self) -> Option<(CompareOp, Span)> {
+        if self.at_simple(&TokenKind::KwNot) && matches!(self.peek_kind(1), Some(TokenKind::KwIn)) {
+            let span = self.current_span();
+            self.bump();
+            self.bump();
+            return Some((CompareOp::NotIn, span));
         }
-
-        Ok(expr)
+        for (kind, op) in [
+            (TokenKind::EqEq, CompareOp::Eq),
+            (TokenKind::NotEq, CompareOp::NotEq),
+            (TokenKind::LessEq, CompareOp::LessEq),
+            (TokenKind::GreaterEq, CompareOp::GreaterEq),
+            (TokenKind::Less, CompareOp::Less),
+            (TokenKind::Greater, CompareOp::Greater),
+            (TokenKind::KwIn, CompareOp::In),
+        ] {
+            if let Some(token) = self.eat_simple(&kind) {
+                return Some((op, token.span));
+            }
+        }
+        None
     }
 
     fn parse_additive(&mut self) -> Result<Expr> {
@@ -2725,6 +2683,25 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
             offset_expr_span(then_expr, line, column_offset);
             offset_expr_span(condition, line, column_offset);
             offset_expr_span(else_expr, line, column_offset);
+        }
+        ExprKind::Membership {
+            value,
+            container,
+            operator_span,
+            ..
+        } => {
+            operator_span.line = line;
+            operator_span.column += column_offset;
+            offset_expr_span(value, line, column_offset);
+            offset_expr_span(container, line, column_offset);
+        }
+        ExprKind::CompareChain { first, links } => {
+            offset_expr_span(first, line, column_offset);
+            for link in links {
+                link.op_span.line = line;
+                link.op_span.column += column_offset;
+                offset_expr_span(&mut link.operand, line, column_offset);
+            }
         }
         ExprKind::Tuple(elements) | ExprKind::List(elements) => {
             for element in elements {

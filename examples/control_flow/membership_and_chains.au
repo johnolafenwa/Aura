@@ -1,0 +1,23 @@
+def in_range(value: int32, low: int32, high: int32) -> bool:
+    return low <= value < high
+
+def main():
+    mut ports = Vec[int32]()
+    ports.push(80)
+    ports.push(443)
+
+    mut allowed = Set[String]()
+    allowed.insert("aurora.dev")
+
+    mut ages = Map[String, int32]()
+    ages.set("ada", 36)
+
+    request = "GET /health HTTP/1.1"
+
+    print(443 in ports)
+    print(8080 not in ports)
+    print("aurora.dev" in allowed)
+    print("ada" in ages)
+    print("/health" in request)
+    print(in_range(80, 1, 1024))
+    print(in_range(2048, 1, 1024))

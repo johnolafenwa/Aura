@@ -1166,30 +1166,23 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
 }
 
 #[test]
-fn compile_commands_preserve_the_chained_comparison_migration_diagnostic() {
+fn compile_commands_accept_membership_and_comparison_chains() {
     let (temp, source_path) = write_temp_source(
-        "aurora-chained-comparison-diagnostic",
-        "def main():\n    if 1 < 2 < 3:\n        pass\n",
+        "aurora-membership-and-chains",
+        "def main():\n    ports = [80, 443]\n    if 443 in ports and 1 <= 80 < 1024:\n        print(\"ok\")\n",
     );
     let output_path = temp.path().join("out");
-    let message = "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release";
     let commands = [
         vec![
             "check".to_string(),
             "--format".to_string(),
             "json".to_string(),
         ],
-        vec![
-            "run".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-        ],
+        vec!["run".to_string()],
         vec![
             "build".to_string(),
             "--backend".to_string(),
             "direct".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
             "-o".to_string(),
             output_path.display().to_string(),
         ],
@@ -1203,23 +1196,35 @@ fn compile_commands_preserve_the_chained_comparison_migration_diagnostic() {
             .output()
             .unwrap_or_else(|error| panic!("failed to run aura {command_name}: {error}"));
         assert!(
-            !output.status.success(),
-            "{command_name} should reject the chain"
-        );
-        let report: serde_json::Value = serde_json::from_slice(&output.stderr)
-            .unwrap_or_else(|error| panic!("{command_name} should emit JSON: {error}"));
-        let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "AU2005", "{command_name}");
-        assert_eq!(diagnostic["message"], message, "{command_name}");
-        assert_eq!(
-            diagnostic["primary_span"]["start"]["line"], 2,
-            "{command_name}"
-        );
-        assert_eq!(
-            diagnostic["primary_span"]["start"]["column"], 14,
-            "{command_name}"
+            output.status.success(),
+            "{command_name} should accept membership and comparison chains, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("the direct binary should run");
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "ok\n");
+
+    let (_reject_temp, reject_path) = write_temp_source(
+        "aurora-membership-rejection",
+        "def main():\n    print(1 in 5)\n",
+    );
+    let rejected = Command::new(aura_bin())
+        .args(["check", "--format", "json"])
+        .arg(reject_path.display().to_string())
+        .output()
+        .expect("failed to run aura check");
+    assert!(!rejected.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&rejected.stderr).expect("check should emit JSON");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "AU2003");
+    assert_eq!(
+        diagnostic["message"],
+        "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`"
+    );
 }
 
 #[test]

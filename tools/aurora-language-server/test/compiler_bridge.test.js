@@ -912,6 +912,55 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
   }
 });
 
+test("compiler bridge preserves membership and comparison chain operands", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-membership-"));
+  const source = [
+    "def probe(ports: Vec[int32], port: int32, low: int32, high: int32) -> bool:",
+    "    return port in ports and low <= port < high",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [start, end, hover] of [
+      [11, 15, "param port: int32"],
+      [19, 24, "param ports: Vec[int32]"],
+      [29, 32, "param low: int32"],
+      [36, 40, "param port: int32"],
+      [43, 47, "param high: int32"]
+    ]) {
+      const occurrence = analysis.occurrences.find(
+        (candidate) =>
+          candidate.line === 1 &&
+          candidate.start_character === start &&
+          candidate.end_character === end
+      );
+      assert.ok(occurrence, `missing membership occurrence at ${start}-${end}`);
+      assert.ok(occurrence.hover.includes(hover));
+    }
+
+    const invalid = await analyzeWithCompiler(
+      mainUri,
+      ["def main():", "    print(1 in 5)", ""].join("\n")
+    );
+    assert.ok(invalid);
+    assert.equal(invalid.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(invalid, mainUri);
+    assert.equal(diagnostic.code, "AU2003");
+    assert.equal(
+      diagnostic.message,
+      "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves conditional operands and bool diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-conditional-"));
   const source = [
@@ -1072,7 +1121,7 @@ test("compiler bridge preserves the integer true-division teaching diagnostic", 
   }
 });
 
-test("compiler bridge preserves the chained-comparison code, guidance, and operator span", async () => {
+test("compiler bridge accepts the retired chained-comparison spelling", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-chained-comparison-"));
   const source = [
     "def main():",
@@ -1080,8 +1129,6 @@ test("compiler bridge preserves the chained-comparison code, guidance, and opera
     "        pass",
     ""
   ].join("\n");
-  const message =
-    "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release";
 
   try {
     setWorkspaceRoots([repoRoot, tempRoot]);
@@ -1089,16 +1136,19 @@ test("compiler bridge preserves the chained-comparison code, guidance, and opera
     const analysis = await analyzeWithCompiler(`file://${mainPath}`, source);
 
     assert.ok(analysis);
-    assert.equal(analysis.diagnostics.length, 1);
-    assert.equal(analysis.diagnostics[0].code, "AU2005");
-    assert.equal(analysis.diagnostics[0].message, message);
-    const diagnostic = compilerDiagnosticsToLsp(analysis)[0];
-    assert.equal(diagnostic.code, "AU2005");
-    assert.equal(diagnostic.message, message);
-    assert.deepEqual(diagnostic.range, {
-      start: { line: 1, character: 13 },
-      end: { line: 1, character: 14 }
-    });
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const mismatched = await analyzeWithCompiler(
+      `file://${mainPath}`,
+      ["def main():", "    if 1 < 2 < true:", "        pass", ""].join("\n")
+    );
+    assert.ok(mismatched);
+    assert.equal(mismatched.diagnostics.length, 1);
+    const diagnostic = compilerDiagnosticsToLsp(mismatched)[0];
+    assert.ok(
+      diagnostic.message.includes("binary operator operands must match"),
+      diagnostic.message
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

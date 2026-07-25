@@ -6,7 +6,7 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
+    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, EnumDecl, Expr, ExprKind,
     FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
     Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
     VariantPattern, WithStmt,
@@ -2985,6 +2985,17 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
             arms.iter()
                 .find_map(|arm| default_argument_references_param(&arm.value, param_names))
         }),
+        ExprKind::Membership {
+            value, container, ..
+        } => default_argument_references_param(value, param_names)
+            .or_else(|| default_argument_references_param(container, param_names)),
+        ExprKind::CompareChain { first, links } => {
+            default_argument_references_param(first, param_names).or_else(|| {
+                links
+                    .iter()
+                    .find_map(|link| default_argument_references_param(&link.operand, param_names))
+            })
+        }
         ExprKind::Binary { left, right, .. } => {
             default_argument_references_param(left, param_names)
                 .or_else(|| default_argument_references_param(right, param_names))
@@ -3458,6 +3469,32 @@ fn unify_type_pattern(
             }
             Ok(())
         }
+    }
+}
+
+/// The element, key, or substring type an `in` container compares against.
+pub(crate) fn membership_needle_type(container_ty: &Type) -> Option<Type> {
+    match container_ty {
+        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+            Some(args[0].clone())
+        }
+        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some(args[0].clone()),
+        Type::Named(name, args) if name == "String" && args.is_empty() => {
+            Some(Type::named("String"))
+        }
+        _ => None,
+    }
+}
+
+/// The builtin member that `in` delegates to for a supported container.
+pub(crate) fn membership_member_name(container_ty: &Type) -> Option<&'static str> {
+    match container_ty {
+        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some("contains_key"),
+        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+            Some("contains")
+        }
+        Type::Named(name, args) if name == "String" && args.is_empty() => Some("contains"),
+        _ => None,
     }
 }
 
@@ -7628,6 +7665,87 @@ impl<'a> FunctionChecker<'a> {
 
                 Ok(inner_args[0].clone())
             }
+            ExprKind::Membership {
+                value,
+                container,
+                negated: _,
+                operator_span,
+            } => {
+                // The container decides the element type the value must have,
+                // but the value is written and evaluated first, so the hint is
+                // taken from a speculative pass that leaves move state alone.
+                let needle_hint = self
+                    .type_of_expr_without_move_state(container, locals, None)
+                    .ok()
+                    .and_then(|ty| membership_needle_type(&ty));
+                let value_ty = self.type_of_expr_hint(value, locals, needle_hint.as_ref())?;
+                let container_ty = self.type_of_expr(container, locals)?;
+                self.check_membership_operands(
+                    &value_ty,
+                    &container_ty,
+                    value.span,
+                    *operator_span,
+                )?;
+                Ok(Type::named("bool"))
+            }
+            ExprKind::CompareChain { first, links } => {
+                // Each operand is typed once, in source order, and a numeric
+                // literal still adopts the type its neighbour establishes, the
+                // same way a single comparison does.
+                let first_hint = links
+                    .first()
+                    .and_then(|link| self.chain_operand_hint(link, locals));
+                let mut left_expr: &Expr = first;
+                let mut left_ty = self.type_of_expr_hint(first, locals, first_hint.as_ref())?;
+                for link in links {
+                    match link.op.as_binary_op() {
+                        Some(op) => {
+                            // The right operand is typed under the left
+                            // operand's type, so only the left operand can
+                            // still need to adopt its neighbour's. Every
+                            // comparison operator produces `bool`, builtin or
+                            // through an operator trait whose declaration
+                            // already fixes that return type, so the link needs
+                            // no further result check.
+                            let right_ty =
+                                self.type_of_expr_hint(&link.operand, locals, Some(&left_ty))?;
+                            if left_ty != right_ty && Self::is_numeric_literal_expr(left_expr) {
+                                left_ty =
+                                    self.type_of_expr_hint(left_expr, locals, Some(&right_ty))?;
+                            }
+                            self.type_of_binary(
+                                link.op_span,
+                                op,
+                                left_ty.clone(),
+                                right_ty.clone(),
+                            )?;
+                            left_ty = right_ty;
+                        }
+                        None => {
+                            let container_ty = self.type_of_expr(&link.operand, locals)?;
+                            if let Some(needle_ty) = membership_needle_type(&container_ty) {
+                                if left_ty != needle_ty && Self::is_numeric_literal_expr(left_expr)
+                                {
+                                    left_ty = self.type_of_expr_hint(
+                                        left_expr,
+                                        locals,
+                                        Some(&needle_ty),
+                                    )?;
+                                }
+                            }
+                            self.check_membership_operands(
+                                &left_ty,
+                                &container_ty,
+                                left_expr.span,
+                                link.op_span,
+                            )?;
+                            left_ty = container_ty;
+                        }
+                    }
+                    left_expr = &link.operand;
+                }
+                Ok(Type::named("bool"))
+            }
             ExprKind::Binary { op, left, right } => {
                 let locals_before = locals.clone();
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
@@ -8143,6 +8261,63 @@ impl<'a> FunctionChecker<'a> {
                 is_integer_type(left_ty) || is_float_type(left_ty)
             }
         }
+    }
+
+    fn is_numeric_literal_expr(expr: &Expr) -> bool {
+        Self::is_integer_literal_expr(expr) || matches!(expr.kind, ExprKind::Float(_))
+    }
+
+    /// The expected type a chain's left operand can adopt from its first link.
+    fn chain_operand_hint(
+        &self,
+        link: &CompareLink,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Type> {
+        let operand_ty = self
+            .type_of_expr_without_move_state(&link.operand, locals, None)
+            .ok()?;
+        match link.op.as_binary_op() {
+            Some(_) => None,
+            None => membership_needle_type(&operand_ty),
+        }
+    }
+
+    fn check_membership_operands(
+        &self,
+        value_ty: &Type,
+        container_ty: &Type,
+        value_span: crate::diag::Span,
+        operator_span: crate::diag::Span,
+    ) -> Result<()> {
+        let Some(needle_ty) = membership_needle_type(container_ty) else {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                operator_span,
+                format!(
+                    "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `{}`",
+                    container_ty
+                ),
+            )
+            .with_help(
+                "membership tests read `Vec` and `Set` elements, `Map` keys, and `String` substrings",
+            ));
+        };
+        if *value_ty != needle_ty {
+            let subject = match container_ty {
+                Type::Named(name, _) if name == "Map" => "key",
+                Type::Named(name, _) if name == "String" => "substring",
+                _ => "element",
+            };
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                value_span,
+                format!(
+                    "`in` expects a `{}` {}, found `{}`",
+                    needle_ty, subject, value_ty
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn type_of_binary(
@@ -14284,6 +14459,18 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Binary { left, right, .. } => {
                 self.collect_expr_place_reads(left, locals, label, places);
                 self.collect_expr_place_reads(right, locals, label, places);
+            }
+            ExprKind::Membership {
+                value, container, ..
+            } => {
+                self.collect_expr_place_reads(value, locals, label, places);
+                self.collect_expr_place_reads(container, locals, label, places);
+            }
+            ExprKind::CompareChain { first, links } => {
+                self.collect_expr_place_reads(first, locals, label, places);
+                for link in links {
+                    self.collect_expr_place_reads(&link.operand, locals, label, places);
+                }
             }
             ExprKind::Conditional {
                 then_expr,

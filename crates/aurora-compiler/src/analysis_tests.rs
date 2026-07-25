@@ -625,6 +625,44 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
 }
 
 #[test]
+fn membership_and_comparison_chain_operands_keep_analysis_coverage() {
+    let source = r#"
+def probe(ports: Vec[int32], port: int32, low: int32, high: int32):
+    present = port in ports
+    absent = port not in ports
+    bounded = low <= port < high
+    print(present)
+    print(absent)
+    print(bounded)
+"#;
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for expected_hover in [
+        "binding present: bool",
+        "binding absent: bool",
+        "binding bounded: bool",
+        "param ports: Vec[int32]",
+        "param port: int32",
+        "param low: int32",
+        "param high: int32",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing membership or chain hover `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+}
+
+#[test]
 fn conditional_expression_result_type_drives_member_completion() {
     for source in [
         "def inspect(flag: bool, values: own Vec[int32]):\n    selected = [] if flag else values\n    selected.\n",

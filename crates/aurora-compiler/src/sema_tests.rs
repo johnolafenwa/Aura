@@ -1000,6 +1000,215 @@ def main():
 }
 
 #[test]
+fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
+    // A default argument may not reference another parameter, wherever the
+    // reference hides inside the expression.
+    for (source, name) in [
+        (
+            "def probe(ports: Vec[int32], present: bool = 1 in ports) -> bool:\n    return present\n\ndef main():\n    print(probe(Vec[int32]()))\n",
+            "ports",
+        ),
+        (
+            "def probe(low: int32, ok: bool = 1 < low < 3) -> bool:\n    return ok\n\ndef main():\n    print(probe(2))\n",
+            "low",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("a default argument must not reference another parameter");
+        assert_eq!(rejected.code, "AU2001", "{source}");
+        assert_eq!(rejected.message, format!("unknown name `{name}`"), "{source}");
+    }
+
+    // A place read inside a membership test or a chain still conflicts with a
+    // consumed argument at the same call.
+    for source in [
+        "def hold(taken: own Vec[int32], flag: bool):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, 1 in values)\n",
+        "def hold(taken: own Vec[int32], flag: bool):\n    pass\n\ndef exercise(values: own Vec[int32], n: int32):\n    hold(values, 1 < n < values.len() as int32)\n",
+    ] {
+        let overlap = crate::check_source(source)
+            .expect_err("reading a consumed argument inside an operand must be rejected");
+        assert_eq!(overlap.code, "AU3002", "{source}");
+        assert!(
+            overlap
+                .message
+                .contains("remains reserved for consumption by the parameter `taken`"),
+            "{source}: {}",
+            overlap.message
+        );
+    }
+}
+
+#[test]
+fn membership_tests_read_supported_containers_and_reject_the_rest() {
+    let output = crate::run_source(
+        r#"
+def main():
+    mut values = Vec[int32]()
+    values.push(1)
+    values.push(2)
+    print(1 in values)
+    print(3 in values)
+    print(3 not in values)
+
+    mut names = Set[String]()
+    names.insert("aurora")
+    print("aurora" in names)
+    print("other" not in names)
+
+    mut ages = Map[String, int32]()
+    ages.set("ada", 36)
+    print("ada" in ages)
+    print("bob" in ages)
+
+    text = "hello world"
+    print("world" in text)
+    print("zzz" in text)
+
+    print(values.len())
+    print(text)
+"#,
+    )
+    .expect("membership tests should read Vec, Set, Map keys, and String substrings");
+    assert_eq!(
+        output.stdout,
+        "true\nfalse\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\n2\nhello world\n"
+    );
+
+    for (source, code, message) in [
+        (
+            "def main():\n    print(1 in 5)\n",
+            "AU2003",
+            "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = Vec[int32]()\n    print(\"x\" in values)\n",
+            "AU2002",
+            "`in` expects a `int32` element, found `String`",
+        ),
+        (
+            "def main():\n    mut ages = Map[String, int32]()\n    print(1 in ages)\n",
+            "AU2002",
+            "`in` expects a `String` key, found `int64`",
+        ),
+    ] {
+        let diagnostic =
+            crate::check_source(source).expect_err("an invalid membership test must be rejected");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert_eq!(diagnostic.message, message, "{source}");
+    }
+}
+
+#[test]
+fn comparison_chains_evaluate_each_operand_once_and_short_circuit() {
+    let output = crate::run_source(
+        r#"
+def trace(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def main():
+    print(trace("a", 1) < trace("b", 2) <= trace("c", 3))
+    print(trace("a", 5) < trace("b", 2) <= trace("c", 3))
+    x: int32 = 2
+    print(1 < x < 3)
+    print(x < 3 < 4)
+    print(1 == 1 == 1)
+    print(3 > 2 >= 2)
+"#,
+    )
+    .expect("comparison chains should evaluate each operand once and short-circuit");
+    assert_eq!(
+        output.stdout,
+        "a\nb\nc\ntrue\na\nb\nfalse\ntrue\ntrue\ntrue\ntrue\n"
+    );
+
+    // A chain link may itself be a membership test, and either form may appear
+    // inside an f-string interpolation.
+    let mixed = crate::run_source(
+        r#"
+def main():
+    mut words = Vec[String]()
+    words.push("abc")
+    text = "abc"
+    needle = "a"
+    print(needle in text in words)
+    print(needle in text not in words)
+
+    mut ports = Vec[int32]()
+    ports.push(80)
+    port: int32 = 80
+    low: int32 = 1
+    high: int32 = 1024
+    print(f"open={port in ports} bounded={low <= port < high}")
+
+    limit: int64 = 8
+    print(limit < 80 in ports)
+"#,
+    )
+    .expect("membership links and interpolated comparisons should run");
+    assert_eq!(mixed.stdout, "true\nfalse\nopen=true bounded=true\ntrue\n");
+
+    // An invalid operand is reported at its own span, wherever it appears in a
+    // chain or a membership test.
+    for (source, column) in [
+        ("def main():\n    print(missing < 1 < 2)\n", 11),
+        ("def main():\n    print(1 < missing < 2)\n", 15),
+        ("def main():\n    print(1 < 2 < missing)\n", 19),
+        (
+            "def main():\n    mut ports = Vec[int32]()\n    print(missing in ports)\n",
+            11,
+        ),
+        ("def main():\n    print(1 in missing)\n", 16),
+        ("def main():\n    print(1 in missing == 2)\n", 16),
+    ] {
+        let unresolved = crate::check_source(source)
+            .expect_err("an unresolved operand must be reported, not swallowed");
+        assert_eq!(unresolved.code, "AU2001", "{source}");
+        assert_eq!(unresolved.message, "unknown name `missing`", "{source}");
+        assert_eq!(
+            unresolved.span.map(|span| span.column),
+            Some(column),
+            "{source}"
+        );
+    }
+
+    // A value that adopts a container's element type is still range-checked,
+    // and a membership link inside a chain reports its own operand mismatch.
+    for (source, code, message) in [
+        (
+            "def main():\n    mut small = Vec[int8]()\n    print(300 in small)\n",
+            "AU2999",
+            "integer literal `300` does not fit in `int8`",
+        ),
+        (
+            "def main():\n    mut small = Vec[int8]()\n    limit: int64 = 1\n    print(limit < 300 in small)\n",
+            "AU2999",
+            "integer literal `300` does not fit in `int8`",
+        ),
+        (
+            "def main():\n    text = \"abc\"\n    limit: int64 = 1\n    print(limit < 2 in text)\n",
+            "AU2002",
+            "`in` expects a `String` substring, found `int64`",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("an out-of-range or mistyped membership value must be rejected");
+        assert_eq!(rejected.code, code, "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    let mismatch = crate::check_source("def main():\n    print(1 < 2 < true)\n")
+        .expect_err("a chain link with mismatched operand types must be rejected");
+    assert!(
+        mismatch
+            .message
+            .contains("binary operator operands must match"),
+        "{}",
+        mismatch.message
+    );
+}
+
+#[test]
 fn owned_result_consumption_keeps_enum_variant_paths_out_of_place_tracking() {
     crate::check_source(
         r#"

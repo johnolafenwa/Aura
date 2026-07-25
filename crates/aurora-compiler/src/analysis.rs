@@ -1420,6 +1420,18 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_expr(&mut self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) {
         match &expr.kind {
+            ExprKind::Membership {
+                value, container, ..
+            } => {
+                self.visit_expr(value, scope);
+                self.visit_expr(container, scope);
+            }
+            ExprKind::CompareChain { first, links } => {
+                self.visit_expr(first, scope);
+                for link in links {
+                    self.visit_expr(&link.operand, scope);
+                }
+            }
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
                     self.push_occurrence(
@@ -2481,6 +2493,9 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
+            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
+                Some(Type::named("bool"))
+            }
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
             ExprKind::BuiltinOmitted => None,

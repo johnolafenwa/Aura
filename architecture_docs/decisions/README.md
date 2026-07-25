@@ -34,3 +34,4 @@ test locations that must prove completion.
 25. [ADR-0025: Newline continuation and delimited layout](0025-newline-continuation-and-delimited-layout.md)
 26. [ADR-0026: Minimal tuples](0026-minimal-tuples.md)
 27. [ADR-0027: Conditional expressions](0027-conditional-expressions.md)
+28. [ADR-0028: Membership operators and comparison chains](0028-membership-and-comparison-chains.md)

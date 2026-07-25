@@ -1,7 +1,7 @@
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, DestructureStmt, Expr, ExprKind,
-    IfStmt, LiteralPatternKind, MatchStmt, Param, Pattern, ReceiverKind, Stmt, TypeRefKind,
-    UnaryOp, WhileStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, CompareLink, CompareOp,
+    DestructureStmt, Expr, ExprKind, IfStmt, LiteralPatternKind, MatchStmt, Param, Pattern,
+    ReceiverKind, Stmt, TypeRefKind, UnaryOp, WhileStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -3253,7 +3253,152 @@ impl<'a> Lowerer<'a> {
                 borrow_mode,
                 arms,
             } => self.lower_match_expr(expr, scrutinee, *borrow_mode, arms),
+            ExprKind::Membership {
+                value,
+                container,
+                negated,
+                operator_span,
+            } => self.lower_membership_expr(value, container, *negated, *operator_span),
+            ExprKind::CompareChain { first, links } => self.lower_compare_chain(first, links),
         }
+    }
+
+    /// Lowers `value in container` to the builtin membership member the
+    /// container supplies, so both backends reuse one dispatch path.
+    fn lower_membership_expr(
+        &mut self,
+        value: &Expr,
+        container: &Expr,
+        negated: bool,
+        operator_span: crate::diag::Span,
+    ) -> Operand {
+        let container_ty = self
+            .infer_expr_type(container)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let needle_ty = crate::sema::membership_needle_type(&container_ty);
+        let value_operand = self.lower_expr_at_sequence_point(value, needle_ty.as_ref());
+        let container_operand = self.lower_expr_at_sequence_point(container, None);
+        let receiver_place = self.render_place_expr_option(container);
+        self.lower_membership_call(
+            value_operand,
+            container_operand,
+            receiver_place,
+            &container_ty,
+            negated,
+            operator_span,
+        )
+    }
+
+    fn lower_membership_call(
+        &mut self,
+        value: Operand,
+        container: Operand,
+        receiver_place: Option<String>,
+        container_ty: &Type,
+        negated: bool,
+        operator_span: crate::diag::Span,
+    ) -> Operand {
+        let member = crate::sema::membership_member_name(container_ty).unwrap_or("contains");
+        let contains = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: contains.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: container,
+                    field: member.to_string(),
+                    receiver_place,
+                },
+                args: vec![MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                }],
+            },
+        });
+        if !negated {
+            return Operand::Place(contains);
+        }
+        let result = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: Operand::Place(contains),
+                span: operator_span,
+            },
+        });
+        Operand::Place(result)
+    }
+
+    /// Lowers `a < b <= c` so every operand is evaluated once, in source order,
+    /// and a failing link short-circuits the operands that follow it.
+    fn lower_compare_chain(&mut self, first: &Expr, links: &[CompareLink]) -> Operand {
+        let result = self.new_typed_temp(Type::named("bool"));
+        let join_block = self.new_block("compare_chain_join");
+        let short_circuit_block = self.new_block("compare_chain_false");
+
+        let mut left = self.lower_expr_at_sequence_point(first, None);
+        for (index, link) in links.iter().enumerate() {
+            let link_value = match link.op.as_binary_op() {
+                Some(op) => {
+                    let right = self.lower_expr_at_sequence_point(&link.operand, None);
+                    let compared = self.new_typed_temp(Type::named("bool"));
+                    self.emit(Instruction::Assign {
+                        target: compared.clone(),
+                        value: Rvalue::Binary {
+                            op,
+                            left: left.clone(),
+                            right: right.clone(),
+                            span: link.op_span,
+                        },
+                    });
+                    left = right;
+                    Operand::Place(compared)
+                }
+                None => {
+                    let container_ty = self
+                        .infer_expr_type(&link.operand)
+                        .unwrap_or_else(|| Type::named("Unknown"));
+                    let container = self.lower_expr_at_sequence_point(&link.operand, None);
+                    let receiver_place = self.render_place_expr_option(&link.operand);
+                    let contains = self.lower_membership_call(
+                        left,
+                        container.clone(),
+                        receiver_place,
+                        &container_ty,
+                        link.op == CompareOp::NotIn,
+                        link.op_span,
+                    );
+                    left = container;
+                    contains
+                }
+            };
+            if index + 1 == links.len() {
+                self.emit(Instruction::Assign {
+                    target: result.clone(),
+                    value: Rvalue::Use(link_value),
+                });
+                self.terminate(Terminator::Goto(self.label(join_block)));
+            } else {
+                let next_block = self.new_block("compare_chain_next");
+                self.terminate(Terminator::Branch {
+                    condition: link_value,
+                    then_label: self.label(next_block),
+                    else_label: self.label(short_circuit_block),
+                });
+                self.switch_to(next_block);
+            }
+        }
+
+        self.switch_to(short_circuit_block);
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Use(Operand::Bool(false)),
+        });
+        self.terminate(Terminator::Goto(self.label(join_block)));
+
+        self.switch_to(join_block);
+        Operand::Place(result)
     }
 
     fn lower_tuple_literal(
@@ -4978,6 +5123,9 @@ impl<'a> Lowerer<'a> {
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
+            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
+                Some(Type::named("bool"))
+            }
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(mapped) = self.scoped_local_name(name) {

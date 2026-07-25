@@ -111,7 +111,7 @@ The following table runs from lowest to highest precedence:
 | 2 | `or` | left |
 | 3 | `and` | left |
 | 4 | prefix `not` | right |
-| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in` | chained left to right |
 | 6 | `+`, `-` | left |
 | 7 | `*`, `/`, `//`, `%` | left |
 | 8 | prefix `match`, `try`, unary `-` | prefix/right |
@@ -126,19 +126,19 @@ not a == b      means not (a == b)
 a + b * c       means a + (b * c)
 ```
 
-Aurora 0.1 accepts at most one unparenthesized equality or ordering operator in
-one comparison expression. Ordering chains, equality chains, and mixtures such
-as `a < b < c`, `a == b == c`, and `a < b == c` are parse errors, not left
-folds and not Python-style chained comparisons. Spell the repeated comparison
-explicitly with `and`, such as `a < b and b < c`. Parentheses make nested
-Boolean comparisons explicit, so `(a == b) == c` is a distinct permitted form
-when its operand types are `bool`.
+Equality, ordering, and membership share one precedence level and chain the
+Python way. `a < b < c` is one chain, not a comparison of a comparison, and
+`a == b == c` and `a < b == c` chain likewise. A chain of `n` operators is
+equivalent to the conjunction of its `n` adjacent comparisons, except that each
+operand expression is evaluated at most once. Parentheses still make a nested
+Boolean comparison explicit, so `(a == b) == c` is a distinct form that
+compares a `bool` against `c`.
 
 Parentheses override precedence:
 
 ```python
 scaled = (left + right) * factor
-inside = lower < value and value < upper
+inside = lower < value < upper
 ```
 
 ## Boolean Operators
@@ -195,6 +195,7 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | unary `-` | Same numeric type |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
+| `in`, `not in` | `bool` for a supported container |
 
 Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
@@ -233,6 +234,51 @@ Duration equality and ordering compare that signed count. The language has no
 `Duration / int64`, `Duration % int64`, `Duration * float`, or unary
 `-Duration` rule. Use `Duration.ms(-1)` when a negative value is needed, and
 remember that negative values are not valid host waits.
+
+## Membership And Comparison Chains
+
+`value in container` and `value not in container` test membership and produce
+`bool`. The container decides both the member the test delegates to and the
+type the value must have:
+
+| Container | Tests | Delegates to | Value type |
+| --- | --- | --- | --- |
+| `Vec[T]` | element membership | `contains` | `T` |
+| `Set[T]` | element membership | `contains` | `T` |
+| `Map[K, V]` | key membership | `contains_key` | `K` |
+| `String` | substring containment | `contains` | `String` |
+
+Any other container type is rejected with `AU2003`; a value whose type is not
+the container's element, key, or substring type is rejected with `AU2002`. An
+unsuffixed numeric literal on the value side may adopt the container's element
+or key type. `not in` is exactly the negation of `in`, not a separate member.
+
+Both operands are read. `in` never moves either operand, because the member it
+delegates to takes a shared borrow of the container and a shared borrow of the
+value. The value is evaluated before the container, matching source order.
+
+```python
+ports = [80, 443]
+print(443 in ports)
+print(8080 not in ports)
+print("/health" in "GET /health HTTP/1.1")
+```
+
+A comparison chain such as `low <= value < high` evaluates its operands left to
+right, evaluates each operand at most once, and stops at the first link that is
+`false`. The operands after that link are not evaluated. Every link must be a
+valid comparison of its two adjacent operands under the rules above, and the
+chain's result is `bool`.
+
+```python
+def in_range(value: int32, low: int32, high: int32) -> bool:
+    return low <= value < high
+```
+
+Each operand of a chain is checked as if it were evaluated, even where
+short-circuiting would skip it at runtime. A chain therefore reports an
+ownership conflict that only one runtime path would reach, which is the same
+conservative rule the other branching forms use.
 
 ## Numeric Casts
 
@@ -500,7 +546,9 @@ of the implemented expression language.
 
 Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
 conditional, `match`, `try`, collection, constructor, and f-string expression
-productions are normative in [Grammar](/manual/grammar). The precedence and
+productions are normative in [Grammar](/manual/grammar). The comparison
+production covers equality, ordering, and membership at one level and admits a
+chain of two or more operators. The precedence and
 associativity table above resolves every accepted operator sequence. A
 spelling absent from those productions is not accepted as an implicit
 extension.
@@ -520,7 +568,9 @@ Operands and call arguments evaluate left to right, with each copy or move
 argument result captured before the next argument's side effects. Named enum
 arguments evaluate in source order and then bind to declaration-order payload
 slots. `and` and `or` short circuit. Conditional expressions evaluate the
-condition first and exactly one selected arm. A member receiver is evaluated before
+condition first and exactly one selected arm. A membership test evaluates its
+value before its container. A comparison chain evaluates its operands left to
+right, evaluates each at most once, and stops at its first `false` link. A member receiver is evaluated before
 arguments; an index base is evaluated before its index; collection entries
 preserve source order; a match scrutinee evaluates once; and each f-string
 interpolation renders immediately before the next begins.
@@ -533,7 +583,9 @@ Evaluation copies copy values and moves non-copy values only when the static
 context consumes them. Default-mode non-copy parameters borrow; `own`
 parameters and consuming receivers move; explicit borrows retain the owner.
 Non-copy indexed reads report `AU3005` and require the safe method surface
-instead of an implicit copy. Binary left operands, index bases, method receivers, and indexed-assignment
+instead of an implicit copy. `in` and `not in` read both operands and move
+neither. A comparison chain checks every operand as if it were evaluated, even
+where short-circuiting would skip it. Binary left operands, index bases, method receivers, and indexed-assignment
 targets retain their non-copy borrow through later inputs. An overlapping
 mutable borrow or consumption is rejected with `AU3002`, and no hidden clone
 repairs the invalid expression.
@@ -542,8 +594,8 @@ repairs the invalid expression.
 
 `AU1101` means invalid expression syntax. `AU2001` means an unresolved name or
 member. `AU2002` means a type, constructor-payload, match-result, or index-type
-mismatch. `AU2003` means an unsupported unary, binary, compound, or cast
-operator. `AU2004` means call or constructor argument binding failed. `AU2005`
+mismatch. `AU2003` means an unsupported unary, binary, compound, membership, or
+cast operator. `AU2004` means call or constructor argument binding failed. `AU2005`
 means focused migration guidance for a Python-shaped expression. `AU2999`
 means an expression rejection without a narrower compile-time code. `AU3001`
 means use of a moved value; `AU3002` means a borrow conflict, including a later
