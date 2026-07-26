@@ -1531,12 +1531,12 @@ impl<'a> Lowerer<'a> {
     fn lower_assign(&mut self, assign: &AssignStmt) {
         if let (AssignTarget::Name(name), Some(annotation)) = (&assign.target, &assign.annotation) {
             let annotation_type = self.lower_type_ref_with_provenance(annotation);
-            self.local_types
-                .entry(name.clone())
-                .or_insert(annotation_type);
+            let target = self.render_local_name(name);
+            self.local_types.entry(target).or_insert(annotation_type);
         } else if let AssignTarget::Name(name) = &assign.target {
             if let Some(inferred) = self.infer_expr_type(&assign.value) {
-                self.local_types.entry(name.clone()).or_insert(inferred);
+                let target = self.render_local_name(name);
+                self.local_types.entry(target).or_insert(inferred);
             }
         }
 
@@ -1671,7 +1671,9 @@ impl<'a> Lowerer<'a> {
 
         let target = self.render_assign_target(&assign.target);
         let target_ty = match &assign.target {
-            AssignTarget::Name(name) => self.local_types.get(name).cloned(),
+            AssignTarget::Name(name) => {
+                self.local_types.get(&self.render_local_name(name)).cloned()
+            }
             AssignTarget::Member { object, field } => self.infer_expr_type(&Expr {
                 kind: ExprKind::Member {
                     object: object.clone(),
@@ -1751,9 +1753,49 @@ impl<'a> Lowerer<'a> {
         source_ty: &Type,
         consume_non_copy: bool,
     ) {
+        self.lower_binding_target_from_place_with_scope(
+            target,
+            source_place,
+            source_ty,
+            consume_non_copy,
+            false,
+        );
+    }
+
+    fn lower_scoped_binding_target_from_place(
+        &mut self,
+        target: &BindingTarget,
+        source_place: &str,
+        source_ty: &Type,
+        consume_non_copy: bool,
+    ) {
+        self.lower_binding_target_from_place_with_scope(
+            target,
+            source_place,
+            source_ty,
+            consume_non_copy,
+            true,
+        );
+    }
+
+    fn lower_binding_target_from_place_with_scope(
+        &mut self,
+        target: &BindingTarget,
+        source_place: &str,
+        source_ty: &Type,
+        consume_non_copy: bool,
+        use_scoped_targets: bool,
+    ) {
         match target {
             BindingTarget::Name { name, .. } => {
-                self.local_types.insert(name.clone(), source_ty.clone());
+                let target = if use_scoped_targets {
+                    self.scoped_local_name(name)
+                        .expect("scoped binding target should have a registered slot")
+                        .to_string()
+                } else {
+                    self.local_types.insert(name.clone(), source_ty.clone());
+                    name.clone()
+                };
                 let source =
                     if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
                         Operand::MovePlace(source_place.to_string())
@@ -1761,19 +1803,19 @@ impl<'a> Lowerer<'a> {
                         Operand::Place(source_place.to_string())
                     };
                 self.emit(Instruction::Assign {
-                    target: name.clone(),
+                    target,
                     value: Rvalue::Use(source),
                 });
             }
             BindingTarget::Tuple { elements, .. } => {
-                let Type::Tuple(element_types) = source_ty else {
-                    return;
-                };
-                for (index, (element, element_ty)) in elements.iter().zip(element_types).enumerate()
-                {
-                    let captured = self.new_typed_temp(element_ty.clone());
-                    let value =
-                        if consume_non_copy && !type_is_copy_in_program(element_ty, self.program) {
+                if let Type::Tuple(element_types) = source_ty {
+                    for (index, (element, element_ty)) in
+                        elements.iter().zip(element_types).enumerate()
+                    {
+                        let captured = self.new_typed_temp(element_ty.clone());
+                        let value = if consume_non_copy
+                            && !type_is_copy_in_program(element_ty, self.program)
+                        {
                             Rvalue::TupleTakeElement {
                                 place: source_place.to_string(),
                                 index,
@@ -1786,16 +1828,49 @@ impl<'a> Lowerer<'a> {
                                 element_type: element_ty.clone(),
                             }
                         };
-                    self.emit(Instruction::Assign {
-                        target: captured.clone(),
-                        value,
-                    });
-                    self.lower_binding_target_from_place(
-                        element,
-                        &captured,
-                        element_ty,
-                        consume_non_copy,
-                    );
+                        self.emit(Instruction::Assign {
+                            target: captured.clone(),
+                            value,
+                        });
+                        self.lower_binding_target_from_place_with_scope(
+                            element,
+                            &captured,
+                            element_ty,
+                            consume_non_copy,
+                            use_scoped_targets,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn fresh_scoped_binding_target_slots(
+        &mut self,
+        target: &BindingTarget,
+        target_ty: &Type,
+    ) -> std::collections::HashMap<String, String> {
+        let mut slots = std::collections::HashMap::new();
+        self.register_scoped_binding_target(target, target_ty, &mut slots);
+        slots
+    }
+
+    fn register_scoped_binding_target(
+        &mut self,
+        target: &BindingTarget,
+        target_ty: &Type,
+        slots: &mut std::collections::HashMap<String, String>,
+    ) {
+        match target {
+            BindingTarget::Name { name, .. } => {
+                let slot = self.new_typed_temp(target_ty.clone());
+                slots.insert(name.clone(), slot);
+            }
+            BindingTarget::Tuple { elements, .. } => {
+                if let Type::Tuple(element_types) = target_ty {
+                    for (element, element_ty) in elements.iter().zip(element_types) {
+                        self.register_scoped_binding_target(element, element_ty, slots);
+                    }
                 }
             }
         }
@@ -2544,11 +2619,19 @@ impl<'a> Lowerer<'a> {
             continue_label: self.label(dispatch_block),
             cleanup_depth: self.with_stack.len(),
         });
-        self.lower_binding_target_from_place(&for_stmt.target, &tuple_place, &tuple_ty, false);
+        let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &tuple_ty);
+        self.scoped_names.push(target_scope);
+        self.lower_scoped_binding_target_from_place(
+            &for_stmt.target,
+            &tuple_place,
+            &tuple_ty,
+            false,
+        );
         self.lower_stmts(&for_stmt.body);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(dispatch_block)));
         }
+        self.scoped_names.pop();
         self.loop_stack.pop();
 
         self.switch_to(after_block);
@@ -2559,10 +2642,6 @@ impl<'a> Lowerer<'a> {
             self.lower_lockstep_for(for_stmt, enumerated, &iterables);
             return;
         }
-        let simple_target_name = match &for_stmt.target {
-            BindingTarget::Name { name, .. } => Some(name.clone()),
-            BindingTarget::Tuple { .. } => None,
-        };
         let mut tuple_target_source: Option<(String, Type, bool)> = None;
         let iterable_ty = self.infer_expr_type(&for_stmt.iterable);
         let mut owned_iterable_place = None;
@@ -2581,13 +2660,32 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr_at_sequence_point(&for_stmt.iterable, None)
         };
+        let target_ty = match iterable_ty.as_ref() {
+            Some(Type::Named(name, _)) if name == "Range" => Type::named("int32"),
+            Some(Type::Named(name, args))
+                if matches!(name.as_str(), "Queue" | "Vec" | "Set") && args.len() == 1 =>
+            {
+                args[0].clone()
+            }
+            _ => Type::named("int32"),
+        };
+        let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &target_ty);
+        let simple_binding = match &for_stmt.target {
+            BindingTarget::Name { name, .. } => Some(
+                target_scope
+                    .get(name)
+                    .expect("simple loop target should have a scoped slot")
+                    .clone(),
+            ),
+            BindingTarget::Tuple { .. } => None,
+        };
         let dispatch_block = self.new_block("for_iter");
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
 
         match iterable_ty {
             Some(Type::Named(name, _)) if name == "Range" => {
-                let binding = simple_target_name
+                let binding = simple_binding
                     .clone()
                     .expect("tuple targets are rejected for Range iteration by sema");
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -2601,7 +2699,7 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Queue" && args.len() == 1 => {
                 let element_ty = args[0].clone();
-                let binding = match simple_target_name.clone() {
+                let binding = match simple_binding.clone() {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
@@ -2613,7 +2711,6 @@ impl<'a> Lowerer<'a> {
                     "QueueReceive".to_string(),
                     vec![element_ty.clone()],
                 ));
-                self.local_types.insert(binding.clone(), element_ty);
                 let (field, args) = if let Some(task_group_place) = self.active_task_group_place() {
                     (
                         INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string(),
@@ -2679,7 +2776,7 @@ impl<'a> Lowerer<'a> {
             Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
-                let binding = match simple_target_name.clone() {
+                let binding = match simple_binding.clone() {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
@@ -2691,7 +2788,6 @@ impl<'a> Lowerer<'a> {
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
                 let index = self.new_typed_temp(Type::named("int32"));
-                self.local_types.insert(binding.clone(), element_ty);
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -2783,10 +2879,12 @@ impl<'a> Lowerer<'a> {
                         return_place: return_place.clone(),
                         cleanup_depth,
                     });
+                    self.scoped_names.push(target_scope.clone());
                     self.lower_stmts(&for_stmt.body);
                     if !self.current_terminated() {
                         self.terminate(Terminator::Goto(self.label(continue_block)));
                     }
+                    self.scoped_names.pop();
                     self.return_redirects.pop();
                     self.loop_stack.pop();
 
@@ -2853,7 +2951,7 @@ impl<'a> Lowerer<'a> {
             Some(Type::Named(name, args)) if name == "Set" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
-                let binding = match simple_target_name.clone() {
+                let binding = match simple_binding.clone() {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
@@ -2865,7 +2963,6 @@ impl<'a> Lowerer<'a> {
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
                 let index = self.new_typed_temp(Type::named("int32"));
-                self.local_types.insert(binding.clone(), element_ty);
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -2945,7 +3042,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             _ => {
-                let binding = simple_target_name
+                let binding = simple_binding
                     .clone()
                     .expect("tuple targets require a statically known iterable element type");
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -2965,8 +3062,9 @@ impl<'a> Lowerer<'a> {
             cleanup_depth: self.with_stack.len(),
         });
         self.switch_to(body_block);
+        self.scoped_names.push(target_scope);
         if let Some((source, source_ty, consume_non_copy)) = tuple_target_source {
-            self.lower_binding_target_from_place(
+            self.lower_scoped_binding_target_from_place(
                 &for_stmt.target,
                 &source,
                 &source_ty,
@@ -2977,6 +3075,7 @@ impl<'a> Lowerer<'a> {
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(dispatch_block)));
         }
+        self.scoped_names.pop();
         self.loop_stack.pop();
 
         self.switch_to(after_block);

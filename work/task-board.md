@@ -14,12 +14,15 @@ Last updated: 2026-07-26
   checkpoint gates and one coverage re-ratchet.
 - Entry state: clean at `4929bab`. Old coverage-only build output was cleaned
   under the repository hygiene rule before the repeated Batch 3 gates.
-  Prerequisite hygiene repair `18b7f00` and Part-0 ratification commit
-  `19a10f4` are isolated from the current B3.0-a worktree.
+  Prerequisite hygiene repair `18b7f00`, Part-0 ratification commit `19a10f4`,
+  and completed B3.0-a commit `6afe47c` are isolated; B3.0-b is the active
+  worktree and ticket.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
-  ADR-0029 remains Provisional until B3.0-b closes. ADR-0031 remains Accepted.
+  ADR-0029 is Accepted with the B3.0-b function-wide per-loop binding-slot
+  isolation amendment. ADR-0031 remains Accepted. Acceptance does not by itself
+  claim implementation or gate completion.
 - ADR-0022 is ratified by the Batch 3 brief. Its status flip, ten binding
   answers, ADR-0009 supersession, cross-ADR amendments, semantic-interface
   cache bump, source inventory, migrator, implementation, and maintained-source
@@ -56,8 +59,28 @@ Last updated: 2026-07-26
   network cases also passed outside the restrictive sandbox. Post-gate
   `target/` size was 14 GiB with 157 GiB free, so no cleanup threshold was
   crossed.
-- Current ticket: B3.0-b heterogeneous `enumerate`/`zip` direct binding-slot
-  reuse, ready for its failing parity repro.
+- B3.0-b disposition: complete. ADR-0029 now records function-wide target-slot
+  isolation for every
+  `for` branch, so later loops may reuse source names with different types.
+  `zip(numbers, words)` followed by `zip(words, numbers)` reusing
+  `number, word` is the mandated acceptance case. The run fixture extension is
+  the required red repro: MIR succeeds while the pre-fix forced direct path
+  traps with `AU4001`. Fresh typed target slots are implemented for lockstep,
+  Range, Queue, Vec, Set, and recursive tuple targets, with iterable evaluation
+  outside the target scope and the same physical slot threaded through
+  mutable-Vec writeback. All 55 focused MIR tests pass, and forced MIR/direct
+  runs match the `enumerate_and_zip`, `tuple_for_pattern_queue`, and
+  `vec_borrow_mut_iteration` oracles. Compiler coverage is green at
+  `64,476/67,106` lines (96.08%), `4,162/4,299` functions (96.81%), and
+  `94,558/100,270` regions (94.30%), with no synthetic coverage test or
+  exclusion. The exact `npm run ci` decision gate passed 265 CLI tests, 900
+  compiler tests, forced backend parity, all 70 LSP tests, all 13 extension
+  tests, both coverage gates, reference integrity, docs, audits, Clippy, and
+  hygiene.
+- Current ticket: B3.0-c structural `==` and `!=` for tuples whose elements are
+  equatable, while tuple ordering remains rejected. ADR-0026 will be amended
+  and accepted with forced MIR/direct parity, analysis/LSP, maintained example,
+  tutorial, Manual, and reference-integrity evidence.
 
 ## Batch 2 Checkpoint (complete)
 

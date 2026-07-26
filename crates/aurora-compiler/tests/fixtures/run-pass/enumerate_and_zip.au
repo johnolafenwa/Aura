@@ -10,7 +10,7 @@ def main():
     for index, tag in enumerate(tags):
         print(f"set {index}:{tag}")
 
-    mut numbers = Vec[int32]()
+    mut numbers = Vec[int64]()
     numbers.push(1)
     numbers.push(2)
     numbers.push(3)
@@ -19,6 +19,15 @@ def main():
     words.push("two")
     for number, word in zip(numbers, words):
         print(f"{number}={word}")
+
+    for number, word in zip(words, numbers):
+        print(f"{number}={word}")
+
+    for item in words:
+        print(f"plain {item}")
+
+    for item in numbers:
+        print(item + 10)
 
     for index, value in enumerate(numbers):
         if index == 0:

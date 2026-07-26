@@ -452,6 +452,221 @@ def main():
 }
 
 #[test]
+fn heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    numbers: Vec[int64] = [1]
+    words: Vec[String] = ["one"]
+    for item in numbers:
+        print(item + 10)
+    for item in words:
+        print(item)
+"#,
+    )
+    .expect("heterogeneous ordinary loops should lower");
+    let output = crate::run_mir(&module).expect("heterogeneous ordinary loops should execute");
+    assert_eq!(output.stdout, "11\none\n");
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let local_types = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), &local.ty))
+        .collect::<BTreeMap<_, _>>();
+    let bindings = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        variant_name,
+                        index: 0,
+                        ..
+                    },
+            } if variant_name == "Some" => {
+                Some((target.as_str(), local_types.get(target.as_str()).copied()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings[0].1, Some(&Type::named("int64")));
+    assert_eq!(bindings[1].1, Some(&Type::named("String")));
+    assert!(bindings.iter().all(|(name, _)| name.starts_with("%t")));
+    assert_ne!(bindings[0].0, bindings[1].0);
+    assert!(!local_types.contains_key("item"));
+}
+
+#[test]
+fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    jobs = Queue[String]()
+    jobs.put("queue")
+    jobs.close()
+    mut labels = Set[String]()
+    labels.insert("set")
+    numbers: Vec[int64] = [1]
+    for item in jobs:
+        print(item)
+    for item in labels:
+        print(item)
+    for item in numbers:
+        print(item)
+    for item in range(1):
+        print(item)
+"#,
+    )
+    .expect("all ordinary loop forms should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let local_types = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), &local.ty))
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        variant_name,
+                        index: 0,
+                        ..
+                    },
+            } if matches!(variant_name.as_str(), "Item" | "Some") => Some(target.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    targets.extend(
+        main.blocks
+            .iter()
+            .filter_map(|block| match &block.terminator {
+                Terminator::ForRange { binding, .. } => Some(binding.as_str()),
+                _ => None,
+            }),
+    );
+
+    assert_eq!(targets.len(), 4);
+    assert!(targets.iter().all(|target| target.starts_with("%t")));
+    assert_eq!(
+        targets.iter().copied().collect::<BTreeSet<_>>().len(),
+        targets.len()
+    );
+    let target_types = targets
+        .iter()
+        .map(|target| {
+            local_types
+                .get(target)
+                .copied()
+                .expect("every loop target slot should retain its type")
+        })
+        .collect::<Vec<_>>();
+    let mut rendered_target_types = target_types
+        .iter()
+        .map(|ty| ty.to_string())
+        .collect::<Vec<_>>();
+    rendered_target_types.sort();
+    assert_eq!(
+        rendered_target_types,
+        vec!["String", "String", "int32", "int64"]
+    );
+}
+
+#[test]
+fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
+    let program = Box::leak(Box::new(checked_program("def main():\n    pass\n")));
+    let mut lowerer = Lowerer::new(
+        program,
+        "main",
+        &program.module_name,
+        Type::Unit,
+        BTreeMap::new(),
+    );
+    lowerer.local_types.insert(
+        "values".to_string(),
+        Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+    );
+    lowerer.lower_for(&ForStmt {
+        target: BindingTarget::Name {
+            name: "values".to_string(),
+            span: Span::new(1, 1),
+        },
+        iterable: name_expr("values"),
+        borrow_mode: None,
+        body: vec![Stmt::Pass(PassStmt {
+            span: Span::new(1, 1),
+        })],
+        span: Span::new(1, 1),
+    });
+
+    let iteration_receiver = lowerer
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Member {
+                                object,
+                                field,
+                                receiver_place,
+                            },
+                        ..
+                    },
+                ..
+            } if field == INTERNAL_VEC_INDEX_OPTION_FIELD => {
+                Some((object, receiver_place.as_deref()))
+            }
+            _ => None,
+        })
+        .expect("Vec iteration should lower through the indexed option helper");
+    assert_eq!(
+        iteration_receiver,
+        (&Operand::Place("values".to_string()), Some("values"))
+    );
+
+    let binding = lowerer
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        variant_name,
+                        index: 0,
+                        ..
+                    },
+            } if variant_name == "Some" => Some(target),
+            _ => None,
+        })
+        .expect("Vec iteration should extract the current element");
+    assert!(binding.starts_with("%t"));
+    assert_ne!(binding, "values");
+}
+
+#[test]
 fn nested_and_copy_tuple_patterns_preserve_binding_ownership() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -3605,10 +3820,19 @@ def main() -> int32:
         })],
         span: Span::new(1, 1),
     });
-    assert!(lowerer.blocks.iter().any(|block| matches!(
-        block.terminator,
-        Some(Terminator::ForRange { ref binding, .. }) if binding == "item"
-    )));
+    let fallback_binding = lowerer
+        .blocks
+        .iter()
+        .find_map(|block| match &block.terminator {
+            Some(Terminator::ForRange { binding, .. }) => Some(binding),
+            _ => None,
+        })
+        .expect("unchecked fallback iteration should still lower");
+    assert!(fallback_binding.starts_with("%t"));
+    assert_eq!(
+        lowerer.local_types.get(fallback_binding),
+        Some(&Type::named("int32"))
+    );
 
     let mut return_lowerer = Lowerer::new(
         program,

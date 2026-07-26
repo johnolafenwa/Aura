@@ -3,6 +3,13 @@
 set 0:beta
 1=one
 2=two
+one=1
+two=2
+plain one
+plain two
+11
+12
+13
 skip 1->2
 2
 3

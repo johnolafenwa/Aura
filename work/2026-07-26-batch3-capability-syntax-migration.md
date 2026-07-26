@@ -26,7 +26,9 @@ Phase 5 is outside this target and must not begin.
 - ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023, ADR-0024, ADR-0025,
   ADR-0027, and ADR-0028 are Accepted as implemented.
 - ADR-0026 becomes Accepted with the B3.0-c tuple-equality amendment.
-- ADR-0029 remains Provisional until B3.0-b closes.
+- ADR-0029 is Accepted with the B3.0-b function-wide per-loop binding-slot
+  isolation amendment. This ratifies the decision; it does not by itself claim
+  that the implementation or gates are complete.
 - ADR-0030 becomes Accepted with the B3.0-d length-unification amendment.
 - ADR-0031 remains Accepted.
 - ADR-0022 is ratified by the Batch 3 brief but remains marked Proposed until
@@ -35,10 +37,11 @@ Phase 5 is outside this target and must not begin.
 
 ## Current verification
 
-- Entry worktree: clean at `4929bab`.
+- Batch 3 entry worktree: clean at `4929bab`.
 - Repository-hygiene prerequisite `18b7f00` removed the committed trailing
   whitespace exposed by the first full gate. Part-0 ratifications are isolated
-  in `19a10f4`; the remaining worktree is B3.0-a plus this active tracking.
+  in `19a10f4`, and completed B3.0-a is isolated in `6afe47c`; B3.0-b is the
+  active worktree and ticket.
 - Batch 2 checkpoint gate: green at the recorded
   `64,409/67,039` lines, `4,158/4,295` functions, and
   `94,472/100,184` regions, with enforced floors
@@ -135,9 +138,60 @@ Phase 5 is outside this target and must not begin.
   neither repository cleanup threshold was crossed and the reusable profiles
   were retained for the next ticket.
 
+## B3.0-b: heterogeneous `enumerate`/`zip` direct binding-slot reuse
+
+- Decision: ADR-0029 is Accepted. The lowering rule applies to every `for`
+  branch: each `Range`, `Vec`, `Set`, `Queue`, `enumerate`, or `zip` loop
+  occurrence owns distinct typed target identities for its loop-body scope.
+  Sequential loops may therefore reuse the same source binding names even when
+  their element types differ. The mandated acceptance case is
+  `zip(numbers, words)` followed by `zip(words, numbers)`.
+- Required red repro: extend
+  `crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au` with the
+  reversed heterogeneous `zip` loop while reusing `number, word`. Before the
+  fix, MIR runs the fixture but forced direct execution traps with `AU4001`
+  because the old lowering collapses both loops onto function-wide
+  source-named typed slots.
+- Implementation: every lockstep and ordinary `for` branch now allocates fresh
+  typed `%tN` leaves for its target and maps source names through a loop-local
+  `scoped_names` frame only while lowering target initialization and the body.
+  The iterable is evaluated first. Range terminators, Queue/Vec/Set payload
+  extraction, recursive tuple leaves, and mutable-Vec writeback all carry the
+  fresh physical slot rather than the repeated source spelling.
+- Focused verification: the original forced-direct repro exited 1 with
+  `AU4001` (`expected int32, found String`) while the forced-MIR run succeeded.
+  Post-fix, 55 focused MIR tests pass, and forced MIR and forced direct both
+  match the exact stdout for `enumerate_and_zip`,
+  `tuple_for_pattern_queue`, and `vec_borrow_mut_iteration`. The last fixture
+  pins fallthrough, `continue`, `break`, and explicit-return element writeback.
+  Formatting and `git diff --check` pass.
+- Coverage verification is green at `64,476/67,106` lines (96.08%),
+  `4,162/4,299` functions (96.81%), and `94,558/100,270` regions (94.30%),
+  above the frozen `96.07/96.81/94.29` floors. No synthetic coverage test or
+  exclusion was added. Two genuinely unreachable defensive tuple-shape returns
+  were restructured as guarded traversal, and the obsolete native fallback
+  that invented an untyped Range binding was removed because every generated
+  Range terminator now names its registered typed slot.
+- Post-full-gate artifact hygiene found `target/` at 18 GiB with 152 GiB free,
+  so neither repository cleanup threshold was crossed and the reusable
+  profiles were retained.
+- The exact full-repository `npm run ci` decision gate is green: 265 CLI tests,
+  900 compiler tests, forced MIR/direct parity, all 70 language-server tests,
+  all 13 extension tests, compiler and 100% LSP coverage, reference integrity,
+  the documentation build, dependency audits, Clippy with warnings denied, and
+  repository hygiene all passed. The Rust audit retains its already-allowed
+  `rustls-pemfile` unmaintained warning and reports no vulnerability failure.
+- Adjacent findings retained for the ADR-0022 scoping/exit-routing work:
+  propagated `?` errors currently bypass mutable-Vec element writeback; nested
+  mutable-Vec return redirects with an intervening `with` can omit an inner
+  cleanup; and unrelated locals declared under separate loop bodies can still
+  collide by raw source name. None is caused by the fresh target-slot patch,
+  and none is represented as closed by B3.0-b.
+- Status: complete. ADR-0029 is Accepted, all scoped binding-slot behavior is
+  implemented and documented, and the exact full decision gate is green.
+
 ## Follow-up
 
-Proceed to B3.0-b. Continue recording failing repros, implementation details,
-focused verification, exact full-gate evidence, coverage measurements,
-source-inventory counts, migration results, and checkpoint disposition here as
-the batch advances.
+Begin B3.0-c tuple structural equality and continue recording source-inventory
+counts, migration results, and checkpoint disposition here as the batch
+advances.

@@ -19,11 +19,14 @@ detached spawn, attributes, and registry publishing—are not part of Aurora
 names: a program that previously declared its own `def len(...)` or
 `def str(...)` is now rejected, the same way redefining `print` or `abs` is.
 
-Conditional expressions, membership operators, and comparison chains are
-accepted language surface under ADR-0027 and ADR-0028. Tuples and the
-`enumerate`/`zip` loop forms remain part of the maintained language only to the
-exact provisional extents recorded by ADR-0026, ADR-0029,
-[Tuples](/manual/tuples), and [Statements](/manual/statements#for-iteration).
+Conditional expressions, membership operators, comparison chains, and the
+`enumerate`/`zip` loop forms are accepted language surface under ADR-0027,
+ADR-0028, and ADR-0029. A later `for` loop may reuse the same target names at
+different element types; both maintained backends must preserve each loop's
+distinct typed binding identities. Tuples remain part of the maintained
+language only to the exact provisional extent recorded by ADR-0026 and
+[Tuples](/manual/tuples). See
+[Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 

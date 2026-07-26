@@ -113,6 +113,20 @@ test -s crates/aurora-compiler/tests/fixtures/run-pass/conditional_expressions.a
 test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_condition_must_be_bool.au
 test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_arm_type_mismatch.au
 test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0029-enumerate-and-zip-loop-forms.md
+grep -Fq '0029-enumerate-and-zip-loop-forms.md' architecture_docs/decisions/README.md
+grep -Fq 'distinct typed binding identities' architecture_docs/decisions/0029-enumerate-and-zip-loop-forms.md
+grep -Fq 'ADR-0028, and ADR-0029.' docs/manual/status-and-compatibility.md
+grep -Fq 'function-wide per-loop binding-slot isolation' docs/manual/conformance.md
+grep -Fq 'mut numbers = Vec[int64]()' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fq 'for number, word in zip(numbers, words):' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fq 'for number, word in zip(words, numbers):' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fxq 'one=1' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
+grep -Fxq 'two=2' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
+grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aurora-compiler/src/mir_tests.rs
+grep -Fq 'for label, value in jobs:' crates/aurora-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
+grep -Fq 'def update_first(values: borrow mut Vec[int64]) -> int64:' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
+test "$(grep -Fxc '24' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md

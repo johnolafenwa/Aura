@@ -1,3 +1,9 @@
+def update_first(values: borrow mut Vec[int64]) -> int64:
+    for value in borrow mut values:
+        value += 13
+        return value
+    return 0
+
 def main() -> int32:
     mut values = [1, 2, 3]
     for value in borrow mut values:
@@ -6,6 +12,9 @@ def main() -> int32:
             continue
         if value == 13:
             break
+
+    print(update_first(values))
+    print(values[0])
 
     for value in borrow values:
         print(value)

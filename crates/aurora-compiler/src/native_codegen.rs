@@ -1524,22 +1524,6 @@ impl<'a> NativeCodegen<'a> {
             );
         }
 
-        for block in &function.blocks {
-            if let Terminator::ForRange { binding, .. } = &block.terminator {
-                if !variables.contains_key(binding) {
-                    declare_root_variables(
-                        &mut builder,
-                        &mut variable_index,
-                        &mut variables,
-                        &mut variable_types,
-                        binding.clone(),
-                        DirectType::Scalar(ScalarKind::Int32),
-                        None,
-                    );
-                }
-            }
-        }
-
         let temporary_assignments = function
             .blocks
             .iter()
