@@ -1,6 +1,63 @@
 # Task Board
 
-Last updated: 2026-07-25
+Last updated: 2026-07-26
+
+## Batch 3 of 6 (active)
+
+- Authorized target: close B3.0-a through B3.0-e in separate test-first
+  commits, then perform the ratified ADR-0022 capability-syntax migration,
+  complete the post-migration reference/parity/coverage/full-CI checkpoint, and
+  stop without beginning Phase 5.
+- Required order: artifact-cache integrity; heterogeneous `enumerate`/`zip`
+  direct lowering; tuple equality; `int64` length-surface unification; the
+  diagnostic/comment polish packet; ADR-0022 inventory and migration; final
+  checkpoint gates and one coverage re-ratchet.
+- Entry state: clean at `4929bab`. Old coverage-only build output was cleaned
+  under the repository hygiene rule before the repeated Batch 3 gates.
+  Prerequisite hygiene repair `18b7f00` and Part-0 ratification commit
+  `19a10f4` are isolated from the current B3.0-a worktree.
+- Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
+  ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
+  ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
+  ADR-0029 remains Provisional until B3.0-b closes. ADR-0031 remains Accepted.
+- ADR-0022 is ratified by the Batch 3 brief. Its status flip, ten binding
+  answers, ADR-0009 supersession, cross-ADR amendments, semantic-interface
+  cache bump, source inventory, migrator, implementation, and maintained-source
+  flip belong to the coordinated migration after B3.0 closes.
+- B3.0-a implementation: cached native entries now atomically publish a
+  platform-native `program`, its `program.sha256`, and a key-bound unique
+  `entry-id`; every hit uses bounded no-follow reads and verifies identity,
+  digest, regular-file/execute state, size, and native launch shape. Aurora
+  materializes the verified bytes into a private per-launch executable and
+  invokes it with raw `execv`, preventing both cache-path substitution and the
+  macOS ENOEXEC shell fallback. Exact-entry quarantine makes corruption and
+  executable-format failure rebuild without racing a concurrent replacement;
+  environmental launch failures preserve valid cache state. Private cache-root
+  trust, exact `0700` creation under a permissive umask, lease-protected stale
+  launch cleanup, owner-aware cache-stage cleanup, and runtime-archive memo
+  invalidation are pinned. Cold publication is keyed by the exact archive
+  bytes and ordered native link arguments used by the link, so an immediate
+  warm run no longer needs the old settle-and-delete workaround. The cache
+  format tag is bumped to v3, and behavioral regressions cover the verified
+  hit, corruption, non-regular members, cleanup, and preservation paths.
+- B3.0-a first-pass evidence: all behavioral, parity, LSP, extension, coverage,
+  reference, docs, audit, and Clippy gates passed. Final hygiene exposed
+  committed trailing whitespace in `personal/file_ops.au`; prerequisite commit
+  `18b7f00` repairs that non-semantic baseline so a pre-commit full gate can
+  genuinely pass. The cache review then strengthened launch isolation and the
+  regression matrix.
+- B3.0-a disposition: complete and exact-tree decision-gate green. `npm run ci`
+  passed 265 CLI tests, 897 compiler tests, forced MIR/direct parity, all 70
+  LSP tests, all 13 extension tests, reference integrity, docs, audits, Clippy,
+  hygiene, and both coverage gates. Compiler coverage is `64,410/67,039`
+  lines (96.08%), `4,158/4,295` functions (96.81%), and
+  `94,473/100,184` regions (94.30%); LSP coverage remains 100%. No synthetic
+  coverage test, exclusion, or coverage-only branch was added. The exact
+  network cases also passed outside the restrictive sandbox. Post-gate
+  `target/` size was 14 GiB with 157 GiB free, so no cleanup threshold was
+  crossed.
+- Current ticket: B3.0-b heterogeneous `enumerate`/`zip` direct binding-slot
+  reuse, ready for its failing parity repro.
 
 ## Batch 2 Checkpoint (complete)
 
@@ -19,10 +76,9 @@ Last updated: 2026-07-25
 - Coverage floors are re-ratcheted once, by downward truncation from the final
   measurement, to lines/functions/regions `96.07/96.81/94.29`. The
   language-server gate remains enforced at 100%.
-- Four Provisional ADRs need checkpoint disposition: ADR-0027 conditional
-  expressions, ADR-0028 membership and comparison chains, ADR-0029
-  `enumerate`/`zip` loop forms, and ADR-0030 `len`/`str` builtins. Eight earlier
-  Provisional ADRs remain open from prior batches.
+- The Batch 3 entry ruling accepts ADR-0018, ADR-0019, ADR-0020, ADR-0021,
+  ADR-0023, ADR-0024, ADR-0025, ADR-0027, and ADR-0028 as implemented.
+  ADR-0026, ADR-0029, and ADR-0030 advance with their named B3.0 amendments.
 - Accepted checkpoint amendment: ADR-0031 ratifies `mir` as the `aura run`
   default for the edit-run path and retains `auto` as the `aura build` default.
   It explicitly amends the original interim-`auto` roadmap clause without
@@ -35,7 +91,7 @@ Last updated: 2026-07-25
 
 ## Batch 2 Implementation Record (completed)
 
-- Result: Phase 3 is complete and committed through `9ff7e82`, including Duration, deterministic and secure Randomness, recursive JSON, Bytes/codecs/SHA-256, assertion statements, and the maintained application-level retry worker. The editor completion/package repair remains committed at `f34b4de`, the ownership tutorial correction at `6665090`, and proposed future capability-syntax ADR-0022 at `929c0b8`; ADR-0022 is not implemented or mixed into Batch 2 semantics. Phase 3.5 newline continuation is complete and decision-gate green: the lexer tracks and validates nested `()`, `[]`, and `{}`, suppresses ordinary continuation layout while retaining physical spans, preserves delimited expression-`match` layout islands, and reports source-related pairing diagnostics. Parser coverage pins multiline signatures, calls, type arguments, grouping, indexing, and collection literals without changing the trailing-comma, backslash, or single-line string/f-string boundaries. Compiler analysis, the language server, and VS Code newline indentation preserve editor behavior across continued and incomplete source. The normative reference, Provisional ADR-0025, maintained example/tutorial, executable-reference gate, frozen coverage floors, forced-backend parity, and exact full-CI gate are aligned.
+- Result: Phase 3 is complete and committed through `9ff7e82`, including Duration, deterministic and secure Randomness, recursive JSON, Bytes/codecs/SHA-256, assertion statements, and the maintained application-level retry worker. The editor completion/package repair remains committed at `f34b4de`, the ownership tutorial correction at `6665090`, and proposed future capability-syntax ADR-0022 at `929c0b8`; ADR-0022 is not implemented or mixed into Batch 2 semantics. Phase 3.5 newline continuation is complete and decision-gate green: the lexer tracks and validates nested `()`, `[]`, and `{}`, suppresses ordinary continuation layout while retaining physical spans, preserves delimited expression-`match` layout islands, and reports source-related pairing diagnostics. Parser coverage pins multiline signatures, calls, type arguments, grouping, indexing, and collection literals without changing the trailing-comma, backslash, or single-line string/f-string boundaries. Compiler analysis, the language server, and VS Code newline indentation preserve editor behavior across continued and incomplete source. The normative reference, now-Accepted ADR-0025, maintained example/tutorial, executable-reference gate, frozen coverage floors, forced-backend parity, and exact full-CI gate are aligned.
 - Current verification: focused Bytes tests, all fixture categories, language-server regression, executable reference integrity, docs build, `git diff --check`, and the complete exact-tree `npm run ci` gate pass. The exact Bytes-era `npm run coverage:compiler:check` gate passes all 251 instrumented CLI tests, 781 compiler library tests, and supporting suites at 60,768/63,252 lines (96.072851451337%), 3,968/4,091 functions (96.993400146663%), and 88,637/94,027 regions (94.267603986089%), above the frozen 96.06/96.79/94.15 floors. The Bytes coverage gap was closed with observable behavior/diagnostic/backend tests plus removal of unreachable validated-decoder and duplicate adapter branches; no synthetic test or coverage exclusion was added. For `assert`, all nine fixture categories, the focused 12-test compiler assertion suite, the CLI behavior matrix, the full 60-test language-server suite, the full 10-test extension suite, the 33-page executable reference-integrity gate, the docs build, the maintained example smoke, and the complete exact-tree `npm run ci` decision gate pass. The focused compiler coverage includes a source-starting lazy-message ownership regression, and editor coverage pins invalid `assert` diagnostics at the keyword. The exact `assert` coverage gate passes all 256 instrumented CLI tests, 795 compiler library tests, and supporting suites at 60,904/63,399 lines (96.06460669726651%), 3,976/4,099 functions (96.99926811417419%), and 88,875/94,275 regions (94.27207637231504%). Its five-line-only first-pass shortfall was closed with observable exported-runtime diagnostic and refcount tests; no synthetic test or coverage exclusion was added. The retry-worker CLI regression passes its exact 15-line oracle through both MIR execution and a forced-direct binary; it pins recovery, terminal `429`, final-attempt no-sleep/no-RNG ordering, explicit timeouts, and seven real loopback requests. Its exact coverage gate passes all 257 instrumented CLI tests, 795 compiler library tests, and supporting suites at 60,904/63,399 lines (96.06460669726651%), 3,976/4,099 functions (96.99926811417419%), and 88,875/94,275 regions (94.27207637231504%). No synthetic-coverage test, exclusion, or coverage-only production restructuring was added. Lightweight reference and diff checks plus the complete exact-tree `npm run ci` decision gate pass.
 - The exact newline-continuation compiler coverage gate passes at
   61,133/63,639 lines (96.06216313895567%), 3,992/4,116 functions
@@ -64,7 +120,7 @@ Last updated: 2026-07-25
   forced MIR/direct parity, 100% LSP coverage, compiler coverage, reference,
   docs, audits, Clippy, and hygiene.
 - Completed conditional-expression ticket: Python-style `a if condition else b`
-  is integrated with Provisional ADR-0027, exact-bool checking, contextual arm
+  is integrated with now-Accepted ADR-0027, exact-bool checking, contextual arm
   unification, lazy one-arm execution, conservative ownership-state merging,
   MIR/direct lowering, compiler analysis/LSP coverage, fixtures, maintained
   example/tutorial, and the normative reference packet.
@@ -98,7 +154,7 @@ Last updated: 2026-07-25
   4,137/4,268 functions (96.9306466729147%), and 93,474/99,154 regions
   (94.27153720475219%); no synthetic coverage test or exclusion was added.
 - Completed membership/comparison-chain ticket: `in`, `not in`, and Python-style
-  chained comparisons are integrated with Provisional ADR-0028. Equality,
+  chained comparisons are integrated with now-Accepted ADR-0028. Equality,
   ordering, and membership now share one precedence level and chain rather than
   left-folding; membership delegates to `contains` or `contains_key` over
   `Vec`, `Set`, `Map` keys, and `String`; chains evaluate every operand at most

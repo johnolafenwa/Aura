@@ -836,15 +836,40 @@ enum NativeRunOutcome {
     FellBack(String),
 }
 
+#[derive(Debug)]
+struct VerifiedNativeLaunchError {
+    message: String,
+    invalidates_cache: bool,
+}
+
+impl VerifiedNativeLaunchError {
+    fn environment(message: String) -> Self {
+        Self {
+            message,
+            invalidates_cache: false,
+        }
+    }
+
+    fn launch(binary: &Path, error: io::Error) -> Self {
+        Self {
+            invalidates_cache: native_launch_error_invalidates_cache(&error),
+            message: format!(
+                "failed to execute the verified direct binary `{}`: {}",
+                binary.display(),
+                error
+            ),
+        }
+    }
+}
+
 /// `aura run`'s default backend.
 ///
-/// This stays on the MIR runtime rather than `auto`. With the content-addressed
-/// cache in place a warm launch of a resident binary matches the MIR runtime at
-/// 0.01s, but a cold miss still costs about 1.3s, and CI and the test suites are
-/// dominated by programs each seen once. A first touch of a fresh binary also
-/// costs about 0.8s, because a direct hello-world executable is roughly 57 MB of
-/// statically linked runtime. The remaining blocker for a native default is
-/// therefore binary size rather than compile time.
+/// This stays on the MIR runtime rather than `auto`. A cold miss costs about
+/// 1.3s, and integrity-preserving warm hits measured about 0.81s after reading,
+/// hashing, and privately materializing a roughly 57 MB direct hello-world
+/// binary. CI and the test suites are also dominated by programs each seen
+/// once. The earlier 0.01s resident-path measurement predates per-hit
+/// verification and is not a current guarantee.
 const DEFAULT_RUN_BACKEND: RunBackend = RunBackend::Mir;
 
 fn parse_run_backend(args: Vec<String>) -> (RunBackend, Vec<String>) {
@@ -893,31 +918,42 @@ fn run_through_native_backend(
         Err(error) => return NativeRunOutcome::Failed(error.message),
     };
 
-    let cache_key = native_cache_key(&mir);
+    let cache_key = native_runtime_identity_for_cache()
+        .as_ref()
+        .and_then(|runtime_identity| native_cache_key(&mir, runtime_identity));
     if let Some(cached) = cache_key.as_deref().and_then(cached_native_binary) {
         // A warm launch skips compiling and linking entirely. The key covers
-        // every input that can change the binary, so a hit is the binary this
-        // run would have produced.
-        return match launch_native_binary(&cached, program_args) {
-            Ok(code) => NativeRunOutcome::Ran(code),
-            Err(reason) => match backend {
-                RunBackend::Auto => NativeRunOutcome::FellBack(reason),
-                _ => NativeRunOutcome::Failed(reason),
-            },
-        };
+        // every input that can change the binary, and the cache hit itself has
+        // passed content and native-shape verification.
+        match launch_verified_native_binary(&cached, program_args) {
+            Ok(code) => return NativeRunOutcome::Ran(code),
+            Err(error) if error.invalidates_cache => {
+                // A plausible header can still be malformed, or a verified
+                // artifact can otherwise be unlaunchable. Discard it and
+                // rebuild once instead of allowing disposable cache state to
+                // force failure or fallback.
+                invalidate_cached_native_binary(&cached);
+            }
+            Err(error) => {
+                return native_backend_failure(backend, error.message);
+            }
+        }
     }
 
     let output_path = temporary_run_binary_path(&input.path);
     let outcome = select_run_outcome(
         backend,
         || {
-            build_direct_native_binary(&input.path, &input.source, &mir, &output_path).inspect(
-                |()| {
-                    if let Some(key) = cache_key.as_deref() {
-                        store_native_binary(key, &output_path);
-                    }
-                },
-            )
+            let runtime_identity = build_direct_native_binary_with_identity(
+                &input.path,
+                &input.source,
+                &mir,
+                &output_path,
+            )?;
+            if let Some(key) = native_cache_key(&mir, &runtime_identity) {
+                store_native_binary(&key, &output_path);
+            }
+            Ok(())
         },
         || launch_native_binary(&output_path, program_args),
     );
@@ -925,13 +961,18 @@ fn run_through_native_backend(
     outcome
 }
 
+fn native_backend_failure(backend: RunBackend, reason: String) -> NativeRunOutcome {
+    match backend {
+        RunBackend::Auto => NativeRunOutcome::FellBack(reason),
+        _ => NativeRunOutcome::Failed(reason),
+    }
+}
+
 fn launch_native_binary(
     binary: &Path,
     program_args: &[String],
 ) -> std::result::Result<i32, String> {
-    process::Command::new(binary)
-        .args(program_args)
-        .status()
+    launch_native_binary_without_shell_fallback(binary, program_args)
         .map(|status| status.code().unwrap_or(1))
         .map_err(|error| {
             format!(
@@ -940,6 +981,114 @@ fn launch_native_binary(
                 error
             )
         })
+}
+
+#[cfg(unix)]
+fn spawn_native_binary_without_shell_fallback(
+    binary: &Path,
+    program_args: &[String],
+) -> io::Result<process::Child> {
+    spawn_unix_native_binary_without_shell_fallback(binary, program_args, None)
+}
+
+#[cfg(unix)]
+fn spawn_verified_native_binary_with_lease(
+    binary: &Path,
+    program_args: &[String],
+    lease: &fs::File,
+) -> io::Result<process::Child> {
+    use std::os::fd::AsRawFd;
+
+    spawn_unix_native_binary_without_shell_fallback(binary, program_args, Some(lease.as_raw_fd()))
+}
+
+#[cfg(unix)]
+fn spawn_unix_native_binary_without_shell_fallback(
+    binary: &Path,
+    program_args: &[String],
+    inherited_lease_fd: Option<std::os::fd::RawFd>,
+) -> io::Result<process::Child> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+
+    let executable = CString::new(binary.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "executable path contains NUL"))?;
+    let mut arguments = Vec::with_capacity(program_args.len() + 1);
+    arguments.push(executable.clone());
+    for argument in program_args {
+        arguments.push(CString::new(argument.as_bytes()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "program argument contains NUL")
+        })?);
+    }
+    // Store pointer bits as `usize` so the pre-exec closure remains Send +
+    // Sync. The `CString` buffers remain owned by `arguments` and therefore
+    // stable until `execv` replaces the child process.
+    let mut argument_pointers = arguments
+        .iter()
+        .map(|argument| argument.as_ptr() as usize)
+        .collect::<Vec<_>>();
+    argument_pointers.push(0);
+
+    let mut command = process::Command::new(binary);
+    // SAFETY: after fork the closure calls only async-signal-safe `fcntl`,
+    // `execv`, and `last_os_error`; all strings and pointer storage were
+    // allocated before `pre_exec`. `execv`, unlike `execvp`, never interprets
+    // ENOEXEC bytes as a shell script.
+    unsafe {
+        command.pre_exec(move || {
+            let _keep_arguments_alive = &arguments;
+            if let Some(fd) = inherited_lease_fd {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            libc::execv(
+                executable.as_ptr(),
+                argument_pointers.as_ptr().cast::<*const libc::c_char>(),
+            );
+            Err(io::Error::last_os_error())
+        });
+    }
+    command.spawn()
+}
+
+#[cfg(not(unix))]
+fn spawn_native_binary_without_shell_fallback(
+    binary: &Path,
+    program_args: &[String],
+) -> io::Result<process::Child> {
+    process::Command::new(binary).args(program_args).spawn()
+}
+
+fn launch_native_binary_without_shell_fallback(
+    binary: &Path,
+    program_args: &[String],
+) -> io::Result<process::ExitStatus> {
+    spawn_native_binary_without_shell_fallback(binary, program_args)?.wait()
+}
+
+fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ENOEXEC) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EBADEXEC)
+            | Some(libc::EBADARCH)
+            | Some(libc::EBADMACHO)
+            | Some(libc::ESHLIBVERS)
+    ) {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    if error.raw_os_error() == Some(libc::ELIBBAD) {
+        return true;
+    }
+    false
 }
 
 /// Decides what a native run does when the build or the launch fails. Only
@@ -967,30 +1116,175 @@ fn select_run_outcome(
 /// The directory holding cached native binaries. `AURORA_CACHE_DIR` overrides
 /// the default so a sandbox or a test can keep its own cache.
 fn native_cache_root() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("AURORA_CACHE_DIR") {
+    let root = if let Some(explicit) = std::env::var_os("AURORA_CACHE_DIR") {
         let explicit = PathBuf::from(explicit);
-        return (!explicit.as_os_str().is_empty()).then_some(explicit);
+        (!explicit.as_os_str().is_empty()).then_some(explicit)?
+    } else {
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        if home.as_os_str().is_empty() {
+            return None;
+        }
+        home.join(".cache").join("aurora").join("native")
+    };
+    create_private_cache_directory_all(&root).ok()?;
+    Some(root)
+}
+
+fn create_private_cache_directory_all(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+
+        // Apply the private mode at each mkdir operation so a permissive
+        // process umask cannot expose any newly-created parent component.
+        builder.mode(0o700);
     }
-    let home = std::env::var_os("HOME")?;
-    let home = PathBuf::from(home);
-    if home.as_os_str().is_empty() {
+    builder.create(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::other(format!(
+            "native cache path `{}` is not a directory",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "native cache directory `{}` must be owned by the current user and not group- or world-writable",
+                    path.display()
+                ),
+            ));
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    cleanup_stale_native_cache_artifacts(path);
+    Ok(())
+}
+
+fn cleanup_stale_native_cache_artifacts(directory: &Path) {
+    cleanup_stale_native_cache_artifacts_at(directory, system_time_nanos(), native_process_is_live);
+}
+
+fn cleanup_stale_native_cache_artifacts_at(
+    directory: &Path,
+    now_nanos: u128,
+    process_is_live: impl Fn(u32) -> bool,
+) {
+    const STALE_AFTER_NANOS: u128 = 24 * 60 * 60 * 1_000_000_000;
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some((owner, created_nanos)) = name
+            .to_str()
+            .and_then(parse_native_cache_transient_identity)
+        else {
+            continue;
+        };
+        if process_is_live(owner) || now_nanos.saturating_sub(created_nanos) < STALE_AFTER_NANOS {
+            continue;
+        }
+        remove_native_cache_path(&entry.path());
+    }
+}
+
+fn parse_native_cache_transient_identity(name: &str) -> Option<(u32, u128)> {
+    let tail = if let Some(tail) = name.strip_prefix(".runtime-identity-") {
+        tail
+    } else if let Some(tail) = name.strip_prefix(".discard-") {
+        let (key, tail) = tail.split_once('-')?;
+        if !is_sha256_hex(key) {
+            return None;
+        }
+        tail
+    } else {
+        let tail = name.strip_prefix('.')?;
+        let (key, tail) = tail.split_once('-')?;
+        if !is_sha256_hex(key) {
+            return None;
+        }
+        tail
+    };
+    let (owner, created_nanos) = tail.split_once('-')?;
+    if created_nanos.contains('-') {
         return None;
     }
-    Some(home.join(".cache").join("aurora").join("native"))
+    let owner = owner.parse::<u32>().ok().filter(|owner| *owner > 0)?;
+    let created_nanos = created_nanos.parse::<u128>().ok()?;
+    Some((owner, created_nanos))
+}
+
+fn native_process_is_live(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+fn write_private_cache_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
+    }
+    let result = file.write_all(contents).and_then(|()| file.flush());
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 /// Content-addressed identity of a native build.
 ///
 /// Every input that can change the emitted binary contributes: the cache
 /// format, this compiler's version, the host target, the backend, the runtime
-/// archive's identity, and the complete lowered program. Lowering already
+/// archive's identity, its ordered native link arguments, and the complete
+/// lowered program. Lowering already
 /// incorporates the entry source and every resolved dependency source, so
 /// hashing the module covers the whole dependency set without walking it
 /// again. Returning `None` disables caching rather than risking a key that
 /// omits an input.
-fn native_cache_key(mir: &MirModule) -> Option<String> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeRuntimeIdentity {
+    archive_sha256: String,
+    native_link_args: Vec<String>,
+}
+
+fn native_cache_key(mir: &MirModule, runtime_identity: &NativeRuntimeIdentity) -> Option<String> {
     let lowered = serde_json::to_vec(mir).ok()?;
-    let runtime = runtime_archive_identity();
+    let runtime = native_runtime_identity_material(runtime_identity)?;
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -998,7 +1292,7 @@ fn native_cache_key(mir: &MirModule) -> Option<String> {
         std::env::consts::ARCH.as_bytes(),
         std::env::consts::OS.as_bytes(),
         b"direct",
-        runtime.as_bytes(),
+        runtime.as_slice(),
     ] {
         material.extend_from_slice(part);
         material.push(0);
@@ -1007,60 +1301,110 @@ fn native_cache_key(mir: &MirModule) -> Option<String> {
     Some(aurora_compiler::sha256_hex(&material))
 }
 
-const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v1";
+fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<Vec<u8>> {
+    serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
+}
 
-/// The linked runtime archive's identity, by content.
+const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v3";
+
+/// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///
-/// Modification time alone is not usable here: a direct build re-runs the
-/// runtime's `cargo` invocation, which can restamp an archive whose bytes did
-/// not change, and that would invalidate every cached program on the next run.
-/// The content hash is memoized against the cheap `(length, mtime)` stamp, so
-/// the expensive read happens only when the archive actually changes on disk.
-fn runtime_archive_identity() -> String {
-    let Ok(path) = resolve_static_library_path(repo_root(), current_profile()) else {
-        return "unresolved".to_string();
-    };
-    let Ok(metadata) = fs::metadata(&path) else {
-        return format!("{}:missing", path.display());
-    };
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let stamp = format!("{}:{}:{}", path.display(), metadata.len(), modified);
-
-    let memo = native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO));
-    if let Some(memo) = memo.as_ref() {
-        if let Some(hash) = read_runtime_identity_memo(memo, &stamp) {
-            return hash;
+/// Packaged runs can read both inputs directly. Source-checkout runs reuse only
+/// an identity memo written by a completed cold build, avoiding a Cargo query
+/// on every hit while never inventing an `unresolved` cache identity.
+fn native_runtime_identity_for_cache() -> Option<NativeRuntimeIdentity> {
+    // Packaged executables link the runtime installed beside `bin/aura`;
+    // source-checkout executables use the current workspace archive. Cache
+    // lookup must fingerprint the same selection the builder will make.
+    let executable = std::env::current_exe().ok()?;
+    let (path, installed_link_args) =
+        match resolve_installed_runtime_artifacts_from_executable(&executable) {
+            Ok(Some(artifacts)) => (artifacts.staticlib, Some(artifacts.native_link_args)),
+            Ok(None) => (
+                resolve_static_library_path_in_target_dir(
+                    native_runtime_target_dir(),
+                    current_profile(),
+                )
+                .ok()?,
+                None,
+            ),
+            // An incomplete or invalid installed layout must not be hidden by a
+            // cache hit labeled with unrelated workspace artifacts.
+            Err(_) => return None,
+        };
+    let metadata = fs::metadata(&path).ok()?;
+    let stamp = runtime_archive_memo_stamp(&path, &metadata)?;
+    let memo = native_cache_root()?.join(RUNTIME_IDENTITY_MEMO);
+    if let Some(mut identity) = read_runtime_identity_memo(&memo, &stamp) {
+        if let Some(link_args) = installed_link_args {
+            identity.native_link_args = link_args;
         }
+        return Some(identity);
     }
 
-    let Ok(contents) = fs::read(&path) else {
-        return stamp;
+    // Workspace link arguments are known only after the cold Cargo query.
+    // Without its matching memo, disable lookup and let that build establish
+    // the authoritative identity. Installed manifests already carry them.
+    let native_link_args = installed_link_args?;
+    let contents = fs::read(&path).ok()?;
+    let identity = NativeRuntimeIdentity {
+        archive_sha256: aurora_compiler::sha256_hex(&contents),
+        native_link_args,
     };
-    let hash = aurora_compiler::sha256_hex(&contents);
-    if let Some(memo) = memo.as_ref() {
-        write_runtime_identity_memo(memo, &stamp, &hash);
-    }
-    hash
+    write_runtime_identity_memo(&memo, &stamp, &identity);
+    Some(identity)
 }
 
 const RUNTIME_IDENTITY_MEMO: &str = "runtime-identity";
+const MAX_RUNTIME_IDENTITY_MEMO_BYTES: u64 = 8192;
 
-fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<String> {
-    let recorded = fs::read_to_string(memo).ok()?;
-    let (recorded_stamp, hash) = recorded.split_once('\n')?;
-    (recorded_stamp == stamp).then(|| hash.trim().to_string())
+fn runtime_archive_memo_stamp(path: &Path, metadata: &fs::Metadata) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        Some(format!(
+            "{}:{}:{}:{}:{}:{}:{}:{}",
+            path.display(),
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec()
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, metadata);
+        // Platforms without a stable file-identity/change token rehash rather
+        // than reuse a memo that could alias different archive contents.
+        None
+    }
 }
 
-fn write_runtime_identity_memo(memo: &Path, stamp: &str, hash: &str) {
+fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<NativeRuntimeIdentity> {
+    let recorded = read_limited_regular_file(memo, MAX_RUNTIME_IDENTITY_MEMO_BYTES, false)?;
+    let recorded = std::str::from_utf8(&recorded).ok()?;
+    let mut lines = recorded.lines();
+    let recorded_stamp = lines.next()?;
+    let archive_sha256 = lines.next()?;
+    let native_link_args = lines.next()?;
+    if recorded_stamp != stamp || !is_sha256_hex(archive_sha256) || lines.next().is_some() {
+        return None;
+    }
+    Some(NativeRuntimeIdentity {
+        archive_sha256: archive_sha256.to_string(),
+        native_link_args: serde_json::from_str(native_link_args).ok()?,
+    })
+}
+
+fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntimeIdentity) {
     let Some(parent) = memo.parent() else {
         return;
     };
-    if fs::create_dir_all(parent).is_err() {
+    if create_private_cache_directory_all(parent).is_err() {
         return;
     }
     let staged = parent.join(format!(
@@ -1069,8 +1413,15 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, hash: &str) {
         std::process::id(),
         system_time_nanos()
     ));
-    if fs::write(&staged, format!("{stamp}\n{hash}\n")).is_err() {
-        let _ = fs::remove_file(&staged);
+    let Ok(native_link_args) = serde_json::to_string(&identity.native_link_args) else {
+        return;
+    };
+    if write_private_cache_file(
+        &staged,
+        format!("{stamp}\n{}\n{native_link_args}\n", identity.archive_sha256).as_bytes(),
+    )
+    .is_err()
+    {
         return;
     }
     if fs::rename(&staged, memo).is_err() {
@@ -1081,38 +1432,583 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, hash: &str) {
 /// Cached program binaries live under their own directory so the cache can
 /// hold its own bookkeeping without either colliding with a content key.
 const NATIVE_CACHE_PROGRAMS: &str = "programs";
+const NATIVE_CACHE_PROGRAM: &str = "program";
+const NATIVE_CACHE_DIGEST: &str = "program.sha256";
+const NATIVE_CACHE_ENTRY_ID: &str = "entry-id";
+const MAX_NATIVE_CACHE_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_NATIVE_CACHE_DIGEST_BYTES: u64 = 65;
+const MAX_NATIVE_CACHE_ENTRY_ID_BYTES: u64 = 130;
 
-/// Returns the cached binary for `key` when one is present.
-fn cached_native_binary(key: &str) -> Option<PathBuf> {
-    let candidate = native_cache_root()?.join(NATIVE_CACHE_PROGRAMS).join(key);
-    candidate.is_file().then_some(candidate)
+struct VerifiedNativeBinary {
+    contents: Vec<u8>,
+    entry: PathBuf,
+    entry_id: String,
+}
+
+/// Returns the cached binary for `key` only after its bytes and native launch
+/// shape have been verified.
+///
+/// An invalid entry is disposable cache state, not a program artifact. It is
+/// removed and reported as a miss so the caller rebuilds before executing.
+fn cached_native_binary(key: &str) -> Option<VerifiedNativeBinary> {
+    let programs = native_cache_root()?.join(NATIVE_CACHE_PROGRAMS);
+    cleanup_stale_native_cache_artifacts(&programs);
+    let entry = programs.join(key);
+    let candidate = entry.join(NATIVE_CACHE_PROGRAM);
+    let digest_path = entry.join(NATIVE_CACHE_DIGEST);
+    let entry_metadata = fs::symlink_metadata(&entry).ok()?;
+    if !entry_metadata.file_type().is_dir() {
+        remove_native_cache_entry_if_unchanged(&entry, None);
+        return None;
+    }
+    // Keep the raw observed identity for exact-entry invalidation even when
+    // its embedded key is wrong. If we discarded it here, quarantine would
+    // mistake the corrupt entry for a concurrent replacement and restore it.
+    let observed_entry_id = read_native_cache_entry_id(&entry);
+    let entry_id = observed_entry_id
+        .as_ref()
+        .filter(|entry_id| {
+            entry_id
+                .split_once(':')
+                .is_some_and(|(entry_key, _)| entry_key == key)
+        })
+        .cloned();
+
+    let recorded_digest =
+        read_limited_regular_file(&digest_path, MAX_NATIVE_CACHE_DIGEST_BYTES, false)
+            .and_then(|bytes| parse_native_cache_digest(&bytes).map(str::to_owned));
+    let contents = read_limited_regular_file(&candidate, MAX_NATIVE_CACHE_ARTIFACT_BYTES, true);
+    let verified = recorded_digest
+        .as_deref()
+        .zip(entry_id.as_deref())
+        .zip(contents.as_deref())
+        .is_some_and(|((recorded_digest, _), contents)| {
+            recorded_digest == aurora_compiler::sha256_hex(contents)
+                && native_binary_has_expected_shape(contents)
+        });
+    if verified {
+        Some(VerifiedNativeBinary {
+            contents: contents.expect("verified cache entry has program bytes"),
+            entry,
+            entry_id: entry_id.expect("verified cache entry has an identity"),
+        })
+    } else {
+        remove_native_cache_entry_if_unchanged(&entry, observed_entry_id.as_deref());
+        None
+    }
+}
+
+fn read_native_cache_entry_id(entry: &Path) -> Option<String> {
+    if !fs::symlink_metadata(entry).ok()?.file_type().is_dir() {
+        return None;
+    }
+    let contents = read_limited_regular_file(
+        &entry.join(NATIVE_CACHE_ENTRY_ID),
+        MAX_NATIVE_CACHE_ENTRY_ID_BYTES,
+        false,
+    )?;
+    let contents = contents.strip_suffix(b"\n").unwrap_or(&contents);
+    let entry_id = std::str::from_utf8(contents).ok()?;
+    let (key, nonce) = entry_id.split_once(':')?;
+    if !is_sha256_hex(key) || !is_sha256_hex(nonce) {
+        return None;
+    }
+    Some(entry_id.to_string())
+}
+
+fn read_limited_regular_file(path: &Path, limit: u64, executable: bool) -> Option<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path).ok()?;
+    if !path_metadata.file_type().is_file()
+        || path_metadata.len() > limit
+        || (executable && !native_binary_metadata_is_executable(&path_metadata))
+    {
+        return None;
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        // O_NOFOLLOW closes the metadata/open symlink race. O_NONBLOCK means a
+        // racing replacement with a FIFO or device cannot hang the cache hit
+        // before the opened handle is checked again below.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.file_type().is_file()
+        || metadata.len() > limit
+        || (executable && !native_binary_metadata_is_executable(&metadata))
+    {
+        return None;
+    }
+
+    let initial_capacity = usize::try_from(metadata.len().min(limit)).ok()?;
+    let mut contents = Vec::with_capacity(initial_capacity);
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut contents)
+        .ok()?;
+    (u64::try_from(contents.len()).ok()? <= limit).then_some(contents)
+}
+
+fn parse_native_cache_digest(contents: &[u8]) -> Option<&str> {
+    let contents = contents.strip_suffix(b"\n").unwrap_or(contents);
+    let digest = std::str::from_utf8(contents).ok()?;
+    is_sha256_hex(digest).then_some(digest)
+}
+
+fn launch_verified_native_binary(
+    verified: &VerifiedNativeBinary,
+    program_args: &[String],
+) -> std::result::Result<i32, VerifiedNativeLaunchError> {
+    let launch_root = std::env::temp_dir();
+    cleanup_stale_verified_native_directories(&launch_root);
+    let directory = launch_root.join(format!(
+        "aurora-verified-native-{}-{}",
+        std::process::id(),
+        system_time_nanos()
+    ));
+    create_private_directory(&directory).map_err(|error| {
+        VerifiedNativeLaunchError::environment(format!(
+            "failed to create private verified-native directory `{}`: {}",
+            directory.display(),
+            error
+        ))
+    })?;
+
+    #[cfg(unix)]
+    let launch_lease = match create_verified_native_launch_lease(&directory) {
+        Ok(lease) => lease,
+        Err(error) => {
+            remove_private_native_launch(&directory.join(NATIVE_CACHE_PROGRAM), &directory);
+            return Err(VerifiedNativeLaunchError::environment(format!(
+                "failed to create verified-native launch lease in `{}`: {}",
+                directory.display(),
+                error
+            )));
+        }
+    };
+
+    let private_binary = directory.join(NATIVE_CACHE_PROGRAM);
+    if let Err(error) = write_private_native_binary(&private_binary, &verified.contents) {
+        remove_private_native_launch(&private_binary, &directory);
+        return Err(VerifiedNativeLaunchError::environment(error));
+    }
+
+    // These are the already verified in-memory bytes inside a private
+    // directory, so launching this file cannot observe later replacement of
+    // the shared cache pathname.
+    let child_result = {
+        #[cfg(unix)]
+        {
+            spawn_verified_native_binary_with_lease(&private_binary, program_args, &launch_lease)
+        }
+        #[cfg(not(unix))]
+        {
+            spawn_native_binary_without_shell_fallback(&private_binary, program_args)
+        }
+    };
+    let mut child = match child_result {
+        Ok(child) => child,
+        Err(error) => {
+            remove_private_native_launch(&private_binary, &directory);
+            return Err(VerifiedNativeLaunchError::launch(&private_binary, error));
+        }
+    };
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            // A failed wait is not proof that the child stopped. Leave the
+            // directory and its inherited lease for a later safe collector.
+            return Err(VerifiedNativeLaunchError::environment(format!(
+                "failed to wait for verified direct binary `{}`: {}",
+                private_binary.display(),
+                error
+            )));
+        }
+    };
+
+    // Clean after exit. Removing an executing Mach-O can cause an otherwise
+    // successful child to terminate with status 1 on macOS. Interrupted
+    // parents are handled by the bounded stale-launch collector on the next
+    // verified run.
+    remove_private_native_launch(&private_binary, &directory);
+
+    Ok(status.code().unwrap_or(1))
+}
+
+fn create_private_directory(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // The creation mode prevents exposure; this restores owner access if a
+        // restrictive umask removed bits that the launch/store requires.
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+const VERIFIED_NATIVE_LAUNCH_LEASE: &str = ".lease";
+
+#[cfg(unix)]
+fn create_verified_native_launch_lease(directory: &Path) -> io::Result<fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true).mode(0o600);
+    let file = options.open(&path)?;
+    if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == -1 {
+        let error = io::Error::last_os_error();
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(file)
+}
+
+fn write_private_native_binary(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o700);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        format!(
+            "failed to create private verified native binary `{}`: {}",
+            path.display(),
+            error
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        file.set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(|error| {
+                format!(
+                    "failed to secure private verified native binary `{}`: {}",
+                    path.display(),
+                    error
+                )
+            })?;
+    }
+    let result = file
+        .write_all(contents)
+        .and_then(|()| file.flush())
+        .map_err(|error| {
+            format!(
+                "failed to materialize private verified native binary `{}`: {}",
+                path.display(),
+                error
+            )
+        });
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn remove_private_native_launch(binary: &Path, directory: &Path) {
+    let _ = fs::remove_file(binary);
+    let _ = fs::remove_file(directory.join(VERIFIED_NATIVE_LAUNCH_LEASE));
+    let _ = fs::remove_dir(directory);
+}
+
+fn cleanup_stale_verified_native_directories(root: &Path) {
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("aurora-verified-native-") {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.file_type().is_dir() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            if metadata.uid() != unsafe { libc::geteuid() } {
+                continue;
+            }
+        }
+        if verified_native_launch_owner_is_live(name) {
+            continue;
+        }
+
+        #[cfg(unix)]
+        match acquire_abandoned_verified_native_launch_lease(&path) {
+            Ok(VerifiedNativeLaunchLeaseState::Busy) | Err(_) => continue,
+            Ok(VerifiedNativeLaunchLeaseState::Acquired(_lease)) => {
+                // Hold the acquired lease until the directory has gone so a
+                // concurrent collector cannot race this decision.
+                let _ = fs::remove_dir_all(path);
+                continue;
+            }
+            Ok(VerifiedNativeLaunchLeaseState::Missing) => {}
+        }
+        #[cfg(not(unix))]
+        {
+            // The maintained native hosts use the lease path above. On other
+            // targets cleanup is conservative rather than guessing whether an
+            // executable may still be live.
+            continue;
+        }
+
+        // A lockless directory can only precede lease creation; no child is
+        // spawned until the lease exists. Give an interrupted creator a
+        // bounded grace period before collecting that incomplete directory.
+        let old_enough = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= STALE_AFTER);
+        if old_enough {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+#[cfg(unix)]
+enum VerifiedNativeLaunchLeaseState {
+    Missing,
+    Busy,
+    Acquired(fs::File),
+}
+
+#[cfg(unix)]
+fn acquire_abandoned_verified_native_launch_lease(
+    directory: &Path,
+) -> io::Result<VerifiedNativeLaunchLeaseState> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = match options.open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(VerifiedNativeLaunchLeaseState::Missing);
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "verified-native launch lease is not a current-user regular file",
+        ));
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(VerifiedNativeLaunchLeaseState::Acquired(file));
+    }
+    let error = io::Error::last_os_error();
+    let raw_error = error.raw_os_error();
+    if raw_error == Some(libc::EWOULDBLOCK) || raw_error == Some(libc::EAGAIN) {
+        Ok(VerifiedNativeLaunchLeaseState::Busy)
+    } else {
+        Err(error)
+    }
+}
+
+fn verified_native_launch_owner_is_live(name: &str) -> bool {
+    #[cfg(unix)]
+    {
+        let Some(pid) = name
+            .strip_prefix("aurora-verified-native-")
+            .and_then(|suffix| suffix.split_once('-').map(|(pid, _)| pid))
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok())
+        else {
+            return true;
+        };
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+#[cfg(unix)]
+fn native_binary_metadata_is_executable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn native_binary_metadata_is_executable(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 /// Publishes `built` into the cache under `key`.
 ///
-/// The binary is linked into place through a unique temporary name and then
-/// renamed, so a concurrent run either sees no entry or a complete one, and
-/// never launches a half-written executable. A failure to publish is not a
-/// build failure: the run continues with the binary it already has.
+/// The binary and the digest of the copied bytes are written into a unique
+/// temporary directory and then renamed together, so a concurrent run either
+/// sees no entry or a complete, self-verifiable one. A failure to publish is
+/// not a build failure: the run continues with the binary it already has.
 fn store_native_binary(key: &str, built: &Path) {
     let Some(root) = native_cache_root().map(|root| root.join(NATIVE_CACHE_PROGRAMS)) else {
         return;
     };
-    if fs::create_dir_all(&root).is_err() {
+    if create_private_cache_directory_all(&root).is_err() {
         return;
     }
-    let staged = root.join(format!(
-        ".{}-{}-{}",
-        key,
-        std::process::id(),
-        system_time_nanos()
-    ));
-    if fs::copy(built, &staged).is_err() {
-        let _ = fs::remove_file(&staged);
+    let nonce = system_time_nanos();
+    let staged = root.join(format!(".{}-{}-{}", key, std::process::id(), nonce));
+    if create_private_directory(&staged).is_err() {
+        return;
+    }
+    let staged_binary = staged.join(NATIVE_CACHE_PROGRAM);
+    let staged_digest = staged.join(NATIVE_CACHE_DIGEST);
+    let staged_entry_id = staged.join(NATIVE_CACHE_ENTRY_ID);
+    let copied = fs::copy(built, &staged_binary)
+        .ok()
+        .and_then(|_| {
+            read_limited_regular_file(&staged_binary, MAX_NATIVE_CACHE_ARTIFACT_BYTES, true)
+        })
+        .filter(|contents| native_binary_has_expected_shape(contents));
+    let Some(contents) = copied else {
+        remove_native_cache_path(&staged);
+        return;
+    };
+    let digest = aurora_compiler::sha256_hex(&contents);
+    if write_private_cache_file(&staged_digest, format!("{digest}\n").as_bytes()).is_err() {
+        remove_native_cache_path(&staged);
+        return;
+    }
+    let entry_nonce =
+        aurora_compiler::sha256_hex(format!("{key}:{}:{nonce}", std::process::id()).as_bytes());
+    let entry_id = format!("{key}:{entry_nonce}");
+    if write_private_cache_file(&staged_entry_id, format!("{entry_id}\n").as_bytes()).is_err() {
+        remove_native_cache_path(&staged);
         return;
     }
     if fs::rename(&staged, root.join(key)).is_err() {
-        let _ = fs::remove_file(&staged);
+        remove_native_cache_path(&staged);
+    }
+}
+
+fn invalidate_cached_native_binary(verified: &VerifiedNativeBinary) {
+    remove_native_cache_entry_if_unchanged(&verified.entry, Some(&verified.entry_id));
+}
+
+fn remove_native_cache_entry_if_unchanged(entry: &Path, expected_entry_id: Option<&str>) {
+    let Some(parent) = entry.parent() else {
+        return;
+    };
+    let name = entry
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("entry");
+    let quarantined = parent.join(format!(
+        ".discard-{}-{}-{}",
+        name,
+        std::process::id(),
+        system_time_nanos()
+    ));
+    if fs::rename(entry, &quarantined).is_err() {
+        return;
+    }
+    let moved_entry_id = read_native_cache_entry_id(&quarantined);
+    if moved_entry_id.as_deref() == expected_entry_id {
+        remove_native_cache_path(&quarantined);
+        return;
+    }
+
+    // Another process replaced the original entry before this process could
+    // quarantine it. Never delete that replacement. Restore it if the
+    // canonical key is still vacant; otherwise leave the quarantined copy for
+    // the bounded stale-cache cleanup rather than destroying known-good data.
+    if fs::symlink_metadata(entry).is_err() {
+        let _ = fs::rename(&quarantined, entry);
+    }
+}
+
+fn remove_native_cache_path(path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            let _ = fs::remove_dir_all(path);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(path);
+        }
+        Err(_) => {}
+    }
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn native_binary_has_expected_shape(contents: &[u8]) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(magic) = contents.get(..4) else {
+            return false;
+        };
+        matches!(
+            magic,
+            b"\xfe\xed\xfa\xce"
+                | b"\xce\xfa\xed\xfe"
+                | b"\xfe\xed\xfa\xcf"
+                | b"\xcf\xfa\xed\xfe"
+                | b"\xca\xfe\xba\xbe"
+                | b"\xbe\xba\xfe\xca"
+                | b"\xca\xfe\xba\xbf"
+                | b"\xbf\xba\xfe\xca"
+        )
+    }
+    #[cfg(target_os = "linux")]
+    {
+        contents.starts_with(b"\x7fELF")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        !contents.is_empty()
     }
 }
 
@@ -1307,6 +2203,15 @@ fn build_direct_native_binary(
     mir: &MirModule,
     output_path: &Path,
 ) -> std::result::Result<(), String> {
+    build_direct_native_binary_with_identity(path, source, mir, output_path).map(|_| ())
+}
+
+fn build_direct_native_binary_with_identity(
+    path: &str,
+    source: &str,
+    mir: &MirModule,
+    output_path: &Path,
+) -> std::result::Result<NativeRuntimeIdentity, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -1328,18 +2233,30 @@ fn build_direct_native_binary(
             error
         )
     })?;
-    let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
-        resolve_static_library_path(repo_root(), current_profile()).and_then(|refreshed| {
-            fs::read(&refreshed).map_err(|error| {
-                format!(
-                    "failed to read Aurora runtime library `{}`: {}",
-                    refreshed.display(),
-                    error
-                )
-            })
-        })
+    let archive_stamp_before = fs::metadata(&native_runtime.staticlib)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
+    let staticlib_bytes = fs::read(&native_runtime.staticlib).map_err(|error| {
+        format!(
+            "failed to read Aurora runtime library `{}`: {}",
+            native_runtime.staticlib.display(),
+            error
+        )
     })?;
-    fs::write(&temp_staticlib, staticlib_bytes).map_err(|error| {
+    let archive_stamp_after = fs::metadata(&native_runtime.staticlib)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
+    let stable_archive_stamp =
+        archive_stamp_before.filter(|before| archive_stamp_after.as_ref() == Some(before));
+    // Return the identity of the exact bytes staged for this link. A Cargo
+    // refresh can replace the workspace archive after pre-build lookup, so
+    // storing under the earlier identity would make the immediate warm run
+    // miss and could associate the binary with the wrong runtime.
+    let runtime_identity = NativeRuntimeIdentity {
+        archive_sha256: aurora_compiler::sha256_hex(&staticlib_bytes),
+        native_link_args: native_runtime.native_link_args.clone(),
+    };
+    fs::write(&temp_staticlib, &staticlib_bytes).map_err(|error| {
         format!(
             "failed to stage Aurora runtime library `{}` as `{}`: {}",
             native_runtime.staticlib.display(),
@@ -1373,7 +2290,17 @@ fn build_direct_native_binary(
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    Ok(())
+    if let Some(stamp) = stable_archive_stamp {
+        let current_stamp = fs::metadata(&native_runtime.staticlib)
+            .ok()
+            .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
+        if current_stamp.as_deref() == Some(stamp.as_str()) {
+            if let Some(memo) = native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO)) {
+                write_runtime_identity_memo(&memo, &stamp, &runtime_identity);
+            }
+        }
+    }
+    Ok(runtime_identity)
 }
 
 fn build_mir_runtime_binary(
@@ -1405,15 +2332,16 @@ fn build_mir_runtime_binary(
         "MIR runtime launcher source",
     )?;
     let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
-        resolve_static_library_path(repo_root(), current_profile()).and_then(|refreshed| {
-            fs::read(&refreshed).map_err(|error| {
-                format!(
-                    "failed to read Aurora runtime library `{}`: {}",
-                    refreshed.display(),
-                    error
-                )
+        resolve_static_library_path_in_target_dir(native_runtime_target_dir(), current_profile())
+            .and_then(|refreshed| {
+                fs::read(&refreshed).map_err(|error| {
+                    format!(
+                        "failed to read Aurora runtime library `{}`: {}",
+                        refreshed.display(),
+                        error
+                    )
+                })
             })
-        })
     })?;
     write_unique_temp_file(
         &temp_staticlib,
@@ -1601,7 +2529,13 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
     }
 
     let staticlib = build_native_runtime_staticlib()?
-        .or_else(|| resolve_static_library_path(repo_root(), current_profile()).ok())
+        .or_else(|| {
+            resolve_static_library_path_in_target_dir(
+                native_runtime_target_dir(),
+                current_profile(),
+            )
+            .ok()
+        })
         .ok_or_else(|| {
             format!(
                 "failed to locate compiled Aurora runtime library from Cargo artifact output or `{}`",
@@ -1814,19 +2748,35 @@ fn static_library_file_name() -> &'static str {
     "libaurora_compiler.a"
 }
 
+#[cfg(test)]
 fn resolve_static_library_path(
     root: PathBuf,
     profile: &str,
 ) -> std::result::Result<PathBuf, String> {
-    let primary = root
-        .join("target")
-        .join(profile)
-        .join(static_library_file_name());
+    resolve_static_library_path_in_target_dir(root.join("target"), profile)
+}
+
+fn native_runtime_target_dir() -> PathBuf {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        return repo_root().join("target/native-runtime-uninstrumented");
+    }
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(target) if Path::new(&target).is_absolute() => PathBuf::from(target),
+        Some(target) => repo_root().join(target),
+        None => repo_root().join("target"),
+    }
+}
+
+fn resolve_static_library_path_in_target_dir(
+    target_dir: PathBuf,
+    profile: &str,
+) -> std::result::Result<PathBuf, String> {
+    let primary = target_dir.join(profile).join(static_library_file_name());
     if primary.exists() {
         return Ok(primary);
     }
 
-    let deps_dir = root.join("target").join(profile).join("deps");
+    let deps_dir = target_dir.join(profile).join("deps");
     let mut candidates = fs::read_dir(&deps_dir)
         .map_err(|error| {
             format!(
@@ -1938,11 +2888,19 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        configure_native_runtime_cargo, parse_run_backend, parse_static_library_artifact_path,
+        cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
+        configure_native_runtime_cargo, create_private_cache_directory_all,
+        native_launch_error_invalidates_cache, native_runtime_identity_material, parse_run_backend,
+        parse_static_library_artifact_path, remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
-        select_build_backend, select_run_outcome, write_unique_temp_file,
-        write_unique_temp_file_with_writer, BuildBackend, NativeRunOutcome, RunBackend,
-        SelectedBuildBackend,
+        runtime_archive_memo_stamp, select_build_backend, select_run_outcome,
+        write_unique_temp_file, write_unique_temp_file_with_writer, BuildBackend, NativeRunOutcome,
+        NativeRuntimeIdentity, RunBackend, SelectedBuildBackend, NATIVE_CACHE_ENTRY_ID,
+    };
+    #[cfg(unix)]
+    use super::{
+        create_private_directory, create_verified_native_launch_lease,
+        spawn_verified_native_binary_with_lease,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -1977,6 +2935,260 @@ mod tests {
         let resolved = resolve_static_library_path(root.clone(), "debug")
             .expect("should resolve runtime library");
         assert_eq!(resolved, primary);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
+        let root = unique_temp_dir("runtime-memo-stamp");
+        let archive = root.join("libaurora_compiler.a");
+        let replacement = root.join("replacement.a");
+        fs::write(&archive, b"archive-a").expect("first archive should write");
+        let first_metadata = fs::metadata(&archive).expect("first metadata should exist");
+        let first_modified = first_metadata
+            .modified()
+            .expect("first archive should have an mtime");
+        let first_stamp = runtime_archive_memo_stamp(&archive, &first_metadata)
+            .expect("Unix archive metadata should have a reliable stamp");
+
+        fs::write(&replacement, b"archive-b").expect("replacement archive should write");
+        let replacement_file = fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .expect("replacement archive should reopen");
+        replacement_file
+            .set_times(fs::FileTimes::new().set_modified(first_modified))
+            .expect("replacement mtime should be restorable");
+        drop(replacement_file);
+        fs::rename(&replacement, &archive).expect("replacement should install atomically");
+
+        let second_metadata = fs::metadata(&archive).expect("replacement metadata should exist");
+        assert_eq!(second_metadata.len(), first_metadata.len());
+        assert_eq!(
+            second_metadata.modified().expect("replacement mtime"),
+            first_modified
+        );
+        let second_stamp = runtime_archive_memo_stamp(&archive, &second_metadata)
+            .expect("Unix replacement should have a reliable stamp");
+        assert_ne!(
+            second_stamp, first_stamp,
+            "file identity or ctime must invalidate a same-size, same-mtime archive memo"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_runtime_identity_preserves_archive_and_ordered_link_inputs() {
+        let identity = |hash: &str, args: &[&str]| NativeRuntimeIdentity {
+            archive_sha256: hash.repeat(64),
+            native_link_args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        };
+        let base = native_runtime_identity_material(&identity("a", &["-lone", "-ltwo"]))
+            .expect("runtime identity should serialize");
+
+        for changed in [
+            identity("b", &["-lone", "-ltwo"]),
+            identity("a", &["-ltwo", "-lone"]),
+            identity("a", &["-lone", "-ltwo", "-ltwo"]),
+            identity("a", &["-lon", "e-ltwo"]),
+        ] {
+            assert_ne!(
+                native_runtime_identity_material(&changed)
+                    .expect("changed runtime identity should serialize"),
+                base,
+                "archive bytes, argument order, duplication, and boundaries must contribute independently"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_executable_shape_errors_invalidate_native_cache_entries() {
+        for raw_error in [
+            libc::ENOEXEC,
+            libc::EBADEXEC,
+            libc::EBADARCH,
+            libc::EBADMACHO,
+            libc::ESHLIBVERS,
+        ] {
+            assert!(
+                native_launch_error_invalidates_cache(&io::Error::from_raw_os_error(raw_error)),
+                "macOS executable-format error {raw_error} must rebuild the cache entry"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_verified_launch_cleanup_never_removes_a_live_owner() {
+        let root = unique_temp_dir("live-verified-launch");
+        let launch = root.join(format!("aurora-verified-native-{}-1", std::process::id()));
+        fs::create_dir(&launch).expect("launch directory should exist");
+        fs::File::open(&launch)
+            .expect("launch directory should open")
+            .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
+            .expect("launch directory should be backdated");
+
+        cleanup_stale_verified_native_directories(&root);
+        assert!(
+            launch.is_dir(),
+            "age must never override proof that a launch owner is still live"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_launch_lease_survives_parent_handle_until_native_child_exits() {
+        let root = unique_temp_dir("inherited-verified-launch-lease");
+        let launch = root.join(format!("aurora-verified-native-{}-1", libc::pid_t::MAX));
+        create_private_directory(&launch).expect("launch directory should be private");
+        let lease =
+            create_verified_native_launch_lease(&launch).expect("launch lease should exist");
+        let mut child = spawn_verified_native_binary_with_lease(
+            PathBuf::from("/bin/sleep").as_path(),
+            &["1".to_string()],
+            &lease,
+        )
+        .expect("native child should start with the inherited lease");
+
+        // Simulate the aura parent dying after spawn: only the exec'd child
+        // retains the open-file-description lock.
+        drop(lease);
+        cleanup_stale_verified_native_directories(&root);
+        assert!(
+            launch.is_dir(),
+            "cleanup must preserve a launch directory while its native child holds the lease"
+        );
+
+        let status = child.wait().expect("native child should remain waitable");
+        assert!(status.success());
+        cleanup_stale_verified_native_directories(&root);
+        assert!(
+            !launch.exists(),
+            "the abandoned launch directory should be collected after the child releases its lease"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_invalidation_does_not_delete_a_replacement_entry() {
+        let root = unique_temp_dir("conditional-cache-invalidation");
+        let entry = root.join("programs").join("a".repeat(64));
+        fs::create_dir_all(&entry).expect("replacement entry should exist");
+        let key = "a".repeat(64);
+        let old_id = format!("{}:{}", key, "b".repeat(64));
+        let replacement_id = format!("{}:{}", key, "c".repeat(64));
+        fs::write(
+            entry.join(NATIVE_CACHE_ENTRY_ID),
+            format!("{replacement_id}\n"),
+        )
+        .expect("replacement identity should write");
+
+        remove_native_cache_entry_if_unchanged(&entry, Some(&old_id));
+        assert!(
+            entry.is_dir(),
+            "an invalidator holding the old identity must restore the replacement"
+        );
+        assert_eq!(
+            fs::read_to_string(entry.join(NATIVE_CACHE_ENTRY_ID))
+                .expect("replacement identity should remain")
+                .trim(),
+            replacement_id
+        );
+
+        remove_native_cache_entry_if_unchanged(&entry, Some(&replacement_id));
+        assert!(
+            !entry.exists(),
+            "an invalidator with the current identity should remove that exact entry"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_cache_cleanup_removes_only_old_dead_exact_transients() {
+        const DAY_NANOS: u128 = 24 * 60 * 60 * 1_000_000_000;
+
+        let root = unique_temp_dir("native-cache-transient-cleanup");
+        let key = "a".repeat(64);
+        let owner = 42;
+        let old = 1;
+        let now = DAY_NANOS * 2;
+        let memo = root.join(format!(".runtime-identity-{owner}-{old}"));
+        let publish = root.join(format!(".{key}-{owner}-{old}"));
+        let discard = root.join(format!(".discard-{key}-{owner}-{old}"));
+        let canonical = root.join(&key);
+        let malformed = root.join(format!(".discard-not-a-key-{owner}-{old}"));
+        let recent = root.join(format!(".runtime-identity-{owner}-{now}"));
+        fs::write(&memo, b"partial memo").expect("memo stage should write");
+        fs::create_dir(&publish).expect("publish stage should exist");
+        fs::create_dir(&discard).expect("discard stage should exist");
+        fs::create_dir(&canonical).expect("canonical entry should exist");
+        fs::create_dir(&malformed).expect("malformed lookalike should exist");
+        fs::write(&recent, b"recent memo").expect("recent memo stage should write");
+
+        cleanup_stale_native_cache_artifacts_at(&root, now, |_| false);
+        for transient in [&memo, &publish, &discard] {
+            assert!(
+                !transient.exists(),
+                "old dead transient `{}` should be removed",
+                transient.display()
+            );
+        }
+        for preserved in [&canonical, &malformed, &recent] {
+            assert!(
+                preserved.exists(),
+                "non-transient or recent path `{}` must be preserved",
+                preserved.display()
+            );
+        }
+
+        let live = root.join(format!(".{key}-{owner}-{old}"));
+        fs::create_dir(&live).expect("live publish stage should exist");
+        cleanup_stale_native_cache_artifacts_at(&root, now, |pid| pid == owner);
+        assert!(
+            live.is_dir(),
+            "a positively live owner must override transient age"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_cache_rejects_group_or_world_writable_roots() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = unique_temp_dir("native-cache-trust");
+        let writable = root.join("writable");
+        fs::create_dir(&writable).expect("cache root should be creatable");
+        fs::set_permissions(&writable, fs::Permissions::from_mode(0o777))
+            .expect("cache root permissions should be adjustable");
+        let error = create_private_cache_directory_all(&writable)
+            .expect_err("shared-writable cache roots must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            fs::metadata(&writable)
+                .expect("rejected root should remain")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o777,
+            "rejection must not chmod a caller-owned shared directory"
+        );
+
+        let real = root.join("real");
+        let linked = root.join("linked");
+        fs::create_dir(&real).expect("symlink target should exist");
+        symlink(&real, &linked).expect("cache-root symlink should be creatable");
+        create_private_cache_directory_all(&linked)
+            .expect_err("a cache root symlink must not be trusted as a private directory");
 
         let _ = fs::remove_dir_all(root);
     }

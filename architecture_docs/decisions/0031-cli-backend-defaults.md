@@ -44,6 +44,21 @@ This decision explicitly amends only the original roadmap's interim `auto`
 default for `aura run`. It does not weaken the backend selector, visible
 fallback, cache, or parity requirements.
 
+Batch 3 hardened the cache requirement without changing this default split.
+Every hit now verifies key-bound entry metadata, bounded regular files, the
+artifact's recorded digest, and native launch state, then launches a private
+copy of the verified bytes without an ENOEXEC shell fallback. Corrupt or
+format-invalid entries rebuild; environmental launch failures preserve valid
+cache state. Keys bind the exact runtime archive bytes and ordered native link
+arguments used by the cold build. An inherited launch lease prevents
+interrupted-parent cleanup from removing an executable while its native child
+is still live. The cache root is explicitly a private, trusted-user boundary.
+This work intentionally invalidates the earlier resident-cache latency as a
+current guarantee: verified hits measured `0.81s` on the checkpoint workstation
+after development-profile SHA-256 optimization. Any future native-default
+proposal must benchmark this integrity-preserving path, not the pre-verification
+Phase 4 implementation.
+
 ## Consequences
 
 The common edit-run loop remains fast and predictable. Users can still exercise

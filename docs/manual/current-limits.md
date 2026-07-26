@@ -99,6 +99,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 ## Tooling
 
 - `build` requires a host C compiler. Source-checkout builds may use Cargo to refresh the native runtime; release archives carry that runtime and do not require Rust or the source checkout.
+- Native `run` cache entries larger than 512 MiB are not retained. The
+  just-built program still runs, but a later invocation rebuilds it instead of
+  using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
 - The default `--backend auto` first tries direct emission and may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only and intentionally has no semantic diagnostics or member inference.

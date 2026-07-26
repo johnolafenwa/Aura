@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -110,6 +112,57 @@ fn wait_with_timeout(
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn command_output_with_timeout(
+    mut command: Command,
+    timeout: std::time::Duration,
+    context: &str,
+) -> std::process::Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("{context}: failed to spawn command: {error}"));
+    let status = match wait_with_timeout(&mut child, timeout) {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            if let Some(mut pipe) = child.stdout.take() {
+                let _ = pipe.read_to_end(&mut stdout);
+            }
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_end(&mut stderr);
+            }
+            panic!(
+                "{context}: command did not finish within {timeout:?}; stdout was:\n{}\nstderr was:\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("captured stdout should exist")
+        .read_to_end(&mut stdout)
+        .expect("captured stdout should be readable");
+    child
+        .stderr
+        .take()
+        .expect("captured stderr should exist")
+        .read_to_end(&mut stderr)
+        .expect("captured stderr should be readable");
+    std::process::Output {
+        status,
+        stdout,
+        stderr,
     }
 }
 
@@ -1165,8 +1218,153 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
     }
 }
 
+#[cfg(unix)]
+struct NativeCacheFixture {
+    cache: TempDir,
+    _source: TempDir,
+    source_path: PathBuf,
+    entry: PathBuf,
+}
+
+#[cfg(unix)]
+impl NativeCacheFixture {
+    fn new(prefix: &str) -> Self {
+        let cache = TempDir::new(&format!("{prefix}-cache"));
+        let (source, source_path) = write_temp_source(
+            &format!("{prefix}-source"),
+            "def main() -> int32:\n    print(\"cached\")\n    return 0\n",
+        );
+
+        let run = |cache_path: &std::path::Path| {
+            Command::new(aura_bin())
+                .env("AURORA_CACHE_DIR", cache_path)
+                .arg("run")
+                .arg("--backend")
+                .arg("direct")
+                .arg(&source_path)
+                .output()
+                .expect("failed to populate the native cache")
+        };
+
+        let cold = run(cache.path());
+        assert!(
+            cold.status.success(),
+            "native-cache cold run failed, stderr was:\n{}",
+            String::from_utf8_lossy(&cold.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
+
+        let mut entries = fs::read_dir(cache.path().join("programs"))
+            .expect("program cache should exist")
+            .map(|entry| entry.expect("cache entry should be readable").path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(
+            entries.len(),
+            1,
+            "fixture should publish exactly one program entry, found {entries:?}"
+        );
+
+        Self {
+            cache,
+            _source: source,
+            source_path,
+            entry: entries.remove(0),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(aura_bin());
+        command
+            .env("AURORA_CACHE_DIR", self.cache.path())
+            .arg("run")
+            .arg("--backend")
+            .arg("direct")
+            .arg(&self.source_path);
+        command
+    }
+
+    fn program(&self) -> PathBuf {
+        self.entry.join("program")
+    }
+
+    fn digest(&self) -> PathBuf {
+        self.entry.join("program.sha256")
+    }
+}
+
+#[cfg(unix)]
+fn replace_file_with_fifo(path: &std::path::Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    fs::remove_file(path).expect("regular cache member should be removable");
+    let path = CString::new(path.as_os_str().as_bytes())
+        .expect("temporary cache path should not contain a nul byte");
+    let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+    assert_eq!(
+        result,
+        0,
+        "failed to create cache-member FIFO: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+#[cfg(unix)]
 #[test]
-fn native_run_cache_reuses_one_binary_and_keys_on_the_program() {
+fn native_cache_creates_every_new_path_component_private_under_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+
+    let root = TempDir::new("aurora-native-cache-private-components");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+        .expect("pre-existing cache parent should be private");
+    let cache = root.path().join("new-parent").join("new-cache");
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-cache-private-components-run",
+        "def main() -> int32:\n    return 0\n",
+    );
+
+    let mut command = Command::new(aura_bin());
+    command
+        .env("AURORA_CACHE_DIR", &cache)
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path);
+    // Change the mask in the child immediately before exec so this test does
+    // not mutate process-global state while other Rust tests are running.
+    unsafe {
+        command.pre_exec(|| {
+            libc::umask(0o000);
+            Ok(())
+        });
+    }
+    let output = command
+        .output()
+        .expect("failed to run aura with a permissive umask");
+    assert!(
+        output.status.success(),
+        "direct run should succeed with a private cache, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for path in [root.path().join("new-parent"), cache] {
+        assert_eq!(
+            fs::metadata(&path)
+                .unwrap_or_else(|error| panic!("{} should exist: {error}", path.display()))
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "new cache component `{}` must never be group- or world-accessible",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_program() {
     let cache = TempDir::new("aurora-native-cache");
     let source = "def main() -> int32:\n    print(\"cached\")\n    return 0\n";
     let (_temp, source_path) = write_temp_source("aurora-native-cache-run", source);
@@ -1181,17 +1379,6 @@ fn native_run_cache_reuses_one_binary_and_keys_on_the_program() {
             .output()
             .expect("failed to run aura run --backend direct")
     };
-
-    // The key covers the runtime archive by design, so a build that settles a
-    // stale archive legitimately produces a different key than the run before
-    // it. Settle the runtime first, then measure the program cache alone.
-    let settle = run(&source_path);
-    assert!(
-        settle.status.success(),
-        "settling run failed, stderr was:\n{}",
-        String::from_utf8_lossy(&settle.stderr)
-    );
-    fs::remove_dir_all(cache.path()).expect("cache directory should be removable");
 
     let cold = run(&source_path);
     assert!(
@@ -1222,14 +1409,228 @@ fn native_run_cache_reuses_one_binary_and_keys_on_the_program() {
         !after_cold[0].starts_with('.'),
         "cache published a staged name: {after_cold:?}"
     );
+    let cached_entry = cache.path().join("programs").join(&after_cold[0]);
+    let cached_binary = cached_entry.join("program");
+    let cached_digest = cached_entry.join("program.sha256");
+    assert!(
+        cached_binary.is_file(),
+        "the cache entry must contain the native program"
+    );
+    assert!(
+        cached_digest.is_file(),
+        "the cache entry must record the program's own content hash"
+    );
 
-    let warm = run(&source_path);
-    assert!(warm.status.success());
+    let cached_contents = fs::read(&cached_binary).expect("cached binary should be readable");
+    let expected_digest = aurora_compiler::sha256_hex(&cached_contents);
+    assert_eq!(
+        fs::read_to_string(&cached_digest)
+            .expect("cached digest should be readable")
+            .trim(),
+        expected_digest,
+        "the stored digest must describe the cached program bytes"
+    );
+    let verified_binary_modified = fs::metadata(&cached_binary)
+        .expect("cached binary metadata should be readable")
+        .modified()
+        .expect("cached binary modification time should be readable");
+    let verified_digest = fs::read(&cached_digest).expect("cached digest should be readable");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // A valid hit must return before compiler/linker selection. Poisoning CC
+    // makes this a behavioral proof of reuse: an implementation that silently
+    // rebuilds on every invocation fails instead of passing because an
+    // existing content-addressed entry masks the attempted republish.
+    let missing_cc = cache.path().join("missing-cc");
+    let warm = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .env("CC", &missing_cc)
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(source_path.display().to_string())
+        .output()
+        .expect("failed to run a verified native cache hit");
+    assert!(
+        warm.status.success(),
+        "a verified cache hit must not invoke the poisoned compiler, stderr was:\n{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&warm.stdout), "cached\n");
     assert_eq!(
         entries("warm"),
         after_cold,
         "a warm run must reuse the cached binary rather than publish another"
+    );
+    assert_eq!(
+        fs::metadata(&cached_binary)
+            .expect("verified cached binary should remain readable")
+            .modified()
+            .expect("verified cached binary modification time should remain readable"),
+        verified_binary_modified,
+        "a verified cache hit must launch without rebuilding or rewriting"
+    );
+    assert_eq!(
+        fs::read(&cached_digest).expect("verified digest should remain readable"),
+        verified_digest,
+        "a verified cache hit must not rewrite its digest"
+    );
+
+    // A syntactically valid identity that is bound to another content key is
+    // still corrupt metadata. The mismatched entry must be removed, rebuilt,
+    // and retained as the next warm hit rather than restored after quarantine.
+    let cached_entry_id = cached_entry.join("entry-id");
+    let wrong_key = if after_cold[0] == "0".repeat(64) {
+        "1".repeat(64)
+    } else {
+        "0".repeat(64)
+    };
+    fs::write(
+        &cached_entry_id,
+        format!("{wrong_key}:{}\n", "2".repeat(64)),
+    )
+    .expect("cached entry identity should be replaceable");
+    let after_entry_id_mismatch = run(&source_path);
+    assert!(
+        after_entry_id_mismatch.status.success(),
+        "entry-id mismatch should rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&after_entry_id_mismatch.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&after_entry_id_mismatch.stdout),
+        "cached\n"
+    );
+    assert!(
+        fs::read_to_string(&cached_entry_id)
+            .expect("entry-id mismatch rebuild should publish an identity")
+            .starts_with(&format!("{}:", after_cold[0])),
+        "rebuilt entry identity must be bound to its content key"
+    );
+    let retained_identity = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .env("CC", &missing_cc)
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(source_path.display().to_string())
+        .output()
+        .expect("failed to run after rebuilding mismatched entry identity");
+    assert!(
+        retained_identity.status.success(),
+        "the rebuilt entry must be retained as a warm hit, stderr was:\n{}",
+        String::from_utf8_lossy(&retained_identity.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&retained_identity.stdout),
+        "cached\n"
+    );
+
+    // A native-shaped artifact with the wrong recorded digest must rebuild.
+    // This separately proves that hit verification consults the sidecar rather
+    // than accepting the executable header alone.
+    fs::write(&cached_digest, format!("{}\n", "0".repeat(64)))
+        .expect("cached digest should be replaceable");
+    let after_digest_mismatch = run(&source_path);
+    assert!(
+        after_digest_mismatch.status.success(),
+        "digest mismatch should rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&after_digest_mismatch.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&after_digest_mismatch.stdout),
+        "cached\n"
+    );
+    let rebuilt_contents =
+        fs::read(&cached_binary).expect("digest-mismatch rebuild should publish a binary");
+    assert_eq!(
+        fs::read_to_string(&cached_digest)
+            .expect("digest-mismatch rebuild should publish a digest")
+            .trim(),
+        aurora_compiler::sha256_hex(&rebuilt_contents),
+        "a digest mismatch must be replaced by a self-verifying entry"
+    );
+
+    // A truncated artifact must fail content verification and rebuild. In
+    // particular, it must never reach the macOS ENOEXEC shell fallback.
+    fs::write(&cached_binary, []).expect("cached binary should be truncatable");
+    let after_truncate = run(&source_path);
+    assert!(
+        after_truncate.status.success(),
+        "truncated cache entry should rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&after_truncate.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&after_truncate.stdout), "cached\n");
+    assert!(
+        fs::metadata(&cached_binary)
+            .expect("rebuilt cached binary should exist")
+            .len()
+            > 0,
+        "the truncated artifact must be replaced"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(&cached_binary)
+            .expect("cached binary permissions should be readable")
+            .permissions();
+        permissions.set_mode(permissions.mode() & !0o111);
+        fs::set_permissions(&cached_binary, permissions)
+            .expect("cached execute permissions should be removable");
+        let after_unlaunchable = run(&source_path);
+        assert!(
+            after_unlaunchable.status.success(),
+            "unlaunchable verified entry should rebuild, stderr was:\n{}",
+            String::from_utf8_lossy(&after_unlaunchable.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&after_unlaunchable.stdout),
+            "cached\n"
+        );
+        assert_ne!(
+            fs::metadata(&cached_binary)
+                .expect("unlaunchable entry should be replaced")
+                .permissions()
+                .mode()
+                & 0o111,
+            0,
+            "the rebuilt cache entry must be executable"
+        );
+    }
+
+    // A digest-matching file with a plausible native magic can still be a
+    // malformed executable. It must reach a no-shell-fallback launch probe,
+    // fail as cache state, and rebuild rather than becoming a program result.
+    let wrong_bytes: &[u8] = if cfg!(target_os = "macos") {
+        b"\xcf\xfa\xed\xfeexit 0\n"
+    } else if cfg!(target_os = "linux") {
+        b"\x7fELFexit 0\n"
+    } else {
+        b"native-format-invalid\n"
+    };
+    fs::write(&cached_binary, wrong_bytes).expect("cached binary should be replaceable");
+    fs::write(
+        &cached_digest,
+        format!("{}\n", aurora_compiler::sha256_hex(wrong_bytes)),
+    )
+    .expect("matching wrong-bytes digest should be writable");
+    let after_wrong_bytes = run(&source_path);
+    assert!(
+        after_wrong_bytes.status.success(),
+        "malformed native-shaped cache entry should rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&after_wrong_bytes.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&after_wrong_bytes.stdout),
+        "cached\n",
+        "digest-matching malformed native bytes must not become a program result"
+    );
+    assert!(
+        fs::metadata(&cached_binary)
+            .expect("wrong-shape artifact should be replaced")
+            .len()
+            > wrong_bytes.len() as u64,
+        "the wrong-shape artifact must be replaced by a native binary"
     );
 
     // Changing the program changes the content key, so the cache gains a
@@ -1253,6 +1654,230 @@ fn native_run_cache_reuses_one_binary_and_keys_on_the_program() {
     assert!(
         cache.path().join("runtime-identity").is_file(),
         "the runtime identity memo should be recorded at the cache root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = NativeCacheFixture::new("aurora-native-cache-non-regular");
+    let timeout = std::time::Duration::from_secs(10);
+    let missing_cc = fixture.cache.path().join("missing-cc");
+    let launch_temp = fixture.cache.path().join("launch-temp");
+    fs::create_dir(&launch_temp).expect("controlled launch temp should be creatable");
+
+    // A verified warm hit is staged privately, and every launch artifact must
+    // be removed again after the child exits.
+    let mut warm_command = fixture.command();
+    warm_command
+        .env("CC", &missing_cc)
+        .env("TMPDIR", &launch_temp);
+    let warm = command_output_with_timeout(warm_command, timeout, "verified native cache hit");
+    assert!(
+        warm.status.success(),
+        "verified hit failed with {:?}; stdout was:\n{}\nstderr was:\n{}",
+        warm.status,
+        String::from_utf8_lossy(&warm.stdout),
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&warm.stdout), "cached\n");
+    let leaked_launch_artifacts = fs::read_dir(&launch_temp)
+        .expect("controlled launch temp should remain readable")
+        .map(|entry| {
+            entry
+                .expect("launch-temp entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.starts_with("aurora-verified-native-"))
+        .collect::<Vec<_>>();
+    assert!(
+        leaked_launch_artifacts.is_empty(),
+        "successful verified hit leaked private launch artifacts: {leaked_launch_artifacts:?}"
+    );
+
+    // A symlinked program must not be followed even when its target is a real
+    // native executable and the sidecar matches that target.
+    let external_program = fixture.cache.path().join("external-program");
+    fs::copy("/bin/echo", &external_program).expect("external native executable should copy");
+    let external_contents =
+        fs::read(&external_program).expect("external native executable should be readable");
+    fs::remove_file(fixture.program()).expect("cached program should be removable");
+    symlink(&external_program, fixture.program()).expect("program symlink should be creatable");
+    fs::write(
+        fixture.digest(),
+        format!("{}\n", aurora_compiler::sha256_hex(&external_contents)),
+    )
+    .expect("program-symlink digest should be writable");
+    let program_symlink = command_output_with_timeout(
+        fixture.command(),
+        timeout,
+        "native cache entry with a program symlink",
+    );
+    assert!(
+        program_symlink.status.success(),
+        "program symlink should cause a rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&program_symlink.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&program_symlink.stdout),
+        "cached\n",
+        "the symlink target must never become the program result"
+    );
+    assert!(
+        fs::symlink_metadata(fixture.program())
+            .expect("rebuilt program should exist")
+            .file_type()
+            .is_file(),
+        "the program symlink should be replaced by a regular cached binary"
+    );
+    assert!(
+        external_program.is_file(),
+        "rejecting a symlink must not remove its external target"
+    );
+
+    // A symlinked digest is invalid cache structure even when it names the
+    // correct digest. Rejecting it pins no-follow behavior for both members.
+    let external_digest = fixture.cache.path().join("external-digest");
+    let current_program =
+        fs::read(fixture.program()).expect("rebuilt cached program should be readable");
+    fs::write(
+        &external_digest,
+        format!("{}\n", aurora_compiler::sha256_hex(&current_program)),
+    )
+    .expect("external digest should be writable");
+    fs::remove_file(fixture.digest()).expect("cached digest should be removable");
+    symlink(&external_digest, fixture.digest()).expect("digest symlink should be creatable");
+    let digest_symlink = command_output_with_timeout(
+        fixture.command(),
+        timeout,
+        "native cache entry with a digest symlink",
+    );
+    assert!(
+        digest_symlink.status.success(),
+        "digest symlink should cause a rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&digest_symlink.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&digest_symlink.stdout), "cached\n");
+    assert!(
+        fs::symlink_metadata(fixture.digest())
+            .expect("rebuilt digest should exist")
+            .file_type()
+            .is_file(),
+        "the digest symlink should be replaced by a regular sidecar"
+    );
+    assert!(
+        external_digest.is_file(),
+        "rejecting a digest symlink must not remove its external target"
+    );
+
+    // FIFOs are especially important: opening either member for an
+    // unconditional read blocks forever when there is no writer. Metadata
+    // validation must reject the node before any read is attempted.
+    for (label, member) in [
+        ("program FIFO", fixture.program()),
+        ("digest FIFO", fixture.digest()),
+    ] {
+        replace_file_with_fifo(&member);
+        let rebuilt = command_output_with_timeout(fixture.command(), timeout, label);
+        assert!(
+            rebuilt.status.success(),
+            "{label} should cause a rebuild, stderr was:\n{}",
+            String::from_utf8_lossy(&rebuilt.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&rebuilt.stdout),
+            "cached\n",
+            "{label} must never become a program result"
+        );
+        assert!(
+            fs::symlink_metadata(&member)
+                .unwrap_or_else(|error| panic!("{label} should be replaced: {error}"))
+                .file_type()
+                .is_file(),
+            "{label} should be replaced by a regular cache member"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_run_cache_preserves_verified_entry_when_private_launch_staging_fails() {
+    use std::os::unix::fs::MetadataExt;
+
+    let fixture = NativeCacheFixture::new("aurora-native-cache-launch-environment");
+    let program_before =
+        fs::read(fixture.program()).expect("cached program should be readable before launch");
+    let digest_before =
+        fs::read(fixture.digest()).expect("cached digest should be readable before launch");
+    let entry_metadata =
+        fs::metadata(&fixture.entry).expect("cache entry metadata should be readable");
+    let program_metadata =
+        fs::metadata(fixture.program()).expect("cached program metadata should be readable");
+    let digest_metadata =
+        fs::metadata(fixture.digest()).expect("cached digest metadata should be readable");
+
+    // Rust's Unix temp-dir selection honors TMPDIR. Pointing it at a regular
+    // file makes private launch staging fail for environmental reasons after
+    // the shared cache bytes have already verified. That must not be confused
+    // with evidence that the valid cache entry itself is corrupt.
+    let unusable_tmp = fixture.cache.path().join("tmp-is-a-file");
+    fs::write(&unusable_tmp, "not a directory").expect("unusable TMPDIR marker should be writable");
+    let mut command = fixture.command();
+    command
+        .env("TMPDIR", &unusable_tmp)
+        .env("CC", fixture.cache.path().join("missing-cc"));
+    let output = command_output_with_timeout(
+        command,
+        std::time::Duration::from_secs(10),
+        "verified launch with unusable TMPDIR",
+    );
+    assert!(
+        !output.status.success(),
+        "a regular-file TMPDIR should exercise the private-staging failure path; stdout was:\n{}\nstderr was:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("failed to create private verified-native directory"),
+        "expected an environmental private-staging diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        fs::read(fixture.program()).expect("environmental failure must preserve cached program"),
+        program_before,
+        "environmental launch failure must not rewrite cached program bytes"
+    );
+    assert_eq!(
+        fs::read(fixture.digest()).expect("environmental failure must preserve cached digest"),
+        digest_before,
+        "environmental launch failure must not rewrite the verified sidecar"
+    );
+    let entry_after =
+        fs::metadata(&fixture.entry).expect("environmental failure must preserve cache entry");
+    let program_after =
+        fs::metadata(fixture.program()).expect("environmental failure must preserve program");
+    let digest_after =
+        fs::metadata(fixture.digest()).expect("environmental failure must preserve digest");
+    assert_eq!(
+        (entry_after.dev(), entry_after.ino()),
+        (entry_metadata.dev(), entry_metadata.ino()),
+        "environmental launch failure must not replace the cache entry"
+    );
+    assert_eq!(
+        (program_after.dev(), program_after.ino()),
+        (program_metadata.dev(), program_metadata.ino()),
+        "environmental launch failure must not replace the cached program"
+    );
+    assert_eq!(
+        (digest_after.dev(), digest_after.ino()),
+        (digest_metadata.dev(), digest_metadata.ino()),
+        "environmental launch failure must not replace the digest sidecar"
     );
 }
 
