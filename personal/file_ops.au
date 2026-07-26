@@ -2,28 +2,26 @@ import fs
 import io
 
 class Path:
-    filepath: str 
-    
-    
+    filepath: str
+
+
 def write_to_path(file: Path, content: String) -> Result[None, io.Error]:
-    
+
     with f = try fs.create(file.filepath):
-        
+
         try f.write_all(content)
-        
+
         try f.flush()
-        
+
     return Result.Ok(None)
-    
+
 def main():
-    
+
     data = "How are you"
     path = Path(filepath="hello.text")
-    
+
     write_to_path(path, data)
-    
+
     print(data)
-    
+
     print("File created successfully")
-        
-    
