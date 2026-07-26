@@ -44,7 +44,17 @@ Integer bounds are exact:
 
 `int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available. It may also use an expected `float32` or `float64` when its value is exactly representable in that target; this is literal typing, not a conversion available to integer variables. Otherwise it defaults to `int64`.
 
-The default does not widen explicitly typed APIs. Existing fixed `int32` contracts remain `int32`, including `main()` exit statuses, `range(...)` bounds and yielded values, collection lengths, Vec indexes, queue capacities, and byte-count parameters. A literal passed to one of those positions adopts the expected `int32` type and must fit it.
+The default does not widen explicitly typed APIs. Existing fixed `int32`
+contracts remain `int32`, including `main()` exit statuses, `range(...)`
+bounds and yielded values, Vec indexes, queue capacities, and bounded
+process/network I/O byte-count parameters. A literal passed to one of those
+positions adopts the expected `int32` type and must fit it. Length results are
+intentionally `int64`:
+the builtin `len`, `String.len`, `String.byte_len`, `Vec.len`, `Map.len`, and
+`Set.len` all return `int64`. Passing a computed length to a still-`int32`
+range or index boundary requires an explicit checked `as int32` cast.
+`random.secure_bytes(n)` is a separate byte-count API: `n` is `int64`, with a
+fixed per-request resource and safety ceiling of `2147483647`.
 
 `Duration` stores a signed 128-bit count of nanoseconds. Literal units are
 normalized exactly to nanoseconds; literals are non-negative, while associated
@@ -71,8 +81,8 @@ accepted for compatibility but currently lowers to the same canonical `String`
 type; code must not assume a separate slice layout or lifetime-bearing runtime
 representation.
 
-`String.len() -> int32` scans the text and counts Unicode scalar values in
-O(n). `String.byte_len() -> int32` reads the UTF-8 byte count in O(1).
+`String.len() -> int64` scans the text and counts Unicode scalar values in
+O(n). `String.byte_len() -> int64` reads the UTF-8 byte count in O(1).
 `String.to_bytes() -> Vec[uint8]` and
 `String.from_bytes(Vec[uint8]) -> Result[String, bytes.Error]` provide the
 explicit strict UTF-8 boundary; `Vec[uint8]` is Aurora's bytes representation.

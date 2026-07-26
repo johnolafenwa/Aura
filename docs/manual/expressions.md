@@ -265,8 +265,11 @@ remember that negative values are not valid host waits.
 `len(value)` delegates to the value's own `len()` member and produces `int64`.
 Every type that provides `len()` is accepted — `String`, `Vec[T]`, `Map[K, V]`,
 and `Set[T]` in Aurora 0.1 — and a value without that member is rejected with
-`AU2002`. `len(value)` and `value.len()` mean the same thing and produce the
-same value; neither is a shorthand that changes ownership, because `len()`
+`AU2002`. `String.len()`, `Vec[T].len()`, `Map[K, V].len()`, and
+`Set[T].len()` also produce `int64`, so `len(value)` and `value.len()` have the
+same static type and value. `String.byte_len()` likewise produces `int64`, but
+counts UTF-8 bytes rather than the Unicode scalar values counted by
+`String.len()`. Neither `len` spelling changes ownership, because `len()`
 borrows its receiver.
 
 `str(value)` produces the same `String` that `print(value)` writes and that

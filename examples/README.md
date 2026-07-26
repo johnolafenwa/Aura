@@ -81,7 +81,10 @@ The examples are organized by topic so they can serve both as quick references a
     - `80`
     - `20`
 - `len_and_str.au`
-  - `len(value)` delegating to the value's own `len()`, and `str(value)` producing the print rendering
+  - the `int64` results of `String.len()`, `String.byte_len()`, `Vec.len()`,
+    `Map.len()`, and `Set.len()`; `len(value) == value.len()`; Unicode scalar
+    length versus UTF-8 byte length; and `str(value)` producing the print
+    rendering
   - prints:
     - `2`
     - `6`
@@ -123,7 +126,10 @@ The examples are organized by topic so they can serve both as quick references a
     - `2`
     - `9`
 - `vec_polish.au`
-  - negative direct/method indexes, non-copy cloned reads, `borrow mut` iteration, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`, `clear()`, and Vec equality
+  - negative direct/method indexes, non-copy cloned reads, `borrow mut`
+    iteration, an explicit checked `as int32` conversion from `Vec.len()` for
+    `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`,
+    `clear()`, and Vec equality
   - prints:
     - `Ada`
     - `Grace`
@@ -722,10 +728,11 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
   - prints `aurora`
 - `string_methods.au`
   - single-quoted strings, an owned `Option[String]` match helper, and the
-    maintained `String` method surface: Unicode-scalar `len()`, UTF-8
-    `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`,
-    `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`,
-    `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
+    maintained `String` method surface: `int64` Unicode-scalar `len()`,
+    `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`,
+    `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`,
+    `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and
+    `clone()`
   - prints:
     - `15`
     - `true`

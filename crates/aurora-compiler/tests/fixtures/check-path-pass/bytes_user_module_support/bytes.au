@@ -1,2 +1,2 @@
 public def hex_encode(value: String) -> int32:
-    return value.len()
+    return value.len() as int32

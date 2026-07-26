@@ -18,6 +18,13 @@ detached spawn, attributes, and registry publishing—are not part of Aurora
 0.1. Adding `len` and `str` to the maintained builtin functions also reserves both
 names: a program that previously declared its own `def len(...)` or
 `def str(...)` is now rejected, the same way redefining `print` or `abs` is.
+ADR-0030 is Accepted with the B3.0-d length-unification amendment:
+`String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()`
+now return `int64`. For `String`, `Vec`, `Map`, and `Set`, `len(value)` and
+`value.len()` have the same static type and value; `String.byte_len()` is the
+separate UTF-8 byte count. Code that previously annotated a member length as
+`int32`, or passed one directly to a still-`int32` range or Vec index boundary,
+must update the annotation or use an explicit checked `as int32` cast.
 
 Conditional expressions, membership operators, comparison chains, and the
 `enumerate`/`zip` loop forms are accepted language surface under ADR-0027,

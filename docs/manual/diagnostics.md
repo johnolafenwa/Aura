@@ -268,9 +268,11 @@ means an unlimited wait. This classification is accepted under ADR-0019.
 
 The random module returns plain values rather than a `random.Error` enum.
 `AU4003` reports an empty or reversed `next_int`/`secure_int` interval and a
-negative `secure_bytes` count. `AU4005` reports secure operating-system entropy
-or allocation failure. A secure operation never recovers by substituting bytes
-from the deterministic generator.
+negative `secure_bytes` count. `AU4005` reports a `secure_bytes` count above the
+fixed per-request ceiling of `2147483647` before allocation or entropy is
+requested, secure operating-system entropy failure, or allocation failure. A
+secure operation never recovers by substituting bytes from the deterministic
+generator.
 
 JSON input-data failures are typed `json.Error` values rather than diagnostics.
 Parse allocation failure or exceeding the shared 262,144-value
@@ -281,9 +283,13 @@ same node limit, encoded output would exceed 67,108,864 bytes, or a controlled
 conversion/output allocation fails. No failed dump returns a partial String.
 
 Malformed UTF-8, hexadecimal, and base64 input returns `bytes.Error`, including
-the relevant zero-based byte offset or odd input length. Bytes conversion,
-codec, or SHA-256 output that cannot be represented or allocated uses
-`AU4005`; no failed operation returns a partial String or byte vector.
+the relevant zero-based byte offset or odd input length, when that metadata fits
+the retained `int32` payload. A required offset or length above `2147483647`
+uses `AU4005` rather than truncating or wrapping the typed error. A fresh bytes
+conversion or codec destination above the fixed 2,147,483,647-byte safety
+ceiling, destination-size arithmetic overflow, or allocation failure also uses
+`AU4005`; the ceiling is independent of the public String and `Vec` length
+domains, and no failed operation returns a partial String or byte vector.
 
 Unrecoverable host or dependency-internal out-of-memory termination remains
 outside the catchable diagnostic contract.

@@ -18,7 +18,7 @@ pub(crate) struct InvalidRandomRange;
 #[derive(Debug)]
 pub(crate) enum SecureRandomError {
     InvalidRange,
-    LengthExceedsVec { requested: usize, maximum: usize },
+    RequestExceedsCeiling { requested: usize, maximum: usize },
     Allocation(TryReserveError),
     Entropy(getrandom::Error),
 }
@@ -29,9 +29,9 @@ impl fmt::Display for SecureRandomError {
             Self::InvalidRange => {
                 formatter.write_str("the lower bound must be below the upper bound")
             }
-            Self::LengthExceedsVec { requested, maximum } => write!(
+            Self::RequestExceedsCeiling { requested, maximum } => write!(
                 formatter,
-                "`random.secure_bytes(n)` count `{requested}` exceeds the maximum `Vec` length `{maximum}`"
+                "`random.secure_bytes(n)` count `{requested}` exceeds the secure-random request ceiling `{maximum}`"
             ),
             Self::Allocation(error) => {
                 write!(formatter, "could not allocate secure bytes: {error}")
@@ -147,7 +147,7 @@ where
     F: FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
 {
     if length > MAX_SECURE_BYTES_LEN {
-        return Err(SecureRandomError::LengthExceedsVec {
+        return Err(SecureRandomError::RequestExceedsCeiling {
             requested: length,
             maximum: MAX_SECURE_BYTES_LEN,
         });

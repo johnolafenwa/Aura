@@ -2917,6 +2917,38 @@ enum Status:
 }
 
 #[test]
+fn mir_types_public_length_members_as_int64() {
+    let lowerer = trait_lowerer();
+    let cases = [
+        (Type::named("String"), "len"),
+        (Type::named("String"), "byte_len"),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            "len",
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "len",
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "len",
+        ),
+    ];
+
+    for (receiver, field) in cases {
+        assert_eq!(
+            lowerer.builtin_runtime_member_return_type(&receiver, field),
+            Some(Type::named("int64")),
+            "{receiver}.{field} must lower with an int64 result"
+        );
+    }
+}
+
+#[test]
 fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     let mut lowerer = trait_lowerer();
     lowerer
@@ -3145,11 +3177,11 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "len"),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "byte_len"),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "split"),

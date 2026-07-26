@@ -10405,7 +10405,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::VecLen => Ok(Type::named("int32")),
+                                BuiltinMember::VecLen => Ok(Type::named("int64")),
                                 BuiltinMember::VecIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::VecClone => {
                                     self.reject_rng_duplication("Vec.clone", &receiver_ty, span)?;
@@ -10666,7 +10666,7 @@ impl<'a> FunctionChecker<'a> {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
-                                    Ok(Type::named("int32"))
+                                    Ok(Type::named("int64"))
                                 }
                                 BuiltinMember::StringToBytes => {
                                     Ok(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
@@ -10824,7 +10824,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::MapLen => Ok(Type::named("int32")),
+                                BuiltinMember::MapLen => Ok(Type::named("int64")),
                                 BuiltinMember::MapIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::MapClone => {
                                     self.reject_rng_duplication("Map.clone", &receiver_ty, span)?;
@@ -11051,7 +11051,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::SetLen => Ok(Type::named("int32")),
+                                BuiltinMember::SetLen => Ok(Type::named("int64")),
                                 BuiltinMember::SetIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::SetClone => {
                                     self.reject_rng_duplication("Set.clone", &receiver_ty, span)?;

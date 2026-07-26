@@ -1649,17 +1649,17 @@ fn direct_secure_random_runtime_preserves_validation_and_resource_diagnostics() 
         "`random.secure_bytes(n)` requires a non-negative byte count, found `-1`"
     );
 
-    let unrepresentable_count = run_lightweight_root_task(|| {
+    let over_ceiling_count = run_lightweight_root_task(|| {
         super::with_task_runtime_error_capture(|| {
             let _ = super::aurora_direct_random_secure_bytes(i64::from(i32::MAX) + 1);
             Ok(Value::Unit)
         })
     })
-    .expect_err("secure byte counts above the Vec length domain should fail the active task");
-    assert_eq!(unrepresentable_count.code, "AU4005");
+    .expect_err("secure byte counts above the request ceiling should fail the active task");
+    assert_eq!(over_ceiling_count.code, "AU4005");
     assert_eq!(
-        unrepresentable_count.message,
-        "`random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`"
+        over_ceiling_count.message,
+        "`random.secure_bytes(n)` count `2147483648` exceeds the secure-random request ceiling `2147483647`"
     );
 
     let allocation = run_lightweight_root_task(|| {
@@ -1672,7 +1672,7 @@ fn direct_secure_random_runtime_preserves_validation_and_resource_diagnostics() 
     assert_eq!(allocation.code, "AU4005");
     assert_eq!(
         allocation.message,
-        "`random.secure_bytes(n)` count `9223372036854775807` exceeds the maximum `Vec` length `2147483647`"
+        "`random.secure_bytes(n)` count `9223372036854775807` exceeds the secure-random request ceiling `2147483647`"
     );
 
     let host_allocation_error = Vec::<u8>::new()

@@ -1,6 +1,6 @@
 def append_and_count(values: borrow mut Vec[Option[int32]]) -> int32:
     values.push(Option.Some(0))
-    return values.len()
+    return values.len() as int32
 
 def main():
     mut values: Vec[Option[int32]] = []

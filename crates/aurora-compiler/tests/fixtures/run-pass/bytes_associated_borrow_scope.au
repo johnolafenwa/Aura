@@ -1,7 +1,7 @@
 import bytes
 
 def consume_length(payload: own Vec[uint8]) -> int32:
-    return payload.len()
+    return payload.len() as int32
 
 def pair(decoded: own Result[String, bytes.Error], measured: int32) -> int32:
     match decoded:

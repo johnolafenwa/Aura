@@ -89,7 +89,11 @@ whole_ratio: float64 = 2
 
 This float-context rule applies only to literals. It never converts an already-bound integer value. If an integer literal is not exact in the expected floating type, the compiler asks you to use an explicit floating spelling or `.to_float()` so that rounding is visible in the source.
 
-The default-type change does not alter APIs that explicitly use `int32`. For example, `range(...)`, Vec indexes, collection lengths, queue capacities, and a numeric `main()` exit status remain `int32`; literals passed to them adopt that expected type.
+The default-type change does not alter APIs that explicitly use `int32`. For
+example, `range(...)`, Vec indexes, queue capacities, and a numeric `main()`
+exit status remain `int32`; literals passed to them adopt that expected type.
+Length members are count APIs instead: `String.len()`, `String.byte_len()`,
+`Vec.len()`, `Map.len()`, and `Set.len()` all return `int64`.
 
 That context applies to the literal expression itself, not to a binding created earlier. `values.get(0)` uses the required `int32` context, but `index = 0` creates an `int64` binding and cannot later be used as a Vec index. Write `index: int32 = 0` when the binding is meant for a fixed-width index API.
 
@@ -161,7 +165,7 @@ match items.get(-2):
 
 items[-1] = 50
 items.insert(-1, 45)             # inserts before the final element
-end_index = items.len()
+end_index: int32 = items.len() as int32
 items.insert(end_index, 60)      # appends
 ```
 
@@ -172,12 +176,26 @@ index to zero, because silently inserting at the wrong position hides bugs.
 
 The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`, `get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`, and `reverse`.
 
-Because `len()` returns `int32`, you can use it directly with `range(...)`:
+`Vec.len()` returns `int64`, while `range(...)` and Vec indexes remain
+`int32`. Narrow explicitly at the consumer; integer casts are checked, so an
+out-of-range length fails instead of wrapping:
 
 ```python
-for index in range(items.len()):
+for index in range(items.len() as int32):
     print(items[index])
 ```
+
+The free `len(value)` builtin delegates to the same member and has the same
+`int64` result:
+
+```python
+assert len(items) == items.len()
+assert len("A🎉") == "A🎉".len()
+```
+
+For `String`, `len()` counts Unicode scalar values and `byte_len()` counts the
+UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
+`"A🎉".byte_len()` is `5`.
 
 Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
 For clone-safe non-copy element types like `String` or ordinary user-defined

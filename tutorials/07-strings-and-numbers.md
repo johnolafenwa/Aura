@@ -244,7 +244,7 @@ print(trimmed.to_upper())           # "AURORA REPO"
 ```
 
 `len()` counts Unicode scalar values, while `byte_len()` reports the number of
-bytes in the UTF-8 encoding:
+bytes in the UTF-8 encoding. Both members return `int64`:
 
 ```python
 text = 'A🎉'

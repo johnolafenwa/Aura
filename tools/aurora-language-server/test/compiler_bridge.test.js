@@ -951,6 +951,85 @@ test("compiler bridge preserves len and str builtin calls", async () => {
   }
 });
 
+test("compiler bridge exposes all public length members as int64", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-length-types-"));
+  const source = [
+    "def lengths_match(text: String, values: Vec[int32], counts: Map[String, int32], seen: Set[int32]) -> bool:",
+    "    text_length = text.len()",
+    "    text_bytes = text.byte_len()",
+    "    vector_length = values.len()",
+    "    map_length = counts.len()",
+    "    set_length = seen.len()",
+    "    text_matches = len(text) == text_length",
+    "    vector_matches = len(values) == vector_length",
+    "    map_matches = len(counts) == map_length",
+    "    set_matches = len(seen) == set_length",
+    "    byte_count_is_wide = text_bytes >= text_length",
+    "    return text_matches and vector_matches and map_matches and set_matches and byte_count_is_wide",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(
+      analysis.diagnostics,
+      [],
+      "free len(...) and the corresponding member length must have the same int64 type"
+    );
+
+    const lines = source.split("\n");
+    for (const [line, member, receiver] of [
+      [1, "len", "String"],
+      [2, "byte_len", "String"],
+      [3, "len", "Vec"],
+      [4, "len", "Map"],
+      [5, "len", "Set"]
+    ]) {
+      const character = lines[line].indexOf(`.${member}`) + 1;
+      const hover = compilerHoverAtPosition(analysis, line, character);
+      assert.ok(hover, `missing ${receiver}.${member}() hover`);
+      assert.ok(
+        hover.value.startsWith(`\`\`\`aurora\n${member}() -> int64\n\`\`\``),
+        `${receiver}.${member}() hover must expose an int64 result, found ${hover.value}`
+      );
+    }
+
+    const builtinHover = compilerHoverAtPosition(
+      analysis,
+      6,
+      lines[6].indexOf("len(") + 1
+    );
+    assert.ok(builtinHover, "missing len(...) builtin hover");
+    assert.ok(
+      builtinHover.value.startsWith(
+        "```aurora\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"
+      ),
+      `len(...) hover must expose an int64 result, found ${builtinHover.value}`
+    );
+
+    for (const [line, name] of [
+      [6, "text_length"],
+      [7, "vector_length"],
+      [8, "map_length"],
+      [9, "set_length"],
+      [10, "text_bytes"]
+    ]) {
+      const character = lines[line].lastIndexOf(name) + 1;
+      assert.equal(
+        compilerHoverAtPosition(analysis, line, character)?.value,
+        `\`\`\`aurora\nbinding ${name}: int64\n\`\`\``,
+        `${name} must retain the inferred int64 member-result type`
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves enumerate and zip loop operands", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-lockstep-"));
   const source = [
@@ -2143,6 +2222,7 @@ test("compiler bridge includes Vec collection members in completions", async () 
     assert.ok(names.has("clear"));
     assert.ok(names.has("reverse"));
     const details = new Map(completions.map((item) => [item.name, item.detail]));
+    assert.equal(details.get("len"), "len() -> int64");
     assert.equal(details.get("push"), "push(value: own T) -> None");
     assert.equal(details.get("set"), "set(index: int32, value: own T) -> Option[T]");
     assert.equal(details.get("extend"), "extend(other: own Vec[T]) -> None");
@@ -2194,11 +2274,11 @@ test("compiler bridge includes String and Map builtin members in completions", a
     assert.ok(textNames.has("join"));
     assert.equal(
       textCompletions.find((item) => item.name === "len")?.detail,
-      "len() -> int32"
+      "len() -> int64"
     );
     assert.equal(
       textCompletions.find((item) => item.name === "byte_len")?.detail,
-      "byte_len() -> int32"
+      "byte_len() -> int64"
     );
 
     const mapLineIndex = lines.findIndex((line) => line.includes("counts."));
@@ -2229,6 +2309,10 @@ test("compiler bridge includes String and Map builtin members in completions", a
     assert.equal(
       mapCompletions.find((item) => item.name === "set")?.detail,
       "set(key: own K, value: own V) -> Option[V]"
+    );
+    assert.equal(
+      mapCompletions.find((item) => item.name === "len")?.detail,
+      "len() -> int64"
     );
     assert.equal(
       mapCompletions.find((item) => item.name === "extend")?.detail,
@@ -2277,12 +2361,27 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
 
     assert.ok(setCompletions);
     const setNames = new Set(setCompletions.map((item) => item.name));
+    assert.equal(
+      setCompletions.length,
+      setNames.size,
+      "Set member completions must not contain duplicate rows"
+    );
     assert.ok(setNames.has("len"));
     assert.ok(setNames.has("is_empty"));
     assert.ok(setNames.has("clone"));
     assert.ok(setNames.has("contains"));
     assert.ok(setNames.has("insert"));
     assert.ok(setNames.has("remove"));
+    const setLengthCompletions = setCompletions.filter((item) => item.name === "len");
+    assert.equal(
+      setLengthCompletions.length,
+      1,
+      "Set.len must be emitted exactly once"
+    );
+    assert.equal(
+      setLengthCompletions[0]?.detail,
+      "len() -> int64"
+    );
 
     const entryLineIndex = lines.findIndex((line) => line.includes("entry."));
     const entryCharacter = lines[entryLineIndex].indexOf(".") + 1;

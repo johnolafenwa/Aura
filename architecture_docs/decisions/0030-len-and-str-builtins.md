@@ -1,6 +1,6 @@
 # ADR-0030: `len` and `str` builtins
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-25
 - Roadmap decision: Batch 2, Phase 3.5 Python expression kernel
 
@@ -24,9 +24,12 @@ strategy to the provisional-decision protocol.
   by an enumerated list, so a future type that gains `len()` is accepted
   without another decision. A value without the member reports `AU2002` and
   names the member the call would have delegated to.
-- `len(value)` and `value.len()` are the same operation with the same
-  ownership behavior: `len()` borrows its receiver, so neither spelling moves
-  anything.
+- `String.len()`, `String.byte_len()`, `Vec[T].len()`, `Map[K, V].len()`,
+  and `Set[T].len()` all produce `int64`. `String.len()` counts Unicode scalar
+  values, while `String.byte_len()` counts UTF-8 bytes.
+- `len(value)` and `value.len()` are the same operation with the same static
+  result type, value, and ownership behavior: both produce `int64`, and
+  `len()` borrows its receiver, so neither spelling moves anything.
 - `str(value)` produces the same `String` that `print(value)` writes and that
   `f"{value}"` interpolates. It is total over the renderable surface rather
   than restricted to scalars, because the renderer is already total there;
@@ -57,11 +60,19 @@ Defining `len`'s domain by the `len()` member rather than an enumerated list
 means the diagnostic names the delegation target, which is the fact a caller
 needs, rather than a list that would drift.
 
+The B3.0-d amendment changes the five maintained public length members from
+`int32` to `int64`. This is a source-compatibility change for annotations and
+for code that passes a computed length to a still-`int32` boundary such as
+`range(...)` or a Vec index. Such code must use an explicit checked
+`as int32` cast; those index-domain APIs are not changed by this decision.
+
 ## Completion tests
 
 - Focused compiler tests pin delegation over `String`, `Vec`, `Map`, and `Set`,
-  the `int64` result, rendering equality between `str(x)` and `f"{x}"`, the
-  two rejection categories, and the reservation of both names.
+  the shared `int64` result of builtin and member length calls, the distinct
+  Unicode-scalar and UTF-8-byte String counts, rendering equality between
+  `str(x)` and `f"{x}"`, the two rejection categories, and the reservation of
+  both names.
 - A check-fail fixture pins the missing-`len()` rejection with its delegation
   help, and the run fixture pins exact stdout through MIR and the forced direct
   parity matrix.
@@ -71,8 +82,10 @@ needs, rather than a list that would drift.
   tutorial surface listings, the status page, and the conformance map are
   updated in the same freeze-rule pass.
 
-## Checkpoint
+## B3.0-d amendment and ratification
 
-Review this Provisional decision at the Batch 2 checkpoint. Ratification should
-confirm the member-defined `len` domain, the `int64` result, the total `str`
-domain, and the name reservation together.
+The Batch 2 checkpoint accepted the member-defined `len` domain, the total
+`str` domain, and the name reservation, with one amendment: B3.0-d unifies all
+five maintained public length members on `int64`. This restores the intended
+identity that `len(value)` and `value.len()` have the same static type and
+observable value. ADR-0030 is therefore **Accepted** with the amendment above.

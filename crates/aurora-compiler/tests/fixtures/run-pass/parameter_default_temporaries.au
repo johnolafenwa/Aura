@@ -2,10 +2,10 @@ class Label:
     text: String
 
 def implicit_shared_length(label: Label = Label(text="default")) -> int32:
-    return label.text.len()
+    return label.text.len() as int32
 
 def explicit_shared_length(label: borrow Label = Label(text="shared")) -> int32:
-    return label.text.len()
+    return label.text.len() as int32
 
 def take_default(label: own Label = Label(text="owned")) -> String:
     return label.text

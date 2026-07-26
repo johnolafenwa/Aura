@@ -30,7 +30,9 @@ extension; Aurora 0.1 accepts no encoding argument on either String conversion.
 
 ## Error Model
 
-Malformed input is recoverable and returns one of these `bytes.Error` variants:
+Malformed input is recoverable when its required offset or length fits the
+retained `int32` error-payload domain, and returns one of these `bytes.Error`
+variants:
 
 | Variant | Payload meaning |
 | --- | --- |
@@ -46,8 +48,11 @@ For base64, an invalid alphabet byte reports that byte, a missing required
 padding byte reports `text.byte_len()`, and nonzero discarded bits report the
 last data symbol that contains them.
 
-Resource or allocation failure is not malformed data and therefore is not a
-`bytes.Error` variant. It traps with `AU4005` as described below.
+If the exact malformed-data offset or length exceeds `2147483647`, Aurora
+cannot construct the retained `int32` payload without losing information. That
+metadata overflow traps with `AU4005`; it is never truncated, clamped, or
+wrapped into a `bytes.Error`. Resource or allocation failure likewise is not a
+`bytes.Error` variant and traps with `AU4005` as described below.
 
 ## UTF-8 Conversion
 
@@ -143,10 +148,12 @@ Public API table are normative. There is no implicit `String`/byte-vector
 coercion and no overload that accepts another integer element type.
 
 `bytes.Error` is a copy-valued enum because all of its payloads are copy
-types. Its offsets and lengths use `int32` because every accepted input is
-bounded by Aurora's representable String or Vec length; the invalid
-hexadecimal byte payload is `uint8`. Match handling follows the ordinary
-exhaustive enum rules.
+types. Its offsets and lengths remain `int32` as the current error-payload
+compatibility contract; that fixed payload type is independent of the public
+String and `Vec` length domains. The invalid hexadecimal byte payload is
+`uint8`. Required malformed-data metadata above the `int32` maximum traps with
+`AU4005` instead of constructing a lossy payload. Match handling follows the
+ordinary exhaustive enum rules.
 
 All successful functions return owned values. Ordinary bare non-copy inputs
 are shared for the call, so a caller may reuse the input after `to_bytes`,
@@ -191,13 +198,18 @@ source order remains the language-wide call order.
 
 ## Diagnostics
 
-Malformed UTF-8, hex, and base64 return `bytes.Error`; they do not emit a
-diagnostic. Static misuse uses the ordinary name/type/argument codes, including
-`AU2001`, `AU2002`, and `AU2004`.
+Malformed UTF-8, hex, and base64 return `bytes.Error` when the exact error
+offset or length fits its retained `int32` payload. Required metadata above
+`2147483647` traps with `AU4005` rather than emitting a truncated or wrapped
+typed error. Static misuse uses the ordinary name/type/argument codes,
+including `AU2001`, `AU2002`, and `AU2004`.
 
-`AU4005` reports output-size overflow, inability to represent an expanded
-result, or allocation failure. The operation produces no partial successful
-value.
+`AU4005` reports a fresh codec destination above the fixed
+2,147,483,647-byte safety ceiling, arithmetic overflow while computing the
+expanded destination size, error metadata outside the retained `int32` payload
+domain, or allocation failure. This codec output/resource boundary is
+independent of the public String and `Vec` length domains. The operation
+produces no partial successful value.
 
 ## Backend Support
 
@@ -212,16 +224,21 @@ types as the runtime surface.
 
 ## Limits And Implementation-Defined Behavior
 
-No Phase 3 byte-count cap is imposed below Aurora's existing representability
-limits. Hex output requires `2 * input_length` bytes. Padded base64 output
-requires `4 * ceil(input_length / 3)` bytes. Encoders and decoders preflight
-their destination size before allocating; the exact representable boundary is
-accepted when allocation succeeds, and the first unrepresentable size traps
-with `AU4005`.
+Codec inputs have no separate byte-count cap. Each fresh String or
+`Vec[uint8]` destination produced by a byte conversion, encoder, or decoder has
+a fixed safety ceiling of 2,147,483,647 bytes. This is a codec output/resource
+boundary independent of the public String and `Vec` length domains. Hex output
+requires `2 * input_length` bytes. Padded base64 output requires
+`4 * ceil(input_length / 3)` bytes. Operations preflight the destination size
+before allocating; a destination exactly at the ceiling is accepted when
+allocation succeeds, and the first larger destination traps with `AU4005`.
+Because the input domain is wider than a `bytes.Error` payload, malformed input
+whose exact reported offset or length exceeds `2147483647` also traps with
+`AU4005`.
 
-Actual allocation success within a representable size is host-dependent.
-SHA-256 output is always 32 bytes. Codec output, errors, and offsets are not
-host-dependent.
+Actual allocation success within the codec destination ceiling is
+host-dependent. SHA-256 output is always 32 bytes. Codec output, errors, and
+offsets are not host-dependent.
 
 Aurora 0.1 does not provide alternate text encodings, URL-safe or unpadded
 base64, streaming codecs, incremental hashing, HMAC, password hashing,

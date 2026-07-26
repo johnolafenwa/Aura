@@ -7692,10 +7692,9 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let inst = self.builder.ins().call(function, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int32),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
                         })
                     }
                     "contains" | "starts_with" | "ends_with" => {
@@ -7962,10 +7961,9 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.vec_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int32),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
                         })
                     }
                     "is_empty" => {
@@ -8375,10 +8373,9 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.map_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int32),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
                         })
                     }
                     "is_empty" => {
@@ -8650,10 +8647,9 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.set_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int32),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
                         })
                     }
                     "is_empty" => {
@@ -12885,7 +12881,7 @@ fn builtin_opaque_member_return_type(
         ("random.Rng", "next_int") => Some(DirectType::Scalar(ScalarKind::Int64)),
         ("random.Rng", "next_float") => Some(DirectType::Scalar(ScalarKind::Float64)),
         ("random.Rng", "shuffle") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("String", "len") | ("String", "byte_len") => direct_type(&Type::named("int32"), classes),
+        ("String", "len") | ("String", "byte_len") => direct_type(&Type::named("int64"), classes),
         ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }
@@ -12907,7 +12903,7 @@ fn builtin_opaque_member_return_type(
         ("String", "strip_prefix") | ("String", "strip_suffix") => Some(DirectType::Opaque(
             Type::Named("Option".to_string(), vec![Type::named("String")]),
         )),
-        ("Vec", "len") => direct_type(&Type::named("int32"), classes),
+        ("Vec", "len") => direct_type(&Type::named("int64"), classes),
         ("Vec", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("Vec", "clone") => Some(DirectType::Opaque(Type::Named(
             "Vec".to_string(),
@@ -12934,7 +12930,7 @@ fn builtin_opaque_member_return_type(
             classes,
         ),
         ("Vec", "__index") => direct_type(args.first().unwrap_or(&Type::named("Unknown")), classes),
-        ("Map", "len") => direct_type(&Type::named("int32"), classes),
+        ("Map", "len") => direct_type(&Type::named("int64"), classes),
         ("Map", "is_empty") | ("Map", "contains_key") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("Map", "clone") => Some(DirectType::Opaque(Type::Named(
             "Map".to_string(),
@@ -12977,7 +12973,7 @@ fn builtin_opaque_member_return_type(
         ("Map", "clear") | ("Map", "extend") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("Map", "__index") => direct_type(args.get(1).unwrap_or(&Type::named("Unknown")), classes),
         ("Map", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("Set", "len") => direct_type(&Type::named("int32"), classes),
+        ("Set", "len") => direct_type(&Type::named("int64"), classes),
         ("Set", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("Set", "clone") => Some(DirectType::Opaque(Type::Named(
             "Set".to_string(),

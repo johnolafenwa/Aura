@@ -88,7 +88,7 @@ normalization, each operation keeps its normal bounds contract.
 | --- | --- | --- |
 | constructor | `Vec[T]()` | Creates an empty vector. |
 | literal | `[a, b, c]` | Creates a vector whose element type is inferred from the elements or expected type. |
-| `len` | `len() -> int32` | Returns the current number of elements. |
+| `len` | `len() -> int64` | Returns the current number of elements. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when `len() == 0`. |
 | `clone` | `clone() -> Vec[T]` | Returns a new owned vector with cloned element values; requires clone-safe `T`. |
 | `push` | `push(value: own T) -> None` | Moves `value` to the end of the vector. |
@@ -126,9 +126,14 @@ print(values[-1])             # 30
 print(values.get(-2))         # Option.Some(20)
 values[-1] = 31               # writes the final element
 values.insert(-1, 25)         # [10, 20, 25, 31]
-end_index = values.len()
+end_index = values.len() as int32
 values.insert(end_index, 40)  # appends
 ```
+
+Vec lengths are `int64`, while Vec index arguments remain exactly `int32`.
+Passing a computed length to an index API therefore requires an explicit
+checked `as int32` cast, as in the append example above. Integer literals at
+index sites continue to adopt the expected `int32` type directly.
 
 `set`, `remove`, `swap`, and `insert` treat invalid indexes as runtime errors because they usually indicate a broken invariant. Use `get` before mutating when an out-of-range index is normal program data.
 
@@ -150,7 +155,7 @@ contract and returns `None`.
 | indexed read | `map[key] -> V` for copy `V` | Returns the stored copy value; a missing key traps with `AU4003`. Non-copy `V` is rejected. |
 | indexed assignment | `map[key] = value` for any `V` | Owns the key and value, consuming either when non-copy, then inserts or replaces without an absence trap. |
 | compound indexed assignment | `map[key] op= rhs` for copy `V` | Copies the stored value, applies `op` with `rhs`, and stores the result. A missing key traps with `AU4003`; non-copy `V` is rejected. |
-| `len` | `len() -> int32` | Returns the number of entries. |
+| `len` | `len() -> int64` | Returns the number of entries. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no entries. |
 | `clone` | `clone() -> Map[K, V]` | Returns a new owned map with cloned keys and values; requires clone-safe `K` and `V`. |
 | `get` | `get(key: K) -> Option[V]` | Looks up `key` and returns a cloned value when present; requires clone-safe `V`. |
@@ -220,7 +225,7 @@ perform an explicit simple assignment.
 | --- | --- | --- |
 | constructor | `Set[T]()` | Creates an empty set. |
 | literal | `{a, b, c}` with expected `Set[T]` | Creates a set. Duplicate values collapse to one entry. |
-| `len` | `len() -> int32` | Returns the number of unique values. |
+| `len` | `len() -> int64` | Returns the number of unique values. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no values. |
 | `clone` | `clone() -> Set[T]` | Returns a new owned set with cloned values; requires clone-safe `T`. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |

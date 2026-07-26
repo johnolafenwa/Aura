@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-22
+- Amended: 2026-07-26 (B3.0-d secure-byte resource ceiling clarification)
 - Roadmap decision: Phase 3 Randomness gap-fill policy
 
 ## Context
@@ -62,12 +63,14 @@ also create a serious API-category error.
   xoshiro256**, clocks, process identifiers, or any other deterministic or
   weak source. `secure_bytes(0)` returns an empty vector without requesting
   entropy.
-- `secure_bytes` accepts at most `2147483647` bytes, matching the largest
-  length representable by `Vec.len() -> int32`. A larger count traps with
-  `AU4005` before allocation or entropy is requested. Invalid integer intervals
-  and negative byte counts trap with `AU4003`; host-entropy and allocation
-  failures trap with `AU4005`. These functions return plain values and there
-  is no `random.Error` type.
+- `secure_bytes` accepts at most `2147483647` bytes as a fixed per-call
+  secure-random request and resource ceiling. This ceiling bounds allocation
+  and operating-system entropy work; it is independent of the public `Vec`
+  length domain and the result reported by `Vec.len()`. A larger count traps
+  with `AU4005` before allocation or entropy is requested. Invalid integer
+  intervals and negative byte counts trap with `AU4003`; host-entropy and
+  allocation failures trap with `AU4005`. These functions return plain values
+  and there is no `random.Error` type.
 - Builtin class behavior is attached to compiler-synthesized declaration
   origin, not merely the string pair `random` and `Rng`. A user entry module
   named `random` and an imported user module whose file is named `random.au`
@@ -89,6 +92,10 @@ also create a serious API-category error.
 
 These choices were accepted at the Batch 3 entry checkpoint.
 
+The 2026-07-26 B3.0-d amendment preserves the exact `secure_bytes` upper bound
+while classifying it as a per-call resource and safety ceiling independent of
+collection-length semantics.
+
 ## Completion tests
 
 - Pure generator tests pin SplitMix64 initialization, raw xoshiro outputs,
@@ -108,11 +115,11 @@ These choices were accepted at the Batch 3 entry checkpoint.
   and value-transfer boundaries. The `random_transitive_clone_rejected` fixture
   provides maintained source-level coverage of the transitive rejection.
 - Secure-function tests inject entropy success/failure and pin invalid bounds,
-  negative counts, the `Vec` length ceiling before allocation/entropy,
+  negative counts, the secure-byte request ceiling before allocation/entropy,
   zero-byte no-entropy behavior, returned byte length, and the absence of a
   deterministic fallback. Run-fail fixtures cover invalid deterministic and
-  secure bounds, a negative byte count, the maximum-length boundary, and
-  secure resource failures with `AU4005`.
+  secure bounds, a negative byte count, the maximum accepted secure-byte
+  request boundary, and secure resource failures with `AU4005`.
 - Path-level checking, analysis, MIR, direct-object, and execution tests pin
   user `Rng` classes in both an entry `random.au` and an imported user
   `random.au` module.

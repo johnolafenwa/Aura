@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-23
+- Amended: 2026-07-26 (B3.0-d codec output safety ceiling clarification)
 - Roadmap decision: Phase 3 Bytes gap-fill policy
 
 ## Context
@@ -45,7 +46,9 @@ shared policy and one shared codec implementation.
   `InvalidBase64(index: int32)`.
   Indices and lengths are zero-based UTF-8 byte positions or byte counts, not
   Unicode-scalar positions. A missing base64 byte is reported at the position
-  immediately after the final input byte.
+  immediately after the final input byte. These `int32` payload types remain
+  the accepted error contract; their width is independent of the public
+  String and `Vec` length domains.
 - `String.to_bytes` preserves the exact UTF-8 encoding, including embedded
   NULs and a leading U+FEFF. `String.from_bytes` preserves valid input exactly;
   it performs no Unicode normalization and gives a leading UTF-8 BOM no
@@ -76,10 +79,11 @@ shared policy and one shared codec implementation.
   argument checking. A later compatibility decision may add the parameter
   without changing the meaning of calls accepted here.
 - Malformed UTF-8, hex, and base64 are typed `bytes.Error` values because
-  callers commonly process untrusted data. Output-size overflow, failure to
-  represent an expanded encoded value, and allocation failure trap with
-  `AU4005`; they do not add resource variants to `bytes.Error`. Encoders
-  preflight their expanded output size before allocation.
+  callers commonly process untrusted data. A fresh destination above the
+  fixed 2,147,483,647-byte codec safety ceiling, output-size arithmetic
+  overflow, and allocation failure trap with `AU4005`; they do not add
+  resource variants to `bytes.Error`. Encoders preflight their expanded
+  output size before allocation.
 - The shared codec layer preserves that boundary explicitly: malformed data is
   returned as a data error, while output-size and allocation failures are
   returned as a distinct resource error for both backend adapters to map to
@@ -87,11 +91,14 @@ shared policy and one shared codec implementation.
   validate malformed input before reserving output, so an invalid encoding
   deterministically produces `bytes.Error` rather than depending on host
   memory pressure.
-- No additional Phase 3 byte-count cap is imposed below Aurora's existing
-  representability limits. Hex output size is `2 * input_bytes`; padded base64
-  output size is `4 * ceil(input_bytes / 3)`; decoders check their destination
-  size before allocation. Exact representable boundaries succeed when
-  allocation succeeds.
+- Codec inputs have no additional Phase 3 byte-count cap. Each fresh String or
+  `Vec[uint8]` destination produced by a conversion, encoder, or decoder has a
+  fixed per-output safety and resource ceiling of 2,147,483,647 bytes,
+  independent of the public String and `Vec` length domains. Hex output size
+  is `2 * input_bytes`; padded base64 output size is
+  `4 * ceil(input_bytes / 3)`; decoders check their destination size before
+  allocation. A destination exactly at the ceiling succeeds when allocation
+  succeeds, and the first larger destination traps with `AU4005`.
 - The MIR and direct backends call the same UTF-8, hex, base64, and SHA-256
   codec helpers and expose identical values, errors, offsets, and diagnostics.
   Built-in behavior is attached to compiler-synthesized declarations, so a
@@ -106,6 +113,10 @@ These choices were accepted at the Batch 3 entry checkpoint. The
 compiler, both maintained backends, analysis service, fixtures, maintained
 example, and executable Manual fence implement and pin this contract.
 
+The 2026-07-26 B3.0-d amendment preserves both the exact codec destination
+ceiling and the `bytes.Error` payload types while correcting their rationale:
+neither narrows the public String or `Vec` length domain.
+
 ## Completion tests
 
 - Pure codec tests pin exact UTF-8 bytes, embedded NUL and non-ASCII text,
@@ -119,7 +130,7 @@ example, and executable Manual fence implement and pin this contract.
   UTF-8 string equivalence, no input mutation, and composition with
   `hex_encode`.
 - Boundary and injected-allocation tests pin preflight arithmetic, the exact
-  representable output limits, `AU4005` immediately above them, and no partial
+  codec destination ceiling, `AU4005` immediately above it, and no partial
   result. Tests must not perform multi-gigabyte success allocations merely to
   prove a boundary.
 - Static and fixture tests pin all signatures, argument names, result types,

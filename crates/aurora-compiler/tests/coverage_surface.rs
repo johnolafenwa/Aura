@@ -192,7 +192,7 @@ def main() -> int32:
     print(values == [3, 7, 8, 5, 6])
     print_int_option(values.get(0))
     mut range_total: int32 = 0
-    for number in range(values.len()):
+    for number in range(values.len() as int32):
         range_total += number
     print(range_total)
     for value in borrow values:

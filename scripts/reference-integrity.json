@@ -340,7 +340,7 @@
       "reason": "Index-lookup fragment: values and index are placeholders supplied by the surrounding prose."
     },
     "docs/manual/collections.md#aurora-7": {
-      "sha256": "7f1cdffe664bb47fb673fab18faf19e4fde86872513ae28d80324306c416e65e",
+      "sha256": "605635d991cd84bb7a4e38949b98a2eef2eed3cbb12d45fc0303cfc55feac1e4",
       "mode": "run",
       "stdout": "30\nOption.Some(20)\n",
       "stderr": ""
@@ -605,7 +605,7 @@
       "reason": "Filesystem function fragment: it relies on the fs and io imports shown in the page-level setup block."
     },
     "docs/manual/filesystem.md#aurora-4": {
-      "sha256": "15806a0023af67947bf0e44ca10cb7355c9f5044e5fa5dd9767df23ace3eed3b",
+      "sha256": "7fc1af04c1d669af14cf450539c146e8103307e1ab4cfc5088347d649dadf709",
       "mode": "illustrative",
       "reason": "Filesystem function fragment: it relies on the fs and io imports shown in the page-level setup block."
     },
@@ -703,7 +703,7 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aurora-5": {
-      "sha256": "d226ff84bfc683b959c78ec11ae8746731c5601471fa54fdc6e4f247d87475ca",
+      "sha256": "e90a5b5fce75d8355398062cfc3815a2bc890c9d61d7406717f1419dcd0b0491",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""

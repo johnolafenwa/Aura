@@ -41,7 +41,7 @@ grep -Fq 'left-to-right' docs/manual/execution-model.md
 grep -Fq 'compiler fixtures' docs/manual/conformance.md
 grep -Fq 'MUST' docs/manual/language-specification.md
 grep -Fq '`int` is an alias for `int64`' docs/manual/types.md
-grep -Fq 'Existing fixed `int32` contracts remain `int32`' docs/manual/types.md
+grep -Fq 'contracts remain `int32`, including `main()` exit statuses' docs/manual/types.md
 grep -Fq 'otherwise the literal defaults to `int64`' docs/manual/lexical-structure.md
 grep -Fq 'otherwise it defaults to `int64`' docs/manual/static-semantics.md
 grep -Fq 'assert-statement' docs/manual/grammar.md
@@ -250,6 +250,146 @@ grep -Fq "unicode = 'A🎉'" examples/strings/string_methods.au
 grep -Fq 'unicode.len()' examples/strings/string_methods.au
 grep -Fq 'unicode.byte_len()' examples/strings/string_methods.au
 grep -Fq 'values.insert(index=-1, value=2)' examples/collections/vec_polish.au
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0030-len-and-str-builtins.md
+grep -Fq '## B3.0-d amendment and ratification' architecture_docs/decisions/0030-len-and-str-builtins.md
+grep -Fq '`len(value)` and `value.len()` are the same operation with the same static' architecture_docs/decisions/0030-len-and-str-builtins.md
+grep -Fq 'result type, value, and ownership behavior: both produce `int64`' architecture_docs/decisions/0030-len-and-str-builtins.md
+grep -Fq '0030-len-and-str-builtins.md' architecture_docs/decisions/README.md
+grep -Fq -- '- Amended: 2026-07-26 (B3.0-d int64 String length results)' architecture_docs/decisions/0004-string-semantics.md
+grep -Fq '`String.len() -> int64` returns the number of Unicode scalar values' architecture_docs/decisions/0004-string-semantics.md
+grep -Fq '`String.byte_len() -> int64` returns the number of' architecture_docs/decisions/0004-string-semantics.md
+grep -Fq -- '- Amended: 2026-07-26 (B3.0-d codec output safety ceiling clarification)' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq 'The 2026-07-26 B3.0-d amendment preserves both the exact codec destination' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq 'neither narrows the public String or `Vec` length domain.' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq '| `String.len` | `len() -> int64` | Counts Unicode scalar values in O(n). |' docs/manual/api-index.md
+grep -Fq '| `String.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1). |' docs/manual/api-index.md
+grep -Fq '| `Vec.len` | `len() -> int64` | Element count. |' docs/manual/api-index.md
+grep -Fq '| `Map.len` | `len() -> int64` | Entry count. |' docs/manual/api-index.md
+grep -Fq '| `Set.len` | `len() -> int64` | Unique value count. |' docs/manual/api-index.md
+grep -Fq 'so `len(value)` and `value.len()` have the' docs/manual/expressions.md
+grep -Fq 'same static type and value. `String.byte_len()` likewise produces `int64`' docs/manual/expressions.md
+grep -Fq 'Self::StringLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
+grep -Fq 'Self::StringByteLen => "byte_len() -> int64"' crates/aurora-compiler/src/call.rs
+grep -Fq 'Self::VecLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
+grep -Fq 'Self::MapLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
+grep -Fq 'Self::SetLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
+grep -Fq 'if len(text) != text_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(values) != values_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(ages) != ages_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(tags) != tags_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'unicode_length: int64 = unicode_text.len()' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'unicode_byte_length: int64 = unicode_text.byte_len()' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'fn len_delegates_to_the_value_and_str_renders_it()' crates/aurora-compiler/src/sema_tests.rs
+grep -Fq 'fn mir_types_public_length_members_as_int64()' crates/aurora-compiler/src/mir_tests.rs
+grep -Fq 'fn analysis_and_completion_report_public_length_members_as_int64()' crates/aurora-compiler/src/analysis_tests.rs
+grep -Fq 'test("compiler bridge exposes all public length members as int64"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq '"free len(...) and the corresponding member length must have the same int64 type"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq '"```aurora\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes Vec collection members in completions"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes String and Map builtin members in completions"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes Set collection members and MapEntry fields"' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'assert.equal(details.get("len"), "len() -> int64");' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq '"byte_len() -> int64"' tools/aurora-language-server/test/compiler_bridge.test.js
+test "$(grep -Fc '"len() -> int64"' tools/aurora-language-server/test/compiler_bridge.test.js)" -ge 4
+grep -Fq 'end_index = values.len() as int32' docs/manual/collections.md
+grep -Fq 'end_index: int32 = items.len() as int32' tutorials/02-bindings-and-types.md
+grep -Fq 'for index in range(values.len() as int32):' examples/collections/vec_polish.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/vec_len_range.au
+grep -Fq 'for index in range(values.len() as int32):' crates/aurora-compiler/tests/fixtures/run-pass/vec_len_range.au
+grep -Fq 'fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing()' crates/aurora-compiler/src/native_codegen_tests.rs
+grep -Fq 'execute `int64` member lengths, `len(value) == value.len()`' README.md
+grep -Fq 'checked `int64`-length to `int32`-index' README.md
+grep -Fq 'the `int64` results of `String.len()`, `String.byte_len()`, `Vec.len()`' examples/README.md
+grep -Fq '`Map.len()`, and `Set.len()`; `len(value) == value.len()`' examples/README.md
+grep -Fq 'an explicit checked `as int32` conversion from `Vec.len()`' examples/README.md
+grep -Fq '`String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` all return' tutorials/README.md
+grep -Fq 'host_count: int64 = hosts.len()' examples/basics/len_and_str.au
+grep -Fq 'assert len(hosts) == host_count' examples/basics/len_and_str.au
+grep -Fq 'byte_count: int64 = text.byte_len()' examples/basics/len_and_str.au
+grep -Fq '`Vec.len()`, `Map.len()`, and `Set.len()` all return `int64`.' tutorials/02-bindings-and-types.md
+grep -Fq '`len()` and therefore satisfies `len(value) == value.len()`' tutorials/14-current-language-surface.md
+grep -Fq '## Lengths Are `int64`' docs/learn/collections.md
+grep -Fq 'All five maintained length members return `int64`:' docs/learn/collections.md
+grep -Fq 'The free builtin delegates to the member, so `len(value) == value.len()`' docs/learn/collections.md
+grep -Fq 'values.insert(values.len() as int32, 40)' docs/learn/collections.md
+grep -Fq 'for index in range(values.len() as int32):' docs/learn/collections.md
+grep -Fq 'pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;' crates/aurora-compiler/src/bytes_codec.rs
+grep -Fq 'fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError>' crates/aurora-compiler/src/bytes_codec.rs
+grep -Fq 'Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len)' crates/aurora-compiler/src/bytes_codec.rs
+grep -Fq 'RequestExceedsCeiling { requested: usize, maximum: usize }' crates/aurora-compiler/src/randomness.rs
+grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aurora-compiler/src/mir_runtime.rs
+grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aurora-compiler/src/native_runtime.rs
+for fixture in \
+  random_secure_bytes_request_ceiling \
+  random_secure_bytes_request_ceiling_i64_max; do
+  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.au"
+  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+  grep -Fq "\`${fixture}\`" docs/manual/conformance.md
+  grep -Fq 'exceeds the secure-random request ceiling `2147483647`' \
+    "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+done
+grep -Fq 'fn bytes_error_index_retains_the_int32_bytes_error_payload_boundary()' crates/aurora-compiler/src/runtime_value_tests.rs
+grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aurora-compiler/src/runtime_value.rs
+grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aurora-compiler/src/runtime_value_tests.rs
+grep -Fq 'Required malformed-data metadata above the `int32` maximum traps with' docs/manual/bytes.md
+grep -Fq 'whose exact reported offset or length exceeds `2147483647` also traps with' docs/manual/bytes.md
+grep -Fq 'secure-random request and resource ceiling. This ceiling bounds allocation' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
+grep -Fq 'or narrow the public `Vec` length domain or the result of `Vec.len()`.' docs/manual/randomness.md
+grep -Fq 'independent of the public String and `Vec` length domains.' docs/manual/bytes.md
+grep -Fq 'Its offsets and lengths remain `int32` as the current error-payload' docs/manual/bytes.md
+grep -Fq 'Crossing this codec output/resource cap' docs/manual/current-limits.md
+grep -Fq 'the public String and `Vec` length domains.' docs/manual/current-limits.md
+grep -Fq 'resource and safety ceiling, independently of the public `Vec` length' docs/manual/current-limits.md
+
+if rg -n '(byte_)?len\(\) (->|-&gt;) int32' \
+  architecture_docs/decisions \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  examples \
+  README.md \
+  examples/README.md \
+  tutorials/README.md; then
+  echo "maintained length surface still exposes an int32 len or byte_len result" >&2
+  exit 1
+fi
+
+if rg -n -i '\b(?:len|byte_len)(?:\([^)]*\))?\b[^.\n]{0,80}\b(?:returns?|produces?|result type is|has (?:the )?(?:static )?(?:result )?type)\b[^.\n]{0,40}\bint32\b' \
+  architecture_docs/decisions \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  examples \
+  README.md \
+  examples/README.md \
+  tutorials/README.md; then
+  echo "maintained prose still describes len or byte_len as returning int32" >&2
+  exit 1
+fi
+
+# Historical work notes and the explicitly historical language proposal retain
+# superseded wording. Maintained surfaces must use operation-specific names and
+# describe these numeric ceilings as resource boundaries, never as the maximum
+# representable Vec/collection size.
+if rg -n 'MAX_(VEC|VECTOR|COLLECTION)(_OUTPUT)?_(LEN|LENGTH|SIZE)|checked_(vec|vector|collection)(_output)?_(len|length|size)|SecureRandomError::(LengthTooLarge|RequestTooLarge)|Self::(LengthTooLarge|RequestTooLarge)|BytesResourceError::((Vec|Vector|Collection)(Length|Output)?TooLarge)' \
+  crates/aurora-compiler/src \
+  crates/aurora-compiler/tests; then
+  echo "retired collection-limit implementation names remain in maintained code" >&2
+  exit 1
+fi
+
+if rg -U -n -i 'maximum (representable )?(Vec|collection) (length|size)|(?:maximum|largest)[^.\n]{0,80}(?:Vec|collection)[^.\n]{0,50}(?:length|size)|(?:Vec|collection) (?:length|size)[^\n]{0,100}(?:is |are )?(?:capped|limited|bounded) (?:at|to|by) (?:2,147,483,647|2147483647)|(?:Vec|collection)[^.\n]{0,50}(?:length|size)[^.\n]{0,80}(?:i32::MAX|int32 maximum)|(?:2,147,483,647|2147483647)[^\n]{0,80}(?:maximum|representable)[^\n]{0,50}(?:Vec|collection)' \
+  architecture_docs/decisions \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  examples \
+  README.md \
+  examples/README.md \
+  tutorials/README.md; then
+  echo "maintained reference still derives a Vec or collection-length limit from a resource ceiling" >&2
+  exit 1
+fi
 grep -Fq 'mut borrow own indirect' docs/manual/lexical-structure.md
 grep -Fq '| "own", "self"' docs/manual/grammar.md
 grep -Fq 'Bare `self` and `borrow self` are the two spellings of a shared receiver' docs/manual/grammar.md
@@ -332,19 +472,27 @@ grep -Fq 'const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;' crates/au
 grep -Fq 'const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
 grep -Fq 'const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
 grep -Fq 'capped at 256 MiB of remaining content' docs/manual/filesystem.md
+grep -Fq 'Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB' docs/manual/current-limits.md
+grep -Fq 'Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB.' docs/manual/current-limits.md
+grep -Fq 'Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message' docs/manual/current-limits.md
+grep -Fq 'Each `process.run` captured stream and each whole-pipe read is capped at 64 MiB' docs/manual/process.md
+grep -Fq 'Whole TCP text reads, TCP line reads, and individual byte-count reads are capped at 64 MiB' docs/manual/network.md
 grep -Fq 'Incoming parsed HTTP messages are capped at 16 MiB of wire data and 64 headers.' docs/manual/network.md
 grep -Fq 'This stream ceiling is independent of the larger filesystem whole-read limit.' docs/manual/process.md
+grep -Fq 'one-shot and `fs.File` whole-file reads are capped at 256 MiB' tutorials/14-current-language-surface.md
+grep -Fq 'capped at 64 MiB; TLS certificate, private-key, and CA-file loading uses the' tutorials/14-current-language-surface.md
+grep -Fq 'incoming HTTP parsing is capped at 16 MiB of wire data per message' tutorials/14-current-language-surface.md
+grep -Fq 'One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB.' docs/learn/io-process-networking.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0018-fixed-resource-read-limits.md
 grep -Fq 'fixed 256 MiB whole-read policy is accepted under ADR-0018' docs/manual/filesystem.md
 grep -Fq 'fixed resource-cap policy recorded by ADR-0018 is Accepted' docs/manual/network.md
 grep -Fq 'cap is Accepted under ADR-0018' docs/manual/control-plane.md
 grep -Fq 'fixed stream-cap policy recorded by ADR-0018 is Accepted' docs/manual/process.md
 
-if rg -n '64 MiB' \
-  docs/manual/filesystem.md \
-  tutorials/19-io-and-networking.md \
-  tutorials/14-current-language-surface.md \
-  docs/learn/io-process-networking.md; then
+if rg -U -n -i '(filesystem|fs\.File|whole[- ]file reads?|file reads?)[^.\n]{0,120}(?:is |are )?(?:capped|limited|bounded) (?:at|to) 64 MiB|64 MiB (?:filesystem|fs\.File|whole[- ]file|whole[- ]read|file-read) (?:cap|ceiling|limit)' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
   echo "filesystem reference still describes the retired 64 MiB whole-read limit" >&2
   exit 1
 fi

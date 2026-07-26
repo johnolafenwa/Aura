@@ -56,7 +56,12 @@ This page documents known current limits of the Aurora compiler and runtime.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification is accepted under ADR-0019.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
-- Hex and padded-base64 encoders preflight their expanded String size, and decoders preflight the destination `Vec[uint8]`; there is no codec-specific byte cap below the existing representable container length. An unrepresentable result or allocation failure traps with `AU4005`. SHA-256 always returns 32 raw bytes.
+- Byte-codec inputs have no separate byte-count cap, but byte conversions and
+  hex/padded-base64 codecs preflight each fresh destination against a fixed
+  2,147,483,647-byte safety ceiling. Crossing this codec output/resource cap
+  or failing allocation traps with `AU4005`. This ceiling is independent of
+  the public String and `Vec` length domains. SHA-256 always returns 32 raw
+  bytes.
 - JSON supports the recursive `json.Value` tree, typed `json.Error` parse
   failures, deterministic dumps, a 128-container depth limit, a shared
   root-inclusive 262,144-value materialization limit, and independent 64 MiB
@@ -79,10 +84,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   establish this contract, but an explicit implementation may not strengthen
   it. Recursive nominal inspection terminates conservatively when safety cannot
   be proved.
-  `secure_bytes` accepts at most 2,147,483,647 bytes so its result is always
-  representable by `Vec.len() -> int32`; larger counts fail with `AU4005`
-  before allocation or entropy. Within that limit, unsatisfied allocation or
-  OS entropy requests also trap with `AU4005`.
+  `secure_bytes` accepts at most 2,147,483,647 bytes as a fixed per-request
+  resource and safety ceiling, independently of the public `Vec` length
+  domain. Larger counts fail with `AU4005` before allocation or entropy.
+  Within that request ceiling, unsatisfied allocation or OS entropy requests
+  also trap with `AU4005`.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may currently become infinity; prefer `float64` when large literal validation matters.

@@ -2,14 +2,16 @@
 
 - Status: Accepted
 - Date: 2026-07-13
+- Amended: 2026-07-26 (B3.0-d int64 String length results)
 - Roadmap decision: D4
 
 ## Decision
 
-`String.len()` returns the number of Unicode scalar values and therefore runs
-in O(n). `String.byte_len()` returns the number of bytes in the UTF-8 encoding
-and runs in O(1). Both return `int32`, consistent with the maintained collection
-length and byte-count surface.
+`String.len() -> int64` returns the number of Unicode scalar values and
+therefore runs in O(n). `String.byte_len() -> int64` returns the number of
+bytes in the UTF-8 encoding and runs in O(1). The B3.0-d amendment aligns both
+results with the maintained `int64` length surface; it does not change either
+counting rule.
 
 Ordinary string literals may use matching single or double quote delimiters.
 Both forms decode the same escape set, including `\"` and `\'`. F-strings
@@ -36,6 +38,7 @@ position; Aurora treats that as a broken invariant and reports a runtime error.
 ## Completion tests
 
 - Lexer escape/span tests and single-quoted parse/run fixtures.
-- String builtin unit tests in MIR and native runtimes.
+- String builtin unit tests in MIR and native runtimes, including the `int64`
+  result types for scalar and UTF-8 byte counts.
 - Vec negative-index check/run fixtures on both forced backends.
 - API/reference, tutorial, example, and LSP completion coverage.

@@ -4366,7 +4366,7 @@ def main() -> int32:
     print_int_option(values.remove(-2))
     print(values.swap(first=-1, second=-3))
     print(values.insert(index=-1, value=99))
-    end_index = values.len()
+    end_index: int32 = values.len() as int32
     print(values.insert(index=end_index, value=77))
     for value in values:
         print(value)
@@ -7588,13 +7588,13 @@ fn run_and_direct_backend_match_d6_parameter_loop_and_task_defaults() {
     text: String
 
 def read(message: Message) -> int32:
-    return message.text.len()
+    return message.text.len() as int32
 
 def consume(value: own String):
     print(value)
 
 def task_read(value: String) -> int32:
-    return value.len()
+    return value.len() as int32
 
 def main() -> int32:
     message = Message(text="shared")

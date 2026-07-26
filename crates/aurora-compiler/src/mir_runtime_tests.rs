@@ -51,6 +51,213 @@ fn mir_arg(name: Option<&str>, value: Operand) -> MirArg {
     }
 }
 
+fn assert_mir_length_call_borrows_receiver(
+    runtime: &mut MirRuntime,
+    env: &mut Env,
+    callee: &CallTarget,
+    args: &[MirArg],
+    receiver_place: &str,
+    expected_length: i128,
+    api: &str,
+) {
+    let clone_count = super::mir_value_clone_count();
+    let result = runtime
+        .evaluate_call(callee, args, env)
+        .unwrap_or_else(|error| panic!("{api} should succeed: {error:?}"));
+    let Value::Int(length) = result else {
+        panic!("{api} should return an integer length, found {result:?}");
+    };
+
+    assert_eq!(
+        length.as_i128(),
+        Some(expected_length),
+        "{api} should report the expected length"
+    );
+    assert!(
+        env.place_ref(receiver_place).is_ok(),
+        "{api} should preserve its borrowed receiver"
+    );
+    assert_eq!(
+        super::mir_value_clone_count() - clone_count,
+        0,
+        "{api} must read its receiver by reference instead of cloning the full value"
+    );
+}
+
+fn assert_mir_member_length_borrows_receiver(
+    receiver_type: Type,
+    receiver: Value,
+    field: &str,
+    expected_length: i128,
+    api: &str,
+) {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed("receiver", receiver_type, receiver);
+    let callee = CallTarget::Member {
+        object: Operand::Place("receiver".to_string()),
+        field: field.to_string(),
+        receiver_place: Some("receiver".to_string()),
+    };
+
+    assert_mir_length_call_borrows_receiver(
+        &mut runtime,
+        &mut env,
+        &callee,
+        &[],
+        "receiver",
+        expected_length,
+        api,
+    );
+}
+
+#[test]
+fn mir_length_string_len_borrows_receiver_without_snapshot_clone() {
+    assert_mir_member_length_borrows_receiver(
+        Type::named("String"),
+        Value::String("é🎉e\u{301}".to_string()),
+        "len",
+        4,
+        "String.len",
+    );
+}
+
+#[test]
+fn mir_length_string_byte_len_borrows_receiver_without_snapshot_clone() {
+    assert_mir_member_length_borrows_receiver(
+        Type::named("String"),
+        Value::String("é🎉e\u{301}".to_string()),
+        "byte_len",
+        9,
+        "String.byte_len",
+    );
+}
+
+#[test]
+fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
+    assert_mir_member_length_borrows_receiver(
+        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("String"),
+            elements: vec![
+                Value::String("first-vector-payload".repeat(64)),
+                Value::String("second-vector-payload".repeat(64)),
+            ],
+        }),
+        "len",
+        2,
+        "Vec.len",
+    );
+}
+
+#[test]
+fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
+    assert_mir_member_length_borrows_receiver(
+        Type::Named(
+            "Map".to_string(),
+            vec![Type::named("String"), Type::named("String")],
+        ),
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("String"),
+            entries: vec![
+                (
+                    Value::String("first-map-key".repeat(64)),
+                    Value::String("first-map-value".repeat(64)),
+                ),
+                (
+                    Value::String("second-map-key".repeat(64)),
+                    Value::String("second-map-value".repeat(64)),
+                ),
+            ],
+        }),
+        "len",
+        2,
+        "Map.len",
+    );
+}
+
+#[test]
+fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
+    assert_mir_member_length_borrows_receiver(
+        Type::Named("Set".to_string(), vec![Type::named("String")]),
+        Value::Set(SetValue {
+            element_type: Type::named("String"),
+            elements: vec![
+                Value::String("first-set-value".repeat(64)),
+                Value::String("second-set-value".repeat(64)),
+            ],
+        }),
+        "len",
+        2,
+        "Set.len",
+    );
+}
+
+#[test]
+fn mir_length_free_len_delegation_borrows_receiver_without_snapshot_clone() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def measure(values: borrow Vec[String]) -> int64:
+    return len(values)
+"#,
+    )
+    .expect("free len source should lower to MIR");
+    let (callee, args) = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| {
+            let Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } = instruction
+            else {
+                return None;
+            };
+            let CallTarget::Member {
+                object: Operand::Place(place),
+                field,
+                receiver_place,
+            } = callee
+            else {
+                return None;
+            };
+            (field == "len" && place == "values" && receiver_place.as_deref() == Some("values"))
+                .then(|| (callee.clone(), args.clone()))
+        })
+        .expect("free len should lower to a borrowed member len call");
+
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "values",
+        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("String"),
+            elements: vec![
+                Value::String("first-free-len-payload".repeat(64)),
+                Value::String("second-free-len-payload".repeat(64)),
+            ],
+        }),
+    );
+
+    assert_mir_length_call_borrows_receiver(
+        &mut runtime,
+        &mut env,
+        &callee,
+        &args,
+        "values",
+        2,
+        "free len(Vec[String])",
+    );
+}
+
 #[test]
 fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
     let mut runtime = test_runtime();
@@ -2107,7 +2314,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
 }
 
 #[test]
-fn mir_secure_bytes_rejects_unrepresentable_vec_length_with_au4005() {
+fn mir_secure_bytes_rejects_requests_above_the_resource_ceiling_with_au4005() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
     let requested = i32::MAX as u128 + 1;
@@ -2118,12 +2325,12 @@ fn mir_secure_bytes_rejects_unrepresentable_vec_length_with_au4005() {
         &[mir_arg(Some("n"), Operand::Int(requested))],
         &mut env,
     )
-    .expect_err("secure byte counts above the Vec length domain must fail before allocation");
+    .expect_err("secure byte counts above the request ceiling must fail before allocation");
 
     assert_eq!(error.code, "AU4005");
     assert_eq!(
         error.message,
-        "`random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`"
+        "`random.secure_bytes(n)` count `2147483648` exceeds the secure-random request ceiling `2147483647`"
     );
 }
 

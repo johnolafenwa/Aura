@@ -74,7 +74,7 @@ The passing mode is part of the function signature:
 def consume(name: own String):
     print(name)
 
-def length(text: borrow String) -> int32:
+def length(text: borrow String) -> int64:
     return text.len()
 
 def push_name(names: borrow mut Vec[String], name: own String):

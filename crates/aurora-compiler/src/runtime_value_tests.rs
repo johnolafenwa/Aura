@@ -334,6 +334,27 @@ fn bytes_data_errors_materialize_exact_typed_result_payloads() {
 }
 
 #[test]
+fn bytes_error_index_retains_the_int32_bytes_error_payload_boundary() {
+    let payload_ceiling = i32::MAX as usize;
+    let boundary = super::bytes_error_index(payload_ceiling)
+        .expect("the maximum `bytes.Error` int32 payload must remain representable");
+    assert!(matches!(
+        boundary,
+        Value::Int(value)
+            if value.as_i128() == Some(i128::from(i32::MAX))
+                && value.runtime_kind() == Some(crate::integer::IntegerKind::Int32)
+    ));
+
+    let diagnostic = super::bytes_error_index(payload_ceiling + 1)
+        .expect_err("metadata above the `bytes.Error` int32 payload range must trap");
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(
+        diagnostic.message,
+        "byte-codec error metadata exceeds the `bytes.Error` int32 payload range"
+    );
+}
+
+#[test]
 fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     fn call(name: &str, args: &[&Value]) -> Value {
         let [value] = args else {
@@ -432,7 +453,7 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
             crate::bytes_codec::BytesResourceError::OutputTooLarge {
                 maximum: i32::MAX as usize,
             },
-            "maximum collection length",
+            "byte-codec safety ceiling",
         ),
         (
             crate::bytes_codec::BytesResourceError::AllocationFailed,
@@ -556,17 +577,12 @@ fn bytes_runtime_utf8_validation_matches_std_first_error_offsets_without_allocat
 }
 
 #[test]
-fn bytes_encoder_expansion_is_preflighted_before_runtime_vec_materialization() {
+fn bytes_encoder_expansion_is_preflighted_against_the_codec_safety_ceiling() {
     let bytes = runtime_bytes(&[0xab]);
+    let codec_safety_ceiling = i32::MAX as usize;
     for (name, logical_input_len) in [
-        (
-            "bytes::hex_encode",
-            crate::bytes_codec::MAX_BYTES_COLLECTION_LEN / 2 + 1,
-        ),
-        (
-            "bytes::base64_encode",
-            (crate::bytes_codec::MAX_BYTES_COLLECTION_LEN / 4) * 3 + 1,
-        ),
+        ("bytes::hex_encode", codec_safety_ceiling / 2 + 1),
+        ("bytes::base64_encode", (codec_safety_ceiling / 4) * 3 + 1),
     ] {
         let error = super::with_bytes_runtime_encoded_input_len_for_test(logical_input_len, || {
             super::with_bytes_runtime_allocation_budget(0, || {
@@ -574,13 +590,13 @@ fn bytes_encoder_expansion_is_preflighted_before_runtime_vec_materialization() {
                     .expect("encoder should be recognized")
             })
         })
-        .expect_err("an unrepresentable expanded output must trap before input allocation");
+        .expect_err("output above the codec safety ceiling must trap before input allocation");
         assert_eq!(error.code, "AU4005", "{name}");
         assert_eq!(
             error.message,
             format!(
-                "byte-codec output exceeds Aurora's maximum collection length of {}",
-                crate::bytes_codec::MAX_BYTES_COLLECTION_LEN
+                "byte-codec output exceeds Aurora's byte-codec safety ceiling of {} bytes",
+                codec_safety_ceiling
             ),
             "{name}"
         );

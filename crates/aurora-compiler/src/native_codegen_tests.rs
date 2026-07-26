@@ -140,6 +140,21 @@ fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
         .collect()
 }
 
+fn object_referenced_symbol_occurrences(bytes: &[u8], needle: &str) -> usize {
+    let object = cranelift_object::object::File::parse(bytes)
+        .expect("direct backend output should be a readable host object");
+    object
+        .sections()
+        .flat_map(|section| section.relocations())
+        .filter_map(|(_, relocation)| match relocation.target() {
+            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
+            _ => None,
+        })
+        .filter_map(|symbol| symbol.name().ok())
+        .filter(|name| name.contains(needle))
+        .count()
+}
+
 #[test]
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
     let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
@@ -1307,7 +1322,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
         "text",
         Type::named("String"),
         Rvalue::Use(Operand::String("é🎉e\u{301}".to_string())),
-        Type::named("int32"),
+        Type::named("int64"),
         "byte_len",
         Vec::new(),
     );
@@ -1717,6 +1732,28 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
     };
     let cases = vec![
         (
+            "String.len",
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("int64"),
+                "len",
+                Vec::new(),
+            ),
+        ),
+        (
+            "String.byte_len",
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("int64"),
+                "byte_len",
+                Vec::new(),
+            ),
+        ),
+        (
             "String.contains",
             module_with_main_member_call_result_type(
                 "text",
@@ -1882,7 +1919,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::named("int32"),
+                Type::named("int64"),
                 "len",
                 Vec::new(),
             ),
@@ -2063,7 +2100,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::named("int32"),
+                Type::named("int64"),
                 "len",
                 Vec::new(),
             ),
@@ -2219,7 +2256,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "seen",
                 set_ty.clone(),
                 set_value.clone(),
-                Type::named("int32"),
+                Type::named("int64"),
                 "len",
                 Vec::new(),
             ),
@@ -3671,7 +3708,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("int32"),
+                Type::named("int64"),
                 "len",
                 vec![MirArg {
                     name: None,
@@ -5643,6 +5680,7 @@ def main() -> int32:
     text = "  Aurora repo  "
     cloned = text.clone()
     length = text.len()
+    byte_length = text.byte_len()
     has_repo = text.contains("repo")
     starts = text.starts_with("  Au")
     ends = text.ends_with("  ")
@@ -5718,6 +5756,7 @@ def main() -> int32:
 
     print(cloned)
     print(length)
+    print(byte_length)
     print(has_repo)
     print(starts)
     print(ends)
@@ -5743,8 +5782,193 @@ def main() -> int32:
     return direct + direct_count
 "#;
     let mir = lower_source_to_mir(source).expect("member-call matrix source should lower");
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("member-call matrix should contain main");
+    for local_name in ["length", "byte_length", "length2", "map_len", "set_len"] {
+        let local_type = main
+            .local_types
+            .iter()
+            .find(|local| local.name == local_name)
+            .map(|local| local.ty.clone());
+        assert_eq!(
+            local_type,
+            Some(Type::named("int64")),
+            "`{local_name}` should infer as exactly int64"
+        );
+    }
     let object = emit_host_object(&mir).expect("member-call matrix should emit direct code");
     assert!(!object.is_empty());
+    let referenced = object_referenced_symbols(&object);
+    for required in [
+        "aurora_direct_string_len",
+        "aurora_direct_string_byte_len",
+        "aurora_direct_vec_len",
+        "aurora_direct_map_len",
+        "aurora_direct_set_len",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "member-length matrix should reference `{required}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
+    let baseline =
+        module_with_main_call_result_type(Rvalue::Use(Operand::Int(0)), Type::named("int64"));
+    let baseline_object =
+        emit_host_object(&baseline).expect("matched int64-result baseline should emit directly");
+    let baseline_overflow_references =
+        object_referenced_symbol_occurrences(&baseline_object, "aurora_direct_fail_int32_overflow");
+
+    let cases = vec![
+        (
+            "String.len",
+            module_with_main_member_call_result_type(
+                "text",
+                Type::named("String"),
+                Rvalue::Use(Operand::String("Aurora".to_string())),
+                Type::named("int64"),
+                "len",
+                Vec::new(),
+            ),
+            "aurora_direct_string_len",
+        ),
+        (
+            "String.byte_len",
+            module_with_main_member_call_result_type(
+                "text",
+                Type::named("String"),
+                Rvalue::Use(Operand::String("é🎉e\u{301}".to_string())),
+                Type::named("int64"),
+                "byte_len",
+                Vec::new(),
+            ),
+            "aurora_direct_string_byte_len",
+        ),
+        (
+            "Vec.len",
+            module_with_main_member_call_result_type(
+                "values",
+                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Rvalue::VecLiteral {
+                    element_type: Type::named("String"),
+                    elements: vec![Operand::String("value".to_string())],
+                },
+                Type::named("int64"),
+                "len",
+                Vec::new(),
+            ),
+            "aurora_direct_vec_len",
+        ),
+        (
+            "Map.len",
+            module_with_main_member_call_result_type(
+                "counts",
+                Type::Named(
+                    "Map".to_string(),
+                    vec![Type::named("String"), Type::named("String")],
+                ),
+                Rvalue::MapLiteral {
+                    key_type: Type::named("String"),
+                    value_type: Type::named("String"),
+                    entries: vec![MirMapEntry {
+                        key: Operand::String("key".to_string()),
+                        value: Operand::String("value".to_string()),
+                    }],
+                },
+                Type::named("int64"),
+                "len",
+                Vec::new(),
+            ),
+            "aurora_direct_map_len",
+        ),
+        (
+            "Set.len",
+            module_with_main_member_call_result_type(
+                "values",
+                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Rvalue::SetLiteral {
+                    element_type: Type::named("String"),
+                    elements: vec![Operand::String("value".to_string())],
+                },
+                Type::named("int64"),
+                "len",
+                Vec::new(),
+            ),
+            "aurora_direct_set_len",
+        ),
+    ];
+
+    for (label, module, required_symbol) in cases {
+        let object = emit_host_object(&module)
+            .unwrap_or_else(|error| panic!("{label} should emit directly: {error}"));
+        let referenced = object_referenced_symbols(&object);
+        assert!(
+            referenced
+                .iter()
+                .any(|symbol| symbol.contains(required_symbol)),
+            "{label} should reference `{required_symbol}`: {referenced:?}"
+        );
+        assert_eq!(
+            object_referenced_symbol_occurrences(&object, "aurora_direct_fail_int32_overflow"),
+            baseline_overflow_references,
+            "{label} returns int64 and must not add an implicit int32 range check"
+        );
+    }
+}
+
+#[test]
+fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing() {
+    let source = r#"
+def main() -> int32:
+    wide = "Aurora".len()
+    narrow = wide as int32
+    print(narrow)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("explicit member-length narrowing should lower");
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("member-length narrowing should contain main");
+    for (local_name, expected) in [
+        ("wide", Type::named("int64")),
+        ("narrow", Type::named("int32")),
+    ] {
+        let local_type = main
+            .local_types
+            .iter()
+            .find(|local| local.name == local_name)
+            .map(|local| local.ty.clone());
+        assert_eq!(
+            local_type,
+            Some(expected),
+            "unexpected inferred type for `{local_name}`"
+        );
+    }
+
+    let object =
+        emit_host_object(&mir).expect("explicit member-length narrowing should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_string_len")),
+        "member-length narrowing should call the String length runtime: {referenced:?}"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_fail_int32_overflow")),
+        "an explicit int64-to-int32 member-length cast must retain the checked narrowing guard: {referenced:?}"
+    );
 }
 
 #[test]
@@ -9190,7 +9414,12 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             Type::named("String"),
             "len",
-            direct_type(&Type::named("int32"), &classes),
+            direct_type(&Type::named("int64"), &classes),
+        ),
+        (
+            Type::named("String"),
+            "byte_len",
+            direct_type(&Type::named("int64"), &classes),
         ),
         (
             Type::named("String"),
@@ -9269,7 +9498,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             Type::Named("Vec".to_string(), vec![Type::named("int32")]),
             "len",
-            direct_type(&Type::named("int32"), &classes),
+            direct_type(&Type::named("int64"), &classes),
         ),
         (
             Type::Named("Vec".to_string(), vec![Type::named("int32")]),
@@ -9375,7 +9604,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
                 vec![Type::named("String"), Type::named("int32")],
             ),
             "len",
-            direct_type(&Type::named("int32"), &classes),
+            direct_type(&Type::named("int64"), &classes),
         ),
         (
             Type::Named(
@@ -9522,7 +9751,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             Type::Named("Set".to_string(), vec![Type::named("String")]),
             "len",
-            direct_type(&Type::named("int32"), &classes),
+            direct_type(&Type::named("int64"), &classes),
         ),
         (
             Type::Named("Set".to_string(), vec![Type::named("String")]),

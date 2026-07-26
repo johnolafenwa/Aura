@@ -16,7 +16,7 @@ def main() -> int32:
     print_int_option(values.remove(-2))
     print(values.swap(first=-1, second=-3))
     print(values.insert(index=-1, value=99))
-    end_index = values.len()
+    end_index: int32 = values.len() as int32
     print(values.insert(index=end_index, value=77))
     for value in values:
         print(value)

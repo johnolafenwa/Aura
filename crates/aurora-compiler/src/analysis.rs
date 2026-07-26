@@ -1773,7 +1773,7 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::DurationToMilliseconds
                 | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
-                    Some(Type::named("int32"))
+                    Some(Type::named("int64"))
                 }
                 BuiltinMember::StringToBytes => {
                     Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
@@ -1793,7 +1793,7 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => Some(
                     Type::Named("Option".to_string(), vec![Type::named("String")]),
                 ),
-                BuiltinMember::VecLen => Some(Type::named("int32")),
+                BuiltinMember::VecLen => Some(Type::named("int64")),
                 BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::VecClone => Some(receiver_type.clone()),
                 BuiltinMember::VecPush | BuiltinMember::VecClear | BuiltinMember::VecReverse => {
@@ -1802,7 +1802,7 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::VecInsert => Some(Type::named("bool")),
                 BuiltinMember::VecSwap | BuiltinMember::VecContains => Some(Type::named("bool")),
                 BuiltinMember::VecExtend => Some(Type::Unit),
-                BuiltinMember::MapLen => Some(Type::named("int32")),
+                BuiltinMember::MapLen => Some(Type::named("int64")),
                 BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::MapClone => Some(receiver_type.clone()),
                 BuiltinMember::MapContainsKey => Some(Type::named("bool")),
@@ -1876,7 +1876,7 @@ impl<'a> AnalysisBuilder<'a> {
                     Some(Type::Named("Option".to_string(), vec![payload]))
                 }
                 BuiltinMember::StringClone => Some(Type::named("String")),
-                BuiltinMember::SetLen => Some(Type::named("int32")),
+                BuiltinMember::SetLen => Some(Type::named("int64")),
                 BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::SetClone => Some(receiver_type.clone()),
                 BuiltinMember::SetContains
@@ -3769,7 +3769,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "len".to_string(),
                     kind: "method".to_string(),
-                    detail: "len() -> int32".to_string(),
+                    detail: "len() -> int64".to_string(),
                 },
                 AnalysisCompletion {
                     name: "is_empty".to_string(),
@@ -3864,11 +3864,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         }
         "Set" => {
             completions.extend([
-                AnalysisCompletion {
-                    name: "len".to_string(),
-                    kind: "method".to_string(),
-                    detail: "len() -> int32".to_string(),
-                },
                 AnalysisCompletion {
                     name: "is_empty".to_string(),
                     kind: "method".to_string(),
@@ -4062,7 +4057,11 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::RngNextFloat,
         BuiltinMember::RngShuffle,
     ] {
-        if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin) {
+        if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin)
+            && !completions
+                .iter()
+                .any(|completion| completion.name == builtin.name())
+        {
             completions.push(AnalysisCompletion {
                 name: builtin.name().to_string(),
                 kind: "method".to_string(),

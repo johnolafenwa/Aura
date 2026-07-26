@@ -16,7 +16,8 @@ Last updated: 2026-07-26
   under the repository hygiene rule before the repeated Batch 3 gates.
   Prerequisite hygiene repair `18b7f00`, Part-0 ratification commit `19a10f4`,
   completed B3.0-a commit `6afe47c`, and completed B3.0-b commit `fc22696` are
-  isolated. B3.0-c is exact-tree green and complete; B3.0-d is next.
+  isolated. B3.0-c is exact-tree green and isolated in `e05c5e6`; B3.0-d is
+  exact-tree green and committed in isolation; B3.0-e is the active ticket.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
@@ -99,7 +100,20 @@ Last updated: 2026-07-26
   `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` must return
   `int64` consistently with builtin `len(...)`, with compatibility narrowing,
   LSP, examples, tutorials, reference, and resource-cap wording updated in the
-  same test-first decision commit.
+  same test-first decision commit. Implementation, focused behavior, both
+  backends, all 72 LSP tests at 100% coverage, all 13 extension tests,
+  reference/docs gates, and compiler coverage are green. Coverage is
+  `64,612/67,239` lines (96.09%), `4,179/4,315` functions (96.85%), and
+  `94,761/100,470` regions (94.32%), above the frozen floors without synthetic
+  tests or exclusions. An earlier gate attempt passed all code, parity, LSP,
+  extension, and coverage stages before finding a line-wrap-sensitive reference
+  assertion; that guard is repaired to pin the same normative statement without
+  depending on its wrapping. The exact full-repository `npm run ci` decision
+  gate is now green end to end: formatting, 916 compiler tests, 265 CLI tests,
+  every fixture and package suite, the 516.80-second forced MIR/direct parity
+  matrix, all 72 LSP tests, all 13 extension tests, compiler coverage, 100% LSP
+  coverage, reference integrity, docs build, npm and Rust audits, Clippy with
+  warnings denied, and hygiene. B3.0-e is next.
 
 ## Batch 2 Checkpoint (complete)
 

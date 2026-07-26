@@ -65,7 +65,7 @@ def read_config() -> Result[String, io.Error]:
 Use byte helpers for binary data or unknown encodings:
 
 ```python
-def read_image_size() -> Result[int32, io.Error]:
+def read_image_size() -> Result[int64, io.Error]:
     bytes = try fs.read_bytes("image.bin")
     return Result.Ok(bytes.len())
 ```

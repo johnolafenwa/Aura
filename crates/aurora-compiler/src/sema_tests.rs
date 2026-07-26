@@ -1043,11 +1043,18 @@ def main():
     ages.set("ada", 36)
     mut tags = Set[String]()
     tags.insert("beta")
+    text = "é🙂"
 
     print(len(values))
     print(len("hello"))
     print(len(ages))
     print(len(tags))
+    print(len(text) == text.len())
+    print(len(values) == values.len())
+    print(len(ages) == ages.len())
+    print(len(tags) == tags.len())
+    print(text.len())
+    print(text.byte_len())
 
     print(str(1))
     print(str(2.5))
@@ -1062,7 +1069,7 @@ def main():
     .expect("len should delegate and str should render");
     assert_eq!(
         output.stdout,
-        "2\n5\n1\n1\n1\n2.5\ntrue\n[1, 2]\nOption.Some(7)\n2\n"
+        "2\n5\n1\n1\ntrue\ntrue\ntrue\ntrue\n2\n6\n1\n2.5\ntrue\n[1, 2]\nOption.Some(7)\n2\n"
     );
 
     // `str` renders exactly what an f-string interpolation renders.
@@ -7514,6 +7521,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
     let span = Span::new(1, 1);
     let string_ty = Type::named("String");
     let int_ty = Type::named("int32");
+    let count_ty = Type::named("int64");
     let float_ty = Type::named("float64");
     let bool_ty = Type::named("bool");
     let vec_int = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
@@ -7721,7 +7729,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "len".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            count_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -7729,7 +7737,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "byte_len".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            count_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -7839,7 +7847,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "len".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            count_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -7954,7 +7962,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "len".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            count_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -8076,7 +8084,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "len".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            count_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -12950,7 +12958,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
 #[test]
 fn builtin_call_and_member_resolution_surface_type_checks() {
     let program = crate::check_source(
-            "def main() -> int32:\n    text = \"  Aurora  \"\n    pieces: Vec[String] = text.split(\"u\")\n    replaced: String = text.replace(\"Aurora\", \"language\")\n    lowered: String = text.to_lower()\n    raised: String = text.to_upper()\n    prefix: Option[String] = text.strip_prefix(\"  \")\n    suffix: Option[String] = text.strip_suffix(\"  \")\n    text_len: int32 = text.len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, String] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, String] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, String] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: Vec[int32] = [1, 2, 3]\n    popped: Option[int32] = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    inserted: bool = values.insert(index=0, value=9)\n    mut counts: Map[String, int32] = {\"a\": 1}\n    keys: Vec[String] = counts.keys()\n    vals: Vec[int32] = counts.values()\n    entries: Vec[MapEntry[String, int32]] = counts.items()\n    mut names = Set{\"ada\"}\n    has_name: bool = names.contains(\"ada\")\n    inserted_name: bool = names.insert(\"bob\")\n    removed_name: bool = names.remove(\"ada\")\n    return text_len + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
+            "def main() -> int32:\n    text = \"  Aurora  \"\n    pieces: Vec[String] = text.split(\"u\")\n    replaced: String = text.replace(\"Aurora\", \"language\")\n    lowered: String = text.to_lower()\n    raised: String = text.to_upper()\n    prefix: Option[String] = text.strip_prefix(\"  \")\n    suffix: Option[String] = text.strip_suffix(\"  \")\n    text_len: int64 = text.len()\n    text_byte_len: int64 = text.byte_len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, String] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, String] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, String] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: Vec[int32] = [1, 2, 3]\n    values_len: int64 = values.len()\n    popped: Option[int32] = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    inserted: bool = values.insert(index=0, value=9)\n    mut counts: Map[String, int32] = {\"a\": 1}\n    counts_len: int64 = counts.len()\n    keys: Vec[String] = counts.keys()\n    vals: Vec[int32] = counts.values()\n    entries: Vec[MapEntry[String, int32]] = counts.items()\n    mut names = Set{\"ada\"}\n    names_len: int64 = names.len()\n    has_name: bool = names.contains(\"ada\")\n    inserted_name: bool = names.insert(\"bob\")\n    removed_name: bool = names.remove(\"ada\")\n    return (text_len as int32) + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
         )
         .expect("builtin call/member surface should type check");
     assert!(program.functions.contains_key("main"));

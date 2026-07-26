@@ -41,7 +41,8 @@ Phase 5 is outside this target and must not begin.
 - Repository-hygiene prerequisite `18b7f00` removed the committed trailing
   whitespace exposed by the first full gate. Part-0 ratifications are isolated
   in `19a10f4`, completed B3.0-a is isolated in `6afe47c`, and completed
-  B3.0-b is isolated in `fc22696`; B3.0-c is the active worktree and ticket.
+  B3.0-b is isolated in `fc22696`. Completed B3.0-c is isolated in `e05c5e6`;
+  B3.0-d is the active worktree and ticket.
 - Batch 2 checkpoint gate: green at the recorded
   `64,409/67,039` lines, `4,158/4,295` functions, and
   `94,472/100,184` regions, with enforced floors
@@ -253,8 +254,94 @@ Phase 5 is outside this target and must not begin.
   profiles are retained for B3.0-d.
 - Status: complete and ready for the isolated B3.0-c decision commit.
 
+## B3.0-d: `int64` length-surface unification
+
+- Red evidence first established that an `int64` annotation rejected each
+  member length as `int32`, while builtin `len(...)` was already `int64`.
+  Focused fixtures then pinned all five member results, free/member equality,
+  Unicode scalar versus UTF-8 byte counts, checked `int32` narrowing, and
+  MIR/direct parity.
+- `String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and
+  `Set.len()` now return `int64` consistently through call metadata, semantic
+  checking, analysis and completion, MIR typing/runtime, direct lowering, and
+  the LSP. The direct backend no longer emits an implicit `int32` range check
+  for these results; an explicit `as int32` conversion remains checked.
+- A late independent review found that MIR member dispatch cloned a complete
+  place receiver before reading a length. Six clone-count regressions failed
+  with one snapshot apiece for the five member forms and source-lowered free
+  `len(...)`. A borrowed place fast path now reads every length without cloning
+  or moving the receiver, preserving `String.byte_len()`'s O(1) contract and
+  the existing no-argument diagnostics.
+- The same review exposed duplicate builtin-member completion rows. A
+  uniqueness regression first reproduced duplicate `Set.len`, then the
+  broader Vec/Map/Set hardcoded-plus-catalog overlap. Catalog entries are now
+  appended only when that member name is not already present. Compiler and LSP
+  tests require unique observable completion rows and exact `int64` details.
+- ADR-0030 is Accepted with the B3.0-d amendment. ADR-0004 records the two
+  `int64` String length APIs, ADR-0020 describes the secure-random request
+  ceiling, and ADR-0023 preserves the independent byte-codec output ceiling
+  and `bytes.Error` `int32` payload ABI. Manual, Learn, README, examples, and
+  tutorials now teach free/member type-and-value equality, Unicode scalar and
+  byte counts, and explicit checked narrowing at retained `int32` boundaries.
+  The reference gate positively freezes those contracts and rejects stale
+  `int32` length signatures or prose.
+- Resource limits were not widened. The codec implementation now uses
+  `MAX_CODEC_OUTPUT_LEN` and `checked_codec_output_len`; secure randomness uses
+  `RequestExceedsCeiling`. Oversized `bytes.Error` metadata retains a precise
+  `AU4005` trap. Renamed run-fail fixtures pin the secure-random ceiling without
+  describing it as a maximum representable Vec length.
+- Count/index audit disposition:
+  - already `int64`: free `len(...)` and `enumerate` positions;
+  - migrated here: the five public String/collection member lengths;
+  - deliberately retained as `int32`: Range endpoints and yields, Vec index
+    inputs and internal cursors, and `WaitAny`/`WaitAll` indices, which form one
+    coordinated index domain and use explicit checked casts from lengths;
+  - deliberately retained as `int32`: `bytes.Error` offsets/lengths and JSON
+    error line/column/depth payloads, which are bounded diagnostic ABIs;
+  - deliberately retained: process supervisor restart counts/configuration,
+    Queue capacity, bounded network/process byte-count inputs, HTTP status,
+    process exit/signal codes, and `main` exit codes. Codes are not collection
+    counts; the bounded operational parameters require their own coordinated
+    API decision. Unlimited supervisor restart-count overflow remains a
+    separate long-horizon audit item rather than an unreviewed breaking change.
+- Focused verification is green: 916 compiler unit tests include the six
+  zero-clone regressions; all nine fixture categories pass with local-network
+  access; MIR and direct produce the same `len_and_str` oracle; all 72 LSP
+  tests pass at 100% statements, branches, functions, and lines; all 13
+  extension tests pass; reference integrity, executable fence hashes, docs
+  build, formatting, and diff hygiene pass. Three independent final reviews
+  report no remaining P0-P2 finding.
+- Compiler coverage is green at `64,612/67,239` lines (96.09%),
+  `4,179/4,315` functions (96.85%), and `94,761/100,470` regions (94.32%),
+  above the frozen `96.07/96.81/94.29` floors. Every added test pins observable
+  type, value, diagnostic, completion, allocation/ownership, or backend
+  behavior; no synthetic coverage test, exclusion, or coverage-only branch was
+  added.
+- An earlier full-repository `npm run ci` attempt passed formatting, all Rust
+  suites, the forced-backend parity matrix, all 72 LSP tests, all 13 extension
+  tests, and both compiler and LSP coverage gates. It then exposed a reference
+  guard whose fixed-string assertion crossed a Markdown line wrap. The guard now
+  pins the same normative statement without depending on its line wrapping.
+- The exact full-repository `npm run ci` decision gate is green on the committed
+  tree: `cargo fmt --all --check`, 916 compiler unit tests, 265 CLI integration
+  tests, every fixture and package suite, the forced MIR/direct runtime-fixture
+  parity matrix in 516.80 seconds, all 72 language-server tests, all 13 extension
+  tests, compiler coverage, LSP coverage at 100% statements, branches, functions,
+  and lines, executable reference integrity, the documentation build, the npm and
+  Rust audits, Clippy with warnings denied, and repository hygiene all passed. The
+  Rust audit retains its already-allowed `rustls-pemfile` unmaintained warning and
+  reports no vulnerability failure.
+- The gate's compiler coverage is `64,612/67,239` lines
+  (96.09304124094648%), `4,179/4,315` functions (96.84820393974508%), and
+  `94,761/100,470` regions (94.31770677814274%), above the frozen
+  `96.07/96.81/94.29` floors, which are not raised during the migration.
+- Coverage-only output was cleaned before the gate; `target/` was 18.9 GiB with
+  about 146 GiB free, so neither repository cleanup threshold was crossed.
+- Status: complete and ready for the isolated B3.0-d decision commit.
+
 ## Follow-up
 
-Commit B3.0-c in isolation, then begin B3.0-d length-surface unification.
-Continue recording source-inventory counts, migration results, and checkpoint
+B3.0-e diagnostic and comment polish is next, followed by the ADR-0022
+inventory, migrator, and capability-syntax migration. Continue recording the
+syntax-aware source-inventory counts, migration results, and checkpoint
 disposition here as the batch advances.

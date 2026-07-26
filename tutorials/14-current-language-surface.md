@@ -369,8 +369,13 @@ Current bytes, text-codec, and hash surface:
 - canonical standard-alphabet `bytes.base64_encode(...)` and
   `bytes.base64_decode(...)`
 - raw 32-byte `bytes.sha256(...)` and `bytes.sha256_string(...)`
-- typed `bytes.Error` malformed-input variants; unrepresentable or failed
-  allocations trap with `AU4005`
+- typed `bytes.Error` malformed-input variants with retained `int32` offsets and
+  lengths; required metadata above `2147483647` traps with `AU4005` rather than
+  being truncated or wrapped
+- a fixed 2,147,483,647-byte safety ceiling for each fresh codec destination,
+  independent of public String and `Vec` length domains; crossing it,
+  destination-size arithmetic overflow, or allocation failure traps with
+  `AU4005`
 
 Current builtin I/O, networking, and process surface:
 
@@ -397,6 +402,10 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.flush()`
 - `fs.File.close()`
 - one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aurora 0.1 has no chunked file-read API
+- process capture/pipe reads and TCP, Unix, and TLS whole or bounded reads are
+  capped at 64 MiB; TLS certificate, private-key, and CA-file loading uses the
+  same independent 64 MiB ceiling
+- incoming HTTP parsing is capped at 16 MiB of wire data per message
 - `net.connect(...)`
 - `net.connect_timeout(...)`
 - `net.listen(...)`
@@ -517,8 +526,8 @@ Current builtin member methods include:
 
 - `float64.sqrt()`
 - scalar and boolean `.to_string()`
-- `String.len()` (Unicode scalar values, O(n))
-- `String.byte_len()` (UTF-8 bytes, O(1))
+- `String.len() -> int64` (Unicode scalar values, O(n))
+- `String.byte_len() -> int64` (UTF-8 bytes, O(1))
 - `String.to_bytes()` (fresh `Vec[uint8]`)
 - `String.from_bytes(...)` (associated strict UTF-8 conversion)
 - `String.contains(...)`
@@ -533,7 +542,7 @@ Current builtin member methods include:
 - `String.strip_suffix(...)`
 - `String.trim()`
 - `String.clone()`
-- `Vec.len()`
+- `Vec.len() -> int64`
 - `Vec.is_empty()`
 - `Vec.clone()`
 - `Vec.push(...)`
@@ -547,7 +556,7 @@ Current builtin member methods include:
 - `Vec.extend(...)`
 - `Vec.clear()`
 - `Vec.reverse()`
-- `Map.len()`
+- `Map.len() -> int64`
 - `Map.is_empty()`
 - `Map.clone()`
 - `Map.get(...)`
@@ -560,7 +569,7 @@ Current builtin member methods include:
 - `Map.entries()`
 - `Map.clear()`
 - `Map.extend(...)`
-- `Set.len()`
+- `Set.len() -> int64`
 - `Set.is_empty()`
 - `Set.clone()`
 - `Set.contains(...)`
@@ -593,9 +602,12 @@ identical through MIR and direct execution.
 `random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
 operating system's secure source. They have no seed and never fall back to the
 deterministic generator. `secure_bytes(0)` returns an empty vector without an
-entropy request. Invalid bounds/counts trap with `AU4003`; entropy or
-allocation failure traps with `AU4005`. There is no `random.Error` or secure
-floating function. See [20-randomness.md](20-randomness.md).
+entropy request. Its count is `int64`, with a fixed per-request resource and
+safety ceiling of `2147483647` independent of the public `Vec` length domain.
+Invalid bounds or a negative count traps with `AU4003`; a count above the
+ceiling traps with `AU4005` before allocation or entropy, and entropy or
+allocation failure also traps with `AU4005`. There is no `random.Error` or
+secure floating function. See [20-randomness.md](20-randomness.md).
 
 Clone-producing generic bodies infer clone-safety obligations rather than
 rejecting unresolved type parameters. Requirements propagate through generic
@@ -643,14 +655,21 @@ Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies
 
 Current collection notes:
 
-- `Vec.len()` returns `int32`, so `range(values.len())` works directly
+- `String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and
+  `Set.len()` return `int64`; `len(value)` delegates to the corresponding
+  `len()` and therefore satisfies `len(value) == value.len()`
+- `range(...)` bounds and Vec indexes remain `int32`, so length-driven
+  iteration narrows explicitly with the checked
+  `range(values.len() as int32)` form
 - bare and explicit-`borrow` Vec iteration are shared; `for value in own vec:`
   consumes; `for value in borrow mut vec:` supports writeback
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
 - `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
-- `insert(-1, value)` inserts before the last element, `insert(len, value)` appends, and out-of-range indexes are never clamped
+- `insert(-1, value)` inserts before the last element;
+  `insert(values.len() as int32, value)` appends through a checked narrowing,
+  and out-of-range indexes are never clamped
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
 - `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` now trap on out-of-bounds indices instead of silently ignoring the operation
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly

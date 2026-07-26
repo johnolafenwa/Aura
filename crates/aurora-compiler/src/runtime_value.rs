@@ -7967,10 +7967,10 @@ pub(crate) fn bytes_resource_error_to_diagnostic(error: BytesResourceError) -> D
 }
 
 pub(crate) fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
-    if bytes.len() > bytes_codec::MAX_BYTES_COLLECTION_LEN {
+    if bytes.len() > bytes_codec::MAX_CODEC_OUTPUT_LEN {
         return Err(bytes_resource_error_to_diagnostic(
             BytesResourceError::OutputTooLarge {
-                maximum: bytes_codec::MAX_BYTES_COLLECTION_LEN,
+                maximum: bytes_codec::MAX_CODEC_OUTPUT_LEN,
             },
         ));
     }
@@ -8016,7 +8016,7 @@ fn bytes_error_index(value: usize) -> Result<Value> {
     let value = i32::try_from(value).map_err(|_| {
         Diagnostic::coded(
             "AU4005",
-            "byte-codec error metadata exceeds Aurora's int32 collection index range",
+            "byte-codec error metadata exceeds the `bytes.Error` int32 payload range",
         )
     })?;
     Ok(Value::Int(IntegerValue::from_i32(value)))

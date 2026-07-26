@@ -3,9 +3,27 @@ def main():
     hosts.push("alpha")
     hosts.push("beta")
 
-    print(len(hosts))
+    host_count: int64 = hosts.len()
+    assert len(hosts) == host_count
+    print(host_count)
+
+    text = "é🌌"
+    scalar_count: int64 = text.len()
+    byte_count: int64 = text.byte_len()
+    assert len(text) == scalar_count
+    assert scalar_count == 2
+    assert byte_count == 6
+
+    ports = {"alpha": 80, "beta": 443}
+    port_count: int64 = ports.len()
+    assert len(ports) == port_count
+
+    unique_hosts: Set[String] = {"alpha", "beta"}
+    unique_count: int64 = unique_hosts.len()
+    assert len(unique_hosts) == unique_count
+
     print(len("aurora"))
 
-    summary = str(len(hosts))
+    summary = str(host_count)
     print(summary)
     print(str(hosts))

@@ -108,10 +108,15 @@ operating system's cryptographically secure source; Aurora never falls back to
 `random.Rng`, a clock, or a process identifier. `secure_bytes(0)` returns an
 empty vector without requesting entropy.
 
+The `secure_bytes` count is `int64`. Each call accepts at most `2147483647`
+bytes as a fixed resource and safety ceiling independent of the public `Vec`
+length domain. A larger count traps with `AU4005` before Aurora requests either
+allocation or entropy.
+
 Invalid or unavailable requests trap because these functions return plain
 values: an empty/reversed integer interval or negative byte count is `AU4003`,
-while OS entropy or allocation failure is `AU4005`. Aurora 0.1 has no
-`random.Error` type.
+while a secure byte count above the ceiling, OS entropy failure, or allocation
+failure is `AU4005`. Aurora 0.1 has no `random.Error` type.
 
 ## Compatibility And The Full Contract
 

@@ -28,7 +28,7 @@ def nested_collection_size(ready: bool) -> int32:
     values = [4, 5]
     selected = ([], 1) if ready else (values, 2)
     items, code = selected
-    return items.len()
+    return items.len() as int32
 
 def main():
     print(then_value() if condition(true) else else_value())

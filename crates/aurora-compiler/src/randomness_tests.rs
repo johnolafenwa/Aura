@@ -199,7 +199,7 @@ fn secure_bytes_zero_length_skips_allocation_and_entropy() {
 }
 
 #[test]
-fn secure_bytes_rejects_unrepresentable_vec_length_before_allocation_or_entropy() {
+fn secure_bytes_rejects_requests_above_its_safety_ceiling_before_allocation_or_entropy() {
     let called = Cell::new(false);
     let requested = i32::MAX as usize + 1;
 
@@ -208,13 +208,11 @@ fn secure_bytes_rejects_unrepresentable_vec_length_before_allocation_or_entropy(
         Ok(())
     });
 
-    assert!(matches!(
-        result,
-        Err(SecureRandomError::LengthExceedsVec {
-            requested: actual,
-            maximum,
-        }) if actual == requested && maximum == i32::MAX as usize
-    ));
+    let error = result.expect_err("the secure-byte request ceiling must be enforced");
+    assert_eq!(
+        error.to_string(),
+        "`random.secure_bytes(n)` count `2147483648` exceeds the secure-random request ceiling `2147483647`"
+    );
     assert!(!called.get());
 }
 
@@ -246,13 +244,13 @@ fn secure_random_errors_explain_invalid_input_and_host_resource_failures() {
         SecureRandomError::Entropy(entropy).to_string(),
         format!("OS entropy is unavailable: {entropy}")
     );
+    let request_ceiling = secure_bytes_with(i32::MAX as usize + 1, |_| {
+        unreachable!("an over-ceiling request must fail before requesting entropy")
+    })
+    .expect_err("the secure-byte request ceiling must be enforced");
     assert_eq!(
-        SecureRandomError::LengthExceedsVec {
-            requested: i32::MAX as usize + 1,
-            maximum: i32::MAX as usize,
-        }
-        .to_string(),
-        "`random.secure_bytes(n)` count `2147483648` exceeds the maximum `Vec` length `2147483647`"
+        request_ceiling.to_string(),
+        "`random.secure_bytes(n)` count `2147483648` exceeds the secure-random request ceiling `2147483647`"
     );
 
     let allocation = allocate_secure_bytes(usize::MAX)

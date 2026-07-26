@@ -768,6 +768,67 @@ fn compiler_member_completion_for_string_exposes_string_methods() {
 }
 
 #[test]
+fn analysis_and_completion_report_public_length_members_as_int64() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let cases = [
+        (Type::named("String"), vec!["len", "byte_len"]),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            vec!["len"],
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            vec!["len"],
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            vec!["len"],
+        ),
+    ];
+
+    for (receiver, fields) in cases {
+        let completions = builder.member_completions(&receiver);
+        for (index, completion) in completions.iter().enumerate() {
+            assert!(
+                completions[..index]
+                    .iter()
+                    .all(|earlier| earlier.name != completion.name),
+                "{receiver}.{} must complete exactly once: {completions:?}",
+                completion.name
+            );
+        }
+        for field in fields {
+            let expected_detail = format!("{field}() -> int64");
+            let member = builder
+                .resolve_member_type(&receiver, field)
+                .unwrap_or_else(|| panic!("expected public member {receiver}.{field}"));
+            assert_eq!(
+                member.ty,
+                Some(Type::named("int64")),
+                "{receiver}.{field} must analyze as int64"
+            );
+
+            let matching_completions = completions
+                .iter()
+                .filter(|item| item.name == field)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching_completions.len(),
+                1,
+                "{receiver}.{field} must complete exactly once: {matching_completions:?}"
+            );
+            let completion = matching_completions[0];
+            assert_eq!(completion.kind, "method", "{receiver}.{field}");
+            assert_eq!(completion.detail, expected_detail, "{receiver}.{field}");
+        }
+    }
+}
+
+#[test]
 fn compiler_string_byte_tooling_separates_static_decode_from_instance_encode() {
     let static_source = "def main() -> int32:\n    String.\n    return 0\n";
     let static_names = completion_names_after_marker(static_source, "String.");
@@ -2189,7 +2250,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             }),
             &scope,
         ),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -4462,8 +4523,8 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
         assert_eq!(member.ty, Some(expected), "{receiver}.{field}");
     };
 
-    assert_member_type("String", "len", Type::named("int32"));
-    assert_member_type("String", "byte_len", Type::named("int32"));
+    assert_member_type("String", "len", Type::named("int64"));
+    assert_member_type("String", "byte_len", Type::named("int64"));
     assert_member_type("process.Child", "stdin", option(named("process.Pipe")));
     assert_member_type("process.Child", "stdout", option(named("process.Pipe")));
     assert_member_type("process.Child", "stderr", option(named("process.Pipe")));

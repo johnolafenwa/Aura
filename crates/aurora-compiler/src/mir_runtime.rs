@@ -878,6 +878,27 @@ fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Resu
     }
 }
 
+fn evaluate_borrowed_length_member(
+    receiver: &Value,
+    field: &str,
+    args: &[MirArg],
+) -> Option<Result<Value>> {
+    let length = match (receiver, field) {
+        (Value::String(text), "len") => text.chars().count(),
+        (Value::String(text), "byte_len") => text.len(),
+        (Value::Vec(vector), "len") => vector.elements.len(),
+        (Value::Map(map), "len") => map.entries.len(),
+        (Value::Set(set), "len") => set.elements.len(),
+        _ => return None,
+    };
+    if !args.is_empty() {
+        return Some(Err(Diagnostic::new(format!(
+            "`{field}` does not take arguments"
+        ))));
+    }
+    Some(Ok(Value::Int(IntegerValue::from_literal(length as u128))))
+}
+
 fn take_mir_operand(operand: &Operand, env: &mut Env) -> Result<Value> {
     match operand {
         Operand::Place(place) => env.read_place(place),
@@ -3139,6 +3160,16 @@ impl MirRuntime {
                 field,
                 receiver_place,
             } => {
+                if matches!(field.as_str(), "len" | "byte_len") {
+                    if let Operand::Place(place) = object {
+                        if let Some(result) =
+                            evaluate_borrowed_length_member(env.place_ref(place)?, field, args)
+                        {
+                            return result;
+                        }
+                    }
+                }
+
                 if field == "to_bytes" {
                     if let Operand::Place(place) = object {
                         let receiver = env.place_ref(place)?;
@@ -7235,7 +7266,7 @@ fn random_resource_error_to_diagnostic(
             Some((lo, hi)) => invalid_random_bounds_diagnostic(lo, hi),
             None => Diagnostic::coded("AU4003", "random bounds require `lo < hi`"),
         },
-        error @ SecureRandomError::LengthExceedsVec { .. } => {
+        error @ SecureRandomError::RequestExceedsCeiling { .. } => {
             Diagnostic::coded("AU4005", error.to_string())
         }
         SecureRandomError::Allocation(error) => Diagnostic::coded(

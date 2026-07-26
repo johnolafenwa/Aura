@@ -699,12 +699,15 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         assert!(!member.docs().is_empty());
     }
     assert_eq!(BuiltinMember::resolve("Vec", "missing"), None);
-    assert_eq!(BuiltinMember::StringLen.detail(), "len() -> int32");
+    assert_eq!(BuiltinMember::StringLen.detail(), "len() -> int64");
     assert!(BuiltinMember::StringLen.docs().contains("Unicode scalar"));
     assert!(BuiltinMember::StringLen.docs().contains("O(n)"));
-    assert_eq!(BuiltinMember::StringByteLen.detail(), "byte_len() -> int32");
+    assert_eq!(BuiltinMember::StringByteLen.detail(), "byte_len() -> int64");
     assert!(BuiltinMember::StringByteLen.docs().contains("UTF-8 bytes"));
     assert!(BuiltinMember::StringByteLen.docs().contains("O(1)"));
+    assert_eq!(BuiltinMember::VecLen.detail(), "len() -> int64");
+    assert_eq!(BuiltinMember::MapLen.detail(), "len() -> int64");
+    assert_eq!(BuiltinMember::SetLen.detail(), "len() -> int64");
 
     let positional_only_error = BuiltinMember::VecReverse
         .bind_args(&[dummy_arg(None)], Span::new(1, 1))

@@ -23,7 +23,7 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `parse_int32` | `parse_int32(text: String) -> Result[int32, String]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: String) -> Result[int64, String]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: String) -> Result[float64, String]` | Parses a 64-bit float. |
-| `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]) -> int64` | Delegates to the value's own `len()` member. |
+| `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]) -> int64` | Delegates to the value's own `len()` member with the same `int64` type and value. |
 | `str` | `str(value) -> String` | Renders `value` exactly as `print` and f-string interpolation render it. |
 
 ## Scalars And String
@@ -38,8 +38,8 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `Duration.minutes` | `Duration.minutes(value: int64) -> Duration` | Exact signed minute constructor. |
 | `Duration.to_ms` | `to_ms() -> float64` | Converts exact nanoseconds to nearest-representable binary64 milliseconds, ties-to-even; may round; accepted under ADR-0019. |
 | `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; accepted under ADR-0019. |
-| `String.len` | `len() -> int32` | Counts Unicode scalar values in O(n). |
-| `String.byte_len` | `byte_len() -> int32` | Returns the UTF-8 byte count in O(1). |
+| `String.len` | `len() -> int64` | Counts Unicode scalar values in O(n). |
+| `String.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1). |
 | `String.to_bytes` | `to_bytes() -> Vec[uint8]` | Returns a fresh vector containing the receiver's exact UTF-8 bytes. |
 | `String.from_bytes` | `from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]` | Strictly validates UTF-8 and returns a fresh String or the first invalid byte offset. |
 | `String.contains` | `contains(text: String) -> bool` | `true` when the receiver contains `text`. |
@@ -115,7 +115,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `Vec[T]()` | `Vec[T]()` | Empty vector constructor. |
-| `Vec.len` | `len() -> int32` | Element count. |
+| `Vec.len` | `len() -> int64` | Element count. |
 | `Vec.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Vec.clone` | `clone() -> Vec[T]` | Clones the vector and elements; requires clone-safe `T`. |
 | `Vec.push` | `push(value: own T) -> None` | Appends `value`. |
@@ -135,7 +135,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `Map[K, V]()` | `Map[K, V]()` | Empty map constructor. |
-| `Map.len` | `len() -> int32` | Entry count. |
+| `Map.len` | `len() -> int64` | Entry count. |
 | `Map.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Map.clone` | `clone() -> Map[K, V]` | Clones keys and values; requires clone-safe `K` and `V`. |
 | `Map.get` | `get(key: K) -> Option[V]` | Cloned value or `None` when absent; requires clone-safe `V`. |
@@ -156,7 +156,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `Set[T]()` | `Set[T]()` | Empty set constructor. |
-| `Set.len` | `len() -> int32` | Unique value count. |
+| `Set.len` | `len() -> int64` | Unique value count. |
 | `Set.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `Set.clone` | `clone() -> Set[T]` | Clones the set; requires clone-safe `T`. |
 | `Set.contains` | `contains(value: T) -> bool` | Membership lookup. |

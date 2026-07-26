@@ -65,10 +65,15 @@ Current compiler workflow:
   - execute user-defined generic classes, enums, and functions
 - `cargo run -p aura -- run examples/basics/default_arguments.au`
   - execute default parameter values on ordinary functions
+- `cargo run -p aura -- run examples/basics/len_and_str.au`
+  - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
+    String length versus UTF-8 byte length, and `str(value)`
 - `cargo run -p aura -- run examples/collections/vec_basics.au`
   - execute list literals, `Vec[T]` methods, and indexed element access
 - `cargo run -p aura -- run examples/collections/vec_polish.au`
-  - execute negative Vec indexing, non-copy cloned reads, mutable Vec iteration, `insert(...)`, `swap(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
+  - execute negative Vec indexing, checked `int64`-length to `int32`-index
+    narrowing, non-copy cloned reads, mutable Vec iteration, `insert(...)`,
+    `swap(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
 - `cargo run -p aura -- run examples/collections/map_basics.au`
   - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
@@ -121,7 +126,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`
   - execute the maintained builtin numeric helper surface `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`, and `float64.sqrt()`
 - `cargo run -p aura -- run examples/strings/string_methods.au`
-  - execute single-quoted strings, Unicode-scalar `len()`, UTF-8 `byte_len()`, and the maintained `String` method surface including `split`, `replace`, case conversion, and prefix/suffix stripping
+  - execute single-quoted strings, `int64` Unicode-scalar `len()`, `int64`
+    UTF-8 `byte_len()`, and the maintained `String` method surface including
+    `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
   - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
 - `cargo run -p aura -- run examples/io/read_text_file.au`

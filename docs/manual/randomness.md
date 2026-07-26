@@ -104,13 +104,15 @@ shuffles are compatibility tests, not merely illustrative examples.
 modulo bias using fresh bytes from the operating system's cryptographically
 secure random source. It has no seed and no reproducibility guarantee.
 
-`random.secure_bytes(n)` requires `0 <= n <= 2147483647`, the maximum length
-representable by Aurora's `Vec`. It allocates a fresh `Vec[uint8]` and fills it
-from that same OS source. `secure_bytes(0)` returns an empty vector without
-contacting the entropy source. A count above the `Vec` limit fails with
-`AU4005` before allocation or entropy is requested. For any accepted positive
-count, Aurora either returns exactly that many initialized bytes or fails; it
-never returns a short vector and never substitutes deterministic data.
+`random.secure_bytes(n)` requires `0 <= n <= 2147483647`. The upper bound is a
+fixed per-call resource and safety ceiling for allocation and operating-system
+entropy requests, independently of Aurora's public `Vec` length domain. The
+function allocates a fresh `Vec[uint8]` and fills it from that same OS source.
+`secure_bytes(0)` returns an empty vector without contacting the entropy source.
+A count above the secure-random request ceiling fails with `AU4005` before
+allocation or entropy is requested. For any accepted positive count, Aurora
+either returns exactly that many initialized bytes or fails; it never returns
+a short vector and never substitutes deterministic data.
 
 The exact secure outputs are intentionally unspecified. Their distribution,
 length, failure category, and no-fallback rule are specified. Host entropy and
@@ -255,12 +257,12 @@ unsafe generic specialization, an unprovable concrete clone requirement, or a
 trait implementation that would strengthen its declared contract.
 
 `AU4003` reports `lo >= hi` for either integer function and a negative
-`secure_bytes` count. `AU4005` reports a byte count above `2147483647`, failure
-to obtain secure operating-system entropy, or failure to allocate/fill the
-requested secure byte vector. The over-limit diagnostic is emitted before any
-allocation or entropy request. Because the public return types are plain
-values, these runtime conditions are diagnostics, not `Result` or
-`random.Error` values.
+`secure_bytes` count. `AU4005` reports a byte count above the fixed
+secure-random request ceiling of `2147483647`, failure to obtain secure
+operating-system entropy, or failure to allocate/fill the requested secure byte
+vector. The over-limit diagnostic is emitted before any allocation or entropy
+request. Because the public return types are plain values, these runtime
+conditions are diagnostics, not `Result` or `random.Error` values.
 
 ## Backend Support
 
@@ -283,10 +285,11 @@ distribution library, random choice helper, or public clone route. Integer
 sampling is limited to `int64` half-open ranges, floating sampling to uniform
 `float64` values in `[0.0, 1.0)`, and shuffle to mutable `Vec[T]` values.
 
-Secure byte count is an `int64`, but accepted requests are capped at
-`2147483647` so every returned length is representable by `Vec.len() -> int32`.
-Within that language limit, a request must also fit the host address space and
-allocator. Either limit reports `AU4005`. The operating system chooses the
+Secure byte count is an `int64`, but each request is capped at `2147483647` as
+a fixed secure-random resource and safety ceiling. The ceiling does not define
+or narrow the public `Vec` length domain or the result of `Vec.len()`. Within
+that request ceiling, the allocation must also fit the host address space and
+allocator. Either failure reports `AU4005`. The operating system chooses the
 secure entropy implementation and actual returned values. No deterministic
 ordering relationship exists between secure calls, tasks, backends, processes,
 or hosts.

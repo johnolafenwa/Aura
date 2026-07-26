@@ -7,11 +7,14 @@ This chapter uses each of them to solve a small problem, then shows the patterns
 ## `Vec[T]`: Ordered Data
 
 A vector stores values in insertion order and indexes them with `int32`.
+Its `len()` method returns an `int64` count:
 
 ```python
 mut names = ["Ada", "Grace"]
 names.push("Katherine")
-print(names.len())
+count: int64 = names.len()
+assert len(names) == count
+print(count)
 ```
 
 Index-safe access goes through `get`, which returns `Option[T]`:
@@ -77,11 +80,44 @@ The short practical rule: use `get` when absence is normal and the element is
 clone-safe; use `remove` to transfer a non-cloneable element; use the other
 mutating methods when an invalid index is a program bug you want to catch.
 
-`insert` accepts normalized indexes from `0` through `len`: `insert(len,
-value)` appends. Aurora deliberately does not copy Python's clamping behavior
-for an extremely negative insertion index. If one normalization still leaves
-the index below zero, Aurora reports the error instead of silently inserting
-at the start.
+`insert` accepts normalized indexes from `0` through `len`: converting the
+length at the `int32` index boundary makes an append explicit:
+
+```python
+values.insert(values.len() as int32, 40)
+```
+
+The cast is checked, so a length outside the `int32` range fails rather than
+wrapping. Aurora deliberately does not copy Python's clamping behavior for an
+extremely negative insertion index. If one normalization still leaves the
+index below zero, Aurora reports the error instead of silently inserting at
+the start.
+
+The same boundary applies to length-driven `range(...)` loops:
+
+```python
+for index in range(values.len() as int32):
+    print(values[index])
+```
+
+## Lengths Are `int64`
+
+All five maintained length members return `int64`:
+
+- `String.len()` counts Unicode scalar values.
+- `String.byte_len()` counts UTF-8 bytes.
+- `Vec[T].len()`, `Map[K, V].len()`, and `Set[T].len()` count entries.
+
+The free builtin delegates to the member, so `len(value) == value.len()` for
+`String`, `Vec`, `Map`, and `Set`. Unicode text makes the distinction between
+the two String counts visible:
+
+```python
+text = "A🎉"
+scalar_count: int64 = text.len()       # 2
+byte_count: int64 = text.byte_len()    # 5
+assert len(text) == scalar_count
+```
 
 ## Collection Iteration
 
@@ -234,7 +270,7 @@ enforces this boundary, so inspection and transfer remain visible.
 Put the pieces together. The helper below walks a vector of strings and reports how many unique values appear:
 
 ```python
-def unique_count(values: borrow Vec[String]) -> int32:
+def unique_count(values: borrow Vec[String]) -> int64:
     mut seen = Set[String]()
 
     for value in values:

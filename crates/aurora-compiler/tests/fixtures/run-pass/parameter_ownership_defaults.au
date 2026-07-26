@@ -2,7 +2,7 @@ class Message:
     text: String
 
 def length(message: Message) -> int32:
-    return message.text.len()
+    return message.text.len() as int32
 
 def consume(message: own Message) -> String:
     return message.text

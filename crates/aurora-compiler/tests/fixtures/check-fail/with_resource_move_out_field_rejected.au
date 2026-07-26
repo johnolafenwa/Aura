@@ -5,7 +5,7 @@ class Handle:
         print(self.name.len())
 
 def mutate(s: own Vec[int32]) -> int32:
-    return s.len()
+    return s.len() as int32
 
 def main() -> int32:
     with h = Handle(name=[5]):

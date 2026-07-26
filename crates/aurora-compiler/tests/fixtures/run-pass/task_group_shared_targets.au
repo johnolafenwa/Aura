@@ -1,8 +1,8 @@
 def default_target(value: String) -> int32:
-    return value.len()
+    return value.len() as int32
 
 def explicit_shared_target(value: borrow String) -> int32:
-    return value.len()
+    return value.len() as int32
 
 def main() -> int32:
     first = "default"

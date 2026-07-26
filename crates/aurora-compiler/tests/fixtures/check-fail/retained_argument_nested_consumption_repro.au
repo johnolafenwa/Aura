@@ -4,7 +4,7 @@ def eat(values: own Vec[int32]) -> int32:
     return 3 as int32
 
 def pair(values: borrow Vec[int32], measured: int32) -> int32:
-    return values.len()
+    return values.len() as int32
 
 def main():
     values: Vec[int32] = [1, 2]

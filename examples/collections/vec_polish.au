@@ -29,7 +29,7 @@ def main() -> int32:
     for value in borrow mut values:
         value += 10
 
-    for index in range(values.len()):
+    for index in range(values.len() as int32):
         print(values[index])
 
     values.swap(first=-4, second=-2)

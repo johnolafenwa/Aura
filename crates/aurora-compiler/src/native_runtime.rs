@@ -3014,7 +3014,7 @@ fn direct_random_resource_error(error: SecureRandomError, bounds: Option<(i64, i
                 "random bounds require `lo < hi`",
             )),
         },
-        error @ SecureRandomError::LengthExceedsVec { .. } => {
+        error @ SecureRandomError::RequestExceedsCeiling { .. } => {
             runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string()))
         }
         SecureRandomError::Allocation(error) => runtime_diagnostic_error(Diagnostic::coded(

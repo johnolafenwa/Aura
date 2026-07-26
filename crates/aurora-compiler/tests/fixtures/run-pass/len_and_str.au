@@ -7,10 +7,36 @@ def main():
     mut tags = Set[String]()
     tags.insert("beta")
 
-    print(len(values))
-    print(len("hello"))
-    print(len(ages))
-    print(len(tags))
+    text = "hello"
+    text_length: int64 = text.len()
+    text_byte_length: int64 = text.byte_len()
+    values_length: int64 = values.len()
+    ages_length: int64 = ages.len()
+    tags_length: int64 = tags.len()
+
+    if len(text) != text_length:
+        print("String len mismatch")
+    if text_byte_length != 5:
+        print("String byte_len mismatch")
+    if len(values) != values_length:
+        print("Vec len mismatch")
+    if len(ages) != ages_length:
+        print("Map len mismatch")
+    if len(tags) != tags_length:
+        print("Set len mismatch")
+
+    unicode_text = "é🎉é"
+    unicode_length: int64 = unicode_text.len()
+    unicode_byte_length: int64 = unicode_text.byte_len()
+    if unicode_length != 4:
+        print("Unicode scalar length mismatch")
+    if unicode_byte_length != 9:
+        print("UTF-8 byte length mismatch")
+
+    print(values_length)
+    print(text_length)
+    print(ages_length)
+    print(tags_length)
 
     print(str(1))
     print(str(2.5))

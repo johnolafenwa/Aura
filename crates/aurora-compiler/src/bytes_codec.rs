@@ -6,7 +6,7 @@ use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-pub(crate) const MAX_BYTES_COLLECTION_LEN: usize = i32::MAX as usize;
+pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BytesDataError {
@@ -58,7 +58,7 @@ impl fmt::Display for BytesResourceError {
         match self {
             Self::OutputTooLarge { maximum } => write!(
                 formatter,
-                "byte-codec output exceeds Aurora's maximum collection length of {maximum}"
+                "byte-codec output exceeds Aurora's byte-codec safety ceiling of {maximum} bytes"
             ),
             Self::AllocationFailed => {
                 formatter.write_str("memory allocation failed while processing bytes")
@@ -93,7 +93,7 @@ impl From<BytesResourceError> for BytesCodecError {
 }
 
 pub(crate) fn hex_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
-    representable_output_len(input_len.checked_mul(2))
+    checked_codec_output_len(input_len.checked_mul(2))
 }
 
 pub(crate) fn base64_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
@@ -101,11 +101,11 @@ pub(crate) fn base64_encoded_len(input_len: usize) -> Result<usize, BytesResourc
         .checked_add(2)
         .map(|length| length / 3)
         .and_then(|groups| groups.checked_mul(4));
-    representable_output_len(encoded_len)
+    checked_codec_output_len(encoded_len)
 }
 
 pub(crate) fn string_to_bytes(text: &str) -> Result<Vec<u8>, BytesCodecError> {
-    let output_len = representable_output_len(Some(text.len()))?;
+    let output_len = checked_codec_output_len(Some(text.len()))?;
     let mut bytes = try_byte_buffer(output_len)?;
     bytes.copy_from_slice(text.as_bytes());
     Ok(bytes)
@@ -115,7 +115,7 @@ pub(crate) fn string_from_bytes(bytes: &[u8]) -> Result<String, BytesCodecError>
     let text = str::from_utf8(bytes).map_err(|error| BytesDataError::InvalidUtf8 {
         index: error.valid_up_to(),
     })?;
-    representable_output_len(Some(text.len()))?;
+    checked_codec_output_len(Some(text.len()))?;
     try_owned_string(text).map_err(Into::into)
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn hex_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
         decode_hex_digit(byte, index)?;
     }
 
-    let output_len = representable_output_len(Some(source.len() / 2))?;
+    let output_len = checked_codec_output_len(Some(source.len() / 2))?;
     let mut output = try_byte_buffer(output_len)?;
     for (pair_index, pair) in source.chunks_exact(2).enumerate() {
         let first_index = pair_index * 2;
@@ -216,16 +216,16 @@ pub(crate) fn sha256_string(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     sha256_bytes(text.as_bytes())
 }
 
-fn representable_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError> {
+fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError> {
     match output_len {
-        Some(output_len) if output_len <= MAX_BYTES_COLLECTION_LEN => Ok(output_len),
+        Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len),
         _ => Err(output_too_large()),
     }
 }
 
 fn output_too_large() -> BytesResourceError {
     BytesResourceError::OutputTooLarge {
-        maximum: MAX_BYTES_COLLECTION_LEN,
+        maximum: MAX_CODEC_OUTPUT_LEN,
     }
 }
 
@@ -317,7 +317,7 @@ fn validate_base64(text: &str) -> Result<Base64Layout, BytesCodecError> {
         .and_then(|groups| groups.checked_mul(3))
         .ok_or_else(output_too_large)?;
     let decoded_len = buffer_len - padding;
-    representable_output_len(Some(decoded_len))?;
+    checked_codec_output_len(Some(decoded_len))?;
     Ok(Base64Layout {
         buffer_len: decoded_len,
     })

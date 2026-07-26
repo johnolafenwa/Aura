@@ -6529,7 +6529,7 @@ impl<'a> Lowerer<'a> {
             return Some(Type::named("String"));
         }
         match (name.as_str(), field) {
-            ("String", "len" | "byte_len") => Some(Type::named("int32")),
+            ("String", "len" | "byte_len") => Some(Type::named("int64")),
             ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
                 Some(Type::named("bool"))
             }
@@ -6546,7 +6546,7 @@ impl<'a> Lowerer<'a> {
                 "Option".to_string(),
                 vec![Type::named("String")],
             )),
-            ("Vec", "len") => Some(Type::named("int32")),
+            ("Vec", "len") => Some(Type::named("int64")),
             ("Vec", "is_empty") => Some(Type::named("bool")),
             ("Vec", "clone") => Some(Type::Named("Vec".to_string(), args.clone())),
             ("Vec", "push") | ("Vec", "extend") | ("Vec", "clear") | ("Vec", "reverse") => {
@@ -6562,13 +6562,13 @@ impl<'a> Lowerer<'a> {
                         .unwrap_or_else(|| Type::named("Unknown"))],
                 ))
             }
-            ("Set", "len") => Some(Type::named("int32")),
+            ("Set", "len") => Some(Type::named("int64")),
             ("Set", "is_empty") => Some(Type::named("bool")),
             ("Set", "clone") => Some(Type::Named("Set".to_string(), args.clone())),
             ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
                 Some(Type::named("bool"))
             }
-            ("Map", "len") => Some(Type::named("int32")),
+            ("Map", "len") => Some(Type::named("int64")),
             ("Map", "is_empty") => Some(Type::named("bool")),
             ("Map", "clone") => Some(Type::Named("Map".to_string(), args.clone())),
             ("Map", "contains_key") => Some(Type::named("bool")),

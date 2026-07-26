@@ -1,5 +1,7 @@
 use super::*;
 
+const BYTE_CODEC_SAFETY_CEILING: usize = i32::MAX as usize;
+
 fn data_error(error: BytesDataError) -> BytesCodecError {
     BytesCodecError::Data(error)
 }
@@ -10,7 +12,7 @@ fn allocation_error() -> BytesCodecError {
 
 fn output_too_large_error() -> BytesResourceError {
     BytesResourceError::OutputTooLarge {
-        maximum: MAX_BYTES_COLLECTION_LEN,
+        maximum: BYTE_CODEC_SAFETY_CEILING,
     }
 }
 
@@ -45,8 +47,8 @@ fn codec_errors_have_stable_user_facing_messages_and_categories() {
     assert_eq!(
         too_large.to_string(),
         format!(
-            "byte-codec output exceeds Aurora's maximum collection length of {}",
-            i32::MAX
+            "byte-codec output exceeds Aurora's byte-codec safety ceiling of {} bytes",
+            BYTE_CODEC_SAFETY_CEILING
         )
     );
     assert_eq!(
@@ -60,11 +62,11 @@ fn codec_errors_have_stable_user_facing_messages_and_categories() {
 }
 
 #[test]
-fn expanded_length_checks_pin_exact_representable_boundaries_without_allocating() {
-    let largest_hex_input = MAX_BYTES_COLLECTION_LEN / 2;
+fn expanded_length_checks_pin_the_exact_codec_safety_ceiling_without_allocating() {
+    let largest_hex_input = BYTE_CODEC_SAFETY_CEILING / 2;
     assert_eq!(
         hex_encoded_len(largest_hex_input),
-        Ok(MAX_BYTES_COLLECTION_LEN - 1)
+        Ok(BYTE_CODEC_SAFETY_CEILING - 1)
     );
     assert_eq!(
         hex_encoded_len(largest_hex_input + 1),
@@ -72,8 +74,8 @@ fn expanded_length_checks_pin_exact_representable_boundaries_without_allocating(
     );
     assert_eq!(hex_encoded_len(usize::MAX), Err(output_too_large_error()));
 
-    let largest_base64_input = (MAX_BYTES_COLLECTION_LEN / 4) * 3;
-    let largest_base64_output = (MAX_BYTES_COLLECTION_LEN / 4) * 4;
+    let largest_base64_input = (BYTE_CODEC_SAFETY_CEILING / 4) * 3;
+    let largest_base64_output = (BYTE_CODEC_SAFETY_CEILING / 4) * 4;
     assert_eq!(
         base64_encoded_len(largest_base64_input),
         Ok(largest_base64_output)

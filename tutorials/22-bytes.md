@@ -136,12 +136,16 @@ cryptographic construction when one of those properties is required.
 ## Typed Data Errors And Runtime Failures
 
 Malformed UTF-8, hex, and base64 are expected data problems, so they return a
-`bytes.Error` inside `Result`. Match the variant and report, reject, or retry
-as the application requires.
+`bytes.Error` inside `Result` when the exact offset or length fits the retained
+`int32` payload. Match the variant and report, reject, or retry as the
+application requires. If required malformed-data metadata exceeds
+`2147483647`, Aurora traps with `AU4005` rather than truncating or wrapping it.
 
-An output too large to represent, arithmetic overflow while calculating an
-expanded codec result, or allocation failure is different: it traps with
-`AU4005`. A codec never returns a partial successful value.
+Each fresh codec destination has a fixed 2,147,483,647-byte safety ceiling
+independent of the public String and `Vec` length domains. Crossing that
+ceiling, arithmetic overflow while calculating the destination size, or
+allocation failure traps with `AU4005`. A codec never returns a partial
+successful value.
 
 The optional `encoding` parameter is reserved but not implemented. These are
 the complete 0.1 conversion calls:
