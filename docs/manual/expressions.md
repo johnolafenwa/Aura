@@ -655,12 +655,10 @@ implementation-defined choice.
 ## Status
 
 The expression forms defined positively in this chapter are implemented.
-Delimiter continuation is implemented under Provisional ADR-0025; it does not
-add a new expression AST form. Conditional expressions are implemented under
-Provisional ADR-0027.
-The minimal tuple surface is Provisional under ADR-0026. Lambdas,
+Delimiter continuation is accepted under ADR-0025 and does not add a new
+expression AST form. Conditional expressions are accepted under ADR-0027, and
+membership operators plus comparison chains are accepted under ADR-0028. The
+minimal tuple surface remains Provisional under ADR-0026. Lambdas,
 comprehensions, assignment expressions, general callables, nonnumeric casts,
-and call-site ownership modifiers are unavailable. `in` is reserved as a loop
-keyword but is unavailable as an expression operator. Chained comparisons are
-deliberately rejected rather than given Python semantics. Parser migration
-hints for any of these spellings do not make them language features.
+and call-site ownership modifiers are unavailable. Parser migration hints for
+unavailable spellings do not make them language features.

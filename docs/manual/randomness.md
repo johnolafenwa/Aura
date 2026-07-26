@@ -301,8 +301,7 @@ secrecy.
 The constructor, deterministic methods, secure functions, move-only ownership,
 backend parity, and documented diagnostics are maintained Aurora 0.1 surface.
 The exact algorithm, mapping, compatibility window, identity/rendering policy,
-and secure-failure boundary are Provisional under ADR-0020 pending the Phase 3
-checkpoint review.
+and secure-failure boundary are accepted under ADR-0020.
 
 No other random distributions, secure floating function, global generator,
 derived sampling trait, or `random.Error` type is part of Aurora 0.1.

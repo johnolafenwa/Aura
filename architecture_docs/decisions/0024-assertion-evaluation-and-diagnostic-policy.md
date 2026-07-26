@@ -1,6 +1,6 @@
 # ADR-0024: Assertion evaluation and diagnostic policy
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-24
 - Roadmap decision: Phase 3 assertion gap-fill policy
 
@@ -14,7 +14,7 @@ precedence, top-level legality, or whether a release mode may remove
 assertions. Those choices are observable and must not vary by backend or build
 configuration.
 
-## Provisional decision
+## Accepted decision
 
 - An assertion is a statement with exactly one of these forms:
   `assert condition` or `assert condition, message`.
@@ -44,7 +44,7 @@ configuration.
 - The MIR runtime and direct native backend implement the same sequencing,
   exact messages, diagnostic code/span, cleanup behavior, and process failure.
 
-These choices remain Provisional pending the Phase 3 checkpoint review.
+These choices were accepted at the Batch 3 entry checkpoint.
 
 ## Completion tests
 

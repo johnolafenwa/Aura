@@ -161,9 +161,8 @@ follows scheduling. HTTP limits are the 16 MiB incoming wire-message cap,
 
 The system, path, JSON, TOML, logging, trace-event, metrics, and summarized HTTP
 contracts on this page are implemented and maintained in Aurora 0.1. Recursive
-JSON gap-fill semantics remain Provisional under ADR-0021. The summarized fixed
-HTTP cap remains Provisional pending the Batch 2 checkpoint review under
-ADR-0018.
+JSON gap-fill semantics are accepted under ADR-0021. The summarized fixed HTTP
+cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,
 scoped tracing spans, and richer HTTP header representations are unavailable.

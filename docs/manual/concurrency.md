@@ -39,7 +39,7 @@ A negative Duration is representable but is not a valid sleep, timeout, or
 backoff. Scheduler APIs on this page have no `io.Error` or `process.Error`
 carrier, so a negative value, host-timer overflow, or deadline overflow traps
 with `AU4001`. Overflow never changes the operation into an unlimited wait.
-The exact host-timer classification is Provisional under ADR-0019.
+The exact host-timer classification is accepted under ADR-0019.
 
 ## TaskGroup
 
@@ -313,8 +313,7 @@ Scheduler-backed lightweight tasks, structured `TaskGroup`, generic task
 handles and outcomes, bounded and unbounded queues, bare receive iteration,
 sleep, cooperative cancellation, task-result observation, and multi-task waits
 plus computed Duration arithmetic are implemented for the Phase 3 surface.
-The host-timer policy recorded by ADR-0019 remains Provisional pending the
-Phase 3 checkpoint review. Multicore Aurora task execution
+The host-timer policy recorded by ADR-0019 is Accepted. Multicore Aurora task execution
 is reserved for the Batch 3 runtime work. Preemptive scheduling,
 mutable-borrow task targets, statically enforced single-observer resource
 results, and detached task syntax are unavailable. The capacity boundary is

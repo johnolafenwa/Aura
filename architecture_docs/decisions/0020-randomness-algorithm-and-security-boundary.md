@@ -1,6 +1,6 @@
 # ADR-0020: Randomness algorithm and security boundary
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-22
 - Roadmap decision: Phase 3 Randomness gap-fill policy
 
@@ -18,7 +18,7 @@ tests, retry jitter, generated data, and every shuffled order even when source
 and seed stay unchanged. Treating a deterministic generator as secure would
 also create a serious API-category error.
 
-## Provisional decision
+## Accepted decision
 
 - `random.Rng(seed: int64)` initializes xoshiro256** state from the seed's
   two's-complement 64-bit pattern. Four consecutive SplitMix64 outputs become
@@ -87,7 +87,7 @@ also create a serious API-category error.
   is rejected with `AU3007`. Operator-trait and `From` dispatch enforce the same
   contract.
 
-These choices remain Provisional pending the Phase 3 checkpoint review.
+These choices were accepted at the Batch 3 entry checkpoint.
 
 ## Completion tests
 

@@ -264,8 +264,7 @@ values instead; the feature page for an API states any trapping exception. A
 negative, host-unrepresentable, or deadline-overflowing Duration returns the
 documented `InvalidInput`/process error when that API has a compatible typed
 carrier. A timer API without one traps with `AU4001`; deadline overflow never
-means an unlimited wait. This classification remains Provisional under
-ADR-0019.
+means an unlimited wait. This classification is accepted under ADR-0019.
 
 The random module returns plain values rather than a `random.Error` enum.
 `AU4003` reports an empty or reversed `next_int`/`secure_int` interval and a

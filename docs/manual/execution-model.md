@@ -126,7 +126,7 @@ Equality is defined only after static typing has established compatible operand 
 
 ## Value Rendering
 
-`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is Provisional under ADR-0019.
+`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is accepted under ADR-0019.
 
 Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. A deterministic random generator renders exactly `<rng>` without exposing or advancing its state. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
 
@@ -271,7 +271,7 @@ current instant would overflow are invalid inputs. Deadline overflow never
 silently becomes an unlimited wait. An API with an `io.Error` carrier reports
 `InvalidInput`; a process-error carrier reports
 `process.Error.Io(io.Error.InvalidInput)`; an API without either typed carrier
-traps with `AU4001`. This host-boundary classification is Provisional under
+traps with `AU4001`. This host-boundary classification is accepted under
 ADR-0019.
 
 Filesystem operations and some host operations run on a bounded blocking worker pool. Cancelling the Aurora task cancels its wait for the worker result; it cannot forcibly stop an operating-system call already executing on a worker. A cancelled write or other side-effecting operation may therefore complete in the host after Aurora has stopped waiting. Programs requiring transactional cancellation must write to a temporary artifact and commit it explicitly.

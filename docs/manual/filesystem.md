@@ -151,6 +151,6 @@ After opening a directory, an individual entry that fails during enumeration is 
 
 ## Status
 
-The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aurora 0.1. The fixed 256 MiB whole-read policy is implemented but remains Provisional under ADR-0018 pending the Batch 2 checkpoint review; no other filesystem semantics on this page are provisional.
+The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aurora 0.1. The fixed 256 MiB whole-read policy is accepted under ADR-0018.
 
 The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Chunked and asynchronous file access, transactional operations, richer metadata, and cross-platform path abstractions are unavailable future work and are non-normative.

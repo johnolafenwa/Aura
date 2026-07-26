@@ -48,7 +48,7 @@ grep -Fq 'assert-statement' docs/manual/grammar.md
 grep -Fq 'A failed assertion is `AU4001` at the `assert` keyword location.' docs/manual/diagnostics.md
 grep -Fq 'An assertion evaluates its condition exactly once.' docs/manual/execution-model.md
 grep -Fq 'An `assert` condition must have exactly type `bool`.' docs/manual/static-semantics.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md
 grep -Fq '0024-assertion-evaluation-and-diagnostic-policy.md' architecture_docs/decisions/README.md
 test -s examples/basics/assertions.au
 grep -Fq '`assertions.au`' examples/README.md
@@ -69,7 +69,7 @@ grep -Fq 'Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline doe
 grep -Fq 'Backslash continuation is not implemented.' docs/manual/lexical-structure.md
 grep -Fq 'Ordinary strings and f-strings remain single-line' docs/manual/lexical-structure.md
 grep -Fq 'it does not add a trailing comma to any list form' docs/manual/grammar.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
 grep -Fq '0025-newline-continuation-and-delimited-layout.md' architecture_docs/decisions/README.md
 test -s examples/basics/multiline_expressions.au
 grep -Fq '`multiline_expressions.au`' examples/README.md
@@ -95,7 +95,8 @@ grep -Fq 'the executable `docs/manual/tuples.md` fence' docs/manual/conformance.
 grep -Fq 'conditional-expression' docs/manual/grammar.md
 grep -Fq 'The condition is evaluated first, exactly once' docs/manual/expressions.md
 grep -Fq 'The unselected arm performs no' docs/manual/execution-model.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0027-conditional-expressions.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0027-conditional-expressions.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0028-membership-and-comparison-chains.md
 grep -Fq '0027-conditional-expressions.md' architecture_docs/decisions/README.md
 test -s examples/control_flow/conditional_expressions.au
 grep -Fq '`conditional_expressions.au`' examples/README.md
@@ -133,7 +134,7 @@ grep -Fq 'using at most six fractional digits and trimming trailing fractional z
 grep -Fq 'exact low and high 64-bit' docs/manual/execution-model.md
 grep -Fq 'Deadline overflow never' docs/manual/execution-model.md
 grep -Fq 'Omitting `process.run(timeout=...)` uses an internal absence marker' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md
 grep -Fq '0019-duration-conversion-and-timer-policy.md' architecture_docs/decisions/README.md
 grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' docs/manual/api-index.md
 grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
@@ -150,14 +151,14 @@ grep -Fq 'Clone-safety obligations survive module imports as part of the callabl
 grep -Fq 'Task and Queue handles are clone barriers' docs/manual/randomness.md
 grep -Fq 'unsafe concrete specialization' docs/manual/diagnostics.md
 grep -Fq 'code: "AU3007"' crates/aurora-compiler/src/diag.rs
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
 grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
 grep -Fq '| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
 grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` |' docs/manual/api-index.md
 grep -Fq '`json.Value` is a move type' docs/manual/types.md
 grep -Fq 'JSON input-data failures are typed `json.Error` values' docs/manual/diagnostics.md
 grep -Fq 'recursive JSON parse/dump semantics' docs/manual/conformance.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0021-json-value-model-and-codec-policy.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0021-json-value-model-and-codec-policy.md
 grep -Fq '0021-json-value-model-and-codec-policy.md' architecture_docs/decisions/README.md
 grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.' docs/manual/json.md
 grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.' tutorials/21-json.md
@@ -172,7 +173,7 @@ grep -Fq '| `bytes.sha256_string` | `sha256_string(text: String) -> Vec[uint8]`'
 grep -Fq 'ordinary shared-borrow default' docs/manual/bytes.md
 grep -Fq 'standard alphabet and canonical padding' docs/manual/bytes.md
 grep -Fq 'InvalidHexDigit(index: int32, byte: uint8)' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
 grep -Fq '0023-byte-vector-codecs-and-hashing-policy.md' architecture_docs/decisions/README.md
 test -s examples/bytes/codecs_and_hashing.au
 grep -Fq '`codecs_and_hashing.au`' examples/README.md
@@ -287,11 +288,11 @@ grep -Fq 'const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;' crates/aurora
 grep -Fq 'capped at 256 MiB of remaining content' docs/manual/filesystem.md
 grep -Fq 'Incoming parsed HTTP messages are capped at 16 MiB of wire data and 64 headers.' docs/manual/network.md
 grep -Fq 'This stream ceiling is independent of the larger filesystem whole-read limit.' docs/manual/process.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0018-fixed-resource-read-limits.md
-grep -Fq 'remains Provisional under ADR-0018 pending the Batch 2 checkpoint review' docs/manual/filesystem.md
-grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/network.md
-grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/control-plane.md
-grep -Fq 'remains Provisional pending the Batch 2 checkpoint review' docs/manual/process.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0018-fixed-resource-read-limits.md
+grep -Fq 'fixed 256 MiB whole-read policy is accepted under ADR-0018' docs/manual/filesystem.md
+grep -Fq 'fixed resource-cap policy recorded by ADR-0018 is Accepted' docs/manual/network.md
+grep -Fq 'cap is Accepted under ADR-0018' docs/manual/control-plane.md
+grep -Fq 'fixed stream-cap policy recorded by ADR-0018 is Accepted' docs/manual/process.md
 
 if rg -n '64 MiB' \
   docs/manual/filesystem.md \

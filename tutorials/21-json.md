@@ -5,9 +5,8 @@ typed parse-error enums. It keeps parsing failures recoverable while making
 serialization deterministic enough for service messages, fixtures, and cache
 keys.
 
-The observable gap-fill policy remains Provisional under ADR-0021 pending the
-Phase 3 checkpoint review, while the API and examples described here are
-implemented.
+The observable gap-fill policy is Accepted under ADR-0021, and the API and
+examples described here are implemented.
 
 ## Parse Into A Typed Tree
 
@@ -175,5 +174,5 @@ for the dynamic API.
 
 The normative [JSON Module](../docs/manual/json.md) chapter fixes the complete
 variant shapes, numeric rules, error coordinates, ordering, escaping,
-formatting, ownership, diagnostics, and limits. ADR-0021 records why those
-observable policies remain Provisional pending the Phase 3 checkpoint.
+formatting, ownership, diagnostics, and limits. ADR-0021 records those
+observable policies and their rationale.

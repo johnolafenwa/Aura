@@ -1,6 +1,6 @@
 # ADR-0021: JSON value model and codec policy
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-23
 - Roadmap decision: Phase 3 JSON gap-fill policy
 
@@ -19,7 +19,7 @@ and a different key or whitespace policy can change signed payloads, golden
 files, caches, and reproducible service messages. Resource limits and failure
 categories must also agree across the MIR and direct backends.
 
-## Provisional decision
+## Accepted decision
 
 - `json.Value` is the recursive enum `Null`, `Bool(bool)`, `Int(int64)`,
   `Float(float64)`, `String(String)`, `Array(Vec[json.Value])`, and
@@ -115,7 +115,7 @@ categories must also agree across the MIR and direct backends.
   Arbitrary-precision JSON numbers, streaming parse/dump APIs, and binary
   serialization formats remain outside Phase 3.
 
-These choices remain Provisional pending the Phase 3 checkpoint review. The
+These choices were accepted at the Batch 3 entry checkpoint. The
 compiler, both maintained backends, analysis service, fixtures, maintained
 example, and executable Manual fence implement and pin this contract.
 

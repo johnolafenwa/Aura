@@ -36,8 +36,8 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Exact signed millisecond constructor. |
 | `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Exact signed second constructor. |
 | `Duration.minutes` | `Duration.minutes(value: int64) -> Duration` | Exact signed minute constructor. |
-| `Duration.to_ms` | `to_ms() -> float64` | Converts exact nanoseconds to nearest-representable binary64 milliseconds, ties-to-even; may round; Provisional under ADR-0019. |
-| `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; Provisional under ADR-0019. |
+| `Duration.to_ms` | `to_ms() -> float64` | Converts exact nanoseconds to nearest-representable binary64 milliseconds, ties-to-even; may round; accepted under ADR-0019. |
+| `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; accepted under ADR-0019. |
 | `String.len` | `len() -> int32` | Counts Unicode scalar values in O(n). |
 | `String.byte_len` | `byte_len() -> int32` | Returns the UTF-8 byte count in O(1). |
 | `String.to_bytes` | `to_bytes() -> Vec[uint8]` | Returns a fresh vector containing the receiver's exact UTF-8 bytes. |

@@ -14,7 +14,7 @@ import net
 import io
 ```
 
-Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior. An explicit timeout must be non-negative, fit the host timer range, and produce a representable deadline; otherwise the operation returns `io.Error.InvalidInput`. Deadline overflow never means no deadline. This input policy is Provisional under ADR-0019.
+Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior. An explicit timeout must be non-negative, fit the host timer range, and produce a representable deadline; otherwise the operation returns `io.Error.InvalidInput`. Deadline overflow never means no deadline. This input policy is accepted under ADR-0019.
 
 Hostname resolution, socket binding, UDP destination resolution, and blocking TCP or Unix connect syscalls run on Aurora's bounded blocking service rather than on the lightweight-task scheduler. A connect timeout is one end-to-end budget: it includes DNS resolution and is shared by every resolved-address attempt, then by any remaining TLS, HTTP, or WebSocket handshake work. Cancellation ends the Aurora wait promptly; host work that cannot be interrupted may finish later and is discarded safely.
 
@@ -287,6 +287,6 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 remains Provisional pending the Batch 2 checkpoint review, and the invalid host-timer policy recorded by ADR-0019 remains Provisional pending the Phase 3 checkpoint review; no other network semantics on this page are provisional.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.

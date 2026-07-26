@@ -232,5 +232,5 @@ String conversion. The reserved `encoding` parameter is not implemented.
 
 `Vec[uint8]` is the implemented Aurora 0.1 bytes type. The conversion, codec,
 error, and hash policy on this page is implemented as the Phase 3 control-plane
-surface and is Provisional under ADR-0023 pending the Phase 3 checkpoint
-review. Derived class/enum codecs and schemas remain deferred beyond Phase 6.
+surface and is accepted under ADR-0023. Derived class/enum codecs and schemas
+remain deferred beyond Phase 6.

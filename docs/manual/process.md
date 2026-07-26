@@ -244,8 +244,8 @@ An omitted parameter displayed with `= ...` selects the documented builtin defau
 
 For `process.run`, the omitted timeout is represented internally rather than
 by a sentinel Duration. Explicit zero is a real immediate deadline, and an
-explicit negative value is invalid input. This distinction is Provisional
-under ADR-0019.
+explicit negative value is invalid input. This distinction is Accepted under
+ADR-0019.
 
 ## Typing Rules
 
@@ -292,6 +292,6 @@ Executable discovery, path syntax, inherited environment, signal availability, n
 
 ## Status
 
-One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.1. The fixed stream-cap policy recorded by ADR-0018 remains Provisional pending the Batch 2 checkpoint review, and the omitted-timeout and invalid host-timer policy recorded by ADR-0019 remains Provisional pending the Phase 3 checkpoint review; no other process semantics on this page are provisional.
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.1. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
 
 Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.

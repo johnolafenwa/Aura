@@ -1,6 +1,6 @@
 # ADR-0027: Conditional expressions
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-24
 - Roadmap decision: Batch 2, Phase 3.5 Python expression kernel
 
@@ -61,7 +61,6 @@ branching forms.
 
 ## Checkpoint
 
-Review this Provisional decision at the Batch 2 checkpoint. Ratification should
-confirm the precedence, contextual-literal behavior, and conservative
-ownership merge together; changing any one of them changes observable source
-compatibility.
+The Batch 3 entry checkpoint accepted the precedence, contextual-literal
+behavior, and conservative ownership merge together; changing any one of them
+changes observable source compatibility.

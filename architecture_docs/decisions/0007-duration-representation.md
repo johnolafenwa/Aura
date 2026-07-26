@@ -34,7 +34,7 @@ This representation makes computed backoff such as `attempt * 1ms`
 expressible without rounding. A representable language value remains distinct
 from whether a particular host timer can accept it. Conversion methods,
 rendering, invalid host-timer inputs, and omitted-timeout encoding are the
-Provisional policy recorded by ADR-0019.
+accepted policy recorded by ADR-0019.
 
 ## Completion tests
 

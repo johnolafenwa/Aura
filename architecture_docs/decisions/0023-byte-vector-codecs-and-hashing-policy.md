@@ -1,6 +1,6 @@
 # ADR-0023: Byte-vector codecs and hashing policy
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-23
 - Roadmap decision: Phase 3 Bytes gap-fill policy
 
@@ -19,7 +19,7 @@ hexadecimal digest result would all make otherwise identical Aurora programs
 interoperate differently. The MIR and direct backends therefore need one
 shared policy and one shared codec implementation.
 
-## Provisional decision
+## Accepted decision
 
 - `Vec[uint8]` is the only built-in bytes representation. Phase 3 does not add
   a nominal `Bytes` type, implicit conversion between `String` and
@@ -102,7 +102,7 @@ shared policy and one shared codec implementation.
   digest comparison, alternate base64 alphabets, streaming codecs, or
   non-UTF-8 text encodings.
 
-These choices remain Provisional pending the Phase 3 checkpoint review. The
+These choices were accepted at the Batch 3 entry checkpoint. The
 compiler, both maintained backends, analysis service, fixtures, maintained
 example, and executable Manual fence implement and pin this contract.
 

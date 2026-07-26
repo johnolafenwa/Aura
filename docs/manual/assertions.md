@@ -112,6 +112,6 @@ catchable exception. Use `Result` for recoverable validation.
 ## Status
 
 Both assertion forms are implemented in Aurora 0.1. Their exact sequencing,
-diagnostic, cleanup, top-level, and no-strip behavior is Provisional under
-ADR-0024 pending the Phase 3 checkpoint review. Exception statements, `raise`,
-and catchable assertion failures are not part of Aurora 0.1.
+diagnostic, cleanup, top-level, and no-strip behavior is accepted under
+ADR-0024. Exception statements, `raise`, and catchable assertion failures are
+not part of Aurora 0.1.

@@ -363,8 +363,8 @@ implementation choices.
 ## Status
 
 The forms described as accepted above are implemented. Delimiter continuation
-and its layout/diagnostic policy are Provisional under ADR-0025 pending the
-Batch 2 checkpoint review. Raw, byte, triple-quoted, and single-quoted
+and its layout/diagnostic policy are accepted under ADR-0025. Raw, byte,
+triple-quoted, and single-quoted
 f-strings; alternate integer bases; digit separators; block comments;
 semicolons; ordinary trailing commas other than the required singleton-tuple
 comma; backslash continuation; and multiline string or f-string literals are

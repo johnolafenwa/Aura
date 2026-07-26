@@ -60,7 +60,7 @@ checked addition and subtraction with another Duration, multiplication by
 value-based comparison. `to_ms()` and `to_seconds()` convert the exact rational
 unit value to the nearest representable IEEE-754 binary64 value, ties-to-even;
 they may round. Their rounding, Duration rendering, and invalid host-timer
-policy are Provisional under ADR-0019; the signed nanosecond representation and
+policy are accepted under ADR-0019; the signed nanosecond representation and
 operators are accepted under ADR-0007.
 
 Numeric literals are checked against the target type. Integer literals must fit an annotated integer target, and a float-context integer literal must be exactly representable in its `float32` or `float64` target. An inexact literal must make rounding explicit with a floating spelling or `.to_float()`. Integer-to-float casts also reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.

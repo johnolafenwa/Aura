@@ -1,6 +1,6 @@
 # ADR-0018: Fixed resource read limits
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-15
 - Roadmap decision: Phase 3 practical control-plane resource caps
 

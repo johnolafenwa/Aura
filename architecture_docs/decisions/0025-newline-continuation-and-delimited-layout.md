@@ -1,6 +1,6 @@
 # ADR-0025: Newline continuation and delimited layout
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-24
 - Roadmap decision: Phase 3.5 newline continuation
 
@@ -19,7 +19,7 @@ construct. The language also needs one precise policy for delimiter pairing,
 continuation indentation, comments, trailing commas, backslashes, strings, and
 physical source locations.
 
-## Provisional Decision
+## Accepted Decision
 
 - While at least one source `(`, `[`, or `{` remains open, an ordinary
   physical newline is lexical whitespace. It emits no `NEWLINE`, `INDENT`, or
@@ -54,7 +54,7 @@ physical source locations.
   likewise labels its opener.
 - The maintained parser nesting and expression-chain limit remains 128.
 
-These choices remain Provisional pending the Batch 2 checkpoint review.
+These choices were accepted at the Batch 3 entry checkpoint.
 
 ## Completion Evidence
 

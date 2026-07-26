@@ -1,6 +1,6 @@
 # ADR-0028: Membership operators and comparison chains
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-25
 - Roadmap decision: Batch 2, Phase 3.5 Python expression kernel
 
@@ -81,8 +81,7 @@ skipped evaluation is the point.
 
 ## Checkpoint
 
-Review this Provisional decision at the Batch 2 checkpoint. Ratification should
-confirm the single precedence level, the four supported containers, the
-at-most-once evaluation rule, and the conservative treatment of
-short-circuited operands together; changing any one of them changes observable
-source compatibility.
+The Batch 3 entry checkpoint accepted the single precedence level, the four
+supported containers, the at-most-once evaluation rule, and the conservative
+treatment of short-circuited operands together; changing any one of them
+changes observable source compatibility.

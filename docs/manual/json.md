@@ -303,8 +303,7 @@ claim that every possible host out-of-memory condition is catchable.
 
 The recursive value/error model, parse/dump surface, accessors, ordering,
 formatting, and resource boundary are implemented Aurora 0.1 behavior. Their
-exact gap-fill semantics remain Provisional under ADR-0021 pending the Phase 3
-checkpoint review.
+exact gap-fill semantics are accepted under ADR-0021.
 
 The older `is_valid`, `stringify_map`, and `parse_string_map` helpers remain
 implemented compatibility surface. Streaming codecs remain future work.

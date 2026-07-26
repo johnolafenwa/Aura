@@ -1,6 +1,6 @@
 # ADR-0019: Duration conversion and timer policy
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-22
 - Roadmap decision: Phase 3 Duration gap-fill policy
 
@@ -12,7 +12,7 @@ questions: conversion rounding, rendering of sub-millisecond values, rejection
 of values that a host timer cannot represent, and the representation of an
 omitted `process.run` timeout.
 
-## Provisional decision
+## Accepted decision
 
 - `Duration.to_ms() -> float64` and `Duration.to_seconds() -> float64` convert
   the exact signed nanosecond value to the named unit and choose the nearest
@@ -40,7 +40,7 @@ omitted `process.run` timeout.
   Aurora `Duration` value can spell. An explicit negative Duration is invalid
   input and never means an omitted or unlimited timeout.
 
-These choices remain Provisional pending the Phase 3 checkpoint review. The
+These choices were accepted at the Batch 3 entry checkpoint. The
 accepted signed-i128 nanosecond representation and arithmetic in ADR-0007 do
 not depend on their ratification.
 
