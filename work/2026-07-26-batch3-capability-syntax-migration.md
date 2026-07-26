@@ -40,8 +40,8 @@ Phase 5 is outside this target and must not begin.
 - Batch 3 entry worktree: clean at `4929bab`.
 - Repository-hygiene prerequisite `18b7f00` removed the committed trailing
   whitespace exposed by the first full gate. Part-0 ratifications are isolated
-  in `19a10f4`, and completed B3.0-a is isolated in `6afe47c`; B3.0-b is the
-  active worktree and ticket.
+  in `19a10f4`, completed B3.0-a is isolated in `6afe47c`, and completed
+  B3.0-b is isolated in `fc22696`; B3.0-c is the active worktree and ticket.
 - Batch 2 checkpoint gate: green at the recorded
   `64,409/67,039` lines, `4,158/4,295` functions, and
   `94,472/100,184` regions, with enforced floors
@@ -190,8 +190,71 @@ Phase 5 is outside this target and must not begin.
 - Status: complete. ADR-0029 is Accepted, all scoped binding-slot behavior is
   implemented and documented, and the exact full decision gate is green.
 
+## B3.0-c: structural tuple equality and inequality
+
+- Red evidence first pinned four defects or missing contracts: the checker
+  rejected tuple `==` and `!=` with AU2003; runtime tuple equality compared
+  transport type metadata as well as values; tuple ordering still emitted the
+  obsolete generic comparison diagnostic; and a tuple comparison chain
+  accepted a later mutable borrow of a non-copy tuple place still retained by
+  the preceding link.
+- The checker now symmetrically derives a move-free operand hint before actual
+  left-to-right typing. Nested tuple literals therefore adopt the peer's exact
+  recursive `Option`, integer-width, and floating-width types in either
+  direction. After contextual typing, `==` and `!=` require one identical
+  static tuple type and produce `bool`; bound tuples are never widened.
+- Equality is builtin and non-consuming. Corresponding values compare
+  recursively from left to right and `!=` is the negation. Tuple `<`, `<=`,
+  `>`, and `>=` remain AU2003 with teaching guidance toward equality or
+  explicit element comparisons. Different tuple types report AU2002.
+- MIR lowering gives both equality operands one shared recursive tuple type
+  rather than crossing independently inferred literal metadata. The same
+  compile-time hint is carried through equality links without evaluating an
+  operand early; the existing comparison-chain CFG still evaluates each
+  operand at most once, left to right, and skips the suffix after the first
+  false link.
+- Chain checking now retains each non-copy builtin left operand through the
+  following operand. Dedicated check-fail fixtures reject mutation of both the
+  first tuple place and a middle tuple place while the relevant equality link
+  still holds a shared read.
+- `TupleValue` equality compares ordered payload elements only. Static tuple
+  typing remains in `element_types` for checking and dispatch, but runtime,
+  generic-specialization, transport, and backend metadata cannot change
+  language value equality.
+- The maintained run fixture covers nested and singleton values, both
+  operators, symmetric nested `Option[int32]`/`float32` literals, exact
+  non-copy operand reuse, successful and first-false chains, a non-copy
+  `(String,)` middle operand, and the generic float32 metadata-divergence case.
+  Forced MIR and forced direct execution produce the same exact stdout.
+- Focused compiler equality, ordering, mismatch, runtime-value, check-pass,
+  check-fail, and run-pass tests pass. All 71 language-server tests pass with
+  bool hover/definition/reuse and exact ordering-diagnostic coverage. The
+  executable reference inventory and all verified Manual examples pass against
+  `target/debug/aura`; the tuple fence's stdout is unchanged and its one
+  content hash was refreshed.
+- ADR-0026 is Accepted with the B3.0-c amendment. The Manual, conformance and
+  status pages, maintained example, root/example READMEs, and tuple tutorials
+  now teach same-static-type recursive equality, non-consuming reads, symmetric
+  literal context, chain behavior, metadata independence, and continued
+  ordering rejection.
+- Compiler coverage is green at `64,588/67,216` lines (96.09%),
+  `4,176/4,313` functions (96.82%), and `94,731/100,444` regions (94.31%),
+  above the frozen `96.07/96.81/94.29` floors. No synthetic coverage test,
+  justified exclusion, or coverage-only branch was added.
+- The exact full-repository `npm run ci` decision gate is green: 265 CLI tests,
+  905 compiler tests, forced MIR/direct backend parity, all 71 language-server
+  tests, all 13 extension tests, compiler coverage, 100% LSP coverage,
+  reference integrity, the documentation build, dependency audits, Clippy
+  with warnings denied, and repository hygiene all passed. The Rust audit
+  retains its allowed `rustls-pemfile` unmaintained warning and reports no
+  vulnerability failure.
+- Post-full-gate artifact hygiene found `target/` at 19 GiB with 149 GiB free,
+  so neither repository cleanup threshold was crossed and the reusable
+  profiles are retained for B3.0-d.
+- Status: complete and ready for the isolated B3.0-c decision commit.
+
 ## Follow-up
 
-Begin B3.0-c tuple structural equality and continue recording source-inventory
-counts, migration results, and checkpoint disposition here as the batch
-advances.
+Commit B3.0-c in isolation, then begin B3.0-d length-surface unification.
+Continue recording source-inventory counts, migration results, and checkpoint
+disposition here as the batch advances.

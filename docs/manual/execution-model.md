@@ -74,6 +74,12 @@ replaces the earlier value and the key keeps its first insertion position.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
 
+A comparison chain evaluates its operand expressions from left to right at
+most once. It evaluates each adjacent link after obtaining that link's right
+operand, stops at the first false link, and does not evaluate any remaining
+operand. This applies equally to chains containing tuple `==` or `!=`: a tuple
+used as a middle operand is evaluated once and read by both adjacent links.
+
 An assertion evaluates its condition exactly once. A true condition skips the
 optional message and falls through. A false condition evaluates the message
 exactly once, then establishes the assertion failure before cleanup begins. A
@@ -117,12 +123,25 @@ applies.
 More precisely:
 
 - numbers, booleans, strings, durations, ranges, enum values, classes, datagrams, and HTTP responses compare by represented value
+- tuples compare corresponding element values from left to right using
+  ordinary equality, recursively for nested tuples, and stop at the first
+  unequal element
 - vectors compare element-by-element in order
 - maps and sets compare by contents and ignore insertion order
 - floating equality follows IEEE behavior, so a NaN value is not equal to itself
 - queue/task handles, random generators, and live file, process, listener, stream, exchange, supervisor, and WebSocket values compare by shared runtime identity
 
-Equality is defined only after static typing has established compatible operand types.
+Equality is defined only after static typing has established compatible
+operand types. Tuple equality specifically requires the same static tuple type.
+It reads both complete operands and consumes neither, including tuples with
+non-copy elements. Runtime element-type, transport, or backend metadata carried
+with a tuple value is not compared; it cannot change the recursively determined
+value result. Operand expressions retain their ordinary ownership effects; the
+equality operation itself adds no move of the resulting tuples.
+
+Tuple `!=` is the logical negation of tuple `==`. Tuple `<`, `<=`, `>`, and
+`>=` remain static errors; Aurora does not define lexicographic or
+metadata-based tuple ordering.
 
 ## Value Rendering
 

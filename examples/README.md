@@ -89,7 +89,9 @@ The examples are organized by topic so they can serve both as quick references a
     - `[alpha, beta]`
 - `tuples.au`
   - fixed tuple values and return types, whole-source unpacking, copy-only
-    constant indexing, tuple-target iteration, and a recursive tuple pattern
+    constant indexing, tuple-target iteration, recursive tuple patterns, and
+    same-type recursive `==` and `!=` that retain both operands; ordering
+    remains rejected
   - prints:
     - `Aurora`
     - `7`

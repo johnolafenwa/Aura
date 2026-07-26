@@ -319,7 +319,10 @@ trait Ord[Rhs]:
 `Add` and `FloorDiv`; `Not` follows the unary `Out` shape. Ordering methods
 must return `bool`.
 
-`and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do not use an equality trait in Aurora 0.1. Builtin operations take precedence where their concrete scalar/string rule applies.
+`and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do
+not use an equality trait in Aurora 0.1. This includes recursive structural
+tuple equality, which a trait implementation cannot override. Builtin
+operations take precedence wherever their concrete value rule applies.
 
 When an operator selects a trait method, it also enforces that method's
 substituted clone-safety obligations.

@@ -20,7 +20,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
   expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
-  unpacking and patterns, whole-source ownership, and constant indexing.
+  unpacking and patterns, whole-source ownership, constant indexing, and
+  recursive equality.
 - [Assertions](/manual/assertions): exact boolean conditions, lazy messages,
   `AU4001` failures, cleanup precedence, and backend behavior.
 - [Functions](/manual/functions): signatures, default/`own`/borrowed parameter

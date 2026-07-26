@@ -85,13 +85,45 @@ grep -Fq 'tuple-pattern' docs/manual/grammar.md
 grep -Fq 'Unpacking a non-copy tuple consumes the whole source exactly once' docs/manual/tuples.md
 grep -Fq 'Mutable-borrow iteration with a tuple target is rejected.' docs/manual/tuples.md
 grep -Fq 'no empty tuple, multi-element trailing tuple comma, tuple' docs/manual/tuples.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0026-minimal-tuples.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0026-minimal-tuples.md
+grep -Fq '## 2026-07-26 Amendment: Tuple Equality' architecture_docs/decisions/0026-minimal-tuples.md
 grep -Fq '0026-minimal-tuples.md' architecture_docs/decisions/README.md
+grep -Fq 'Tuple value `==` and `!=` require both operands to have the same static tuple' docs/manual/tuples.md
+grep -Fq 'comparison reads the two resulting tuple values and consumes neither' docs/manual/tuples.md
+grep -Fq 'Tuple ordering remains a static error.' docs/manual/tuples.md
 test -s examples/basics/tuples.au
 grep -Fq '`tuples.au`' examples/README.md
 grep -Fq 'examples/basics/tuples.au' README.md
 grep -Fq '[25-tuples.md]' tutorials/README.md
+grep -Fq 'assert baseline == same' examples/basics/tuples.au
+grep -Fq 'assert baseline != changed' examples/basics/tuples.au
+grep -Fq 'assert same != changed' examples/basics/tuples.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.stdout
+grep -Fq 'nested_with_score' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'generic_equal' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'trace_singleton' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'trace_text' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+test -s crates/aurora-compiler/tests/fixtures/check-pass/tuple_equality_contextual_literals.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
+test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au
+test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_middle_borrow_rejects_later_mutation.au
+grep -Fq 'tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly' crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
+grep -Fq 'fn tuple_equality_and_inequality_are_structural_and_non_consuming()' crates/aurora-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_equality_requires_the_same_static_tuple_type()' crates/aurora-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_ordering_rejects_all_four_operators_with_the_teaching_diagnostic()' crates/aurora-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_value_equality_uses_elements_not_runtime_type_metadata()' crates/aurora-compiler/src/runtime_value_tests.rs
+grep -Fq 'fn analysis_exposes_structural_tuple_equality_without_consuming_operands()' crates/aurora-compiler/src/analysis_tests.rs
+grep -Fq 'compiler bridge exposes structural tuple equality and ordering diagnostics' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'same-type recursive structural `==`/`!=`' docs/manual/conformance.md
+grep -Fq 'Tuple `==` and `!=` compare same-typed values structurally and' docs/manual/status-and-compatibility.md
 grep -Fq 'the executable `docs/manual/tuples.md` fence' docs/manual/conformance.md
+if [[ -e crates/aurora-compiler/tests/fixtures/check-fail/tuple_equality_rejected.au ||
+      -e crates/aurora-compiler/tests/fixtures/check-fail/tuple_equality_rejected.diag ]]; then
+  echo "retired tuple-equality rejection fixture is still present" >&2
+  exit 1
+fi
 grep -Fq 'conditional-expression' docs/manual/grammar.md
 grep -Fq 'The condition is evaluated first, exactly once' docs/manual/expressions.md
 grep -Fq 'The unselected arm performs no' docs/manual/execution-model.md
@@ -359,6 +391,19 @@ if rg -n 'expressions do not include tuples|tuples, callable types|Callable, clo
   docs/manual \
   tutorials; then
   echo "reference still describes the implemented tuple kernel as unavailable" >&2
+  exit 1
+fi
+
+# Historical work notes intentionally retain the earlier provisional boundary.
+if rg -U -n -i 'identity rule does not add tuple value|does not add tuple equality|tuple equality or ordering|tuple equality, ordering|methods, equality, ordering|equality/order rejection|Provisional\s+under ADR-0026|provisional\s+extent recorded by ADR-0026|ADR-0026[^.\n]*Provisional|These choices remain Provisional|^- Status: Provisional$' \
+  architecture_docs/decisions/0026-minimal-tuples.md \
+  docs/manual \
+  tutorials \
+  examples \
+  README.md \
+  examples/README.md \
+  tutorials/README.md; then
+  echo "maintained reference still describes tuple equality as rejected or ADR-0026 as provisional" >&2
   exit 1
 fi
 

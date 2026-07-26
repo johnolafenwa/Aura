@@ -211,6 +211,9 @@ The current compiler supports these expression forms:
   - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
   - builtin `%` follows the divisor's sign for matching integer or floating types
   - Duration supports checked `+`, `-`, `* int64` in either order, `// int64`, and full comparison
+  - same-type tuples support recursive `==` and `!=` when every element is
+    equatable; both operands are read and retained, while tuple ordering remains
+    rejected
 - unary prefix operators `-` and `not`
 - operator-trait dispatch for `+`, binary `-`, `*`, `/`, `//`, `%`, unary `-`, and `not`
   - `//` uses `FloorDiv.floor_div` when no builtin numeric or Duration rule applies

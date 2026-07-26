@@ -15,8 +15,8 @@ Last updated: 2026-07-26
 - Entry state: clean at `4929bab`. Old coverage-only build output was cleaned
   under the repository hygiene rule before the repeated Batch 3 gates.
   Prerequisite hygiene repair `18b7f00`, Part-0 ratification commit `19a10f4`,
-  and completed B3.0-a commit `6afe47c` are isolated; B3.0-b is the active
-  worktree and ticket.
+  completed B3.0-a commit `6afe47c`, and completed B3.0-b commit `fc22696` are
+  isolated. B3.0-c is exact-tree green and complete; B3.0-d is next.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
@@ -77,10 +77,29 @@ Last updated: 2026-07-26
   compiler tests, forced backend parity, all 70 LSP tests, all 13 extension
   tests, both coverage gates, reference integrity, docs, audits, Clippy, and
   hygiene.
-- Current ticket: B3.0-c structural `==` and `!=` for tuples whose elements are
-  equatable, while tuple ordering remains rejected. ADR-0026 will be amended
-  and accepted with forced MIR/direct parity, analysis/LSP, maintained example,
-  tutorial, Manual, and reference-integrity evidence.
+- B3.0-c disposition: complete. Structural `==` and `!=` are implemented for
+  tuples whose elements are equatable, while tuple ordering remains rejected.
+  Symmetric recursive tuple-literal context, exact same-static-type checking,
+  non-consuming retained operands, first-false comparison-chain behavior,
+  chain mutation-conflict diagnostics, and metadata-independent runtime
+  equality all pass focused compiler tests.
+  Forced MIR and direct runs match the nested `Option`/`float32`, non-copy
+  `(String,)`, generic-float32, `==`/`!=`, once-only, and short-circuit fixture
+  oracle. ADR-0026 is Accepted; the Manual, tutorial, maintained example,
+  analysis/LSP regression, reference gate, and executable reference are
+  aligned. Compiler coverage is green at `64,588/67,216` lines (96.09%),
+  `4,176/4,313` functions (96.82%), and `94,731/100,444` regions (94.31%),
+  above the frozen `96.07/96.81/94.29` floors with no synthetic test or
+  exclusion. The exact `npm run ci` decision gate passed 265 CLI tests, 905
+  compiler tests, forced backend parity, all 71 LSP tests, all 13 extension
+  tests, both coverage gates, reference integrity, docs, audits, Clippy, and
+  hygiene. Post-gate `target/` size is 19 GiB with 149 GiB free, below both
+  cleanup thresholds.
+- Current ticket: B3.0-d length-surface unification. `String.len()`,
+  `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` must return
+  `int64` consistently with builtin `len(...)`, with compatibility narrowing,
+  LSP, examples, tutorials, reference, and resource-cap wording updated in the
+  same test-first decision commit.
 
 ## Batch 2 Checkpoint (complete)
 

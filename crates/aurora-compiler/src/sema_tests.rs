@@ -63,17 +63,49 @@ def main():
 }
 
 #[test]
-fn tuple_comparison_is_rejected_until_it_has_ratified_semantics() {
-    for operator in ["==", "!=", "<", "<=", ">", ">="] {
+fn tuple_equality_and_inequality_are_structural_and_non_consuming() {
+    crate::check_source(
+        r#"
+def main():
+    left = ("kept", ((1,), true))
+    same = ("kept", ((1,), true))
+    different = ("kept", ((2,), true))
+    equal: bool = left == same
+    unequal: bool = left != different
+    still_equal: bool = left == same
+"#,
+    )
+    .expect("tuple equality should recurse through nested elements without consuming operands");
+}
+
+#[test]
+fn tuple_equality_requires_the_same_static_tuple_type() {
+    for operator in ["==", "!="] {
+        let source = format!(
+            "def main():\n    left: (int32, String) = (1, \"same\")\n    right: (int64, String) = (1, \"same\")\n    compared = left {operator} right\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("bound tuples with different static element types must not be widened");
+        assert_eq!(error.code, "AU2002");
+        assert_eq!(
+            error.message,
+            "tuple equality operands must have the same type, found `(int32, String)` and `(int64, String)`"
+        );
+    }
+}
+
+#[test]
+fn tuple_ordering_rejects_all_four_operators_with_the_teaching_diagnostic() {
+    for operator in ["<", "<=", ">", ">="] {
         let source = format!(
             "def main():\n    left = (1, 2)\n    right = (1, 2)\n    compared = left {operator} right\n"
         );
-        let error = crate::check_source(&source)
-            .expect_err("tuple comparisons are outside the ratified language");
+        let error =
+            crate::check_source(&source).expect_err("tuple ordering is outside the language");
         assert_eq!(error.code, "AU2003");
         assert_eq!(
             error.message,
-            "tuple comparison is not supported; compare tuple elements explicitly"
+            "tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly"
         );
     }
 }

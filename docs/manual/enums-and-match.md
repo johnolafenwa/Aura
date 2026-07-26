@@ -363,6 +363,6 @@ contextual builtin construction, structural copy/move classification,
 statement and expression matches, exhaustiveness, nested enum patterns, scalar
 literal patterns, wildcards, short variants, and borrowed matching are
 implemented for the post-Phase 1.5 surface. Live non-copy borrowed match
-results are reserved for the Phase 6 alias work. Tuple patterns are Provisional
-under ADR-0026. Guards, or-patterns, class/collection destructuring beyond the
-tuple kernel, and arbitrary predicate patterns are unavailable.
+results are reserved for the Phase 6 alias work. Tuple patterns are implemented
+under Accepted ADR-0026. Guards, or-patterns, class/collection destructuring
+beyond the tuple kernel, and arbitrary predicate patterns are unavailable.

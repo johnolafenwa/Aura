@@ -8,6 +8,14 @@ def main():
     print(name)
     print(version)
 
+    # Equality retains non-copy tuple operands; tuple ordering is rejected.
+    baseline = ("Aurora", (7, true))
+    same = ("Aurora", (7, true))
+    changed = ("Aurora", (8, true))
+    assert baseline == same
+    assert baseline != changed
+    assert same != changed
+
     copy_pair = (10, 20)
     print(copy_pair[1])
 

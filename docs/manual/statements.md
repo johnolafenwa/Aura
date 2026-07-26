@@ -544,6 +544,7 @@ above. No statement evaluation order is implementation-defined.
 Bindings, assignments, expression, return, and assertion statements,
 conditionals, loops, match, scoped cleanup, `pass`, imports, and entry-module
 top-level execution are implemented as described. Tuple assignment/loop
-targets are Provisional under ADR-0026. Class/collection destructuring, loop
-`else`, exception statements, `yield`, `raise`, `async`, and nested
-declarations are unavailable; `try` remains an expression over `Result`.
+targets are implemented under Accepted ADR-0026. Class/collection
+destructuring, loop `else`, exception statements, `yield`, `raise`, `async`,
+and nested declarations are unavailable; `try` remains an expression over
+`Result`.

@@ -23,9 +23,11 @@ Conditional expressions, membership operators, comparison chains, and the
 `enumerate`/`zip` loop forms are accepted language surface under ADR-0027,
 ADR-0028, and ADR-0029. A later `for` loop may reuse the same target names at
 different element types; both maintained backends must preserve each loop's
-distinct typed binding identities. Tuples remain part of the maintained
-language only to the exact provisional extent recorded by ADR-0026 and
-[Tuples](/manual/tuples). See
+distinct typed binding identities. Tuples are accepted language surface under
+ADR-0026. Tuple `==` and `!=` compare same-typed values structurally and
+recursively. Reading an existing non-copy tuple for comparison does not
+consume it; tuple ordering remains rejected. See
+[Tuples](/manual/tuples) and
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).

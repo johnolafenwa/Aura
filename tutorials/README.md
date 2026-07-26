@@ -88,7 +88,8 @@ The current tutorial set covers:
   remain unavailable (singleton tuples require their one comma)
 - fixed structural tuples with parenthesized value/type syntax, recursive
   assignment/loop unpacking and patterns, whole-source move behavior, and
-  copy-only constant indexing
+  copy-only constant indexing; same-type recursive `==` and `!=` retain both
+  operands, while tuple ordering remains unavailable
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

@@ -105,6 +105,37 @@ fn tuple_values_preserve_type_metadata_equality_and_rendering() {
     assert_ne!(pair, singleton);
 }
 
+#[test]
+fn tuple_value_equality_uses_elements_not_runtime_type_metadata() {
+    let left = Value::Tuple(TupleValue {
+        element_types: vec![Type::Tuple(vec![Type::named("int64")])],
+        elements: vec![Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64")],
+            elements: vec![Value::Int(IntegerValue::from_signed(7))],
+        })],
+    });
+    let same_elements_different_metadata = Value::Tuple(TupleValue {
+        element_types: vec![Type::Tuple(vec![Type::named("uint64")])],
+        elements: vec![Value::Tuple(TupleValue {
+            element_types: vec![Type::named("uint64")],
+            elements: vec![Value::Int(IntegerValue::from_signed(7))],
+        })],
+    });
+    let different_elements = Value::Tuple(TupleValue {
+        element_types: vec![Type::Tuple(vec![Type::named("int64")])],
+        elements: vec![Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64")],
+            elements: vec![Value::Int(IntegerValue::from_signed(8))],
+        })],
+    });
+
+    assert_eq!(
+        left, same_elements_different_metadata,
+        "tuple runtime metadata is not part of structural value equality"
+    );
+    assert_ne!(left, different_elements);
+}
+
 fn runtime_bytes(bytes: &[u8]) -> Value {
     Value::Vec(VecValue {
         element_type: Type::named("uint8"),

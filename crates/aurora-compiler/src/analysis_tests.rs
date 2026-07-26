@@ -3514,6 +3514,99 @@ fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scop
 }
 
 #[test]
+fn analysis_exposes_structural_tuple_equality_without_consuming_operands() {
+    let source = [
+        "def inspect():",
+        "    left = (\"left\", 1)",
+        "    right = (\"right\", 2)",
+        "    equal = left == right",
+        "    not_equal = left != right",
+        "    typed: (Option[int32], float32) = (Option.Some(1), 1.5)",
+        "    literal_on_right = typed == (None, 2.5)",
+        "    literal_on_left = (None, 3.5) != typed",
+        "    print(left[1])",
+        "    print(right[1])",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for (name, line) in [
+        ("equal", 3),
+        ("not_equal", 4),
+        ("literal_on_right", 6),
+        ("literal_on_left", 7),
+    ] {
+        assert!(
+            analysis.occurrences.iter().any(|occurrence| {
+                occurrence.line == line
+                    && occurrence.hover.contains(&format!("binding {name}: bool"))
+            }),
+            "missing bool result hover for `{name}` in {:?}",
+            analysis.occurrences
+        );
+    }
+
+    for (name, definition_line, definition_end, use_lines) in
+        [("left", 1, 8, [3, 4, 8]), ("right", 2, 9, [3, 4, 9])]
+    {
+        for use_line in use_lines {
+            let occurrence = analysis
+                .occurrences
+                .iter()
+                .find(|occurrence| {
+                    occurrence.line == use_line
+                        && occurrence
+                            .hover
+                            .contains(&format!("binding {name}: (String, int64)"))
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing reusable tuple occurrence for `{name}` on line {use_line}")
+                });
+            assert_eq!(
+                occurrence.definition.as_ref().map(|range| (
+                    range.line,
+                    range.start_character,
+                    range.end_character
+                )),
+                Some((definition_line, 4, definition_end))
+            );
+        }
+    }
+}
+
+#[test]
+fn analysis_maps_tuple_ordering_diagnostic() {
+    let source = [
+        "def compare(left: (String, int64), right: (String, int64)):",
+        "    ordered = left < right",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert_eq!(analysis.diagnostics.len(), 1, "{:?}", analysis.diagnostics);
+    let diagnostic = &analysis.diagnostics[0];
+    assert_eq!(diagnostic.code, "AU2003");
+    assert_eq!(
+        diagnostic.message,
+        "tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly"
+    );
+    assert_eq!(
+        (
+            diagnostic.line,
+            diagnostic.start_character,
+            diagnostic.end_character,
+        ),
+        (1, 14, 15)
+    );
+}
+
+#[test]
 fn analysis_preserves_tuple_recovery_for_invalid_patterns_and_grouped_indices() {
     let pattern_source = [
         "def inspect(flag: bool):",

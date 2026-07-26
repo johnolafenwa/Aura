@@ -6,7 +6,11 @@ This chapter states the cross-cutting rules. The declaration-specific chapters p
 
 ## Types And Type Equality
 
-Aurora 0.1 uses nominal types with invariant generic arguments. Two types match when their canonical names and recursively all type arguments are equal. There is no general subtype relation and no implicit numeric widening.
+Aurora 0.1 primarily uses nominal types with invariant generic arguments. Two
+nominal types match when their canonical names and recursively all type
+arguments are equal. Tuple types are structural: two tuple types match exactly
+when their arity and every corresponding element type match recursively. There
+is no general subtype relation and no implicit numeric widening.
 
 Examples:
 
@@ -120,6 +124,19 @@ method. Builtin numeric and Duration rules take precedence over operator-trait
 dispatch. Builtin equality does not dispatch through an operator trait in
 Aurora 0.1.
 
+Tuple `==` and `!=` require operands with the same static tuple type. They
+apply builtin equality recursively to corresponding element types and produce
+`bool`; nested tuple elements apply the same rule. Both operands are read, not
+consumed. Runtime metadata attached to a tuple value is not a further
+type-compatibility or equality input. Tuple `<`, `<=`, `>`, and `>=` are
+rejected: structural tuple types have no lexicographic ordering and cannot
+acquire one through `Ord`.
+
+When one equality operand is a tuple literal and the other has a known tuple
+type, the known type contextually types the literal recursively. The rule is
+symmetric. Each equality link in a comparison chain applies the same
+contextual typing before enforcing exact operand-type equality.
+
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 ### Conditions
@@ -171,6 +188,8 @@ inputs. Another shared borrow is valid, but an overlapping mutable borrow or
 consumption is rejected with `AU3002`, with the retained selection reported as
 the borrow origin. The same rule applies to name roots and projected member
 places. The checker never legalizes the operation by assuming a deep clone.
+Equality and inequality retain this borrow through the right operand and
+consume neither operand; tuple equality does not introduce a recursive move.
 
 ## Call Binding
 

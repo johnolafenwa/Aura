@@ -1399,7 +1399,7 @@
       "stderr": ""
     },
     "docs/manual/tuples.md#aurora-3": {
-      "sha256": "62923f71e326e667c4d56f2d72772a3e61faa58c5aaf89fff7f50f79c1e5858c",
+      "sha256": "ba51a2310e96401697630bc110cbfde18ed52bb417289d7374c27018d43f6c38",
       "mode": "run",
       "stdout": "Aurora\n7\n20\nready:2\ndone:3\n3\ntrue\n",
       "stderr": ""

@@ -25,13 +25,13 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Backslash continuation is not implemented. Ordinary strings and f-strings
   remain single-line.
 - Tuples have fixed structural types, recursive unpack targets and patterns,
-  and copy-only constant indexing. There is no empty tuple, multi-element
-  trailing tuple comma, tuple iteration or methods, tuple equality or ordering,
-  named/rest unpacking, mutable tuple-target writeback, dynamic/negative tuple
-  indexing, or tuple-to-collection conversion. Unpack a tuple to take ownership
-  of a non-copy element.
+  copy-only constant indexing, and non-consuming recursive `==` and `!=` for
+  operands of the same static tuple type. There is no empty tuple,
+  multi-element trailing tuple comma, tuple iteration or methods, tuple
+  ordering, named/rest unpacking, mutable tuple-target writeback,
+  dynamic/negative tuple indexing, or tuple-to-collection conversion. Unpack a
+  tuple to take ownership of a non-copy element.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
-- Chained comparisons are rejected with migration guidance; write an explicit boolean combination such as `a < b and b < c`.
 - `for` loop bindings cannot shadow names already visible in the same scope.
 - Duration literals have only the integral `ms`, `s`, and `m` suffixes; there is no `ns` or fractional Duration literal and no unary `-Duration`. Associated constructors and checked Duration arithmetic provide signed and sub-millisecond results instead.
 - Task starting currently supports named functions and associated methods without `self`.

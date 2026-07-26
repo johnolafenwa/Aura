@@ -131,6 +131,12 @@ classification is recursive through nested tuples. Otherwise the complete
 tuple is a move value; unpacking it consumes the source as one whole value
 rather than exposing independently reusable positional partial moves.
 
+Two tuple values may be compared with `==` or `!=` only when they have the same
+static tuple type. The comparison is recursive over corresponding element
+values and reads rather than consumes both operands, regardless of copy
+classification. Runtime metadata carried with a tuple value is not part of
+value equality. Tuple ordering is not defined.
+
 Aurora has no empty tuple type and does not convert tuples to or from
 collections. See [Tuples](/manual/tuples) for construction, unpacking,
 patterns, indexing, and the exact current boundary.
@@ -385,7 +391,7 @@ and indirect types described by this Manual are implemented for the post-Phase
 1.5 surface. Borrowed-return syntax reserves the provenance contract for a
 future live non-copy alias representation; calls cannot produce such aliases
 today. Callable, closure, and FFI types are unavailable. Structural tuple types
-are Provisional under ADR-0026. `str` is the
-implemented compatibility alias for `String`; a distinct borrowed `str` view
-type is unavailable. None of those unavailable types may be inferred from
-current syntax.
+and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
+`str` is the implemented compatibility alias for `String`; a distinct borrowed
+`str` view type is unavailable. None of those unavailable types may be inferred
+from current syntax.

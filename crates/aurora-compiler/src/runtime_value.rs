@@ -289,10 +289,16 @@ pub struct VecValue {
     pub elements: Vec<Value>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct TupleValue {
     pub element_types: Vec<Type>,
     pub elements: Vec<Value>,
+}
+
+impl PartialEq for TupleValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.elements == other.elements
+    }
 }
 
 #[derive(Clone, Debug)]

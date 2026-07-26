@@ -60,8 +60,14 @@ point: (int64, int64) = (3, 4)
 The tuple expression's arity and element types must exactly match an expected
 tuple type when one is present. Otherwise each element is inferred in its own
 position. Tuple types are structural: two tuple types are equal exactly when
-they have the same arity and equal corresponding element types. This type
-identity rule does not add tuple value `==` or `!=`.
+they have the same arity and equal corresponding element types.
+
+Tuple value `==` and `!=` require both operands to have the same static tuple
+type. Equality then compares corresponding element values recursively.
+When one operand is a tuple literal and the other has a known tuple type, that
+exact type contextually types the literal recursively; this rule is symmetric.
+`<`, `<=`, `>`, and `>=` are not defined for tuples; Aurora does not infer a
+lexicographic ordering.
 
 The ordinary optional-type suffix applies to a complete tuple type:
 `(String, int64)?` is `Option[(String, int64)]`. `indirect` tuple types are
@@ -97,11 +103,30 @@ retain their existing matching and exhaustiveness rules.
 Constant tuple indexing selects the statically named position and returns a
 copy. It has no runtime index expression to evaluate.
 
+Tuple `==` compares corresponding element values from left to right using each
+element type's ordinary equality semantics. Nested tuples apply the same rule
+recursively. The result is `true` only when every corresponding comparison is
+true; comparison stops at the first unequal element. Tuple `!=` is the logical
+negation of tuple `==`.
+
+Both complete operand expressions are evaluated once, left to right. The
+comparison reads the two resulting tuple values and consumes neither, even
+when an operand contains non-copy elements. Runtime element-type, transport,
+or backend metadata carried with a tuple value is not an additional equality
+component; the checker has already required one common static tuple type.
+Evaluating an operand expression still has its ordinary ownership effects;
+the equality operation itself adds no move.
+
+Tuple equality links use the ordinary comparison-chain contract. For example,
+`first == middle != last` evaluates `first`, then `middle`, compares the first
+link, and evaluates `last` only when that link is true. Each evaluated operand,
+including `middle`, is evaluated once. Tuple ordering remains a static error.
+
 Tuple rendering uses parentheses, `, ` between elements, and one final comma
 for a singleton: `(1, 2)` and `(1,)`. Each element uses its ordinary Aurora
 rendering, so a contained `String` is not quoted. `print`, f-string
-interpolation, and backend diagnostics use this same format. Rendering does
-not add tuple equality or ordering.
+interpolation, and backend diagnostics use this same format. Rendering is not
+part of tuple equality, and it does not define tuple ordering.
 
 ```aurora
 def make_record() -> (String, int64):
@@ -109,6 +134,8 @@ def make_record() -> (String, int64):
 
 def main():
     record = make_record()
+    assert record == ("Aurora", 7)
+    assert record != ("Aurora", 8)
     name, version = record
     print(name)
     print(version)
@@ -120,6 +147,9 @@ def main():
         print(f"{label}:{count}")
 
     nested = ((1, 2), true)
+    assert nested == ((1, 2), true)
+    assert nested != ((1, 3), true)
+    assert (1, 2) == (1, 2) != (2, 1)
     match nested:
         case ((left, right), flag):
             print(left + right)
@@ -147,6 +177,10 @@ Unpacking a non-copy tuple consumes the whole source exactly once and gives
 owned leaf bindings. Aurora does not turn positional fields into independently
 reusable partial-move places; any later source use is diagnosed as use after
 move.
+
+Tuple `==` and `!=` are shared-read operations rather than unpacking or
+ownership transfer. They leave both operands usable, including a non-copy
+tuple such as `(String, int64)`.
 
 For collection iteration, tuple leaves inherit the ownership provenance of the
 yielded element:
@@ -182,26 +216,29 @@ unpacking or `match borrow` is `AU3002`.
 
 Tuple construction, fixed structural types, function returns, recursive
 assignment/loop unpacking, tuple patterns, whole-source ownership, and
-copy-only constant indexing are implemented for MIR execution and direct
-native generation. Maintained parity fixtures require both backends to produce
-the same output and primary diagnostics.
+copy-only constant indexing are implemented alongside recursive structural
+equality for MIR execution and direct native generation. Maintained parity
+fixtures require both backends to produce the same output and primary
+diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
 Aurora 0.1 has no empty tuple, multi-element trailing tuple comma, tuple
-iteration, tuple methods, tuple equality or ordering, named tuple elements,
-rest/star unpacking, mutable tuple-target writeback, tuple slicing, or dynamic
-tuple indexing. A tuple is not implicitly converted to or from `Vec`.
+iteration, tuple methods, tuple ordering, named tuple elements, rest/star
+unpacking, mutable tuple-target writeback, tuple slicing, or dynamic tuple
+indexing. A tuple is not implicitly converted to or from `Vec`.
 
 Tuple element order, left-to-right construction, recursive shape matching,
-copy classification, whole-source non-copy moves, and constant-index results
-are language-defined rather than implementation-defined.
+copy classification, whole-source non-copy moves, constant-index results, and
+recursive equality are language-defined rather than implementation-defined.
+Runtime tuple metadata cannot change the equality result.
 
 ## Status
 
-The minimal tuple kernel described on this page is Provisional under ADR-0026
-pending the Batch 2 checkpoint review. The maintained implementation includes
-parenthesized tuple values and types, function returns, recursive assignment
-and `for` unpacking, recursive tuple patterns, structural copy classification,
-whole-source moves, shared borrowed destructuring, and copy-only constant
-indexing. The limits above are intentionally not pre-accepted.
+The minimal tuple kernel and its Batch 3 B3.0-c equality amendment are Accepted
+under ADR-0026. The maintained implementation includes parenthesized tuple
+values and types, function returns, recursive assignment and `for` unpacking,
+recursive tuple patterns, structural copy classification, whole-source moves,
+shared borrowed destructuring, copy-only constant indexing, and
+same-static-type recursive `==` and `!=`. The limits above remain intentional
+parts of the accepted boundary.

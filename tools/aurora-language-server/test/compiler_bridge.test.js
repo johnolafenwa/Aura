@@ -3186,3 +3186,124 @@ test("compiler bridge maps non-copy tuple index diagnostics", async () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("compiler bridge exposes structural tuple equality and ordering diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-tuple-equality-"));
+  const sourceLines = [
+    "def inspect():",
+    "    left: (int32, String) = (1, \"left\")",
+    "    right: (int32, String) = (2, \"right\")",
+    "    equal = left == right",
+    "    not_equal = left != right",
+    "    literal_on_right = left == (1, \"left\")",
+    "    literal_on_left = (2, \"right\") != right",
+    "    print(left[0])",
+    "    print(right[0])",
+    "    print(equal)",
+    "    print(not_equal)",
+    "    print(literal_on_right)",
+    "    print(literal_on_left)",
+    ""
+  ];
+  const source = sourceLines.join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    for (const [name, line, start, end] of [
+      ["equal", 9, 10, 15],
+      ["not_equal", 10, 10, 19],
+      ["literal_on_right", 11, 10, 26],
+      ["literal_on_left", 12, 10, 25]
+    ]) {
+      assert.deepEqual(compilerHoverAtPosition(analysis, line, start + 1), {
+        value: `\`\`\`aurora\nbinding ${name}: bool\n\`\`\``,
+        range: {
+          start: { line, character: start },
+          end: { line, character: end }
+        }
+      });
+    }
+
+    const definitionRanges = {
+      left: {
+        start: { line: 1, character: 4 },
+        end: { line: 1, character: 8 }
+      },
+      right: {
+        start: { line: 2, character: 4 },
+        end: { line: 2, character: 9 }
+      }
+    };
+    for (const [name, line, useLastOccurrence] of [
+      ["left", 3, false],
+      ["right", 3, false],
+      ["left", 4, false],
+      ["right", 4, false],
+      ["left", 5, false],
+      ["right", 6, true],
+      ["left", 7, false],
+      ["right", 8, false]
+    ]) {
+      const start = useLastOccurrence
+        ? sourceLines[line].lastIndexOf(name)
+        : sourceLines[line].indexOf(name);
+      const occurrence = analysis.occurrences.find(
+        (candidate) =>
+          candidate.line === line &&
+          candidate.start_character === start &&
+          candidate.end_character === start + name.length
+      );
+      assert.ok(occurrence, `missing tuple operand occurrence for ${name} on line ${line}`);
+      assert.equal(
+        occurrence.hover,
+        `\`\`\`aurora\nbinding ${name}: (int32, String)\n\`\`\``
+      );
+      assert.deepEqual(
+        compilerDefinitionAtPosition(mainUri, analysis, line, start + 1)?.range,
+        definitionRanges[name]
+      );
+    }
+
+    const orderingSource = [
+      "def compare(left: (int32, String), right: (int32, String)):",
+      "    ordered = left < right",
+      ""
+    ].join("\n");
+    const orderingAnalysis = await analyzeWithCompiler(mainUri, orderingSource);
+
+    assert.ok(orderingAnalysis);
+    assert.equal(orderingAnalysis.diagnostics.length, 1);
+    const [rawDiagnostic] = orderingAnalysis.diagnostics;
+    assert.equal(rawDiagnostic.code, "AU2003");
+    assert.equal(
+      rawDiagnostic.message,
+      "tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly"
+    );
+    assert.deepEqual(
+      {
+        line: rawDiagnostic.line,
+        start_character: rawDiagnostic.start_character,
+        end_character: rawDiagnostic.end_character
+      },
+      { line: 1, start_character: 14, end_character: 15 }
+    );
+
+    const [diagnostic] = compilerDiagnosticsToLsp(orderingAnalysis, mainUri);
+    assert.equal(diagnostic.source, "aurora-compiler");
+    assert.equal(diagnostic.code, "AU2003");
+    assert.equal(diagnostic.message, rawDiagnostic.message);
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 14 },
+      end: { line: 1, character: 15 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

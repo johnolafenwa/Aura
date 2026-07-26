@@ -3356,24 +3356,33 @@ impl<'a> Lowerer<'a> {
                 }
                 let left_ty = self.infer_expr_type(left);
                 let right_ty = self.infer_expr_type(right);
-                let left_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                    || (is_integer_literal_expr(left)
-                        && right_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })) {
-                    right_ty.as_ref()
-                } else {
-                    None
-                };
-                let right_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                    || (is_integer_literal_expr(right)
-                        && left_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })) {
-                    left_ty.as_ref()
-                } else {
-                    None
-                };
+                let shared_tuple_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    .then(|| self.infer_tuple_equality_hint(left, right))
+                    .flatten();
+                let left_expected = shared_tuple_expected.as_ref().or_else(|| {
+                    if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                        || (is_integer_literal_expr(left)
+                            && right_ty.as_ref().is_some_and(|ty| {
+                                is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
+                            }))
+                    {
+                        right_ty.as_ref()
+                    } else {
+                        None
+                    }
+                });
+                let right_expected = shared_tuple_expected.as_ref().or_else(|| {
+                    if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                        || (is_integer_literal_expr(right)
+                            && left_ty.as_ref().is_some_and(|ty| {
+                                is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
+                            }))
+                    {
+                        left_ty.as_ref()
+                    } else {
+                        None
+                    }
+                });
                 let left = self.lower_expr_at_sequence_point(left, left_expected);
                 let right = self.lower_expr_with_expected(right, right_expected);
                 let temp = self.new_temp_for_expr(expr);
@@ -3608,11 +3617,32 @@ impl<'a> Lowerer<'a> {
         let join_block = self.new_block("compare_chain_join");
         let short_circuit_block = self.new_block("compare_chain_false");
 
-        let mut left = self.lower_expr_at_sequence_point(first, None);
+        let first_expected = links.first().and_then(|link| {
+            matches!(link.op.as_binary_op(), Some(BinaryOp::Eq | BinaryOp::NotEq))
+                .then(|| self.infer_tuple_equality_hint(first, &link.operand))
+                .flatten()
+        });
+        let mut left_ty = first_expected
+            .clone()
+            .or_else(|| self.infer_expr_type(first));
+        let mut left_expr = first;
+        let mut left = self.lower_expr_at_sequence_point(first, first_expected.as_ref());
         for (index, link) in links.iter().enumerate() {
             let link_value = match link.op.as_binary_op() {
                 Some(op) => {
-                    let right = self.lower_expr_at_sequence_point(&link.operand, None);
+                    let shared_tuple_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                        left_ty
+                            .as_ref()
+                            .filter(|ty| matches!(ty, Type::Tuple(_)))
+                            .cloned()
+                            .or_else(|| self.infer_tuple_equality_hint(left_expr, &link.operand))
+                    } else {
+                        None
+                    };
+                    let right = self.lower_expr_at_sequence_point(
+                        &link.operand,
+                        shared_tuple_expected.as_ref(),
+                    );
                     let compared = self.new_typed_temp(Type::named("bool"));
                     self.emit(Instruction::Assign {
                         target: compared.clone(),
@@ -3624,6 +3654,7 @@ impl<'a> Lowerer<'a> {
                         },
                     });
                     left = right;
+                    left_ty = shared_tuple_expected.or_else(|| self.infer_expr_type(&link.operand));
                     Operand::Place(compared)
                 }
                 None => {
@@ -3641,9 +3672,11 @@ impl<'a> Lowerer<'a> {
                         link.op_span,
                     );
                     left = container;
+                    left_ty = Some(container_ty);
                     contains
                 }
             };
+            left_expr = &link.operand;
             if index + 1 == links.len() {
                 self.emit(Instruction::Assign {
                     target: result.clone(),
@@ -6016,6 +6049,43 @@ impl<'a> Lowerer<'a> {
                 Some(then_ty)
             }
             (Some(then_ty), Some(_)) => Some(then_ty),
+        }
+    }
+
+    fn infer_tuple_equality_hint(&self, left: &Expr, right: &Expr) -> Option<Type> {
+        if let ExprKind::Group(inner) = &left.kind {
+            return self.infer_tuple_equality_hint(inner, right);
+        }
+        if let ExprKind::Group(inner) = &right.kind {
+            return self.infer_tuple_equality_hint(left, inner);
+        }
+        if let (ExprKind::Tuple(left_elements), ExprKind::Tuple(right_elements)) =
+            (&left.kind, &right.kind)
+        {
+            if left_elements.len() == right_elements.len() {
+                let element_types = left_elements
+                    .iter()
+                    .zip(right_elements)
+                    .map(|(left_element, right_element)| {
+                        self.infer_tuple_equality_hint(left_element, right_element)
+                            .or_else(|| {
+                                self.infer_conditional_result_type(left_element, right_element)
+                            })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                return Some(Type::Tuple(element_types));
+            }
+        }
+
+        let left_ty = self.infer_expr_type(left);
+        let right_ty = self.infer_expr_type(right);
+        match (&left.kind, &right.kind, left_ty, right_ty) {
+            (ExprKind::Tuple(_), _, _, Some(right_ty @ Type::Tuple(_))) => Some(right_ty),
+            (_, ExprKind::Tuple(_), Some(left_ty @ Type::Tuple(_)), _) => Some(left_ty),
+            (_, _, Some(left_ty @ Type::Tuple(_)), Some(right_ty)) if left_ty == right_ty => {
+                Some(left_ty)
+            }
+            _ => None,
         }
     }
 

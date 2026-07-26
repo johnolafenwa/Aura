@@ -82,7 +82,8 @@ Current compiler workflow:
     across physical lines while a source delimiter remains open
 - `cargo run -p aura -- run examples/basics/tuples.au`
   - execute fixed-arity tuple values, recursive unpacking, tuple-pattern
-    matching, and copy-only constant indexing
+    matching, copy-only constant indexing, and same-type recursive `==` and
+    `!=` that retain both operands; tuple ordering remains rejected
 - `cargo run -p aura -- run examples/modules/simple_import.au`
   - execute local file modules with `import`, `from ... import ...`, and `public` module boundaries
 - `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`

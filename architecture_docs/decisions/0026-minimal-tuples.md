@@ -1,7 +1,8 @@
 # ADR-0026: Minimal tuples
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-24
+- Amended: 2026-07-26 (B3.0-c structural tuple equality and inequality)
 - Roadmap decision: Phase 3.5 tuples
 
 ## Context
@@ -15,7 +16,7 @@ indexing.
 The Batch 2 tuple ticket therefore defines one deliberately narrow kernel. More
 expressive tuple operations remain separate language decisions.
 
-## Provisional Decision
+## Decision
 
 - Tuple value expressions are parenthesized: `(left, right)` and the singleton
   `(value,)`. A comma is required, so `(value)` remains grouping.
@@ -54,10 +55,36 @@ expressive tuple operations remain separate language decisions.
   is copyable. The operation returns a copy. Dynamic, negative, out-of-bounds,
   and non-copy-element tuple indexing are rejected. Unpack when ownership of a
   non-copy element is required.
-- Tuple equality, ordering, iteration, methods, named elements, rest patterns,
-  and implicit tuple/collection conversions are not introduced.
+- Tuple iteration, methods, named elements, rest patterns, and implicit
+  tuple/collection conversions are not introduced.
+- Tuple equality and inequality are defined by the 2026-07-26 amendment below.
+  Tuple ordering is not introduced.
 
-These choices remain Provisional pending the Batch 2 checkpoint review.
+These choices are Accepted with the Batch 3 B3.0-c amendment.
+
+## 2026-07-26 Amendment: Tuple Equality
+
+Batch 3 B3.0-c ratifies the minimal tuple kernel and adds builtin tuple `==`
+and `!=` with these rules:
+
+- Both operands must have the same static tuple type. Tuple type identity is
+  structural, so this requires equal arity and the same corresponding element
+  types recursively.
+- Equality compares corresponding element values from left to right using each
+  element type's ordinary equality semantics. Nested tuples apply this rule
+  recursively. `==` stops at the first unequal element, and `!=` is the
+  logical negation of `==`.
+- Both operand expressions are evaluated once, left to right. Equality reads
+  both resulting tuple values and consumes neither, including when the tuple
+  contains non-copy elements.
+- Runtime element-type, transport, or backend metadata carried with a tuple
+  value is not an additional semantic component of equality. Static typing
+  establishes compatibility before the recursive value comparison.
+- Tuple equality links participate in the ordinary comparison-chain contract.
+  Chain operands are evaluated left to right at most once, and the chain stops
+  at its first false link without evaluating later operands.
+- `<`, `<=`, `>`, and `>=` remain rejected for tuples. The amendment does not
+  define lexicographic or metadata-based tuple ordering.
 
 ## Rationale
 
@@ -76,10 +103,12 @@ from becoming part of Aurora 0.1 by accident.
   constant-index syntax.
 - Checker fixtures pin exact shape/type matching, recursive copy
   classification, whole-source moves, shared provenance, invalid indexing,
-  and the mutable-writeback rejections.
+  same-static-type equality, continued ordering rejection, and the
+  mutable-writeback rejections.
 - Run fixtures and CLI parity tests pin tuple returns, recursive assignment,
-  `for` unpacking, tuple-pattern arms, evaluation order, and equal MIR/direct
-  output.
+  `for` unpacking, tuple-pattern arms, recursive equality, non-consuming
+  operands, comparison-chain short-circuiting, evaluation order, and equal
+  MIR/direct output.
 - `examples/basics/tuples.au` and the executable block in
   `docs/manual/tuples.md` pin the maintained user-facing surface and exact
   output.

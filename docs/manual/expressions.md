@@ -58,6 +58,10 @@ in bounds, and must select a copy element. The result is a copy. Dynamic,
 negative, out-of-bounds, and non-copy-element tuple indexing are static errors;
 unpack a tuple when ownership of a non-copy element is required.
 
+Tuple `==` and `!=` require the same static tuple type and compare
+corresponding element values recursively. They read both operands without
+consuming either one. Tuple ordering operators remain unavailable.
+
 ## Delimiter Continuation
 
 An expression may span physical lines while a `(`, `[`, or `{` remains open.
@@ -87,6 +91,8 @@ Except for short-circuit boolean operators and control-flow expressions, evaluat
 - f-string interpolations are evaluated from left to right
 - a conditional expression evaluates its condition first and then exactly one arm
 - a match scrutinee is evaluated once, before arm selection
+- a comparison chain evaluates operands left to right at most once and does
+  not evaluate any operand after its first false link
 
 Evaluation order matters when an expression moves a value, mutates through a
 call, performs I/O, or can produce a runtime failure. A copy place contributes
@@ -197,6 +203,19 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
 | `in`, `not in` | `bool` for a supported container |
 
+For tuple operands, `==` and `!=` require exactly the same static tuple type.
+They compare corresponding element values from left to right using ordinary
+equality, recursively for nested tuples. The comparison reads both complete
+operands and does not move either one, including a tuple that contains
+non-copy elements. Runtime tuple element-type, transport, or backend metadata
+does not participate in the value result.
+
+A tuple literal on either side may be contextually typed from the other
+operand's known tuple type, recursively through nested literals. After that
+symmetric contextual typing, the two static tuple types must still match
+exactly. Evaluating either operand keeps its ordinary ownership effects; the
+equality operation adds no move of the resulting tuple.
+
 Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
@@ -210,6 +229,10 @@ For non-numeric user types, `/` requests `Div.div`; `//` requests
 `FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
 `Duration // int64` rule applies. Builtin equality does not use an equality
 operator trait in Aurora 0.1.
+
+Tuple `<`, `<=`, `>`, and `>=` are static errors. Aurora has no lexicographic
+tuple ordering, and an `Ord` implementation cannot add one to a structural
+tuple type.
 
 Builtin integer `/` is a static error, as is integer `/=`. The diagnostic directs callers to `//` for a floor quotient or to `.to_float()` on both operands for floating true division. Integer `//` rounds the mathematical quotient toward negative infinity, and integer `%` is its paired remainder. Floating `//` and `%` use the corresponding CPython-compatible divmod correction. In both numeric domains, a nonzero remainder has the divisor's sign. Integer and floating `//` or `%` by zero, and floating `/` by zero, are runtime failures. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
 
@@ -293,6 +316,11 @@ right, evaluates each operand at most once, and stops at the first link that is
 `false`. The operands after that link are not evaluated. Every link must be a
 valid comparison of its two adjacent operands under the rules above, and the
 chain's result is `bool`.
+
+The same rule applies to tuple equality links. In
+`first == middle != last`, `middle` is evaluated once and reused by both
+adjacent links, while `last` is skipped when the first link is false. Tuple
+equality does not consume any evaluated chain operand.
 
 ```python
 def in_range(value: int32, low: int32, high: int32) -> bool:
@@ -594,10 +622,11 @@ arguments evaluate in source order and then bind to declaration-order payload
 slots. `and` and `or` short circuit. Conditional expressions evaluate the
 condition first and exactly one selected arm. A membership test evaluates its
 value before its container. A comparison chain evaluates its operands left to
-right, evaluates each at most once, and stops at its first `false` link. A member receiver is evaluated before
-arguments; an index base is evaluated before its index; collection entries
-preserve source order; a match scrutinee evaluates once; and each f-string
-interpolation renders immediately before the next begins.
+right, evaluates each at most once, and stops at its first `false` link. A
+member receiver is evaluated before arguments; an index base is evaluated
+before its index; collection entries preserve source order; a match scrutinee
+evaluates once; and each f-string interpolation renders immediately before the
+next begins.
 `try` either yields an `Ok` payload or returns the `Err` from the enclosing
 function after required cleanup.
 
@@ -608,11 +637,14 @@ context consumes them. Default-mode non-copy parameters borrow; `own`
 parameters and consuming receivers move; explicit borrows retain the owner.
 Non-copy indexed reads report `AU3005` and require the safe method surface
 instead of an implicit copy. `in` and `not in` read both operands and move
-neither. A comparison chain checks every operand as if it were evaluated, even
-where short-circuiting would skip it. Binary left operands, index bases, method receivers, and indexed-assignment
-targets retain their non-copy borrow through later inputs. An overlapping
-mutable borrow or consumption is rejected with `AU3002`, and no hidden clone
-repairs the invalid expression.
+neither. Equality and inequality themselves also read both resulting operands
+and move neither; this includes structural tuple equality. Evaluation inside
+an operand retains its ordinary ownership effects. A comparison chain checks
+every operand as if it were evaluated, even where short-circuiting would skip
+it. Binary left operands, index bases, method receivers, and
+indexed-assignment targets retain their non-copy borrow through later inputs.
+An overlapping mutable borrow or consumption is rejected with `AU3002`, and
+no hidden clone repairs the invalid expression.
 
 ## Diagnostics
 
@@ -658,7 +690,8 @@ The expression forms defined positively in this chapter are implemented.
 Delimiter continuation is accepted under ADR-0025 and does not add a new
 expression AST form. Conditional expressions are accepted under ADR-0027, and
 membership operators plus comparison chains are accepted under ADR-0028. The
-minimal tuple surface remains Provisional under ADR-0026. Lambdas,
+minimal tuple surface and its Batch 3 B3.0-c equality amendment are Accepted
+under ADR-0026. Lambdas,
 comprehensions, assignment expressions, general callables, nonnumeric casts,
 and call-site ownership modifiers are unavailable. Parser migration hints for
 unavailable spellings do not make them language features.

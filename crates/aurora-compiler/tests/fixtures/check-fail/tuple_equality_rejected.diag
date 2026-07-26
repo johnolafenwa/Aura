@@ -1,5 +1,0 @@
-error[AU2003]: tuple comparison is not supported; compare tuple elements explicitly
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_equality_rejected.au:2:11
-  |
-2 |     print((1, 2) == (1, 2))
-  |           ^

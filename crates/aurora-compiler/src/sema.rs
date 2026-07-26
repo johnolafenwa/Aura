@@ -7271,6 +7271,15 @@ impl<'a> FunctionChecker<'a> {
         Ok(then_ty)
     }
 
+    fn equality_operand_hint(
+        &self,
+        left: &Expr,
+        right: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Type> {
+        self.conditional_result_hint(left, right, locals, None).ok()
+    }
+
     fn result_consumption_needs_replay(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Member { object, .. } => Self::member_projects_branch_result(object),
@@ -7887,7 +7896,7 @@ impl<'a> FunctionChecker<'a> {
                 // same way a single comparison does.
                 let first_hint = links
                     .first()
-                    .and_then(|link| self.chain_operand_hint(link, locals));
+                    .and_then(|link| self.chain_operand_hint(first, link, locals));
                 let mut left_expr: &Expr = first;
                 let mut left_ty = self.type_of_expr_hint(first, locals, first_hint.as_ref())?;
                 for link in links {
@@ -7900,11 +7909,32 @@ impl<'a> FunctionChecker<'a> {
                             // through an operator trait whose declaration
                             // already fixes that return type, so the link needs
                             // no further result check.
+                            let locals_before_right = locals.clone();
                             let right_ty =
                                 self.type_of_expr_hint(&link.operand, locals, Some(&left_ty))?;
                             if left_ty != right_ty && Self::is_numeric_literal_expr(left_expr) {
                                 left_ty =
                                     self.type_of_expr_hint(left_expr, locals, Some(&right_ty))?;
+                            }
+                            if Self::binary_uses_builtin_value_semantics(op, &left_ty, &right_ty) {
+                                let retained_left = self
+                                    .retained_place_access(
+                                        left_expr,
+                                        &left_ty,
+                                        ReceiverKind::Borrow,
+                                        "left operand",
+                                    )
+                                    .into_iter()
+                                    .collect::<Vec<_>>();
+                                self.reject_retained_expr_overlap(
+                                    &retained_left,
+                                    &link.operand,
+                                    &right_ty,
+                                    None,
+                                    &locals_before_right,
+                                    locals,
+                                    "right operand",
+                                )?;
                             }
                             self.type_of_binary(
                                 link.op_span,
@@ -7992,15 +8022,8 @@ impl<'a> FunctionChecker<'a> {
                     | BinaryOp::GreaterEq => None,
                     _ => expected,
                 };
-                let contextual_left_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                    && Self::is_contextual_none_expr(left)
-                    && !Self::is_contextual_none_expr(right)
-                {
-                    self.type_of_expr_without_move_state(right, locals, None)
-                        .ok()
-                        .filter(|ty| {
-                            matches!(ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
-                        })
+                let contextual_left_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                    self.equality_operand_hint(left, right, locals)
                 } else {
                     None
                 };
@@ -8463,15 +8486,19 @@ impl<'a> FunctionChecker<'a> {
     /// The expected type a chain's left operand can adopt from its first link.
     fn chain_operand_hint(
         &self,
+        left: &Expr,
         link: &CompareLink,
         locals: &HashMap<String, LocalBinding>,
     ) -> Option<Type> {
-        let operand_ty = self
-            .type_of_expr_without_move_state(&link.operand, locals, None)
-            .ok()?;
         match link.op.as_binary_op() {
+            Some(BinaryOp::Eq | BinaryOp::NotEq) => {
+                self.equality_operand_hint(left, &link.operand, locals)
+            }
             Some(_) => None,
-            None => membership_needle_type(&operand_ty),
+            None => self
+                .type_of_expr_without_move_state(&link.operand, locals, None)
+                .ok()
+                .and_then(|operand_ty| membership_needle_type(&operand_ty)),
         }
     }
 
@@ -8525,18 +8552,26 @@ impl<'a> FunctionChecker<'a> {
         }
         if matches!(
             op,
-            BinaryOp::Eq
-                | BinaryOp::NotEq
-                | BinaryOp::Less
-                | BinaryOp::LessEq
-                | BinaryOp::Greater
-                | BinaryOp::GreaterEq
+            BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq
         ) && (matches!(left_ty, Type::Tuple(_)) || matches!(right_ty, Type::Tuple(_)))
         {
             return Err(Diagnostic::coded_at(
                 "AU2003",
                 span,
-                "tuple comparison is not supported; compare tuple elements explicitly",
+                "tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly",
+            ));
+        }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            && left_ty != right_ty
+            && (matches!(left_ty, Type::Tuple(_)) || matches!(right_ty, Type::Tuple(_)))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "tuple equality operands must have the same type, found `{}` and `{}`",
+                    left_ty, right_ty
+                ),
             ));
         }
         if is_duration_type(&left_ty) || is_duration_type(&right_ty) {
@@ -8577,9 +8612,7 @@ impl<'a> FunctionChecker<'a> {
             ) if left_ty == right_ty && (is_integer_type(&left_ty) || is_float_type(&left_ty)) => {
                 Ok(left_ty)
             }
-            (BinaryOp::Eq | BinaryOp::NotEq, _, _)
-                if left_ty == right_ty && !matches!(left_ty, Type::Tuple(_)) =>
-            {
+            (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
                 Ok(Type::named("bool"))
             }
             (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _, _)

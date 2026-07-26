@@ -71,6 +71,28 @@ print(name)
 Aurora deliberately reports reuse of the original tuple instead of exposing
 independent positional partial moves.
 
+## Structural Equality
+
+`==` and `!=` compare tuples recursively, element by element. Both operands
+must have exactly the same tuple type, and every element must support equality:
+
+```aurora
+baseline = ("Aurora", (7, true))
+same = ("Aurora", (7, true))
+changed = ("Aurora", (8, true))
+
+assert baseline == same
+assert baseline != changed
+assert same != changed
+```
+
+Tuple equality reads and retains both operands rather than moving them. This
+also applies to non-copy tuples such as these, which contain `String`: each
+binding remains usable in a later comparison.
+
+Tuple ordering is deliberately separate. `<`, `<=`, `>`, and `>=` are rejected
+for tuple operands; compare the intended elements explicitly instead.
+
 ## Constant Indexes
 
 Indexing is available for the small read-only case:
@@ -116,9 +138,9 @@ A normal by-value match consumes a non-copy tuple as one whole value.
 
 ## What Tuples Are Not
 
-Tuples are not small vectors. The initial surface has no tuple iteration,
-methods, equality, ordering, named elements, rest/star unpacking, slicing,
-dynamic indexing, or implicit conversion to `Vec`.
+Tuples are not small vectors. Beyond structural `==` and `!=`, the current
+surface has no tuple ordering, iteration, methods, named elements, rest/star
+unpacking, slicing, dynamic indexing, or implicit conversion to `Vec`.
 
 Run the maintained example:
 
