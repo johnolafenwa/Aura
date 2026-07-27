@@ -132,6 +132,17 @@ Last updated: 2026-07-27
   tests, 13 extension tests, both coverage gates, reference/docs, audits,
   warning-denied Clippy, and hygiene. Phase 5.3 is complete; Phase 5.4 stack
   diet is next.
+- Phase 5.4 stack diet is active. Read-only architecture, protocol, and
+  benchmark audits are complete. Parallel test-first lanes are implementing:
+  a dedicated bounded protocol-step service for deep HTTP/rustls/WebSocket
+  frames; guarded 256 KiB default stacks with collision-free
+  `start_with_stack`/`start_soon_with_stack` overrides from 256 KiB to 64 MiB;
+  and truthful incremental-RSS plus 100,000-sleeper/timer benchmark protocols.
+  Reactor readiness/deadlines/cancellation remain on coroutine stacks, and the
+  existing generic blocking pool is not used for whole protocol operations.
+  The contractual Mac14,9 host has 16 KiB pages; `DefaultStack` already leaves
+  one guard page inaccessible. Implementation, focused gates, before/after
+  measurements, coverage, full CI, and published per-task cost remain.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

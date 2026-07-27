@@ -259,6 +259,25 @@ before-reactor baseline is recorded in
   coverage, executable reference integrity, all 683 migration manifests, docs,
   npm and cargo audits, warning-denied Clippy, and hygiene. Cargo audit retains
   only the repository's allowed `rustls-pemfile` unmaintained warning.
+- Phase 5.4 stack-diet investigation found that the 1 MiB default is a
+  containment measure for deep host-library frames, not an Aurora-frame
+  requirement. DNS/connect work and WebSocket handshakes are already
+  offloaded, but HTTP URL/build/parsing, rustls handshake/data paths, and
+  WebSocket framing still execute on coroutine stacks. The implementation
+  target is a dedicated bounded protocol-step service: each bounded
+  nonblocking host-library step temporarily owns its protocol state and is
+  awaited to completion, while descriptor readiness, deadlines, and
+  cancellation remain reactor-owned. Whole-operation blocking-pool wrappers
+  are rejected because they can abandon owned protocol state, starve unrelated
+  filesystem/resolver jobs, or deadlock through nested connect work.
+- `corosensei::DefaultStack` already provides the required inaccessible guard
+  page. On the contractual Mac14,9 host the page size is 16 KiB. The provisional
+  override surface is collision-free
+  `TaskGroup.start_with_stack(bytes, target, args...)` and
+  `start_soon_with_stack(...)`; this avoids stealing a named argument from the
+  child function. The initial proof target is a 256 KiB default with explicit
+  overrides from 256 KiB through 64 MiB, deterministic rejection outside that
+  range, and parity across MIR/direct task starts.
 
 ## Follow-up
 
