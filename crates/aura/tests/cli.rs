@@ -7219,6 +7219,123 @@ def main() -> int32:
 }
 
 #[test]
+fn loop_backedge_safepoints_prevent_timer_and_queue_starvation() {
+    let source = r#"
+import sys
+
+def sleep_then_report(progress: Queue[int64]) -> None:
+    started_at = sys.monotonic_time_ms()
+    sleep(10ms)
+    progress.put(sys.monotonic_time_ms() - started_at)
+
+def run_hot_loop() -> None:
+    started_at = sys.monotonic_time_ms()
+    while true:
+        if sys.monotonic_time_ms() - started_at >= 100:
+            return
+
+def report_queue_progress(started_at: int64, progress: Queue[int64]) -> None:
+    progress.put(sys.monotonic_time_ms() - started_at)
+
+def main() -> int32:
+    timer_progress = Queue[int64]()
+    queue_progress = Queue[int64]()
+    started_at = sys.monotonic_time_ms()
+
+    with TaskGroup() as group:
+        group.start(sleep_then_report, timer_progress)
+        group.start(run_hot_loop)
+        group.start(report_queue_progress, started_at, queue_progress)
+
+        queue_latency = queue_progress.get_or(-1, timeout=1s)
+        timer_latency = timer_progress.get_or(-1, timeout=1s)
+        print(queue_latency >= 0 and queue_latency <= 50)
+        print(timer_latency >= 10 and timer_latency <= 50)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-loop-backedge-safepoints",
+        source,
+        std::time::Duration::from_secs(10),
+        "true\ntrue\n",
+    );
+}
+
+#[test]
+fn loop_backedge_safepoints_prevent_socket_readiness_starvation() {
+    let source = r#"
+import io
+import net
+import sys
+
+def accept_then_report(
+    listener: own net.TcpListener,
+    armed: Queue[int32],
+    progress: Queue[int64]
+) -> None:
+    with server_listener = listener:
+        armed.put(1)
+        started_at = sys.monotonic_time_ms()
+        match own server_listener.accept(timeout=1s):
+            case Result.Ok(stream):
+                with accepted_stream = stream:
+                    progress.put(sys.monotonic_time_ms() - started_at)
+            case Result.Err(_):
+                progress.put(-1)
+
+def connect_after_delay(address: String) -> None:
+    sleep(10ms)
+    match own net.connect_timeout(address, 1s):
+        case Result.Ok(stream):
+            with client_stream = stream:
+                pass
+        case Result.Err(_):
+            pass
+
+def run_hot_loop() -> None:
+    started_at = sys.monotonic_time_ms()
+    while true:
+        if sys.monotonic_time_ms() - started_at >= 200:
+            return
+
+def socket_probe() -> Result[bool, io.Error]:
+    listener = try net.listen("127.0.0.1:0")
+    address = try listener.local_addr()
+    armed = Queue[int32]()
+    socket_progress = Queue[int64]()
+
+    with TaskGroup() as group:
+        group.start(accept_then_report, listener, armed, socket_progress)
+        if armed.get_or(-1, timeout=1s) != 1:
+            return Result.Ok(false)
+
+        group.start(connect_after_delay, address)
+        group.start(run_hot_loop)
+
+        socket_latency = socket_progress.get_or(-1, timeout=1s)
+        return Result.Ok(socket_latency >= 10 and socket_latency <= 100)
+
+def main() -> int32:
+    match socket_probe():
+        case Result.Ok(progressed):
+            print(progressed)
+        case Result.Err(_):
+            print(false)
+    return 0
+"#;
+
+    // Readiness must arrive in the first half of the 200 ms hot loop. Without
+    // a cooperative backedge, the accept task cannot resume until the loop ends.
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-loop-backedge-socket-safepoints",
+        source,
+        std::time::Duration::from_secs(10),
+        "true\n",
+    );
+}
+
+#[test]
 fn self_receiver_method_result_can_bind_to_a_name() {
     let source = r#"
 class Box:

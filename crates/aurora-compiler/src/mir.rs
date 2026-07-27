@@ -315,8 +315,19 @@ pub struct BasicBlock {
     pub terminator: Terminator,
 }
 
+/// Loop backedges consume one unit of function-local scheduling fuel. The
+/// interpreter uses a shorter quantum because each interpreted iteration is
+/// substantially more expensive; native code uses a longer quantum to keep
+/// the amortized scheduler cost below the loop-performance budget.
+pub const MIR_LOOP_SAFEPOINT_INTERVAL: u64 = 8;
+pub const NATIVE_LOOP_SAFEPOINT_INTERVAL: u64 = 4_096;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instruction {
+    /// A compiler-inserted cooperative scheduling check. Loop lowering places
+    /// one on each semantic backedge; runtimes amortize the actual yield with
+    /// a per-function fuel counter.
+    Safepoint,
     Assign {
         target: String,
         value: Rvalue,
@@ -2524,6 +2535,7 @@ impl<'a> Lowerer<'a> {
     ) {
         let dispatch_block = self.new_block("for_lockstep");
         let body_block = self.new_block("for_body");
+        let safepoint_block = self.new_block("for_safepoint");
         let after_block = self.new_block("for_end");
 
         let sources = iterables
@@ -2644,7 +2656,7 @@ impl<'a> Lowerer<'a> {
 
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
-            continue_label: self.label(dispatch_block),
+            continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
         });
         let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &tuple_ty);
@@ -2657,10 +2669,14 @@ impl<'a> Lowerer<'a> {
         );
         self.lower_stmts(&for_stmt.body);
         if !self.current_terminated() {
-            self.terminate(Terminator::Goto(self.label(dispatch_block)));
+            self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
         self.scoped_names.pop();
         self.loop_stack.pop();
+
+        self.switch_to(safepoint_block);
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
         self.switch_to(after_block);
     }
@@ -2933,6 +2949,7 @@ impl<'a> Lowerer<'a> {
                             span: for_stmt.span,
                         },
                     });
+                    self.emit(Instruction::Safepoint);
                     self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
                     self.switch_to(break_block);
@@ -3084,9 +3101,10 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        let safepoint_block = self.new_block("for_safepoint");
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
-            continue_label: self.label(dispatch_block),
+            continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
         });
         self.switch_to(body_block);
@@ -3101,10 +3119,14 @@ impl<'a> Lowerer<'a> {
         }
         self.lower_stmts(&for_stmt.body);
         if !self.current_terminated() {
-            self.terminate(Terminator::Goto(self.label(dispatch_block)));
+            self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
         self.scoped_names.pop();
         self.loop_stack.pop();
+
+        self.switch_to(safepoint_block);
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
         self.switch_to(after_block);
     }
@@ -3155,6 +3177,7 @@ impl<'a> Lowerer<'a> {
     fn lower_while(&mut self, while_stmt: &WhileStmt) {
         let condition_block = self.new_block("while_cond");
         let body_block = self.new_block("while_body");
+        let safepoint_block = self.new_block("while_safepoint");
         let after_block = self.new_block("while_end");
 
         self.terminate(Terminator::Goto(self.label(condition_block)));
@@ -3169,15 +3192,19 @@ impl<'a> Lowerer<'a> {
 
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
-            continue_label: self.label(condition_block),
+            continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
         });
         self.switch_to(body_block);
         self.lower_stmts(&while_stmt.body);
         if !self.current_terminated() {
-            self.terminate(Terminator::Goto(self.label(condition_block)));
+            self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
         self.loop_stack.pop();
+
+        self.switch_to(safepoint_block);
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(after_block);
     }

@@ -217,9 +217,41 @@ before-reactor baseline is recorded in
   executable reference integrity, the docs build, audits, warning-denied
   Clippy, and hygiene. Cargo audit retains only the repository's allowed
   `rustls-pemfile` unmaintained warning.
+- Phase 5.3 adds explicit MIR safepoint instructions at the latch of every
+  `while` and `for` shape, including `enumerate`, `zip`, Queue iteration, and
+  mutable Vec iteration. Normal loop tails and `continue` traverse the latch;
+  `break` and `return` bypass it. Mutable Vec writeback and index advancement
+  remain before the latch. MIR yields every eight traversed latches. Native
+  code uses a per-function unboxed fuel counter, checks every backedge, and
+  calls the existing void `aurora_direct_yield_now` ABI every 4,096 latches.
+  Native modules with no possible sibling task retain the MIR marker but
+  statically elide the runtime check.
+- Behavioral regressions prove that a 200 ms hot loop no longer blocks a
+  queued sibling, a 10 ms timer, or an armed loopback socket on either backend.
+  The dedicated benchmark records the pre-safepoint failure as
+  `SAMPLE starvation 10 200`; the current direct and MIR probes complete the
+  same 10 ms sleeper before the hot loop ends. Structural tests cover all loop
+  forms, nested latches, `continue`/`break`, mutable Vec ordering, malformed
+  MIR, and the direct void-ABI and sequential-elision shapes.
+- Phase 5.3 focused gates are green: 277 CLI tests, 979 compiler library tests,
+  the complete forced MIR/direct parity matrix, 25 benchmark-runner tests,
+  reference integrity, documentation, formatting, and diff hygiene. Frozen
+  compiler coverage passes without a closure pass at 65,842/68,478 lines
+  (96.150589%), 4,337/4,476 functions (96.894549%), and 97,258/103,032 regions
+  (94.395916%). Every new test pins observable progress, diagnostic, MIR
+  placement, writeback ordering, parity, or native ABI behavior; no synthetic
+  test, exclusion, or unreachable-branch fixture was added.
+- A contained pre-existing defect found while auditing loop exits remains a
+  follow-up: error propagation through `try` inside mutable Vec iteration can
+  bypass loop writeback on both backends. Explicit `return`, `break`, and
+  `continue` write back correctly. This is outside the safepoint behavior and
+  is recorded rather than silently absorbed into Phase 5.3.
 
 ## Follow-up
 
-Start automatic loop-backedge safepoints, using the accepted Phase 5.2 V6
-measurements as the before-stage baseline. Coverage floors remain frozen until
-the one-time Batch 4 sign-off re-ratchet.
+Commit the Phase 5.3 implementation, run its clean-tree contractual benchmark
+against the accepted Phase 5.2 V6 baseline, then run exact full CI. After that,
+begin the stack-diet stage with protocol service offload, guarded smaller task
+stacks, a collision-free per-task override, and measured incremental memory per
+parked task. Coverage floors remain frozen until the one-time Batch 4 sign-off
+re-ratchet.

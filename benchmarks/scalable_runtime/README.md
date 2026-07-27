@@ -17,6 +17,9 @@ mkdir -p target/scalable-runtime-benchmarks
 ./target/release/aura build --backend direct \
   -o target/scalable-runtime-benchmarks/idle-10-tasks \
   benchmarks/scalable_runtime/idle_10_tasks.au
+./target/release/aura build --backend direct \
+  -o target/scalable-runtime-benchmarks/sleeper-vs-hot-loop \
+  benchmarks/scalable_runtime/sleeper_vs_hot_loop.au
 ```
 
 Run the resulting binaries directly. Do not benchmark through `cargo run` or
@@ -99,6 +102,21 @@ and joins every child before emitting:
 DONE idle 10
 ```
 
+`sleeper-vs-hot-loop` arms one 10 ms sleep, then starts a sibling task whose
+only work is a 200 ms loop over the monotonic clock. The loop contains no
+explicit scheduler operation, so progress during it must come from
+compiler-inserted loop-backedge safepoints. The sleeper records elapsed time
+from immediately before it arms the sleep until it runs again:
+
+```text
+SAMPLE starvation 10 <elapsed_ms>
+DONE starvation
+```
+
+The runner requires both lines exactly, rejects standard error, nonzero exit,
+negative elapsed time, extra output, and timeout, and uses the worst elapsed
+time across repetitions for the starvation gate.
+
 ## Gate interpretation
 
 Use a quiet machine and record the hardware and operating-system version with
@@ -111,6 +129,7 @@ report non-contractual, records the reason, and cannot produce an
 - 10,000 sleepers at no more than 512 MiB peak RSS.
 - p99 timer overshoot at no more than 5 ms under the 1,000-timer load.
 - less than 2% process CPU during the idle workload's stable window.
+- a 10 ms sleeper beside the hot loop completes within 50 ms.
 
 Timer millisecond readings are intentionally the language's public monotonic
 clock rather than a hidden host hook. Report the `READY` maximum-minus-minimum

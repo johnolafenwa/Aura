@@ -18,6 +18,7 @@ use crate::json_codec;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
@@ -176,7 +177,8 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .iter()
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
-                Instruction::Eval { .. }
+                Instruction::Safepoint
+                | Instruction::Eval { .. }
                 | Instruction::PushCleanup { .. }
                 | Instruction::PopCleanup { .. } => false,
             })
@@ -439,6 +441,7 @@ pub unsafe extern "C" fn aurora_native_run(
 
 struct MirRuntime {
     module: Arc<MirModule>,
+    safepoints_enabled: bool,
     functions: HashMap<String, MirFunction>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
@@ -1280,6 +1283,7 @@ impl MirRuntime {
         cancellation: CancellationContext,
         program_args: Arc<Vec<String>>,
     ) -> Self {
+        let safepoints_enabled = module_uses_lightweight_tasks(&module);
         let mut functions = HashMap::new();
         for function in &module.functions {
             functions.insert(function.name.clone(), function.clone());
@@ -1291,6 +1295,7 @@ impl MirRuntime {
         let trait_impls = module.trait_impls.clone();
         Self {
             module: Arc::new(module),
+            safepoints_enabled,
             functions,
             classes,
             trait_impls,
@@ -1979,6 +1984,7 @@ impl MirRuntime {
         let mut current_label = function.entry.clone();
         let mut loop_state = HashMap::<String, i128>::new();
         let mut cleanup_stack = Vec::<String>::new();
+        let mut safepoint_fuel = MIR_LOOP_SAFEPOINT_INTERVAL;
 
         loop {
             let block_index = block_map.get(&current_label).copied().ok_or_else(|| {
@@ -1989,7 +1995,12 @@ impl MirRuntime {
             })?;
             let block = &function.blocks[block_index];
             for instruction in &block.instructions {
-                match self.execute_instruction(instruction, env, &mut cleanup_stack) {
+                match self.execute_instruction(
+                    instruction,
+                    env,
+                    &mut cleanup_stack,
+                    &mut safepoint_fuel,
+                ) {
                     Ok(Some(value)) => {
                         self.unwind_cleanups(&mut cleanup_stack, env, true)?;
                         return Ok(value);
@@ -2054,8 +2065,19 @@ impl MirRuntime {
         instruction: &Instruction,
         env: &mut Env,
         cleanup_stack: &mut Vec<String>,
+        safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
         match instruction {
+            Instruction::Safepoint => {
+                if self.safepoints_enabled {
+                    *safepoint_fuel -= 1;
+                    if *safepoint_fuel == 0 {
+                        *safepoint_fuel = MIR_LOOP_SAFEPOINT_INTERVAL;
+                        yield_now_with_runtime_scheduler();
+                    }
+                }
+                Ok(None)
+            }
             Instruction::Assign { target, value } => {
                 let target_ty = self.resolve_place_type(target, env);
                 match self.evaluate_rvalue_for_target(value, env, target_ty.as_ref())? {

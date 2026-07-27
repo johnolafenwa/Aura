@@ -107,6 +107,28 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
             bench.parse_timer_samples(output, expected_count=1)
 
+    def test_starvation_protocol_is_exact_and_bounded(self) -> None:
+        self.assertEqual(
+            bench.parse_starvation_output(
+                b"SAMPLE starvation 10 17\nDONE starvation\n",
+                expected_sleep_ms=10,
+            ),
+            {"sleep_ms": 10, "elapsed_ms": 17},
+        )
+        cases = [
+            (b"SAMPLE starvation 11 17\nDONE starvation\n", "sleep duration"),
+            (b"SAMPLE starvation 10 -1\nDONE starvation\n", "nonnegative"),
+            (b"SAMPLE starvation 10 17\nWRONG\n", "DONE"),
+            (
+                b"SAMPLE starvation 10 17\nDONE starvation\nunexpected\n",
+                "trailing",
+            ),
+        ]
+        for output, expected in cases:
+            with self.subTest(output=output):
+                with self.assertRaisesRegex(bench.BenchmarkError, expected):
+                    bench.parse_starvation_output(output, expected_sleep_ms=10)
+
 
 class StatisticsTests(unittest.TestCase):
     def test_nearest_rank_percentiles_and_summary(self) -> None:
@@ -147,6 +169,17 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(summary["worst_valid_run_p99_ms"], 6.0)
         self.assertEqual(summary["valid_run_indexes"], [0, 1])
         self.assertEqual(summary["invalid_overlap_runs"], [2])
+
+    def test_starvation_gate_uses_worst_repetition(self) -> None:
+        summary = bench.starvation_gate_summary(
+            [{"elapsed_ms": 12}, {"elapsed_ms": 49}, {"elapsed_ms": 20}]
+        )
+        self.assertEqual(summary["observed_max_ms"], 49)
+        self.assertEqual(summary["limit_ms"], 50)
+        self.assertTrue(summary["passed"])
+        self.assertFalse(
+            bench.starvation_gate_summary([{"elapsed_ms": 51}])["passed"]
+        )
 
 
 class ProcessUnitTests(unittest.TestCase):
@@ -270,6 +303,26 @@ class ValidationAndExecutionTests(unittest.TestCase):
             self.assertGreaterEqual(result["elapsed_s"], 0.0)
             with self.assertRaisesRegex(bench.BenchmarkError, "stdout"):
                 bench.run_v6_once(invalid)
+
+    def test_starvation_run_records_elapsed_sleep_and_rejects_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = self.make_executable(
+                root,
+                "valid-starvation",
+                'printf "SAMPLE starvation 10 17\\nDONE starvation\\n"\n',
+            )
+            invalid = self.make_executable(
+                root,
+                "invalid-starvation",
+                'printf "SAMPLE starvation 10 17\\nDONE starvation\\nnoise\\n"\n',
+            )
+            result = bench.run_starvation(valid)
+            self.assertEqual(result["sleep_ms"], 10)
+            self.assertEqual(result["elapsed_ms"], 17)
+            self.assertEqual(result["returncode"], 0)
+            with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
+                bench.run_starvation(invalid)
 
     def test_sleepers_waits_for_exact_natural_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

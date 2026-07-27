@@ -209,7 +209,11 @@ operations remain valid because they transfer one owned item instead.
 
 ## Cancellation Is Cooperative
 
-Calling `group.cancel()` signals child tasks. Tasks observe cancellation at **scheduler-aware waits**: `sleep`, queue sends and receives, task-result waits, socket waits, HTTP calls, and process waits. A CPU-bound loop that never reaches one of those waits should check `cancelled()` itself:
+Calling `group.cancel()` signals child tasks. Tasks observe cancellation at
+**scheduler-aware waits**: `sleep`, queue sends and receives, task-result
+waits, socket waits, HTTP calls, and process waits. Compiler-inserted loop
+safepoints schedule sibling work but deliberately do not inspect cancellation,
+so a CPU-bound loop that must stop on request should check `cancelled()` itself:
 
 ```python
 def ticker():
@@ -225,10 +229,25 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in parallel. CPU code without a scheduler boundary can starve sibling tasks, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits are event-driven: descriptors stay registered, deadlines are kept in a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. An idle scheduler blocks until an event or deadline instead of waking on a periodic tick.
+Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in
+parallel. Every loop backedge includes an automatic scheduling check. Normal
+loop tails and `continue` take the check; `break` and `return` leave without
+it. This keeps a tight loop from freezing timers, queues, and sockets
+indefinitely, but one long loop body or long straight-line computation can
+still delay siblings. Each task reserves a fixed 1 MiB coroutine stack.
+Scheduler waits are event-driven: descriptors stay registered, deadlines are
+kept in a timer heap, and Queue, task-completion, and blocking-pool events
+notify the scheduler directly. An idle scheduler blocks until an event or
+deadline instead of waking on a periodic tick.
 
-For CPU work that is not checking cancellation on every chunk, `yield_now()`
-adds an explicit cooperative scheduling point:
+MIR execution checks every loop backedge and yields every 8 backedges. Native
+concurrent programs use a function-local 4,096-iteration fuel budget, and
+sequential native programs remove checks that cannot have a sibling to
+schedule. These implementation
+choices do not promise an interleaving or ready-task order.
+
+`yield_now()` adds an explicit cooperative scheduling point between
+application-chosen chunks:
 
 ```python
 def crunch():
@@ -250,7 +269,8 @@ Good Aurora concurrency tends to look the same across programs:
 - one `with TaskGroup()` per concurrent operation
 - queues owned by the parent, closed by the producers
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
-- long CPU loops that check `cancelled()` or yield between bounded chunks
+- long CPU loops that check `cancelled()` when cancellation matters and use
+  explicit yields when a particular chunk boundary should schedule siblings
 - no detached background work; Aurora 0.1 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.

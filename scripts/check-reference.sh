@@ -443,6 +443,16 @@ grep -Fq '| `yield_now` | `yield_now() -> None` |' docs/manual/api-index.md
 grep -Fq 'places the current lightweight task back in the scheduler ready set' docs/manual/concurrency.md
 grep -Fq '[examples/concurrency/yield_now.au](../examples/concurrency/yield_now.au)' tutorials/13-concurrency.md
 grep -Fq '`yield_now` cooperative scheduling' docs/manual/conformance.md
+grep -Fq 'The compiler inserts a cooperative scheduling check on every semantic loop' docs/manual/execution-model.md
+grep -Fq 'as does `continue`; `break`, `return`, and another exit that leaves the loop do' docs/manual/execution-model.md
+grep -Fq 'MIR execution amortizes the cooperative yield with 8 units' docs/manual/execution-model.md
+grep -Fq 'Direct native code uses 4,096 units' docs/manual/execution-model.md
+grep -Fq 'automatic checks do not inspect cancellation' docs/manual/current-limits.md
+grep -Fq '## Automatic Loop Safepoints' tutorials/13-concurrency.md
+grep -Fq 'compiler-inserted scheduling checks on every ordinary and `continue` loop backedge' docs/manual/conformance.md
+grep -Fq 'fn loop_backedge_safepoints_prevent_timer_and_queue_starvation()' crates/aura/tests/cli.rs
+grep -Fq 'fn loop_backedge_safepoints_prevent_socket_readiness_starvation()' crates/aura/tests/cli.rs
+test -s benchmarks/scalable_runtime/sleeper_vs_hot_loop.au
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md

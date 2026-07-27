@@ -263,7 +263,27 @@ Explicitly closing a resource before scope exit is permitted only where the reso
 
 Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. A task can also yield explicitly with `yield_now()`. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
 
-The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `yield_now()`, `cancelled()`, or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack.
+The compiler inserts a cooperative scheduling check on every semantic loop
+backedge. Reaching the ordinary tail of a `while` or `for` body participates,
+as does `continue`; `break`, `return`, and another exit that leaves the loop do
+not traverse its backedge. These checks let a tight loop eventually return to
+the scheduler so ready timers, Queue operations, and socket work are not
+starved indefinitely.
+
+A loop safepoint is not preemption and does not inspect cancellation. A single
+long iteration can still delay every sibling until the body reaches its
+backedge, and long straight-line CPU work with no loop or scheduler operation
+can do the same. Use `cancelled()` when the task must observe cancellation, and
+use `yield_now()` when the program needs an explicit scheduling point between
+chosen chunks. Neither automatic nor explicit yielding specifies which ready
+task runs next.
+
+MIR execution amortizes the cooperative yield with 8 units of function-local
+loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
+yielding. A program proven to have no possible sibling Aurora task elides the
+runtime check entirely. These backend strategies may produce different valid
+interleavings; scheduling order is not observable language order. Each
+lightweight task reserves a fixed 1 MiB coroutine stack.
 
 `yield_now()` places the current lightweight task back in the ready set and
 returns when the scheduler selects it again. It gives other runnable tasks an
@@ -302,6 +322,7 @@ A task stores its completed result. Repeated result observation clones the store
 
 Cancellation is cooperative. Pure CPU code observes cancellation through
 `cancelled()`; `yield_now()` is a scheduling point but does not inspect
+cancellation. Compiler-inserted loop safepoints likewise do not inspect
 cancellation. Scheduler-aware blocking operations receive cancellation context
 directly.
 

@@ -249,17 +249,41 @@ If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scop
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
-Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `yield_now()`, `cancelled()`, or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack. Descriptor registrations persist across waits, deadlines use a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. With nothing ready, the scheduler blocks until an event or deadline rather than waking on a periodic tick.
+Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in
+parallel. The compiler inserts a cooperative scheduling check on every loop
+backedge, including a normal body tail and `continue`, so a tight loop no
+longer freezes ready timers, Queue operations, or socket work indefinitely.
+`break` and `return` leave the loop without taking that check. Each lightweight
+task still reserves a fixed 1 MiB coroutine stack. Descriptor registrations
+persist across waits, deadlines use a timer heap, and Queue, task-completion,
+and blocking-pool events notify the scheduler directly. With nothing ready,
+the scheduler blocks until an event or deadline rather than waking on a
+periodic tick.
 
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 
 See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 
+## Automatic Loop Safepoints
+
+Loop safepoints make progress automatic at backedges; they do not make Aurora
+preemptive. A single long iteration can still delay siblings until it reaches
+the body tail, and long straight-line CPU work has no automatic checkpoint.
+The safepoint also does not inspect cancellation. Keep calling `cancelled()`
+when a task must stop on request.
+
+MIR execution amortizes yielding with 8 units of function-local loop fuel.
+Native concurrent programs use 4,096 units, while a program proven to have no
+possible sibling task removes the runtime checks. Do not use these intervals
+to predict output order: runnable-task selection and concurrent interleaving
+remain unspecified.
+
 ## `yield_now`
 
-Long CPU-bound work should be divided into bounded chunks. Calling
-`yield_now()` between chunks voluntarily gives other runnable lightweight
-tasks an opportunity to proceed:
+Automatic safepoints are enough to keep a tight loop from starving the
+scheduler indefinitely. Calling `yield_now()` between chosen bounded chunks
+provides an explicit scheduling point sooner than the amortized native check
+when the application wants one:
 
 ```python
 def count(label: String):
@@ -361,6 +385,8 @@ The runtime is intentionally simple:
   a timer heap, receives direct Queue/task-completion/blocking-pool
   notifications, and blocks without a periodic idle tick
 - cancellation is still cooperative rather than preemptive
+- loop backedges include compiler-inserted cooperative scheduling checks, but
+  a single long body can still delay siblings
 - tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - task arguments are owned captures; bare shared and `own` target parameters
   are supported, while `mut` target parameters are rejected

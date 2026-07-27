@@ -1,0 +1,44 @@
+import sys
+
+
+def sleeper(armed: Queue[int32], samples: Queue[int64]):
+    start_ms: int64 = sys.monotonic_time_ms()
+    armed.put(1)
+    sleep(10ms)
+    samples.put(sys.monotonic_time_ms() - start_ms)
+
+
+def hot_loop(duration_ms: int64):
+    start_ms: int64 = sys.monotonic_time_ms()
+    while sys.monotonic_time_ms() - start_ms < duration_ms:
+        pass
+
+
+def main() -> int32:
+    armed = Queue[int32]()
+    samples = Queue[int64]()
+
+    with TaskGroup() as group:
+        group.start_soon(sleeper, armed, samples)
+        match armed.get():
+            case QueueReceive.Item(_):
+                group.start_soon(hot_loop, 200)
+            case QueueReceive.Closed:
+                return 1
+            case QueueReceive.TimedOut:
+                return 1
+            case QueueReceive.Cancelled:
+                return 1
+
+    match samples.get():
+        case QueueReceive.Item(elapsed_ms):
+            print(f"SAMPLE starvation 10 {elapsed_ms}")
+        case QueueReceive.Closed:
+            return 1
+        case QueueReceive.TimedOut:
+            return 1
+        case QueueReceive.Cancelled:
+            return 1
+
+    print("DONE starvation")
+    return 0

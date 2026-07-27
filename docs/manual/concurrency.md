@@ -214,7 +214,16 @@ while not cancelled():
 
 Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
 
-Aurora 0.1 task scheduling is cooperative and single-threaded. CPU code that never reaches `yield_now()`, `cancelled()`, or another scheduler-aware operation can starve sibling tasks. Each lightweight task reserves a fixed 1 MiB coroutine stack. When no task is ready, the event reactor blocks until a notification, descriptor event, or deadline; it does not wake on a periodic scheduler tick.
+Aurora 0.1 task scheduling is cooperative and single-threaded. The compiler
+inserts a scheduling check on every loop backedge, including the ordinary body
+tail and `continue`, so a tight loop eventually lets ready timers, Queue
+operations, and socket work proceed. `break` and `return` leave the loop
+without taking that check. A single long loop body or long straight-line CPU
+work can still delay siblings. The inserted check does not inspect
+cancellation; tasks that must stop on request still call `cancelled()`. Each
+lightweight task reserves a fixed 1 MiB coroutine stack. When no task is ready,
+the event reactor blocks until a notification, descriptor event, or deadline;
+it does not wake on a periodic scheduler tick.
 
 ## Detached Work
 
@@ -305,25 +314,31 @@ violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
 ## Backend Support
 
 Structured groups, task targets and captures, Queue operations and iteration,
-wait helpers, sleep, cancellation, and user-trait dispatch on `Queue[T]`,
-`Task[T]`, and `TaskGroup` for noncolliding method names are maintained on both
-MIR execution and direct native generation. Builtin handle member names retain
-builtin dispatch on both backends. The scheduler/runtime surface and primary
-diagnostics are parity-pinned. Both backends therefore share the persistent
-reactor, timer heap, and direct runtime-event notification behavior.
+wait helpers, sleep, cancellation, compiler-inserted loop safepoints, and
+user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for noncolliding
+method names are maintained on both MIR execution and direct native generation.
+MIR checks each backedge and yields every 8 backedges. Native code uses 4,096
+units of function-local fuel between yields when sibling tasks are possible
+and elides the check when the program proves that no sibling task can exist.
+Builtin handle member names
+retain builtin dispatch on both backends. The scheduler/runtime surface and
+primary diagnostics are parity-pinned. Both backends therefore share the
+persistent reactor, timer heap, and direct runtime-event notification behavior.
 MIR traps include Aurora call-chain and task-ancestry notes; direct native
 traps may omit only those supplemental notes until the later Batch 4
 native-frames stage.
 
 ## Limits And Implementation-Defined Behavior
 
-Task execution is cooperative, single-threaded, and non-preemptive; CPU code
-without a scheduler boundary can starve siblings. Scheduling order among
-simultaneously ready tasks is deliberately unspecified. Each lightweight task
-reserves a fixed 1 MiB coroutine stack, and the MIR/direct entry thread
-reserves 64 MiB. The scheduler keeps descriptor registrations persistent and
-blocks until an event or deadline when idle; it does not use a periodic
-readiness scan. Nested Aurora calls stop at 256 frames. The process-wide blocking pool uses 2
+Task execution is cooperative, single-threaded, and non-preemptive. Loop
+backedges have compiler-inserted scheduling checks, but one long loop body or
+long straight-line computation can still delay siblings. The checks do not
+inspect cancellation. Scheduling order among simultaneously ready tasks is
+deliberately unspecified. Each lightweight task reserves a fixed 1 MiB
+coroutine stack, and the MIR/direct entry thread reserves 64 MiB. The scheduler
+keeps descriptor registrations persistent and blocks until an event or
+deadline when idle; it does not use a periodic readiness scan. Nested Aurora
+calls stop at 256 frames. The process-wide blocking pool uses 2
 through 8 host threads selected from host parallelism; it has no 0.1
 configuration or queue backpressure, so slow or stuck jobs can delay unrelated
 work behind them. A result holding an exclusive runtime resource is
@@ -335,17 +350,17 @@ progress. Detached lightweight tasks are unavailable.
 
 Scheduler-backed lightweight tasks, structured `TaskGroup`, generic task
 handles and outcomes, bounded and unbounded queues, bare receive iteration,
-sleep, cooperative cancellation, task-result observation, and multi-task waits
-plus computed Duration arithmetic are implemented. Phase 5.1 adds persistent
-reactor registrations, heap-managed deadlines, and direct Queue,
-task-completion, and blocking-pool wakeups. The host-timer policy recorded by
-ADR-0019 is Accepted. Multicore Aurora task execution is reserved for the later
+sleep, cooperative cancellation, task-result observation, multi-task waits,
+computed Duration arithmetic, and compiler-inserted loop-backedge safepoints
+are implemented. Phase 5.1 adds persistent reactor registrations, heap-managed
+deadlines, and direct Queue, task-completion, and blocking-pool wakeups; Phase
+5.3 adds the automatic loop checks. The host-timer policy recorded by ADR-0019
+is Accepted. Multicore Aurora task execution is reserved for the later
 pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
 `mut` task targets, statically enforced single-observer resource
 results, Transfer boundary checks, typed heterogeneous selection, configurable
 blocking-pool sizing, native frame parity, and detached task syntax are
-unavailable. Compiler-inserted loop safepoints and smaller or configurable
-coroutine stacks are also later work. The capacity boundary is pinned by
+unavailable. Smaller or configurable coroutine stacks are also later work. The capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
 both backends.

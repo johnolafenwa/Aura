@@ -590,6 +590,312 @@ def main():
     );
 }
 
+fn safepoint_blocks(function: &MirFunction) -> Vec<&BasicBlock> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::Safepoint))
+        })
+        .collect()
+}
+
+fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
+    match terminator {
+        Terminator::Goto(label) => vec![label],
+        Terminator::Branch {
+            then_label,
+            else_label,
+            ..
+        } => vec![then_label, else_label],
+        Terminator::ForRange {
+            body_label,
+            exit_label,
+            ..
+        } => vec![body_label, exit_label],
+        Terminator::Match {
+            arms, otherwise, ..
+        } => arms
+            .iter()
+            .map(|arm| arm.label.as_str())
+            .chain(std::iter::once(otherwise.as_str()))
+            .collect(),
+        Terminator::Return(_) | Terminator::AssertFail { .. } | Terminator::Unreachable => {
+            Vec::new()
+        }
+    }
+}
+
+#[test]
+fn while_backedge_paths_converge_at_one_safepoint_and_break_bypasses_it() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut count = 0
+    while count < 10:
+        count += 1
+        if count == 1:
+            continue
+        if count == 2:
+            break
+        print(count)
+"#,
+    )
+    .expect("while loop should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    let safepoints = safepoint_blocks(main);
+    assert_eq!(
+        safepoints.len(),
+        1,
+        "one semantic while loop must have exactly one safepoint latch"
+    );
+    let safepoint = safepoints[0];
+    assert!(safepoint.label.contains("while_safepoint"));
+    assert_eq!(
+        safepoint
+            .instructions
+            .iter()
+            .filter(|instruction| matches!(instruction, Instruction::Safepoint))
+            .count(),
+        1
+    );
+    let condition_label = match &safepoint.terminator {
+        Terminator::Goto(label) => label,
+        other => panic!("while safepoint must return to its condition, got {other:?}"),
+    };
+    let condition = main
+        .blocks
+        .iter()
+        .find(|block| &block.label == condition_label)
+        .expect("safepoint target should be the while condition");
+    let after_label = match &condition.terminator {
+        Terminator::Branch { else_label, .. } => else_label,
+        other => panic!("while condition must branch, got {other:?}"),
+    };
+
+    let safepoint_predecessors = main
+        .blocks
+        .iter()
+        .filter(|block| {
+            terminator_targets(&block.terminator)
+                .iter()
+                .any(|target| *target == safepoint.label)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        safepoint_predecessors.len(),
+        2,
+        "normal fallthrough and continue must converge at the same latch"
+    );
+
+    let after_predecessors = main
+        .blocks
+        .iter()
+        .filter(|block| {
+            terminator_targets(&block.terminator)
+                .iter()
+                .any(|target| *target == after_label)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_predecessors.len(),
+        2,
+        "the condition's false edge and break should both exit the loop"
+    );
+    assert!(after_predecessors
+        .iter()
+        .any(|block| block.label == condition.label));
+    let break_predecessor = after_predecessors
+        .iter()
+        .find(|block| block.label != condition.label)
+        .expect("break should add an exit predecessor");
+    assert!(matches!(
+        &break_predecessor.terminator,
+        Terminator::Goto(label) if label == after_label
+    ));
+    assert!(
+        !break_predecessor
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::Safepoint)),
+        "break must bypass the loop safepoint"
+    );
+}
+
+#[test]
+fn nested_while_loops_have_distinct_single_safepoint_latches() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut outer = 0
+    while outer < 2:
+        mut inner = 0
+        while inner < 2:
+            inner += 1
+        outer += 1
+"#,
+    )
+    .expect("nested while loops should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    let safepoints = safepoint_blocks(main);
+    assert_eq!(
+        safepoints.len(),
+        2,
+        "each nested semantic loop needs its own latch"
+    );
+    let condition_targets = safepoints
+        .iter()
+        .map(|block| match &block.terminator {
+            Terminator::Goto(label) => label.as_str(),
+            other => panic!("while safepoint must return to its condition, got {other:?}"),
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        condition_targets.len(),
+        2,
+        "nested loop latches must target distinct conditions"
+    );
+    assert!(condition_targets
+        .iter()
+        .all(|label| label.contains("while_cond")));
+}
+
+#[test]
+fn every_for_loop_shape_has_exactly_one_safepoint_latch() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def range_loop():
+    for value in range(0, 2):
+        print(value)
+
+def vec_loop(values: Vec[int64]):
+    for value in values:
+        print(value)
+
+def set_loop(values: Set[int64]):
+    for value in values:
+        print(value)
+
+def queue_loop(values: Queue[int64]):
+    for value in values:
+        print(value)
+
+def enumerate_loop(values: Vec[int64]):
+    for index, value in enumerate(values):
+        print(index + value)
+
+def zip_loop(left: Vec[int64], right: Vec[int64]):
+    for first, second in zip(left, right):
+        print(first + second)
+"#,
+    )
+    .expect("all supported for-loop shapes should lower");
+
+    for (function_name, dispatch_fragment) in [
+        ("range_loop", "for_iter"),
+        ("vec_loop", "for_iter"),
+        ("set_loop", "for_iter"),
+        ("queue_loop", "for_iter"),
+        ("enumerate_loop", "for_lockstep"),
+        ("zip_loop", "for_lockstep"),
+    ] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == function_name)
+            .unwrap_or_else(|| panic!("{function_name} should lower"));
+        let safepoints = safepoint_blocks(function);
+        assert_eq!(
+            safepoints.len(),
+            1,
+            "{function_name} should have exactly one safepoint latch"
+        );
+        assert_eq!(
+            safepoints[0]
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Instruction::Safepoint))
+                .count(),
+            1
+        );
+        assert!(
+            matches!(
+                &safepoints[0].terminator,
+                Terminator::Goto(label) if label.contains(dispatch_fragment)
+            ),
+            "{function_name}'s latch must return to its iteration dispatch"
+        );
+    }
+}
+
+#[test]
+fn mutable_vec_writeback_precedes_its_single_safepoint_latch() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut values: Vec[int64] = [1, 2]
+    for value in mut values:
+        value += 1
+"#,
+    )
+    .expect("mutable Vec loop should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    let safepoints = safepoint_blocks(main);
+    assert_eq!(
+        safepoints.len(),
+        1,
+        "mutable Vec iteration should have exactly one latch"
+    );
+    let latch = safepoints[0];
+    let writeback_index = latch
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+                    ..
+                } if field == INTERNAL_VEC_SET_INDEX_FIELD
+            )
+        })
+        .expect("mutable Vec latch must write the element back");
+    let safepoint_index = latch
+        .instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Instruction::Safepoint))
+        .expect("mutable Vec latch must include a safepoint");
+    assert!(
+        writeback_index < safepoint_index,
+        "mutable element writeback must complete before scheduling can yield"
+    );
+    assert!(matches!(
+        &latch.terminator,
+        Terminator::Goto(label) if label.contains("for_iter")
+    ));
+}
+
 #[test]
 fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
     let program = Box::leak(Box::new(checked_program("def main():\n    pass\n")));

@@ -111,8 +111,24 @@ Last updated: 2026-07-27
   added. Exact full `npm run ci` is green with 275 CLI tests, 971 compiler
   library tests, forced MIR/direct parity, 80 LSP tests, 13 extension tests,
   both coverage gates, reference integrity, docs, audits, warning-denied
-  Clippy, and hygiene. Phase 5.2 is complete; the next action is automatic
-  loop-backedge safepoints.
+  Clippy, and hygiene.
+- Phase 5.3 automatic loop safepoints are implemented on both backends. Every
+  loop shape lowers through one explicit latch; MIR yields every eight latch
+  traversals, while native code uses a 4,096-iteration unboxed fuel counter
+  and statically elides checks for modules with no possible sibling task.
+  Behavioral tests prove timer, Queue, and socket progress during a hot loop;
+  structural tests pin `continue`/`break`, nested loops, mutable Vec writeback
+  ordering, the void native yield ABI, and sequential-native elision. Focused
+  gates are green: 277 CLI tests, 979 compiler tests, the full forced-backend
+  parity matrix, 25 benchmark tests, reference integrity, docs, formatting,
+  and hygiene. Frozen coverage is green at 65,842/68,478 lines (96.150589%),
+  4,337/4,476 functions (96.894549%), and 97,258/103,032 regions (94.395916%)
+  with no synthetic test or exclusion. Remaining Phase 5.3 closure is the
+  clean-tree contractual benchmark, exact full CI, and evidence commit.
+- Follow-up found during Phase 5.3: pre-existing `try` propagation inside
+  mutable Vec iteration can bypass writeback on both backends; explicit
+  `return`, `break`, and `continue` are correct. Track separately from the
+  safepoint stage.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions

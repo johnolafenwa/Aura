@@ -659,7 +659,17 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without `yield_now()`, `cancelled()`, or another scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
+Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task
+bodies are not parallel. Every loop backedge has a compiler-inserted scheduling
+check, including the ordinary body tail and `continue`; `break` and `return`
+bypass it. Tight loops therefore no longer starve ready timers, queues, or
+sockets indefinitely, although a single long loop body can still delay
+siblings. The check does not inspect cancellation. Each task reserves a fixed
+1 MiB coroutine stack. Scheduler waits use persistent descriptor
+registrations, a timer heap, and direct Queue, task-completion, and
+blocking-pool notifications; an idle scheduler blocks until an event or
+deadline without a periodic tick. Resource-bearing task results are
+single-observer-only; the checker does not yet enforce that restriction.
 
 Current collection notes:
 

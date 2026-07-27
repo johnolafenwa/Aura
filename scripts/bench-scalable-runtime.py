@@ -36,6 +36,7 @@ MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 READY_LINE_BYTES = 256
 READY_TIMEOUT_SECONDS = 20.0
 TIMER_TIMEOUT_SECONDS = 60.0
+STARVATION_TIMEOUT_SECONDS = 10.0
 NATURAL_COMPLETION_TIMEOUT_SECONDS = 40.0
 RSS_SAMPLE_INTERVAL_SECONDS = 0.05
 IDLE_SAMPLE_INTERVAL_SECONDS = 0.25
@@ -44,12 +45,15 @@ SLEEPER_RSS_LIMIT_BYTES = 512 * 1024 * 1024
 TIMER_P99_LIMIT_MS = 5.0
 IDLE_CPU_LIMIT_PERCENT = 2.0
 TIMER_ARM_SPAN_LIMIT_MS = 10.0
+STARVATION_SLEEP_MS = 10
+STARVATION_LATENCY_LIMIT_MS = 50
 EXPECTED_V6_STDOUT = b"10000000\n"
 
 WORKLOADS = {
     "sleepers": ROOT / "benchmarks/scalable_runtime/10k_sleepers.au",
     "timers": ROOT / "benchmarks/scalable_runtime/1000_timers.au",
     "idle": ROOT / "benchmarks/scalable_runtime/idle_10_tasks.au",
+    "starvation": ROOT / "benchmarks/scalable_runtime/sleeper_vs_hot_loop.au",
     "int32": ROOT / "benchmarks/direct_integer_loops/int32_loop.au",
     "int64": ROOT / "benchmarks/direct_integer_loops/int64_loop.au",
 }
@@ -334,6 +338,62 @@ def timer_gate_summary(
         "worst_valid_run_p99_ms": (
             max(valid_p99_values) if valid_p99_values else None
         ),
+    }
+
+
+def parse_starvation_output(
+    output: bytes, expected_sleep_ms: int
+) -> Dict[str, int]:
+    stream = io.BytesIO(output)
+    sample = read_bounded_line(stream, MAX_PROTOCOL_LINE_BYTES)
+    fields = sample.rstrip(b"\n").split(b" ")
+    if (
+        not sample.endswith(b"\n")
+        or len(fields) != 4
+        or fields[:2] != [b"SAMPLE", b"starvation"]
+    ):
+        raise BenchmarkError("malformed starvation sample line: " + repr(sample))
+    try:
+        sleep_ms = int(fields[2].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid starvation sleep duration") from error
+    if sleep_ms != expected_sleep_ms:
+        raise BenchmarkError(
+            "unexpected starvation sleep duration: expected "
+            + str(expected_sleep_ms)
+            + ", got "
+            + str(sleep_ms)
+        )
+    try:
+        elapsed_ms = int(fields[3].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid starvation elapsed duration") from error
+    if elapsed_ms < 0:
+        raise BenchmarkError("starvation elapsed duration must be nonnegative")
+    done = read_bounded_line(stream, MAX_PROTOCOL_LINE_BYTES)
+    if done != b"DONE starvation\n":
+        raise BenchmarkError(
+            "unexpected starvation DONE line: expected "
+            + repr(b"DONE starvation\n")
+            + ", got "
+            + repr(done)
+        )
+    if stream.read(1):
+        raise BenchmarkError("starvation benchmark emitted trailing output")
+    return {"sleep_ms": sleep_ms, "elapsed_ms": elapsed_ms}
+
+
+def starvation_gate_summary(
+    runs: Sequence[Dict[str, object]]
+) -> Dict[str, object]:
+    if not runs:
+        raise BenchmarkError("starvation benchmark has no repetitions")
+    observed_max_ms = max(int(run["elapsed_ms"]) for run in runs)
+    return {
+        "observed_max_ms": observed_max_ms,
+        "limit_ms": STARVATION_LATENCY_LIMIT_MS,
+        "operator": "<=",
+        "passed": observed_max_ms <= STARVATION_LATENCY_LIMIT_MS,
     }
 
 
@@ -766,6 +826,43 @@ def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
     return {
         "command": [str(binary)],
         "elapsed_s": elapsed,
+        "stdout": result.stdout.decode("ascii"),
+        "returncode": result.returncode,
+    }
+
+
+def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
+    started = time.perf_counter()
+    try:
+        result = subprocess.run(
+            [str(binary)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=ROOT,
+            shell=False,
+            check=False,
+            timeout=STARVATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise BenchmarkError("starvation benchmark timed out") from error
+    elapsed = time.perf_counter() - started
+    if result.returncode != 0:
+        raise BenchmarkError(
+            "starvation benchmark exited with status " + str(result.returncode)
+        )
+    if result.stderr:
+        raise BenchmarkError(
+            "starvation benchmark wrote unexpected stderr: "
+            + result.stderr.decode("utf-8", errors="replace")
+        )
+    observation = parse_starvation_output(
+        result.stdout, expected_sleep_ms=STARVATION_SLEEP_MS
+    )
+    return {
+        "command": [str(binary)],
+        "elapsed_s": elapsed,
+        **observation,
         "stdout": result.stdout.decode("ascii"),
         "returncode": result.returncode,
     }
@@ -1215,6 +1312,7 @@ def execute(options: Options) -> Dict[str, object]:
             "idle_seconds": options.idle_seconds,
             "ready_timeout_seconds": READY_TIMEOUT_SECONDS,
             "timer_timeout_seconds": TIMER_TIMEOUT_SECONDS,
+            "starvation_timeout_seconds": STARVATION_TIMEOUT_SECONDS,
             "natural_completion_timeout_seconds": NATURAL_COMPLETION_TIMEOUT_SECONDS,
             "timer_arm_span_limit_ms": TIMER_ARM_SPAN_LIMIT_MS,
             "rss_sample_interval_seconds": RSS_SAMPLE_INTERVAL_SECONDS,
@@ -1269,6 +1367,9 @@ def execute(options: Options) -> Dict[str, object]:
             run_idle(binaries["idle"], options.idle_seconds)
             for _ in range(options.repeats)
         ]
+        starvation = [
+            run_starvation(binaries["starvation"]) for _ in range(options.repeats)
+        ]
         v6 = run_v6_benchmark(
             binaries["int32"], binaries["int64"], options.v6_repeats
         )
@@ -1284,6 +1385,7 @@ def execute(options: Options) -> Dict[str, object]:
     worst_valid_timer_p99 = timer_gate["worst_valid_run_p99_ms"]
     idle_cpu_max = max(float(run["cpu_percent"]) for run in idle)
     all_arm_spans_valid = all(bool(run["arm_span_valid"]) for run in timers)
+    starvation_gate = starvation_gate_summary(starvation)
     gates = {
         "sleepers_peak_rss": {
             "observed_bytes": sleeper_peak,
@@ -1315,6 +1417,7 @@ def execute(options: Options) -> Dict[str, object]:
             "operator": "<",
             "passed": idle_cpu_max < IDLE_CPU_LIMIT_PERCENT,
         },
+        "starvation_latency": starvation_gate,
     }
     report["benchmarks"] = {
         "sleepers": {"runs": sleepers},
@@ -1324,6 +1427,7 @@ def execute(options: Options) -> Dict[str, object]:
             "gate_summary": timer_gate,
         },
         "idle": {"runs": idle},
+        "starvation": {"runs": starvation},
         "v6": v6,
     }
     report["gates"] = gates

@@ -19,6 +19,7 @@ use crate::diag::Span;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMapEntry,
     MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -201,6 +202,7 @@ struct ValueRef {
 
 struct NativeCodegen<'a> {
     module: &'a MirModule,
+    safepoints_enabled: bool,
     program_path: String,
     program_source: String,
     object: ObjectModule,
@@ -661,6 +663,10 @@ impl<'a> NativeCodegen<'a> {
         program_source: &str,
     ) -> std::result::Result<Self, String> {
         validate_module(module)?;
+        // A program with no task-start operation cannot have a runnable sibling
+        // for a loop to starve. Keep explicit MIR markers for portability, but
+        // elide their native fast-path cost for provably sequential programs.
+        let safepoints_enabled = !collect_task_start_targets(module).is_empty();
         let mut classes = HashMap::new();
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
@@ -1068,6 +1074,7 @@ impl<'a> NativeCodegen<'a> {
 
         Ok(Self {
             module,
+            safepoints_enabled,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
             object,
@@ -1620,6 +1627,25 @@ impl<'a> NativeCodegen<'a> {
             builder.def_var(registration_variable, zero);
             cleanup_registration_vars.insert(place.clone(), registration_variable);
         }
+
+        let safepoint_fuel = if self.safepoints_enabled
+            && function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::Safepoint))
+            }) {
+            let variable = Variable::from_u32(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let initial = builder
+                .ins()
+                .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
+            builder.def_var(variable, initial);
+            Some(variable)
+        } else {
+            None
+        };
 
         let mut writeback_locals = Vec::new();
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -2553,6 +2579,7 @@ impl<'a> NativeCodegen<'a> {
             cleanup_places,
             cleanup_active_vars,
             cleanup_registration_vars,
+            safepoint_fuel,
             exit_call,
             print_i64,
             print_u64,
@@ -3223,6 +3250,7 @@ struct FunctionCompiler<'a> {
     cleanup_places: Vec<String>,
     cleanup_active_vars: HashMap<String, Variable>,
     cleanup_registration_vars: HashMap<String, Variable>,
+    safepoint_fuel: Option<Variable>,
     exit_call: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_u64: cranelift_codegen::ir::FuncRef,
@@ -3670,6 +3698,31 @@ impl<'a> FunctionCompiler<'a> {
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
         match instruction {
+            Instruction::Safepoint => {
+                let Some(fuel_variable) = self.safepoint_fuel else {
+                    return Ok(());
+                };
+                let fuel = self.builder.use_var(fuel_variable);
+                let remaining = self.builder.ins().iadd_imm(fuel, -1);
+                self.builder.def_var(fuel_variable, remaining);
+                let exhausted = self.builder.ins().icmp_imm(IntCC::Equal, remaining, 0);
+                let slow_block = self.builder.create_block();
+                let continue_block = self.builder.create_block();
+                self.builder
+                    .ins()
+                    .brif(exhausted, slow_block, &[], continue_block, &[]);
+
+                self.builder.switch_to_block(slow_block);
+                let reset = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
+                self.builder.def_var(fuel_variable, reset);
+                self.builder.ins().call(self.yield_now, &[]);
+                self.builder.ins().jump(continue_block, &[]);
+
+                self.builder.switch_to_block(continue_block);
+            }
             Instruction::Assign { target, value } => {
                 if let Rvalue::Try { value: try_value } = value {
                     let target_ty = self.type_of_place(target)?;
@@ -12023,6 +12076,7 @@ fn validate_function(
     for block in &function.blocks {
         for instruction in &block.instructions {
             match instruction {
+                Instruction::Safepoint => {}
                 Instruction::Assign { value, .. } => validate_rvalue(value, classes)?,
                 Instruction::Eval { value } => validate_operand(value)?,
                 Instruction::PushCleanup { .. } | Instruction::PopCleanup { .. } => {}

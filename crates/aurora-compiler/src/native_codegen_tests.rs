@@ -648,6 +648,167 @@ def main() -> int32:
 }
 
 #[test]
+fn native_loop_safepoint_uses_void_yield_runtime_abi_when_tasks_can_run() {
+    let source = r#"
+def worker(limit: int32) -> int32:
+    mut value: int32 = 0
+    while value < limit:
+        value += 1
+    return value
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, 8)
+        mut value: int32 = 0
+        while value < 8:
+            value += 1
+        match task.result():
+            case TaskResult.Ready(result):
+                return result
+            case _:
+                return 1
+"#;
+    let mir = lower_source_to_mir(source).expect("concurrent loop source should lower to MIR");
+    assert!(
+        mir.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::Safepoint))
+            })
+        }),
+        "loop lowering must retain the portable MIR safepoint marker"
+    );
+    assert!(
+        mir.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::StartTask { .. },
+                            ..
+                        }
+                    )
+                })
+            })
+        }),
+        "the fixture must preserve a runnable sibling task"
+    );
+
+    let object = emit_host_object(&mir).expect("concurrent loop source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now")),
+        "a concurrent native loop must call the void scheduler ABI: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now_value")),
+        "an automatic safepoint must not request a boxed Unit result: {referenced:?}"
+    );
+}
+
+#[test]
+fn native_loop_safepoint_elides_runtime_call_when_no_sibling_can_run() {
+    let source = r#"
+def main() -> int32:
+    mut value: int32 = 0
+    while value < 8:
+        value += 1
+    return value
+"#;
+    let mir = lower_source_to_mir(source).expect("sequential loop source should lower to MIR");
+    assert!(
+        mir.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::Safepoint))
+            })
+        }),
+        "static native elision must not remove the backend-independent MIR marker"
+    );
+
+    let object = emit_host_object(&mir).expect("sequential loop source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now")),
+        "a module with no task start has no sibling to schedule and must elide the call: \
+         {referenced:?}"
+    );
+}
+
+#[test]
+fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
+    let function = MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::named("int32"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::Safepoint],
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    };
+    validate_function(&function, &HashMap::new())
+        .expect("a hand-built MIR safepoint is a valid backend instruction");
+
+    let module = crate::mir::MirModule {
+        functions: vec![function],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let object = emit_host_object(&module).expect("a hand-built MIR safepoint should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now")),
+        "hand-built sequential MIR must receive the same static elision: {referenced:?}"
+    );
+}
+
+#[test]
+fn handbuilt_mir_safepoint_does_not_mask_a_malformed_terminator() {
+    let function = MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::named("int32"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::Safepoint],
+            terminator: Terminator::Unreachable,
+        }],
+    };
+
+    let error = validate_function(&function, &HashMap::new())
+        .expect_err("a valid safepoint must not make an unsupported terminator valid");
+    assert!(
+        error.contains("does not yet support MIR terminator"),
+        "unexpected malformed-MIR diagnostic: {error}"
+    );
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",

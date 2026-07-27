@@ -630,7 +630,8 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `0`
     - `1`
 - `yield_now.au`
-  - explicit cooperative scheduling between bounded CPU-work chunks
+  - explicit cooperative scheduling between bounded CPU-work chunks; ordinary
+    loop backedges also receive compiler-inserted amortized scheduling checks
   - prints three numbered steps for each of `alpha` and `beta`; their exact
     interleaving is intentionally unspecified
 - `task_group_wait_helpers.au`

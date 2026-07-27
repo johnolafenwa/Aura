@@ -178,7 +178,8 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- run examples/concurrency/yield_now.au`
-  - execute bounded CPU-work chunks with explicit cooperative scheduling points
+  - execute bounded CPU-work chunks with explicit cooperative scheduling
+    points; ordinary loop backedges also receive automatic checks
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
   - compile a standalone native binary through the default auto backend
 - `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`
@@ -269,6 +270,9 @@ Current `run` status:
 - `aura run` defaults to the MIR runtime for the current implemented Aurora surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
 - queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
 - scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; when idle, the cooperative single-threaded runtime blocks until an event or deadline without a periodic tick
+- every loop backedge includes a compiler-inserted cooperative scheduling
+  check; native concurrent code amortizes it with function-local fuel, while
+  sequential native code elides checks when no sibling task can exist
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

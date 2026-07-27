@@ -13007,6 +13007,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         vec![(0, Value::Int(IntegerValue::from_signed(11)))]
     );
     let mut cleanup_stack = Vec::new();
+    let mut safepoint_fuel = crate::mir::MIR_LOOP_SAFEPOINT_INTERVAL;
     runtime
         .execute_instruction(
             &Instruction::PushCleanup {
@@ -13014,6 +13015,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             },
             &mut env,
             &mut cleanup_stack,
+            &mut safepoint_fuel,
         )
         .expect("push cleanup should succeed");
     assert_eq!(cleanup_stack, vec!["group".to_string()]);
@@ -13025,6 +13027,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             },
             &mut env,
             &mut cleanup_stack,
+            &mut safepoint_fuel,
         )
         .expect("pop cleanup should run the resource cleanup path");
     assert!(cleanup_stack.is_empty());

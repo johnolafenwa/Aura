@@ -225,3 +225,42 @@ The subsequent exact full `npm run ci` gate is green: 275 CLI tests, 971
 compiler library tests, forced MIR/direct parity, 80 LSP tests, 13 extension
 tests, compiler and LSP coverage, reference integrity, documentation, audits,
 warning-denied Clippy, and hygiene.
+
+## Phase 5.3 automatic loop safepoints
+
+The accepted Phase 5.2 report above is the before-stage baseline. Its native
+int64 median is 21.916833 ms, so the exact two-percent acceptance ceiling is
+22.35516966 ms.
+
+The new starvation workload arms a 10 ms sleeper before entering a 200 ms hot
+loop with no explicit scheduler operation. The preserved Phase 5.2 direct
+binary reports:
+
+```text
+SAMPLE starvation 10 200
+DONE starvation
+```
+
+This is the intended red proof: before compiler safepoints, the sleeper cannot
+resume until the loop finishes. The Phase 5.3 runner executes the probe three
+times and gates the worst observed completion at 50 ms. It also repeats the V6
+native loops 21 times because their accepted baseline variation is close to the
+permitted two-percent change.
+
+The clean-tree after-stage command is:
+
+```bash
+cargo build --release -p aura
+npm run bench:scalable-runtime -- \
+  --label after-safepoints \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 5 \
+  --v6-repeats 21 \
+  --idle-seconds 30 \
+  --json /tmp/aurora-phase53-after-safepoints.json
+```
+
+The exact commit, report hash, competing-process inventory, starvation
+observations, existing scheduler gates, and V6 comparison will be added after
+the implementation commit so the report remains contractual.

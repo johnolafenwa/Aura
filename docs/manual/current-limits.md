@@ -50,7 +50,10 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.
 - Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to that Batch 4 native-frames stage; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
 - Aurora task code executes on one cooperative scheduler thread per program. Aurora 0.1 does not run two Aurora tasks in parallel; blocking-worker threads perform host operations only.
-- Scheduling is cooperative, not preemptive. A task that runs CPU code without reaching `yield_now()`, `cancelled()`, or another scheduler-aware operation can starve every other Aurora task.
+- Scheduling is cooperative, not preemptive. The compiler checks every loop
+  backedge and eventually yields from a tight loop, but one long loop body or
+  long straight-line computation can still delay every other Aurora task. The
+  automatic checks do not inspect cancellation.
 - Every lightweight task reserves a fixed 1 MiB coroutine stack. The MIR/direct runtime entry thread reserves 64 MiB, and maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
 - The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. No high-scale task-count claim is made for 0.1.
 - Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-read API.
