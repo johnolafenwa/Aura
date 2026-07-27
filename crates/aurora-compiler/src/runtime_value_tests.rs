@@ -21,13 +21,14 @@ use super::{
     HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
     ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult,
-    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
-    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
+use crate::runtime_reactor::{RuntimeReactor, WaitKey};
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
@@ -848,7 +849,7 @@ fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
         Some(requested_tls_deadline)
     );
 
-    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
         flags: vec![cancel_flag],
     };
@@ -1056,117 +1057,385 @@ fn supervisor_wait_or_none_deadline_overflow_is_a_typed_error() {
     assert_eq!(event.payloads[2], Value::Int(IntegerValue::from_signed(0)));
 }
 
-#[cfg(unix)]
-#[test]
-fn lightweight_scheduler_external_event_paths_cover_ready_queue_and_fd_polling() {
-    let mut scheduler = super::LightweightTaskScheduler::new();
-    scheduler
-        .ready
-        .push_back((7, super::RuntimeSchedulerWakeReason::Ready));
-    scheduler.wait_for_external_events();
-    assert_eq!(
-        scheduler.ready.pop_front(),
-        Some((7, super::RuntimeSchedulerWakeReason::Ready))
-    );
+fn reactor_wait(task_id: u64) -> (RuntimeReactor, WaitKey) {
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let key = WaitKey(task_id, 1);
+    reactor
+        .begin_wait(key)
+        .expect("test wait registration should succeed");
+    (reactor, key)
+}
 
-    let (_idle_writer, idle_reader) =
-        std::os::unix::net::UnixStream::pair().expect("idle stream pair should be available");
-    scheduler.waiting.insert(
-        8,
-        super::TaskWaitRegistration {
-            recv_channels: Vec::new(),
-            ignore_closed_recv_channels: false,
-            send_channels: Vec::new(),
-            task_waits: Vec::new(),
-            deadline: None,
-            cancellation: None,
-            fd_wait: Some(super::FdWaitRegistration {
-                fd: idle_reader.as_raw_fd(),
-                events: libc::POLLIN,
-            }),
-        },
-    );
-    scheduler.waiting.insert(
-        9,
-        super::TaskWaitRegistration {
-            recv_channels: Vec::new(),
-            ignore_closed_recv_channels: false,
-            send_channels: Vec::new(),
-            task_waits: Vec::new(),
-            deadline: None,
-            cancellation: None,
-            fd_wait: None,
-        },
-    );
-    scheduler.wait_for_external_events();
-    assert!(scheduler.ready.is_empty());
-    scheduler.waiting.clear();
-
-    let (mut writer, reader) =
-        std::os::unix::net::UnixStream::pair().expect("ready stream pair should be available");
-    writer
-        .write_all(b"x")
-        .expect("ready stream should accept a byte");
-    scheduler.waiting.insert(
-        10,
-        super::TaskWaitRegistration {
-            recv_channels: Vec::new(),
-            ignore_closed_recv_channels: false,
-            send_channels: Vec::new(),
-            task_waits: Vec::new(),
-            deadline: Some(Instant::now() + StdDuration::from_millis(100)),
-            cancellation: None,
-            fd_wait: Some(super::FdWaitRegistration {
-                fd: reader.as_raw_fd(),
-                events: libc::POLLIN,
-            }),
-        },
-    );
-    scheduler.wait_for_external_events();
+fn expect_reactor_wake(reactor: &mut RuntimeReactor, key: WaitKey) {
     assert_eq!(
-        scheduler.ready.pop_front(),
-        Some((10, super::RuntimeSchedulerWakeReason::Ready))
+        reactor
+            .poll(Some(StdDuration::from_millis(500)))
+            .expect("reactor polling should succeed"),
+        vec![key]
     );
 }
 
 #[test]
-fn lightweight_scheduler_completion_helpers_cover_waiters_and_unbounded_waits() {
-    let mut scheduler = super::LightweightTaskScheduler::new();
-    scheduler.resume_task(999, super::RuntimeSchedulerWakeReason::Ready);
+fn channel_send_directly_wakes_reactor_receive_subscription() {
+    let channel = ChannelValue::new();
+    let (mut reactor, key) = reactor_wait(101);
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(key, reactor.handle()), false);
 
-    let blocker = ChannelValue::new();
-    let release = blocker.clone();
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    expect_reactor_wake(&mut reactor, key);
+}
+
+#[test]
+fn channel_close_wakes_ordinary_but_not_ignore_closed_receive_subscription() {
+    let channel = ChannelValue::new();
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let ordinary = WaitKey(102, 1);
+    let ignore_closed = WaitKey(103, 1);
+    reactor
+        .begin_wait(ordinary)
+        .expect("ordinary receive wait should register");
+    reactor
+        .begin_wait(ignore_closed)
+        .expect("ignore-closed receive wait should register");
+    let handle = reactor.handle();
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(ordinary, handle.clone()), false);
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(ignore_closed, handle), true);
+
+    channel.close();
+
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(500)))
+            .expect("reactor polling should succeed"),
+        vec![ordinary]
+    );
+    assert!(
+        reactor.is_waiting(ignore_closed),
+        "ignoring queue closure must leave the receive wait pending"
+    );
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("bounded no-wake poll should succeed")
+            .is_empty(),
+        "queue closure must not wake an ignore-closed receive subscription"
+    );
+}
+
+#[test]
+fn bounded_channel_receive_directly_wakes_reactor_send_subscription() {
+    let channel = ChannelValue::with_capacity(1);
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    let (mut reactor, key) = reactor_wait(104);
+    channel.subscribe_reactor_send(&ReactorSubscription::new(key, reactor.handle()));
+
+    assert_eq!(channel.try_recv(), TryRecvResult::Value(Value::Unit));
+    expect_reactor_wake(&mut reactor, key);
+}
+
+#[test]
+fn real_task_completion_directly_wakes_reactor_result_subscription() {
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let task = TaskValue::from_handle(thread::spawn(move || {
-        let _ = blocker.recv_with_cancellation(None, None);
+        release_rx
+            .recv()
+            .expect("test should release the task after subscribing");
         Ok(Value::Unit)
     }));
-    {
-        let mut handle = lock_mutex(&task.inner.handle);
-        match &mut *handle {
-            super::TaskHandle::Running { waiters } => waiters.push(42),
-            super::TaskHandle::Completed(_) => panic!("test task should still be running"),
-        }
-    }
-    scheduler.waiting.insert(
-        42,
+    let (mut reactor, key) = reactor_wait(105);
+    task.subscribe_reactor_completion(&ReactorSubscription::new(key, reactor.handle()));
+
+    release_tx
+        .send(())
+        .expect("test task release should be delivered");
+    expect_reactor_wake(&mut reactor, key);
+    assert_eq!(
+        wait_task_ready(&task).expect("released task should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn cancellation_directly_wakes_unbounded_reactor_subscription() {
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let (mut reactor, key) = reactor_wait(106);
+    cancellation.subscribe_reactor(&ReactorSubscription::new(key, reactor.handle()));
+
+    group.cancel();
+
+    expect_reactor_wake(&mut reactor, key);
+    assert!(cancellation.is_cancelled());
+}
+
+#[test]
+fn duplicate_reactor_subscriptions_and_wakes_produce_one_ready_key() {
+    let channel = ChannelValue::new();
+    let (mut reactor, key) = reactor_wait(107);
+    let handle = reactor.handle();
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(key, handle.clone()), false);
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(key, handle), false);
+
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    assert_eq!(
+        channel.try_send(Value::Bool(true)),
+        super::TrySendResult::Sent
+    );
+
+    expect_reactor_wake(&mut reactor, key);
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("bounded post-wake poll should succeed")
+            .is_empty(),
+        "duplicate registrations and source notifications must not queue duplicate wakes"
+    );
+}
+
+#[test]
+fn task_wait_ready_reason_preserves_cancellation_source_deadline_fd_precedence() {
+    let ready_channel = ChannelValue::new();
+    assert_eq!(
+        ready_channel.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let completed_task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    assert_eq!(
+        wait_task_ready(&completed_task).expect("test task should complete"),
+        Value::Unit
+    );
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancelled = group.child_cancellation();
+    group.cancel();
+    let expired = Instant::now() - StdDuration::from_millis(1);
+
+    let all_ready = super::TaskWaitRegistration {
+        recv_channels: vec![ready_channel.clone()],
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: vec![completed_task.clone()],
+        deadline: Some(expired),
+        cancellation: Some(cancelled),
+        fd_wait: None,
+    };
+    assert_eq!(
+        all_ready.ready_reason(true),
+        Some(super::RuntimeSchedulerWakeReason::Cancelled),
+        "cancellation must win over every other ready source"
+    );
+
+    let queue_ready = super::TaskWaitRegistration {
+        recv_channels: vec![ready_channel],
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: Some(expired),
+        cancellation: None,
+        fd_wait: None,
+    };
+    assert_eq!(
+        queue_ready.ready_reason(true),
+        Some(super::RuntimeSchedulerWakeReason::Ready),
+        "queue readiness must win over an expired deadline and fd readiness"
+    );
+
+    let task_ready = super::TaskWaitRegistration {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: vec![completed_task],
+        deadline: Some(expired),
+        cancellation: None,
+        fd_wait: None,
+    };
+    assert_eq!(
+        task_ready.ready_reason(true),
+        Some(super::RuntimeSchedulerWakeReason::Ready),
+        "task completion must win over an expired deadline and fd readiness"
+    );
+
+    let deadline_ready = super::TaskWaitRegistration {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: Some(expired),
+        cancellation: None,
+        fd_wait: None,
+    };
+    assert_eq!(
+        deadline_ready.ready_reason(true),
+        Some(super::RuntimeSchedulerWakeReason::TimedOut),
+        "an expired deadline must win over fd readiness"
+    );
+
+    let fd_ready = super::TaskWaitRegistration {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: None,
+        cancellation: None,
+        fd_wait: None,
+    };
+    assert_eq!(
+        fd_ready.ready_reason(true),
+        Some(super::RuntimeSchedulerWakeReason::Ready)
+    );
+    assert_eq!(fd_ready.ready_reason(false), None);
+}
+
+#[test]
+fn resolving_a_scheduler_wait_removes_all_source_subscriptions() {
+    let queue = ChannelValue::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let task = TaskValue::from_handle(thread::spawn(move || {
+        release_rx
+            .recv()
+            .expect("test should release the task after cleanup");
+        Ok(Value::Unit)
+    }));
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let mut scheduler = super::LightweightTaskScheduler::new();
+    scheduler.arm_wait(
+        108,
         super::TaskWaitRegistration {
-            recv_channels: Vec::new(),
+            recv_channels: vec![queue.clone()],
             ignore_closed_recv_channels: false,
             send_channels: Vec::new(),
-            task_waits: Vec::new(),
+            task_waits: vec![task.clone()],
             deadline: None,
-            cancellation: None,
+            cancellation: Some(cancellation.clone()),
             fd_wait: None,
         },
     );
-    scheduler.complete_task(99, &task.inner, TaskExecutionResult::Ready(Ok(Value::Unit)));
-    assert!(!scheduler.waiting.contains_key(&42));
+
+    assert_eq!(lock_mutex(&queue.inner.recv_reactor_subscribers).len(), 1);
+    assert_eq!(
+        lock_mutex(&task.inner.completion_reactor_subscribers).len(),
+        1
+    );
+    assert!(cancellation
+        .flags
+        .iter()
+        .all(|flag| lock_mutex(&flag.reactor_subscribers).len() == 1));
+
+    assert_eq!(queue.try_send(Value::Unit), super::TrySendResult::Sent);
+    scheduler
+        .wait_for_external_events()
+        .expect("queue readiness should resolve the scheduler wait");
+
+    assert!(!scheduler.waiting.contains_key(&108));
     assert_eq!(
         scheduler.ready.pop_front(),
-        Some((42, super::RuntimeSchedulerWakeReason::Ready))
+        Some((108, super::RuntimeSchedulerWakeReason::Ready))
     );
-    scheduler.complete_task(99, &task.inner, TaskExecutionResult::Cancelled);
-    release.close();
+    assert!(lock_mutex(&queue.inner.recv_reactor_subscribers).is_empty());
+    assert!(lock_mutex(&task.inner.completion_reactor_subscribers).is_empty());
+    assert!(cancellation
+        .flags
+        .iter()
+        .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()));
+
+    release_tx
+        .send(())
+        .expect("test task release should be delivered");
+    assert_eq!(
+        wait_task_ready(&task).expect("released task should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn dropping_scheduler_removes_outstanding_source_subscriptions() {
+    let queue = ChannelValue::new();
+    let cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = cancellation_group.child_cancellation();
+    {
+        let mut scheduler = super::LightweightTaskScheduler::new();
+        scheduler.arm_wait(
+            109,
+            super::TaskWaitRegistration {
+                recv_channels: vec![queue.clone()],
+                ignore_closed_recv_channels: false,
+                send_channels: Vec::new(),
+                task_waits: Vec::new(),
+                deadline: Some(Instant::now() + StdDuration::from_secs(60)),
+                cancellation: Some(cancellation.clone()),
+                fd_wait: None,
+            },
+        );
+        assert_eq!(lock_mutex(&queue.inner.recv_reactor_subscribers).len(), 1);
+        assert!(cancellation
+            .flags
+            .iter()
+            .all(|flag| lock_mutex(&flag.reactor_subscribers).len() == 1));
+    }
+
+    assert!(lock_mutex(&queue.inner.recv_reactor_subscribers).is_empty());
+    assert!(cancellation
+        .flags
+        .iter()
+        .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()));
+}
+
+#[test]
+fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
+    let wake_queue = ChannelValue::new();
+    let sender = wake_queue.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let sender_stop = stop.clone();
+    let sender_thread = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(10));
+        assert_eq!(sender.try_send(Value::Unit), super::TrySendResult::Sent);
+        thread::sleep(StdDuration::from_millis(240));
+        sender_stop.store(true, Ordering::SeqCst);
+    });
+
+    let started = Instant::now();
+    let received_after = super::run_lightweight_root_task(move || {
+        let hot_stop = stop.clone();
+        let hot = super::spawn_lightweight_task(move || {
+            while !hot_stop.load(Ordering::SeqCst) {
+                super::yield_now_current_lightweight_task();
+            }
+            Ok(Value::Unit)
+        })?;
+
+        let received_after = match wake_queue
+            .recv_result_with_cancellation(None, None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
+            RecvValueResult::Value(_) => started.elapsed(),
+            other => panic!("reactor wake should deliver the queued value, got {other:?}"),
+        };
+        match hot
+            .wait_result_with_cancellation(None, None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
+            super::TaskWaitStatus::Ready(result) => assert_eq!(result?, Value::Unit),
+            other => panic!("yielding task should complete normally, got {other:?}"),
+        }
+        Ok(Value::Int(IntegerValue::from_signed(
+            received_after.as_millis() as i128,
+        )))
+    })
+    .expect("reactor fairness probe should complete");
+    sender_thread.join().expect("sender thread should complete");
+
+    let Value::Int(received_after) = received_after else {
+        panic!("fairness probe should return its observed latency")
+    };
+    assert!(
+        received_after.as_i128().expect("latency should fit i128") < 100,
+        "a continually yielding task delayed the reactor wake for {received_after:?} ms"
+    );
+}
+
+#[test]
+fn lightweight_scheduler_helpers_cover_unbounded_waits_and_defensive_exit() {
+    let mut scheduler = super::LightweightTaskScheduler::new();
 
     let waiting_task = scheduler
         .spawn_task(None, || {
@@ -2358,7 +2627,7 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
             .expect_err("timed bounded sends should report timeout when capacity stays full"),
         super::SendValueError::TimedOut(Box::new(Value::Bool(true)))
     );
-    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
         flags: vec![cancel_flag],
     };
@@ -3712,7 +3981,7 @@ fn task_group_wake_flags_cover_already_completed_and_duplicate_registrations() {
         Value::Unit
     );
 
-    let completion_flag = Arc::new(AtomicBool::new(false));
+    let completion_flag = Arc::new(super::RuntimeWakeSignal::new(false));
     completed.register_group_completion_wake_flag(completion_flag.clone());
     assert!(completion_flag.load(Ordering::SeqCst));
     completion_flag.store(false, Ordering::SeqCst);
@@ -3728,7 +3997,7 @@ fn task_group_wake_flags_cover_already_completed_and_duplicate_registrations() {
     }
     assert!(failed.unobserved_error().is_some());
 
-    let failure_flag = Arc::new(AtomicBool::new(false));
+    let failure_flag = Arc::new(super::RuntimeWakeSignal::new(false));
     failed.register_group_failure_wake_flag(failure_flag.clone());
     assert!(failure_flag.load(Ordering::SeqCst));
     failure_flag.store(false, Ordering::SeqCst);

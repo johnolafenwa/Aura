@@ -225,7 +225,7 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in parallel. CPU code without a scheduler boundary can starve sibling tasks. Each task reserves a fixed 1 MiB coroutine stack, and readiness scanning is linear in the waiting-task set.
+Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in parallel. CPU code without a scheduler boundary can starve sibling tasks, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits are event-driven: descriptors stay registered, deadlines are kept in a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. An idle scheduler blocks until an event or deadline instead of waking on a periodic tick.
 
 ## The Shape Worth Copying
 

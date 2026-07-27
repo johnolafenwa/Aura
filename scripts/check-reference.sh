@@ -458,7 +458,7 @@ grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0031-cli-backend-de
 grep -Fq '0031-cli-backend-defaults.md' architecture_docs/decisions/README.md
 grep -Fq '`aura run --backend mir` executes the lowered MIR and is the default.' docs/manual/cli-and-tooling.md
 grep -Fq 'run_backend_parsing_defaults_to_mir_and_accepts_every_selector' crates/aura/src/main.rs
-grep -Fq 'Structured frame-list fields are deferred to Batch 3' docs/manual/current-limits.md
+grep -Fq 'Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.' docs/manual/current-limits.md
 grep -Fq 'notes as prose rather than parse them.' docs/manual/diagnostics.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0014-map-literals-and-indexing.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0015-explicit-and-default-argument-order.md

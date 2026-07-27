@@ -1107,6 +1107,26 @@ def main() -> int32:
 }
 
 #[test]
+fn scheduler_mixed_wakeups_complete_in_mir_and_direct_backends() {
+    // Queue, task, timer, cancellation, and blocking-I/O wakeups are observable
+    // here. Whether the scheduler reaches them by direct notification instead
+    // of rescanning is intentionally proved by the reactor's instrumented unit
+    // tests because both implementations have the same language-level result.
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.stdout"
+    );
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-scheduler-mixed-wakeups",
+        source,
+        std::time::Duration::from_secs(20),
+        expected,
+    );
+}
+
+#[test]
 fn large_http_responses_complete_without_timing_out() {
     let temp = TempDir::new("aurora-http-large-response");
     let body_path = temp.path().join("body.txt");

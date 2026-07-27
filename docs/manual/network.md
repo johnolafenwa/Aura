@@ -287,6 +287,6 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.

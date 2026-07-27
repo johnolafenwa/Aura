@@ -1,0 +1,148 @@
+import fs
+
+def receive_one(queue: Queue[int32]) -> int32:
+    match queue.get():
+        case QueueReceive.Item(value):
+            return value
+        case QueueReceive.Closed:
+            return -1
+        case QueueReceive.TimedOut:
+            return -2
+        case QueueReceive.Cancelled:
+            return -3
+
+def send_one(queue: Queue[int32]) -> int32:
+    match queue.put(2):
+        case Result.Ok(_):
+            return 1
+        case Result.Err(_):
+            return -1
+
+def complete_after_release(release: Queue[int32]) -> int32:
+    match release.get():
+        case QueueReceive.Item(_):
+            return 42
+        case QueueReceive.Closed:
+            return -1
+        case QueueReceive.TimedOut:
+            return -2
+        case QueueReceive.Cancelled:
+            return -3
+
+def complete_after_timer() -> int32:
+    sleep(5ms)
+    return 3
+
+def complete_after_blocking_io() -> int32:
+    match fs.read_to_string("Cargo.toml"):
+        case Result.Ok(text):
+            if text.len() > 0:
+                return 1
+            return 0
+        case Result.Err(_):
+            return -1
+
+def observe_cancellation(started: Queue[int32]) -> int32:
+    started.put(1)
+    sleep(5s)
+    if cancelled():
+        return 5
+    return -1
+
+def print_result(label: String, result: own TaskResult[int32]) -> None:
+    print(label)
+    match own result:
+        case TaskResult.Ready(value):
+            print(value)
+        case TaskResult.Error(_):
+            print(-10)
+        case TaskResult.TimedOut:
+            print(-11)
+        case TaskResult.Cancelled:
+            print(-12)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        receive_queue = Queue[int32]()
+        receiver = group.start(receive_one, receive_queue)
+        match receiver.result(timeout=100ms):
+            case TaskResult.TimedOut:
+                print("receive-blocked")
+            case TaskResult.Ready(_):
+                return 10
+            case TaskResult.Error(_):
+                return 11
+            case TaskResult.Cancelled:
+                return 12
+        receive_queue.put(11)
+        print_result("queue-receive", receiver.result(timeout=2s))
+
+        send_queue = Queue[int32](capacity=1)
+        send_queue.put(1)
+        sender = group.start(send_one, send_queue)
+        match sender.result(timeout=100ms):
+            case TaskResult.TimedOut:
+                print("send-blocked")
+            case TaskResult.Ready(_):
+                return 13
+            case TaskResult.Error(_):
+                return 14
+            case TaskResult.Cancelled:
+                return 15
+        match send_queue.get(timeout=2s):
+            case QueueReceive.Item(value):
+                print("send-drain")
+                print(value)
+            case QueueReceive.Closed:
+                return 20
+            case QueueReceive.TimedOut:
+                return 21
+            case QueueReceive.Cancelled:
+                return 22
+        print_result("queue-send", sender.result(timeout=2s))
+        match send_queue.get(timeout=2s):
+            case QueueReceive.Item(value):
+                print("send-value")
+                print(value)
+            case QueueReceive.Closed:
+                return 23
+            case QueueReceive.TimedOut:
+                return 24
+            case QueueReceive.Cancelled:
+                return 25
+
+        release = Queue[int32]()
+        completed = group.start(complete_after_release, release)
+        match completed.result(timeout=100ms):
+            case TaskResult.TimedOut:
+                print("task-blocked")
+            case TaskResult.Ready(_):
+                return 26
+            case TaskResult.Error(_):
+                return 27
+            case TaskResult.Cancelled:
+                return 28
+        release.put(1)
+        print_result("task-completion", completed.result(timeout=2s))
+
+        timer = group.start(complete_after_timer)
+        print_result("timer", timer.result(timeout=2s))
+
+        blocking = group.start(complete_after_blocking_io)
+        print_result("blocking-pool", blocking.result(timeout=2s))
+
+        cancellation_started = Queue[int32]()
+        cancellation = group.start(observe_cancellation, cancellation_started)
+        match cancellation_started.get(timeout=2s):
+            case QueueReceive.Item(_):
+                pass
+            case QueueReceive.Closed:
+                return 29
+            case QueueReceive.TimedOut:
+                return 30
+            case QueueReceive.Cancelled:
+                return 31
+        group.cancel()
+        print_result("cancellation", cancellation.result(timeout=2s))
+
+    return 0

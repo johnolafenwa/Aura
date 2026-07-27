@@ -260,12 +260,13 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
+- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
 - `aura run` defaults to the MIR runtime for the current implemented Aurora surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
-- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained poll-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
+- scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; when idle, the cooperative single-threaded runtime blocks until an event or deadline without a periodic tick
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

@@ -263,7 +263,15 @@ Explicitly closing a resource before scope exit is permitted only where the reso
 
 Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
 
-The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `cancelled()` or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack. Readiness discovery scans the waiting-task set and constructs the host `poll` set, so its current cost is linear in the number of waiting tasks/descriptors.
+The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `cancelled()` or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack.
+
+The scheduler owns a persistent event reactor. Nonblocking descriptors remain
+registered across scheduler turns, deadlines are ordered in a timer heap, and
+Queue, task-completion, and blocking-pool events notify the ready queue
+directly. Registration uses a check-subscribe-check protocol with wait epochs,
+so a readiness edge racing with suspension is not lost and stale wakeups do
+not resume a later wait. If no task is ready, the scheduler blocks until the
+next event or deadline; there is no periodic park tick.
 
 Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
 
@@ -290,7 +298,9 @@ Cancellation is cooperative. Pure CPU code observes cancellation at maintained t
 
 ## Host I/O And Cancellation
 
-Socket-backed network resources use nonblocking descriptors and scheduler/poll integration. Their timeout and cancellation outcomes are documented per operation.
+Socket-backed network resources use nonblocking descriptors with persistent
+reactor registration. Their timeout and cancellation outcomes are documented
+per operation.
 
 Converting a Duration to a host wait is a checked boundary. Negative values,
 values outside the host timer range, and durations whose addition to the

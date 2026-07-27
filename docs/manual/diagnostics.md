@@ -265,10 +265,10 @@ host Rust frames.
 
 Structured output currently transports the Aurora call chain, task entry, and
 task ancestry as flat prose strings in `notes`. Dedicated structured frame
-lists are deferred to the Batch 3 native-frame work; tools MUST treat these
+lists are deferred to the later native-frames stage of the Batch 4 runtime work; tools MUST treat these
 notes as prose rather than parse them.
 
-Native-backend Aurora backtraces are deferred to the Batch 3 frame work. Until
+Native-backend Aurora backtraces are deferred to that Batch 4 native-frames stage. Until
 then, native execution preserves the same primary trap code, message, and source
 location but may omit the supplemental Aurora frame and task-ancestry notes;
 this temporary difference is recorded in Current Limits.

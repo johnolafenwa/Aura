@@ -48,6 +48,7 @@ use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
+use crate::runtime_reactor::{IoInterest, ReactorSubscription, RuntimeReactor, WaitKey};
 use crate::sema::Type;
 
 type HttpHeaders = Vec<(String, String)>;
@@ -362,6 +363,8 @@ pub struct ChannelValue {
 struct ChannelState {
     state: Mutex<ChannelInner>,
     producer_tasks: Mutex<Vec<Weak<TaskState>>>,
+    recv_reactor_subscribers: Mutex<Vec<ReactorRecvSubscription>>,
+    send_reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
 }
 
@@ -480,17 +483,18 @@ struct TaskState {
     ready: Condvar,
     lightweight: bool,
     observed_failure: AtomicBool,
-    group_failure_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
-    group_completion_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
+    completion_reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
+    group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
+    group_completion_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     runtime_type_name: Mutex<Option<String>>,
 }
 
 struct TaskGroupState {
     tasks: Mutex<Vec<TaskValue>>,
-    cancel_flag: Arc<AtomicBool>,
-    failure_wake_flag: Arc<AtomicBool>,
-    completion_wake_flag: Arc<AtomicBool>,
-    parent_flags: Vec<Arc<AtomicBool>>,
+    cancel_flag: Arc<RuntimeWakeSignal>,
+    failure_wake_flag: Arc<RuntimeWakeSignal>,
+    completion_wake_flag: Arc<RuntimeWakeSignal>,
+    parent_flags: Vec<Arc<RuntimeWakeSignal>>,
 }
 
 struct FileState {
@@ -671,13 +675,79 @@ pub(crate) enum TaskExecutionResult {
 pub(crate) struct LightweightTaskFailureSignal(pub(crate) Diagnostic);
 
 enum TaskHandle {
-    Running { waiters: Vec<u64> },
+    Running,
     Completed(TaskExecutionResult),
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct CancellationContext {
-    flags: Vec<Arc<AtomicBool>>,
+    flags: Vec<Arc<RuntimeWakeSignal>>,
+}
+
+struct ReactorRecvSubscription {
+    target: ReactorSubscription,
+    ignore_closed: bool,
+}
+
+#[derive(Default)]
+struct RuntimeWakeSignal {
+    value: AtomicBool,
+    reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
+}
+
+impl RuntimeWakeSignal {
+    fn new(value: bool) -> Self {
+        Self {
+            value: AtomicBool::new(value),
+            reactor_subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn load(&self, ordering: Ordering) -> bool {
+        self.value.load(ordering)
+    }
+
+    fn store(&self, value: bool, ordering: Ordering) {
+        self.value.store(value, ordering);
+        if value {
+            wake_reactor_subscribers(&self.reactor_subscribers);
+        }
+    }
+
+    fn subscribe(&self, subscription: &ReactorSubscription) {
+        subscribe_reactor_target(&self.reactor_subscribers, subscription);
+    }
+
+    fn unsubscribe(&self, subscription: &ReactorSubscription) {
+        unsubscribe_reactor_target(&self.reactor_subscribers, subscription);
+    }
+}
+
+fn subscribe_reactor_target(
+    subscribers: &Mutex<Vec<ReactorSubscription>>,
+    subscription: &ReactorSubscription,
+) {
+    let mut subscribers = lock_mutex(subscribers);
+    if !subscribers
+        .iter()
+        .any(|target| target.same_wait(subscription))
+    {
+        subscribers.push(subscription.clone());
+    }
+}
+
+fn unsubscribe_reactor_target(
+    subscribers: &Mutex<Vec<ReactorSubscription>>,
+    subscription: &ReactorSubscription,
+) {
+    lock_mutex(subscribers).retain(|target| !target.same_wait(subscription));
+}
+
+fn wake_reactor_subscribers(subscribers: &Mutex<Vec<ReactorSubscription>>) {
+    let targets = lock_mutex(subscribers).clone();
+    for target in targets {
+        let _ = target.wake();
+    }
 }
 
 enum TaskYield {
@@ -717,11 +787,20 @@ struct LightweightTaskRecord {
     forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
 }
 
+struct LightweightTaskWait {
+    key: WaitKey,
+    registration: TaskWaitRegistration,
+    subscription: ReactorSubscription,
+}
+
 struct LightweightTaskScheduler {
     next_task_id: u64,
+    next_wait_epoch: u64,
     ready: VecDeque<(u64, RuntimeSchedulerWakeReason)>,
-    waiting: BTreeMap<u64, TaskWaitRegistration>,
+    waiting: BTreeMap<u64, LightweightTaskWait>,
     tasks: BTreeMap<u64, LightweightTaskRecord>,
+    reactor: RuntimeReactor,
+    reactor_failure: Option<Diagnostic>,
 }
 
 // Network-heavy lightweight tasks can traverse substantial library stacks
@@ -1749,15 +1828,49 @@ impl TaskWaitRegistration {
         }
         None
     }
+
+    fn subscribe_reactor(&self, subscription: &ReactorSubscription) {
+        for channel in &self.recv_channels {
+            channel.subscribe_reactor_recv(subscription, self.ignore_closed_recv_channels);
+        }
+        for channel in &self.send_channels {
+            channel.subscribe_reactor_send(subscription);
+        }
+        for task in &self.task_waits {
+            task.subscribe_reactor_completion(subscription);
+        }
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.subscribe_reactor(subscription);
+        }
+    }
+
+    fn unsubscribe_reactor(&self, subscription: &ReactorSubscription) {
+        for channel in &self.recv_channels {
+            channel.unsubscribe_reactor_recv(subscription);
+        }
+        for channel in &self.send_channels {
+            channel.unsubscribe_reactor_send(subscription);
+        }
+        for task in &self.task_waits {
+            task.unsubscribe_reactor_completion(subscription);
+        }
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.unsubscribe_reactor(subscription);
+        }
+    }
 }
 
 impl LightweightTaskScheduler {
     fn new() -> Self {
         Self {
             next_task_id: 1,
+            next_wait_epoch: 1,
             ready: VecDeque::new(),
             waiting: BTreeMap::new(),
             tasks: BTreeMap::new(),
+            reactor: RuntimeReactor::new()
+                .expect("the Aurora lightweight-task reactor must initialize"),
+            reactor_failure: None,
         }
     }
 
@@ -1785,12 +1898,11 @@ impl LightweightTaskScheduler {
         self.next_task_id += 1;
 
         let state = Arc::new(TaskState {
-            handle: Mutex::new(TaskHandle::Running {
-                waiters: Vec::new(),
-            }),
+            handle: Mutex::new(TaskHandle::Running),
             ready: Condvar::new(),
             lightweight: true,
             observed_failure: AtomicBool::new(false),
+            completion_reactor_subscribers: Mutex::new(Vec::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
@@ -1831,24 +1943,15 @@ impl LightweightTaskScheduler {
         task_state: &Arc<TaskState>,
         result: TaskExecutionResult,
     ) {
-        self.waiting.remove(&task_id);
-        let waiters = {
+        self.disarm_wait(task_id);
+        {
             let mut state = lock_mutex(&task_state.handle);
-            let waiters = match &mut *state {
-                TaskHandle::Running { waiters } => std::mem::take(waiters),
-                TaskHandle::Completed(_) => Vec::new(),
-            };
             *state = TaskHandle::Completed(result.clone());
             task_state.ready.notify_all();
-            waiters
-        };
+        }
+        wake_reactor_subscribers(&task_state.completion_reactor_subscribers);
         notify_group_failure_wake_flags(task_state, &result);
         notify_group_completion_wake_flags(task_state);
-        for waiter in waiters {
-            self.waiting.remove(&waiter);
-            self.ready
-                .push_back((waiter, RuntimeSchedulerWakeReason::Ready));
-        }
         runtime_scheduler().notify();
     }
 
@@ -1856,7 +1959,7 @@ impl LightweightTaskScheduler {
         let Some(mut record) = self.tasks.remove(&task_id) else {
             return;
         };
-        self.waiting.remove(&task_id);
+        self.disarm_wait(task_id);
         let _guard = enter_lightweight_task_context(&record.context);
         match record.coroutine.resume(reason) {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
@@ -1864,7 +1967,7 @@ impl LightweightTaskScheduler {
                 if let Some(reason) = wait.ready_reason(false) {
                     self.ready.push_back((task_id, reason));
                 } else {
-                    self.waiting.insert(task_id, wait);
+                    self.arm_wait(task_id, wait);
                 }
             }
             CoroutineResult::Yield(TaskYield::YieldNow) => {
@@ -1902,102 +2005,130 @@ impl LightweightTaskScheduler {
         }
     }
 
-    fn promote_ready_waiters(&mut self, fd_ready: Option<&BTreeMap<u64, bool>>) {
-        let mut ready = Vec::new();
-        for (task_id, wait) in &self.waiting {
-            let fd_ready = fd_ready
-                .and_then(|ready_map| ready_map.get(task_id))
-                .copied()
-                .unwrap_or(false);
-            if let Some(reason) = wait.ready_reason(fd_ready) {
-                ready.push((*task_id, reason));
-            }
+    fn arm_wait(&mut self, task_id: u64, registration: TaskWaitRegistration) {
+        let key = WaitKey(task_id, self.next_wait_epoch);
+        self.next_wait_epoch = self
+            .next_wait_epoch
+            .checked_add(1)
+            .expect("Aurora lightweight-task wait epoch exhausted");
+        if let Err(error) = self.reactor.begin_wait(key) {
+            self.record_reactor_failure("beginning a task wait", error);
+            return;
         }
-        for (task_id, reason) in ready {
-            self.waiting.remove(&task_id);
+
+        let subscription = ReactorSubscription::new(key, self.reactor.handle());
+        registration.subscribe_reactor(&subscription);
+        if let Some(reason) = registration.ready_reason(false) {
+            registration.unsubscribe_reactor(&subscription);
+            let _ = self.reactor.cancel_wait(key);
             self.ready.push_back((task_id, reason));
+            return;
+        }
+
+        let armed = registration
+            .deadline
+            .map(|deadline| self.reactor.add_deadline(key, deadline))
+            .transpose()
+            .and_then(|_| self.arm_fd_wait(key, registration.fd_wait));
+        if let Err(error) = armed {
+            registration.unsubscribe_reactor(&subscription);
+            let _ = self.reactor.cancel_wait(key);
+            self.record_reactor_failure("registering a task wait", error);
+            return;
+        }
+
+        self.waiting.insert(
+            task_id,
+            LightweightTaskWait {
+                key,
+                registration,
+                subscription,
+            },
+        );
+    }
+
+    fn arm_fd_wait(&mut self, key: WaitKey, fd_wait: Option<FdWaitRegistration>) -> io::Result<()> {
+        #[cfg(unix)]
+        if let Some(fd_wait) = fd_wait {
+            let mut interest = None;
+            if fd_wait.events & (libc::POLLIN | libc::POLLPRI) != 0 {
+                interest = Some(IoInterest::READABLE);
+            }
+            if fd_wait.events & libc::POLLOUT != 0 {
+                interest = Some(
+                    interest
+                        .map(|current| current | IoInterest::WRITABLE)
+                        .unwrap_or(IoInterest::WRITABLE),
+                );
+            }
+            let interest = interest.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Aurora runtime descriptor wait has no supported interest",
+                )
+            })?;
+            self.reactor.add_fd(key, fd_wait.fd, interest)?;
+        }
+        #[cfg(not(unix))]
+        let _ = (key, fd_wait);
+        Ok(())
+    }
+
+    fn disarm_wait(&mut self, task_id: u64) -> Option<TaskWaitRegistration> {
+        let waiting = self.waiting.remove(&task_id)?;
+        waiting
+            .registration
+            .unsubscribe_reactor(&waiting.subscription);
+        if let Err(error) = self.reactor.cancel_wait(waiting.key) {
+            self.record_reactor_failure("retiring a task wait", error);
+        }
+        Some(waiting.registration)
+    }
+
+    fn record_reactor_failure(&mut self, operation: &str, error: io::Error) {
+        if self.reactor_failure.is_none() {
+            self.reactor_failure = Some(Diagnostic::new(format!(
+                "Aurora runtime reactor failed while {operation}: {error}"
+            )));
         }
     }
 
-    fn wait_for_external_events(&mut self) {
-        self.promote_ready_waiters(None);
-        if !self.ready.is_empty() {
-            return;
-        }
-
-        let poll_slice = StdDuration::from_millis(1);
-        let next_deadline = self.waiting.values().filter_map(|wait| wait.deadline).min();
-        let has_non_fd_waiters = self.waiting.values().any(|wait| wait.fd_wait.is_none());
-        let mut task_ids = Vec::new();
-        let mut descriptors = Vec::new();
-        for (task_id, wait) in &self.waiting {
-            if let Some(fd_wait) = wait.fd_wait {
-                task_ids.push(*task_id);
-                descriptors.push(libc::pollfd {
-                    fd: fd_wait.fd,
-                    events: fd_wait.events,
-                    revents: 0,
-                });
+    fn admit_reactor_keys(&mut self, keys: Vec<WaitKey>) {
+        for key in keys {
+            let Some(current) = self.waiting.get(&key.0) else {
+                continue;
+            };
+            if current.key != key {
+                continue;
+            }
+            let registration = self
+                .disarm_wait(key.0)
+                .expect("the matching reactor wait remains registered");
+            if let Some(reason) = registration.ready_reason(registration.fd_wait.is_some()) {
+                self.ready.push_back((key.0, reason));
+            } else {
+                self.arm_wait(key.0, registration);
             }
         }
+    }
 
-        if descriptors.is_empty() {
-            let wait_duration = next_deadline
-                .map(|deadline| {
-                    deadline
-                        .saturating_duration_since(Instant::now())
-                        .min(poll_slice)
-                })
-                .unwrap_or(poll_slice);
-            // Channel readiness, task completion, and blocking-I/O completions can change without
-            // any fd becoming readable. Poll those states on a short slice instead of sleeping
-            // until the full deadline, otherwise completions remain invisible until timeout.
-            thread::park_timeout(wait_duration);
-            self.promote_ready_waiters(None);
-            return;
-        }
+    fn admit_reactor_events_nonblocking(&mut self) -> io::Result<()> {
+        let keys = self.reactor.poll_nonblocking()?;
+        self.admit_reactor_keys(keys);
+        Ok(())
+    }
 
-        let timeout_ms = match next_deadline {
-            Some(deadline) => {
-                let now = Instant::now();
-                if deadline <= now {
-                    0
-                } else {
-                    let duration = deadline.saturating_duration_since(now);
-                    let duration = if has_non_fd_waiters {
-                        duration.min(poll_slice)
-                    } else {
-                        duration
-                    };
-                    duration_to_poll_timeout(duration)
-                }
-            }
-            None if has_non_fd_waiters => duration_to_poll_timeout(poll_slice),
-            None => -1,
-        };
-
-        let result =
-            unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                thread::park_timeout(StdDuration::from_millis(1));
-            }
-            self.promote_ready_waiters(None);
-            return;
-        }
-
-        let mut fd_ready = BTreeMap::new();
-        for (task_id, descriptor) in task_ids.into_iter().zip(descriptors) {
-            if descriptor.revents != 0 {
-                fd_ready.insert(task_id, true);
-            }
-        }
-        self.promote_ready_waiters(Some(&fd_ready));
+    fn wait_for_external_events(&mut self) -> io::Result<()> {
+        let keys = self.reactor.poll(None)?;
+        self.admit_reactor_keys(keys);
+        Ok(())
     }
 
     fn run_until_root(&mut self, root: &TaskValue) -> std::result::Result<Value, Diagnostic> {
         loop {
+            if let Some(diagnostic) = self.reactor_failure.take() {
+                return Err(diagnostic);
+            }
             if let Some(result) = root.completed_result() {
                 debug_assert!(
                     self.tasks
@@ -2013,16 +2144,25 @@ impl LightweightTaskScheduler {
                 };
             }
 
-            // Keep timed sleeps, cancellations, and completed child tasks from starving behind a
-            // CPU-bound task that repeatedly yields with `cancelled()`.
-            self.promote_ready_waiters(None);
+            self.admit_reactor_events_nonblocking().map_err(|error| {
+                Diagnostic::new(format!(
+                    "Aurora runtime reactor failed while admitting ready events: {error}"
+                ))
+            })?;
+            if let Some(diagnostic) = self.reactor_failure.take() {
+                return Err(diagnostic);
+            }
 
             if let Some((task_id, reason)) = self.ready.pop_front() {
                 self.resume_task(task_id, reason);
                 continue;
             }
 
-            self.wait_for_external_events();
+            self.wait_for_external_events().map_err(|error| {
+                Diagnostic::new(format!(
+                    "Aurora runtime reactor failed while waiting: {error}"
+                ))
+            })?;
         }
     }
 
@@ -2032,10 +2172,19 @@ impl LightweightTaskScheduler {
                 return self
                     .waiting
                     .get(task_id)
-                    .is_some_and(|wait| wait.deadline.is_none());
+                    .is_some_and(|wait| wait.registration.deadline.is_none());
             }
         }
         false
+    }
+}
+
+impl Drop for LightweightTaskScheduler {
+    fn drop(&mut self) {
+        let task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        for task_id in task_ids {
+            self.disarm_wait(task_id);
+        }
     }
 }
 
@@ -2412,6 +2561,8 @@ impl ChannelValue {
                     capacity,
                 }),
                 producer_tasks: Mutex::new(Vec::new()),
+                recv_reactor_subscribers: Mutex::new(Vec::new()),
+                send_reactor_subscribers: Mutex::new(Vec::new()),
                 runtime_type_name: Mutex::new(None),
             }),
         }
@@ -2527,6 +2678,42 @@ pub(crate) enum TaskWaitStatus {
 }
 
 impl ChannelValue {
+    fn subscribe_reactor_recv(&self, subscription: &ReactorSubscription, ignore_closed: bool) {
+        let mut subscribers = lock_mutex(&self.inner.recv_reactor_subscribers);
+        if !subscribers.iter().any(|entry| {
+            entry.ignore_closed == ignore_closed && entry.target.same_wait(subscription)
+        }) {
+            subscribers.push(ReactorRecvSubscription {
+                target: subscription.clone(),
+                ignore_closed,
+            });
+        }
+    }
+
+    fn unsubscribe_reactor_recv(&self, subscription: &ReactorSubscription) {
+        lock_mutex(&self.inner.recv_reactor_subscribers)
+            .retain(|entry| !entry.target.same_wait(subscription));
+    }
+
+    fn subscribe_reactor_send(&self, subscription: &ReactorSubscription) {
+        subscribe_reactor_target(&self.inner.send_reactor_subscribers, subscription);
+    }
+
+    fn unsubscribe_reactor_send(&self, subscription: &ReactorSubscription) {
+        unsubscribe_reactor_target(&self.inner.send_reactor_subscribers, subscription);
+    }
+
+    fn wake_reactor_receivers(&self, closed_only: bool) {
+        let targets: Vec<_> = lock_mutex(&self.inner.recv_reactor_subscribers)
+            .iter()
+            .filter(|entry| !closed_only || !entry.ignore_closed)
+            .map(|entry| entry.target.clone())
+            .collect();
+        for target in targets {
+            let _ = target.wake();
+        }
+    }
+
     fn is_ready_for_scheduler_recv(&self, ignore_closed: bool) -> bool {
         let state = lock_mutex(&self.inner.state);
         !state.queue.is_empty() || (!ignore_closed && state.closed)
@@ -2572,6 +2759,7 @@ impl ChannelValue {
         let mut state = lock_mutex(&self.inner.state);
         if let Some(value) = state.queue.pop_front() {
             drop(state);
+            wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
             runtime_scheduler().notify();
             return TryRecvResult::Value(value);
         }
@@ -2594,6 +2782,7 @@ impl ChannelValue {
         }
         state.queue.push_back(value);
         drop(state);
+        self.wake_reactor_receivers(false);
         runtime_scheduler().notify();
         TrySendResult::Sent
     }
@@ -2730,6 +2919,8 @@ impl ChannelValue {
         let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
         drop(state);
+        self.wake_reactor_receivers(true);
+        wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
         runtime_scheduler().notify();
     }
 }
@@ -7380,6 +7571,18 @@ impl CancellationContext {
     pub(crate) fn is_cancelled(&self) -> bool {
         self.flags.iter().any(|flag| flag.load(Ordering::SeqCst))
     }
+
+    fn subscribe_reactor(&self, subscription: &ReactorSubscription) {
+        for flag in &self.flags {
+            flag.subscribe(subscription);
+        }
+    }
+
+    fn unsubscribe_reactor(&self, subscription: &ReactorSubscription) {
+        for flag in &self.flags {
+            flag.unsubscribe(subscription);
+        }
+    }
 }
 
 pub(crate) fn poll_cancellation(cancellation: &CancellationContext) -> bool {
@@ -7395,9 +7598,9 @@ impl TaskGroupValue {
         Self {
             inner: Arc::new(TaskGroupState {
                 tasks: Mutex::new(Vec::new()),
-                cancel_flag: Arc::new(AtomicBool::new(false)),
-                failure_wake_flag: Arc::new(AtomicBool::new(false)),
-                completion_wake_flag: Arc::new(AtomicBool::new(false)),
+                cancel_flag: Arc::new(RuntimeWakeSignal::new(false)),
+                failure_wake_flag: Arc::new(RuntimeWakeSignal::new(false)),
+                completion_wake_flag: Arc::new(RuntimeWakeSignal::new(false)),
                 parent_flags: parent.flags.clone(),
             }),
         }
@@ -7469,6 +7672,14 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
+    fn subscribe_reactor_completion(&self, subscription: &ReactorSubscription) {
+        subscribe_reactor_target(&self.inner.completion_reactor_subscribers, subscription);
+    }
+
+    fn unsubscribe_reactor_completion(&self, subscription: &ReactorSubscription) {
+        unsubscribe_reactor_target(&self.inner.completion_reactor_subscribers, subscription);
+    }
+
     pub(crate) fn runtime_type_name(&self) -> Option<String> {
         lock_mutex(&self.inner.runtime_type_name).clone()
     }
@@ -7477,7 +7688,7 @@ impl TaskValue {
         *lock_mutex(&self.inner.runtime_type_name) = Some(runtime_type_name);
     }
 
-    fn register_group_failure_wake_flag(&self, flag: Arc<AtomicBool>) {
+    fn register_group_failure_wake_flag(&self, flag: Arc<RuntimeWakeSignal>) {
         let mut flags = lock_mutex(&self.inner.group_failure_wake_flags);
         if !flags.iter().any(|existing| Arc::ptr_eq(existing, &flag)) {
             flags.push(flag.clone());
@@ -7489,7 +7700,7 @@ impl TaskValue {
         }
     }
 
-    fn register_group_completion_wake_flag(&self, flag: Arc<AtomicBool>) {
+    fn register_group_completion_wake_flag(&self, flag: Arc<RuntimeWakeSignal>) {
         let mut flags = lock_mutex(&self.inner.group_completion_wake_flags);
         if !flags.iter().any(|existing| Arc::ptr_eq(existing, &flag)) {
             flags.push(flag.clone());
@@ -7511,7 +7722,7 @@ impl TaskValue {
         let state = lock_mutex(&self.inner.handle);
         match &*state {
             TaskHandle::Completed(result) => Some(result.clone()),
-            TaskHandle::Running { .. } => None,
+            TaskHandle::Running => None,
         }
     }
 
@@ -7526,12 +7737,11 @@ impl TaskValue {
         handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
     ) -> Self {
         let inner = Arc::new(TaskState {
-            handle: Mutex::new(TaskHandle::Running {
-                waiters: Vec::new(),
-            }),
+            handle: Mutex::new(TaskHandle::Running),
             ready: Condvar::new(),
             lightweight: false,
             observed_failure: AtomicBool::new(false),
+            completion_reactor_subscribers: Mutex::new(Vec::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
@@ -7545,6 +7755,7 @@ impl TaskValue {
             let mut task_state = lock_mutex(&state.handle);
             *task_state = TaskHandle::Completed(result.clone());
             drop(task_state);
+            wake_reactor_subscribers(&state.completion_reactor_subscribers);
             notify_group_failure_wake_flags(&state, &result);
             notify_group_completion_wake_flags(&state);
             state.ready.notify_all();

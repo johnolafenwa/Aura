@@ -658,7 +658,7 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without a scheduler boundary can starve siblings, each task reserves a fixed 1 MiB coroutine stack, and readiness checks are linear in the waiting-task set. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
+Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without a scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
 
 Current collection notes:
 
@@ -692,7 +692,7 @@ Current collection notes:
 - `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
 - `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback; without a timeout it returns the fallback immediately when no item is ready
 - Queue iteration receives owned items and accepts only bare `for value in
-  queue:`; all explicit ownership modifiers are rejected
+  queue:`; the explicit `own` and `mut` modifiers are rejected
 - `Task.result(timeout=...)` returns `TaskResult[T]`, distinguishing `Ready(value)`, `Error(message)`, `TimedOut`, and `Cancelled`
 - `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`, `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns `TimedOut` immediately
 - `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`, `Error(index, message)`, `TimedOut`, and `Cancelled`

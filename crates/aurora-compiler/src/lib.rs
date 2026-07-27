@@ -15,6 +15,7 @@ mod native_runtime;
 mod package;
 pub mod parser;
 mod randomness;
+mod runtime_reactor;
 pub mod runtime_value;
 pub mod sema;
 

@@ -67,9 +67,26 @@ B4.0 implementation and its repository gates are complete:
   non-cloneable `random.Rng` wording as a provisional diagnostic gap-fill.
 - B4.0-d gate-condition suite-count precision is committed at `5cb4476`.
 
-The Phase 5.1 runtime implementation has not started. The dedicated benchmark
-harness is committed at `850e906`, and the contractual before-reactor baseline
-is recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`.
+The Phase 5.1 reactor implementation is complete pending its contractual
+after-stage benchmark, frozen coverage gate, and exact full CI:
+
+- `RuntimeReactor` owns one persistent `mio::Poll`, a durable command inbox
+  and `Waker`, epoch-keyed readiness, a versioned and compacting deadline heap,
+  and aggregate persistent registrations for shared descriptors.
+- Queue receive/send, task completion, cancellation/group signals, and the
+  blocking pool's completion Queue publish direct keyed wakeups. Registration
+  follows check-subscribe-recheck; resolution and scheduler teardown remove
+  every losing subscription.
+- The scheduler blocks until an event or deadline when idle. It also admits
+  reactor events nonblocking before every ready-task turn so a task that
+  explicitly yields forever cannot starve timers, queues, or descriptors.
+- Reactor registration and cleanup failures become runtime diagnostics instead
+  of false readiness. Descriptor bookkeeping is retired transactionally even
+  when a closed descriptor makes deregistration or interest narrowing fail.
+
+The dedicated benchmark harness is committed at `850e906`, and the contractual
+before-reactor baseline is recorded in
+`work/2026-07-27-phase5-runtime-benchmarks.md`.
 
 ## Verification
 
@@ -114,9 +131,28 @@ is recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`.
   retains the existing allowed `rustls-pemfile` unmaintained warning.
 - This checkpoint change lands B4.0-a/b and its behavior-focused coverage
   closure as one isolated commit family.
+- Phase 5.1 focused verification is green: 956 compiler library tests, all 16
+  reactor primitive tests, five adversarial scheduler-model tests, the exact
+  mixed-wakeup run-pass fixture and MIR/direct parity probe, and the expanded
+  fairness/cancellation/mixed stress runner. Product Clippy with warnings
+  denied, reference integrity (34 pages, 246 fences, 118 verified blocks), and
+  the docs build pass. The 3-run focused scheduler stress also passed before
+  the final audit hardening, and a final 1-run sweep passed afterward.
+- Behavior-focused regressions cover lost-wake registration interleavings,
+  stale epochs, deduplication and one-winner cleanup, persistent fd interest,
+  terminal/error readiness, stale timer-heap compaction, transactional
+  close-before-cancel cleanup, direct Queue/task/cancellation wakeups, exact
+  cancellation/source/timeout/fd precedence, teardown cleanup, and reactor
+  admission while another task continuously yields. The obsolete scan/pollfd
+  and manually injected dormant waiter tests were removed.
+- Maintained documentation now describes the reactor without claiming later
+  safepoints, smaller stacks, multicore, Transfer, typed select, configurable
+  pool sizing, or native frames. All executable fence bytes and ordering are
+  unchanged.
 
 ## Follow-up
 
-Begin the reactor stage with failing lifecycle/model tests. Every Phase 5 stage
-must land independently with behavior, parity, reference, benchmark, coverage,
-and cleanup evidence appropriate to that stage.
+Commit the verified implementation tree to establish clean benchmark
+provenance, record the contractual after-reactor measurements, then run frozen
+coverage and exact full CI. Only after the isolated Phase 5.1 commit family is
+green may work begin on the public `yield_now()` stage.

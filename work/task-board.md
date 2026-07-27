@@ -47,8 +47,7 @@ Last updated: 2026-07-27
   all 13 extension tests, compiler coverage, reference and stale-syntax
   integrity, docs, both audits, warning-denied Clippy, and hygiene. This
   checkpoint change lands B4.0-a/b and its behavior-focused coverage closure
-  as one isolated commit family. Phase 5 proper has not started; the next
-  action is the before-reactor benchmark baseline.
+  as one isolated commit family.
 - Benchmark host: Mac14,9 Apple M2 Pro, 10 logical CPUs, 16 GiB RAM, macOS
   26.5.2 (25F84). Contractual measurements require the dedicated quiet-machine
   protocol and per-stage before/after evidence. B4.0 is committed at `665d540`,
@@ -59,8 +58,25 @@ Last updated: 2026-07-27
   13–15 ms arm spans with diagnostic raw p99 overshoot of 8–10 ms; V6 medians
   are 32.734250 ms for int32 and 10.248625 ms for int64. Raw JSON and hashes are
   recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`. No Phase 5.1
-  runtime implementation edit preceded the baseline; failing reactor tests are
-  next.
+  runtime implementation edit preceded the baseline.
+- Phase 5.1 reactor implementation: persistent `mio` descriptor
+  registrations, a compacting versioned timer heap, durable keyed wake
+  subscriptions, and direct Queue/task-completion/cancellation/blocking-pool
+  wakeups now replace the rebuilt `pollfd` array and 1 ms scan. Every wait uses
+  an epoch key and check-subscribe-recheck registration; losing sources and
+  scheduler teardown remove all subscriptions. Nonblocking admission prevents
+  a continuously yielding task from starving inbox, timer, or descriptor
+  readiness. Reactor failures become scheduler diagnostics rather than false
+  descriptor readiness.
+- Phase 5.1 verification so far: 956 compiler library tests, all 16 reactor
+  primitive tests, five adversarial scheduler models, the mixed-wakeup
+  MIR/direct fixture, warning-denied product Clippy, reference integrity, docs
+  build, and expanded fairness/cancellation/mixed scheduler stress are green.
+  Audit regressions pin stale epochs, stale timer-heap compaction,
+  transactional descriptor cleanup, source-subscription cleanup, wake
+  precedence, and continuously-ready fairness. The next action is the
+  contractual clean-tree after-reactor benchmark, followed by frozen coverage
+  and the exact full CI gate before the isolated Phase 5.1 sign-off commit.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions

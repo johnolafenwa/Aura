@@ -47,12 +47,12 @@ This page documents known current limits of the Aurora compiler and runtime.
 ## Runtime
 
 - MIR runtime traps include Aurora function names and source spans in an innermost-first call-chain note. A trap escaping a structured child task also includes the child entry and its spawn ancestry.
-- Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to Batch 3 with the native-frame work.
-- Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to the Batch 3 frame work; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
+- Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.
+- Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to that Batch 4 native-frames stage; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
 - Aurora task code executes on one cooperative scheduler thread per program. Aurora 0.1 does not run two Aurora tasks in parallel; blocking-worker threads perform host operations only.
 - Scheduling is cooperative, not preemptive. A task that runs CPU code without reaching `cancelled()` or another scheduler-aware operation can starve every other Aurora task.
 - Every lightweight task reserves a fixed 1 MiB coroutine stack. The MIR/direct runtime entry thread reserves 64 MiB, and maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
-- The bootstrap scheduler scans waiting tasks for readiness and rebuilds a host `poll` descriptor list. Readiness work is linear in the number of waiting tasks/descriptors; no high-scale task-count claim is made for 0.1.
+- The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. No high-scale task-count claim is made for 0.1.
 - Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.

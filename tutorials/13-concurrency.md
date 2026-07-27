@@ -102,6 +102,10 @@ See [examples/concurrency/queue_iteration.au](../examples/concurrency/queue_iter
 
 Queue and task handles are cheap copy-like references. Passing the same queue into multiple tasks shares the underlying queue without requiring `.clone()` in the common case.
 
+Queue iteration accepts only the bare form shown above. `for item in own
+queue:` and `for item in mut queue:` are rejected because receiving already
+delivers an owned item and the Queue handle itself is a copy value.
+
 ## Task Groups
 
 Task groups tie child tasks to a lexical scope:
@@ -245,7 +249,7 @@ If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scop
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
-Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `cancelled()` or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack, and readiness checks scale linearly with the current waiting-task set.
+Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `cancelled()` or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack. Descriptor registrations persist across waits, deadlines use a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. With nothing ready, the scheduler blocks until an event or deadline rather than waking on a periodic tick.
 
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 
@@ -331,6 +335,9 @@ See:
 The runtime is intentionally simple:
 
 - queue waits, task waits, `sleep(...)`, socket waits, and HTTP waits all use the shared runtime scheduler
+- the scheduler keeps descriptor registrations persistent, orders deadlines in
+  a timer heap, receives direct Queue/task-completion/blocking-pool
+  notifications, and blocks without a periodic idle tick
 - cancellation is still cooperative rather than preemptive
 - tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - task arguments are owned captures; bare shared and `own` target parameters
