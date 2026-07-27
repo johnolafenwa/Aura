@@ -349,6 +349,7 @@ struct NativeCodegen<'a> {
     arg_buffer_store: FuncId,
     arg_buffer_store_owned: FuncId,
     host_builtin: FuncId,
+    monotonic_time_ms: FuncId,
     channel_new: FuncId,
     channel_send: FuncId,
     channel_send_timeout_value: FuncId,
@@ -512,7 +513,7 @@ struct NativeCodegen<'a> {
     tls_stream_write_all: FuncId,
     tls_stream_close: FuncId,
     cancelled: FuncId,
-    sleep_value: FuncId,
+    sleep_value_void: FuncId,
     start_task_call: FuncId,
     string_data: HashMap<Vec<u8>, DataId>,
 }
@@ -823,6 +824,7 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
             arg_buffer_store_owned => ("aurora_direct_arg_buffer_store_owned", [types::I64, types::I64, types::I64], None),
             host_builtin => ("aurora_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            monotonic_time_ms => ("aurora_direct_monotonic_time_ms", [], Some(types::I64)),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
             channel_send_timeout_value => ("aurora_direct_channel_send_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -986,7 +988,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all => ("aurora_direct_tls_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
             tls_stream_close => ("aurora_direct_tls_stream_close", [types::I64], Some(types::I64)),
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
-            sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
+            sleep_value_void => ("aurora_direct_sleep_value_void", [types::I64], None),
             start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
@@ -1212,6 +1214,7 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store,
             arg_buffer_store_owned,
             host_builtin,
+            monotonic_time_ms,
             channel_new,
             channel_send,
             channel_send_timeout_value,
@@ -1375,7 +1378,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
-            sleep_value,
+            sleep_value_void,
             start_task_call,
             string_data: HashMap::new(),
         })
@@ -2025,6 +2028,9 @@ impl<'a> NativeCodegen<'a> {
         let host_builtin = self
             .object
             .declare_func_in_func(self.host_builtin, builder.func);
+        let monotonic_time_ms = self
+            .object
+            .declare_func_in_func(self.monotonic_time_ms, builder.func);
         let channel_new = self
             .object
             .declare_func_in_func(self.channel_new, builder.func);
@@ -2512,9 +2518,9 @@ impl<'a> NativeCodegen<'a> {
         let cancelled = self
             .object
             .declare_func_in_func(self.cancelled, builder.func);
-        let sleep_value = self
+        let sleep_value_void = self
             .object
-            .declare_func_in_func(self.sleep_value, builder.func);
+            .declare_func_in_func(self.sleep_value_void, builder.func);
         let start_task_call = self
             .object
             .declare_func_in_func(self.start_task_call, builder.func);
@@ -2673,6 +2679,7 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store,
             arg_buffer_store_owned,
             host_builtin,
+            monotonic_time_ms,
             channel_new,
             channel_send,
             channel_send_timeout_value,
@@ -2836,7 +2843,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
-            sleep_value,
+            sleep_value_void,
             start_task_call,
         };
 
@@ -3341,6 +3348,7 @@ struct FunctionCompiler<'a> {
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
     arg_buffer_store_owned: cranelift_codegen::ir::FuncRef,
     host_builtin: cranelift_codegen::ir::FuncRef,
+    monotonic_time_ms: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
     channel_send_timeout_value: cranelift_codegen::ir::FuncRef,
@@ -3504,7 +3512,7 @@ struct FunctionCompiler<'a> {
     tls_stream_write_all: cranelift_codegen::ir::FuncRef,
     tls_stream_close: cranelift_codegen::ir::FuncRef,
     cancelled: cranelift_codegen::ir::FuncRef,
-    sleep_value: cranelift_codegen::ir::FuncRef,
+    sleep_value_void: cranelift_codegen::ir::FuncRef,
     start_task_call: cranelift_codegen::ir::FuncRef,
 }
 
@@ -4987,11 +4995,9 @@ impl<'a> FunctionCompiler<'a> {
             };
             let duration = self.load_operand(&argument.value)?;
             let duration = self.ensure_opaque(duration)?;
-            let inst = self
-                .builder
+            self.builder
                 .ins()
-                .call(self.sleep_value, &[duration.values[0]]);
-            self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                .call(self.sleep_value_void, &[duration.values[0]]);
             return Ok(unit_value(&mut self.builder));
         }
         if matches!(name, "wait_any" | "wait_all") {
@@ -5314,6 +5320,20 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let metadata = host_builtin_metadata(name)
             .expect("host builtin codegen is only called for registered host builtins");
+        if name == "sys::monotonic_time_ms" {
+            if !args.is_empty() {
+                return Err(format!(
+                    "direct backend expected `{name}` to receive no arguments, found {}",
+                    args.len()
+                ));
+            }
+            debug_assert!(metadata.params.is_empty());
+            let call = self.builder.ins().call(self.monotonic_time_ms, &[]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(call).to_vec(),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            });
+        }
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let expected_names = metadata

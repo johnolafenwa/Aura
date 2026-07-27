@@ -1086,6 +1086,44 @@ fn channel_send_directly_wakes_reactor_receive_subscription() {
 }
 
 #[test]
+fn queue_empty_to_nonempty_transition_wakes_all_receivers_once() {
+    let channel = ChannelValue::new();
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let first = WaitKey(108, 1);
+    let second = WaitKey(109, 1);
+    reactor
+        .begin_wait(first)
+        .expect("first receive wait should register");
+    reactor
+        .begin_wait(second)
+        .expect("second receive wait should register");
+    let handle = reactor.handle();
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(first, handle.clone()), false);
+    channel.subscribe_reactor_recv(&ReactorSubscription::new(second, handle), false);
+
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(500)))
+            .expect("first bounded reactor poll should succeed"),
+        vec![first, second],
+        "the empty-to-nonempty transition must wake every receiver so select losers can rearm"
+    );
+
+    assert_eq!(
+        channel.try_send(Value::Bool(true)),
+        super::TrySendResult::Sent
+    );
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("nonempty queue poll should succeed")
+            .is_empty(),
+        "additional sends while the queue remains nonempty must not rebroadcast stale waits"
+    );
+}
+
+#[test]
 fn channel_close_wakes_ordinary_but_not_ignore_closed_receive_subscription() {
     let channel = ChannelValue::new();
     let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
@@ -1123,6 +1161,71 @@ fn channel_close_wakes_ordinary_but_not_ignore_closed_receive_subscription() {
 }
 
 #[test]
+fn channel_close_wakes_all_ordinary_receivers_and_senders_but_not_ignore_closed_receivers() {
+    let channel = ChannelValue::with_capacity(1);
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let ordinary_first = WaitKey(110, 1);
+    let ordinary_second = WaitKey(111, 1);
+    let ignore_closed_first = WaitKey(112, 1);
+    let ignore_closed_second = WaitKey(113, 1);
+    let sender_first = WaitKey(114, 1);
+    let sender_second = WaitKey(115, 1);
+    for key in [
+        ordinary_first,
+        ordinary_second,
+        ignore_closed_first,
+        ignore_closed_second,
+        sender_first,
+        sender_second,
+    ] {
+        reactor
+            .begin_wait(key)
+            .expect("queue close wait should register");
+    }
+
+    let handle = reactor.handle();
+    channel.subscribe_reactor_recv(
+        &ReactorSubscription::new(ordinary_first, handle.clone()),
+        false,
+    );
+    channel.subscribe_reactor_recv(
+        &ReactorSubscription::new(ordinary_second, handle.clone()),
+        false,
+    );
+    channel.subscribe_reactor_recv(
+        &ReactorSubscription::new(ignore_closed_first, handle.clone()),
+        true,
+    );
+    channel.subscribe_reactor_recv(
+        &ReactorSubscription::new(ignore_closed_second, handle.clone()),
+        true,
+    );
+    channel.subscribe_reactor_send(&ReactorSubscription::new(sender_first, handle.clone()));
+    channel.subscribe_reactor_send(&ReactorSubscription::new(sender_second, handle));
+
+    channel.close();
+
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(500)))
+            .expect("bounded queue-close poll should succeed"),
+        vec![ordinary_first, ordinary_second, sender_first, sender_second],
+        "queue close must broadcast to ordinary receivers and blocked senders"
+    );
+    assert!(reactor.is_waiting(ignore_closed_first));
+    assert!(reactor.is_waiting(ignore_closed_second));
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("bounded ignore-closed poll should succeed"),
+        Vec::<WaitKey>::new(),
+        "queue close must leave every ignore-closed receiver asleep"
+    );
+}
+
+#[test]
 fn bounded_channel_receive_directly_wakes_reactor_send_subscription() {
     let channel = ChannelValue::with_capacity(1);
     assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
@@ -1131,6 +1234,41 @@ fn bounded_channel_receive_directly_wakes_reactor_send_subscription() {
 
     assert_eq!(channel.try_recv(), TryRecvResult::Value(Value::Unit));
     expect_reactor_wake(&mut reactor, key);
+}
+
+#[test]
+fn bounded_queue_full_to_available_transition_wakes_all_senders_once() {
+    let channel = ChannelValue::with_capacity(1);
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let first = WaitKey(116, 1);
+    let second = WaitKey(117, 1);
+    reactor
+        .begin_wait(first)
+        .expect("first blocked sender wait should register");
+    reactor
+        .begin_wait(second)
+        .expect("second blocked sender wait should register");
+    let handle = reactor.handle();
+    channel.subscribe_reactor_send(&ReactorSubscription::new(first, handle.clone()));
+    channel.subscribe_reactor_send(&ReactorSubscription::new(second, handle));
+
+    assert_eq!(channel.try_recv(), TryRecvResult::Value(Value::Unit));
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(500)))
+            .expect("bounded sender-wake poll should succeed"),
+        vec![first, second],
+        "the full-to-available transition must wake every sender so select losers can rearm"
+    );
+    assert_eq!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("bounded post-receive poll should succeed"),
+        Vec::<WaitKey>::new(),
+        "one capacity transition must not queue duplicate sender wakeups"
+    );
 }
 
 #[test]

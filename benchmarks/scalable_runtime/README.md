@@ -52,24 +52,32 @@ DONE sleepers 10000
 Measure peak RSS after `READY` and before `DONE`.
 
 `1000-timers` first parks every worker on a release queue. The parent releases
-all workers, then waits until each has recorded its own monotonic start and
-entered its independent 10 ms sleep path. It emits:
+all workers, then waits until each has sent its monotonic start through the
+primitive `armed` queue and entered its independent 10 ms sleep path. The
+parent computes the minimum and maximum start observations and emits:
 
 ```text
-READY timers 1000 10
+READY timers 1000 10 <min_start_ms> <max_start_ms>
 ```
 
-This is followed by exactly 1,000 records in unspecified completion order:
+Each worker records its overshoot immediately after waking and sends only that
+primitive integer to the parent. The task group then joins every worker before
+the parent formats exactly 1,000 records:
 
 ```text
-SAMPLE timer <index> <start_ms> <overshoot_ms>
+SAMPLE timer <observation_index> <overshoot_ms>
 ```
 
-`index` is unique in `0..999`. `start_ms` is the worker's
-`sys.monotonic_time_ms()` value immediately before the sleep.
-`overshoot_ms` is `max(0, end_ms - start_ms - 10)`. The start values allow the
-runner to report the arm span and verify that the timer intervals overlapped;
-the overshoot values provide the p99 sample set. The final line is:
+`observation_index` is the parent's unique sequence in `0..999`;
+`overshoot_ms` is `max(0, end_ms - start_ms - 10)`. The `READY` bounds let the
+runner report the exact worker-start span and verify that the timer intervals
+overlapped. The raw overshoots provide the p99 sample set.
+
+Keeping worker-side observations primitive is part of the measurement
+contract. Aurora tasks are cooperative: worker-side string interpolation after
+one timer's timestamp would delay the next ready worker and incorrectly charge
+formatting overhead to that timer's overshoot. Formatting only after the task
+group has joined removes that observer effect. The final line is:
 
 ```text
 DONE timers 1000
@@ -105,11 +113,12 @@ report non-contractual, records the reason, and cannot produce an
 - less than 2% process CPU during the idle workload's stable window.
 
 Timer millisecond readings are intentionally the language's public monotonic
-clock rather than a hidden host hook. Report the timer arm span alongside p99;
-a run whose intervals did not substantially overlap does not demonstrate the
-1,000-timer gate. The p99 gate uses the worst p99 among valid-overlap
-repetitions; invalid-overlap repetitions are reported explicitly and fail the
-separate arm-span gate. The combined sample summary is informational only.
+clock rather than a hidden host hook. Report the `READY` maximum-minus-minimum
+arm span alongside p99; a run whose intervals did not substantially overlap
+does not demonstrate the 1,000-timer gate. The p99 gate uses the worst p99
+among valid-overlap repetitions; invalid-overlap repetitions are reported
+explicitly and fail the separate arm-span gate. The combined sample summary is
+informational only.
 
 On Linux the runner samples `/proc`. On macOS it uses `proc_pid_rusage` from
 `libproc` for resident bytes and nanosecond process CPU time. Background

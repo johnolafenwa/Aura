@@ -561,6 +561,68 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn direct_monotonic_time_uses_scalar_runtime_abi_without_generic_host_boxing() {
+    let source = r#"
+import sys
+
+def main() -> int32:
+    start: int64 = sys.monotonic_time_ms()
+    finish: int64 = sys.monotonic_time_ms()
+    if finish < start:
+        return 1
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("monotonic clock source should lower to MIR");
+    let object = emit_host_object(&mir).expect("monotonic clock source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_monotonic_time_ms")),
+        "direct monotonic clock calls must use the scalar runtime ABI: {referenced:?}"
+    );
+    for generic_symbol in [
+        "aurora_direct_host_builtin",
+        "aurora_direct_arg_buffer_new",
+        "aurora_direct_box_i64",
+        "aurora_direct_unbox_int64",
+    ] {
+        assert!(
+            !referenced
+                .iter()
+                .any(|symbol| symbol.contains(generic_symbol)),
+            "direct monotonic clock calls must not use `{generic_symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_sleep_uses_void_runtime_abi_without_boxing_unit() {
+    let source = r#"
+def main() -> int32:
+    sleep(0ms)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("sleep source should lower to MIR");
+    let object = emit_host_object(&mir).expect("sleep source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_sleep_value_void")),
+        "direct sleep calls must use the void runtime ABI: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.ends_with("aurora_direct_sleep_value")),
+        "direct sleep calls must not allocate a boxed Unit result: {referenced:?}"
+    );
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",

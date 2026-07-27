@@ -8427,6 +8427,29 @@ pub extern "C-unwind" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -
     })
 }
 
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_sleep_value_void(duration: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        let timeout = duration_from_ptr(duration, "sleep(...)");
+        checked_sleep_with_runtime_scheduler(timeout)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    })
+}
+
+static DIRECT_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_monotonic_time_ms() -> i64 {
+    task_runtime_boundary(|| {
+        let millis = DIRECT_MONOTONIC_EPOCH
+            .get_or_init(Instant::now)
+            .elapsed()
+            .as_millis();
+        i64::try_from(millis)
+            .unwrap_or_else(|_| runtime_error("monotonic time does not fit in Aurora `int64`"))
+    })
+}
+
 fn checked_sleep_milliseconds_with<F>(duration: i64, sleep: F) -> Result<(), Diagnostic>
 where
     F: FnOnce(StdDuration) -> io::Result<RuntimeSchedulerWakeReason>,

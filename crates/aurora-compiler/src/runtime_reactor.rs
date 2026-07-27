@@ -9,6 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::ops::BitOr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,7 @@ use std::os::fd::RawFd;
 
 const WAKER_TOKEN: Token = Token(0);
 const FIRST_FD_TOKEN: usize = 1;
+static NEXT_REACTOR_ID: AtomicU64 = AtomicU64::new(1);
 const MIN_TIMER_HEAP_COMPACTION_THRESHOLD: usize = 64;
 const TIMER_HEAP_LIVE_MULTIPLIER: usize = 2;
 const TIMER_HEAP_STALE_ALLOWANCE: usize = 16;
@@ -67,8 +69,14 @@ enum InboxCommand {
 }
 
 struct ReactorInbox {
-    commands: Mutex<VecDeque<InboxCommand>>,
+    id: u64,
+    state: Mutex<ReactorInboxState>,
     waker: Waker,
+}
+
+struct ReactorInboxState {
+    commands: VecDeque<InboxCommand>,
+    wake_armed: bool,
 }
 
 /// Cloneable, thread-safe completion path. Commands enter the durable queue
@@ -96,8 +104,14 @@ impl ReactorHandle {
     }
 
     fn submit(&self, command: InboxCommand) -> io::Result<()> {
-        lock_unpoisoned(&self.inbox.commands).push_back(command);
-        self.inbox.waker.wake()
+        let mut state = lock_unpoisoned(&self.inbox.state);
+        state.commands.push_back(command);
+        if state.wake_armed {
+            return Ok(());
+        }
+        self.inbox.waker.wake()?;
+        state.wake_armed = true;
+        Ok(())
     }
 }
 
@@ -109,6 +123,9 @@ pub(crate) struct ReactorSubscription {
     key: WaitKey,
     handle: ReactorHandle,
 }
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ReactorSubscriptionKey(u64, WaitKey);
 
 impl ReactorSubscription {
     pub(crate) fn new(key: WaitKey, handle: ReactorHandle) -> Self {
@@ -129,6 +146,10 @@ impl ReactorSubscription {
 
     pub(crate) fn same_wait(&self, other: &Self) -> bool {
         self.key == other.key && self.handle.same_reactor(&other.handle)
+    }
+
+    pub(crate) fn identity(&self) -> ReactorSubscriptionKey {
+        ReactorSubscriptionKey(self.handle.inbox.id, self.key)
     }
 }
 
@@ -172,7 +193,11 @@ impl RuntimeReactor {
     pub(crate) fn new() -> io::Result<Self> {
         let poll = Poll::new()?;
         let inbox = Arc::new(ReactorInbox {
-            commands: Mutex::new(VecDeque::new()),
+            id: NEXT_REACTOR_ID.fetch_add(1, Ordering::Relaxed),
+            state: Mutex::new(ReactorInboxState {
+                commands: VecDeque::new(),
+                wake_armed: false,
+            }),
             waker: Waker::new(poll.registry(), WAKER_TOKEN)?,
         });
         Ok(Self {
@@ -295,6 +320,20 @@ impl RuntimeReactor {
         }
     }
 
+    /// Admits thread-safe source notifications and expired deadlines without
+    /// entering the platform poller. The scheduler uses this cheap path while
+    /// runnable tasks remain, interleaving less-frequent zero-time descriptor
+    /// polls for fd fairness.
+    pub(crate) fn poll_local_nonblocking(&mut self) -> io::Result<Vec<WaitKey>> {
+        self.drain_inbox()?;
+        self.mark_expired_timers(Instant::now());
+        if self.ready.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.finish_ready()
+        }
+    }
+
     fn poll_mio_once(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         self.events.clear();
         retry_on_interrupt(|| self.poll.poll(&mut self.events, timeout))?;
@@ -332,8 +371,9 @@ impl RuntimeReactor {
 
     fn drain_inbox(&mut self) -> io::Result<()> {
         let commands: Vec<_> = {
-            let mut queue = lock_unpoisoned(&self.inbox.commands);
-            queue.drain(..).collect()
+            let mut state = lock_unpoisoned(&self.inbox.state);
+            state.wake_armed = false;
+            state.commands.drain(..).collect()
         };
         for command in commands {
             match command {
@@ -871,8 +911,23 @@ mod tests {
     mod unix {
         use super::*;
         use std::io::Write;
-        use std::os::fd::{AsRawFd, IntoRawFd};
+        use std::os::fd::{AsRawFd, RawFd};
         use std::os::unix::net::UnixStream;
+
+        // These tests deliberately close a descriptor while mio still owns its
+        // registration. A high duplicate prevents unrelated parallel tests
+        // from immediately reusing the process-wide fd number.
+        static CLOSED_FD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+        fn duplicate_high_fd(fd: RawFd) -> RawFd {
+            let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10_000) };
+            assert!(
+                duplicate >= 10_000,
+                "failed to reserve a high test descriptor: {}",
+                io::Error::last_os_error()
+            );
+            duplicate
+        }
 
         #[test]
         fn one_persistent_fd_registration_aggregates_waiters_and_narrows_interest() {
@@ -980,9 +1035,10 @@ mod tests {
 
         #[test]
         fn cancelling_a_closed_last_descriptor_retires_every_internal_registration() {
+            let _closed_fd_guard = lock_unpoisoned(&CLOSED_FD_TEST_LOCK);
             let mut reactor = RuntimeReactor::new().unwrap();
             let (stream, _peer) = UnixStream::pair().unwrap();
-            let fd = stream.into_raw_fd();
+            let fd = duplicate_high_fd(stream.as_raw_fd());
             let key = WaitKey(1, 1);
             reactor.begin_wait(key).unwrap();
             reactor.add_fd(key, fd, IoInterest::READABLE).unwrap();
@@ -998,9 +1054,10 @@ mod tests {
 
         #[test]
         fn failed_interest_narrowing_retires_the_fd_and_wakes_surviving_waiters() {
+            let _closed_fd_guard = lock_unpoisoned(&CLOSED_FD_TEST_LOCK);
             let mut reactor = RuntimeReactor::new().unwrap();
             let (stream, _peer) = UnixStream::pair().unwrap();
-            let fd = stream.into_raw_fd();
+            let fd = duplicate_high_fd(stream.as_raw_fd());
             let reader = WaitKey(1, 1);
             let writer = WaitKey(2, 1);
             reactor.begin_wait(reader).unwrap();

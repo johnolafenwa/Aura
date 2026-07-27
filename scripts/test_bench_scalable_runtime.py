@@ -43,27 +43,64 @@ class ProtocolTests(unittest.TestCase):
             bench.read_bounded_line(io.BytesIO(b"x" * 33 + b"\n"), 32)
 
     def test_timer_protocol_requires_all_unique_samples_and_done(self) -> None:
+        ready = bench.parse_timer_ready_line(
+            b"READY timers 3 10 100.0 101.2\n",
+            expected_count=3,
+            expected_duration_ms=10,
+        )
+        self.assertEqual(ready["count"], 3)
+        self.assertEqual(ready["duration_ms"], 10)
+        self.assertEqual(ready["min_start_ms"], 100.0)
+        self.assertEqual(ready["max_start_ms"], 101.2)
+        self.assertAlmostEqual(ready["arm_span_ms"], 1.2)
         output = io.BytesIO(
-            b"SAMPLE timer 2 1.20 0.30\n"
-            b"SAMPLE timer 0 0.00 0.10\n"
-            b"SAMPLE timer 1 0.70 0.20\n"
+            b"SAMPLE timer 2 0.30\n"
+            b"SAMPLE timer 0 0.10\n"
+            b"SAMPLE timer 1 0.20\n"
             b"DONE timers 3\n"
         )
         samples = bench.parse_timer_samples(output, expected_count=3)
         self.assertEqual([sample["index"] for sample in samples], [0, 1, 2])
-        self.assertAlmostEqual(bench.timer_arm_span_ms(samples), 1.2)
+        self.assertEqual(
+            [sample["overshoot_ms"] for sample in samples],
+            [0.10, 0.20, 0.30],
+        )
 
         duplicate = io.BytesIO(
-            b"SAMPLE timer 0 0.0 0.1\n"
-            b"SAMPLE timer 0 0.1 0.2\n"
+            b"SAMPLE timer 0 0.1\n"
+            b"SAMPLE timer 0 0.2\n"
             b"DONE timers 2\n"
         )
         with self.assertRaisesRegex(bench.BenchmarkError, "duplicate"):
             bench.parse_timer_samples(duplicate, expected_count=2)
+        negative = io.BytesIO(
+            b"SAMPLE timer 0 -0.1\n"
+            b"DONE timers 1\n"
+        )
+        with self.assertRaisesRegex(bench.BenchmarkError, "nonnegative"):
+            bench.parse_timer_samples(negative, expected_count=1)
+
+    def test_timer_ready_protocol_is_specialized_and_strict(self) -> None:
+        cases = [
+            (b"READY timers 2 10 1 2\n", "count"),
+            (b"READY timers 3 11 1 2\n", "duration"),
+            (b"READY timers 3 10 nan 2\n", "min_start_ms"),
+            (b"READY timers 3 10 -1 2\n", "nonnegative"),
+            (b"READY timers 3 10 2 1\n", "before"),
+            (b"READY timers 3 10 1 2 extra\n", "READY"),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(bench.BenchmarkError, expected):
+                    bench.parse_timer_ready_line(
+                        line,
+                        expected_count=3,
+                        expected_duration_ms=10,
+                    )
 
     def test_timer_protocol_rejects_extra_output(self) -> None:
         output = io.BytesIO(
-            b"SAMPLE timer 0 0.0 0.1\n"
+            b"SAMPLE timer 0 0.1\n"
             b"DONE timers 1\n"
             b"unexpected\n"
         )

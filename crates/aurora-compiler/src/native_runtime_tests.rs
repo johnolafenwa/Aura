@@ -6010,6 +6010,13 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     expect_unit(super::aurora_direct_task_group_close(group, 1));
     super::aurora_direct_sleep_ms(0);
     expect_unit(super::aurora_direct_sleep_value(duration_value(0)));
+    super::aurora_direct_sleep_value_void(duration_value(0));
+    let first = super::aurora_direct_monotonic_time_ms();
+    let second = super::aurora_direct_monotonic_time_ms();
+    assert!(
+        second >= first,
+        "the direct monotonic clock must not move backwards"
+    );
 }
 
 #[test]
@@ -8931,6 +8938,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "sleep-value-negative" => {
                 super::aurora_direct_sleep_value(duration_value(-1));
+            }
+            "sleep-value-void-negative" => {
+                super::aurora_direct_sleep_value_void(duration_value(-1));
             }
             "fail-division-no-span" => {
                 super::aurora_direct_fail_division_by_zero(0, 0);

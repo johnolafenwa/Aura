@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
 use std::io::{self, BufRead, Read, Seek, Write};
@@ -48,7 +48,9 @@ use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
-use crate::runtime_reactor::{IoInterest, ReactorSubscription, RuntimeReactor, WaitKey};
+use crate::runtime_reactor::{
+    IoInterest, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
+};
 use crate::sema::Type;
 
 type HttpHeaders = Vec<(String, String)>;
@@ -363,8 +365,8 @@ pub struct ChannelValue {
 struct ChannelState {
     state: Mutex<ChannelInner>,
     producer_tasks: Mutex<Vec<Weak<TaskState>>>,
-    recv_reactor_subscribers: Mutex<Vec<ReactorRecvSubscription>>,
-    send_reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
+    recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
+    send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
 }
 
@@ -483,7 +485,7 @@ struct TaskState {
     ready: Condvar,
     lightweight: bool,
     observed_failure: AtomicBool,
-    completion_reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
+    completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     group_completion_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     runtime_type_name: Mutex<Option<String>>,
@@ -692,14 +694,14 @@ struct ReactorRecvSubscription {
 #[derive(Default)]
 struct RuntimeWakeSignal {
     value: AtomicBool,
-    reactor_subscribers: Mutex<Vec<ReactorSubscription>>,
+    reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
 }
 
 impl RuntimeWakeSignal {
     fn new(value: bool) -> Self {
         Self {
             value: AtomicBool::new(value),
-            reactor_subscribers: Mutex::new(Vec::new()),
+            reactor_subscribers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -708,8 +710,8 @@ impl RuntimeWakeSignal {
     }
 
     fn store(&self, value: bool, ordering: Ordering) {
-        self.value.store(value, ordering);
-        if value {
+        let previous = self.value.swap(value, ordering);
+        if value && !previous {
             wake_reactor_subscribers(&self.reactor_subscribers);
         }
     }
@@ -724,27 +726,27 @@ impl RuntimeWakeSignal {
 }
 
 fn subscribe_reactor_target(
-    subscribers: &Mutex<Vec<ReactorSubscription>>,
+    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
-    let mut subscribers = lock_mutex(subscribers);
-    if !subscribers
-        .iter()
-        .any(|target| target.same_wait(subscription))
-    {
-        subscribers.push(subscription.clone());
-    }
+    lock_mutex(subscribers)
+        .entry(subscription.identity())
+        .or_insert_with(|| subscription.clone());
 }
 
 fn unsubscribe_reactor_target(
-    subscribers: &Mutex<Vec<ReactorSubscription>>,
+    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
-    lock_mutex(subscribers).retain(|target| !target.same_wait(subscription));
+    lock_mutex(subscribers).remove(&subscription.identity());
 }
 
-fn wake_reactor_subscribers(subscribers: &Mutex<Vec<ReactorSubscription>>) {
-    let targets = lock_mutex(subscribers).clone();
+fn wake_reactor_subscribers(
+    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+) {
+    let targets = std::mem::take(&mut *lock_mutex(subscribers));
+    let mut targets: Vec<_> = targets.into_values().collect();
+    targets.sort_unstable_by_key(ReactorSubscription::identity);
     for target in targets {
         let _ = target.wake();
     }
@@ -801,6 +803,8 @@ struct LightweightTaskScheduler {
     tasks: BTreeMap<u64, LightweightTaskRecord>,
     reactor: RuntimeReactor,
     reactor_failure: Option<Diagnostic>,
+    ready_turns_since_local_reactor_poll: u32,
+    ready_turns_since_io_reactor_poll: u32,
 }
 
 // Network-heavy lightweight tasks can traverse substantial library stacks
@@ -818,6 +822,8 @@ const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
 const TASK_GROUP_CLEANUP_SETTLE_TIMEOUT: StdDuration = StdDuration::from_millis(10);
+const READY_TURNS_PER_LOCAL_REACTOR_POLL: u32 = 64;
+const READY_TURNS_PER_IO_REACTOR_POLL: u32 = 256;
 
 #[derive(Clone)]
 struct RuntimeSchedulerRegistration {
@@ -851,6 +857,8 @@ struct RuntimeScheduler {
     ready: Condvar,
     next_id: AtomicU64,
 }
+
+static RUNTIME_SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
 
 type BlockingIoJob = Box<dyn FnOnce() + Send + 'static>;
 
@@ -1482,8 +1490,13 @@ impl RuntimeScheduler {
 }
 
 fn runtime_scheduler() -> &'static Arc<RuntimeScheduler> {
-    static SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
-    SCHEDULER.get_or_init(RuntimeScheduler::start)
+    RUNTIME_SCHEDULER.get_or_init(RuntimeScheduler::start)
+}
+
+fn notify_runtime_scheduler_if_started() {
+    if let Some(scheduler) = RUNTIME_SCHEDULER.get() {
+        scheduler.notify();
+    }
 }
 
 impl BlockingIoPool {
@@ -1871,6 +1884,8 @@ impl LightweightTaskScheduler {
             reactor: RuntimeReactor::new()
                 .expect("the Aurora lightweight-task reactor must initialize"),
             reactor_failure: None,
+            ready_turns_since_local_reactor_poll: 0,
+            ready_turns_since_io_reactor_poll: 0,
         }
     }
 
@@ -1902,7 +1917,7 @@ impl LightweightTaskScheduler {
             ready: Condvar::new(),
             lightweight: true,
             observed_failure: AtomicBool::new(false),
-            completion_reactor_subscribers: Mutex::new(Vec::new()),
+            completion_reactor_subscribers: Mutex::new(HashMap::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
@@ -1952,7 +1967,7 @@ impl LightweightTaskScheduler {
         wake_reactor_subscribers(&task_state.completion_reactor_subscribers);
         notify_group_failure_wake_flags(task_state, &result);
         notify_group_completion_wake_flags(task_state);
-        runtime_scheduler().notify();
+        notify_runtime_scheduler_if_started();
     }
 
     fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
@@ -2075,12 +2090,26 @@ impl LightweightTaskScheduler {
     }
 
     fn disarm_wait(&mut self, task_id: u64) -> Option<TaskWaitRegistration> {
+        self.take_wait_registration(task_id, true)
+    }
+
+    fn take_ready_wait(&mut self, task_id: u64) -> Option<TaskWaitRegistration> {
+        self.take_wait_registration(task_id, false)
+    }
+
+    fn take_wait_registration(
+        &mut self,
+        task_id: u64,
+        cancel_reactor_wait: bool,
+    ) -> Option<TaskWaitRegistration> {
         let waiting = self.waiting.remove(&task_id)?;
         waiting
             .registration
             .unsubscribe_reactor(&waiting.subscription);
-        if let Err(error) = self.reactor.cancel_wait(waiting.key) {
-            self.record_reactor_failure("retiring a task wait", error);
+        if cancel_reactor_wait {
+            if let Err(error) = self.reactor.cancel_wait(waiting.key) {
+                self.record_reactor_failure("retiring a task wait", error);
+            }
         }
         Some(waiting.registration)
     }
@@ -2102,7 +2131,7 @@ impl LightweightTaskScheduler {
                 continue;
             }
             let registration = self
-                .disarm_wait(key.0)
+                .take_ready_wait(key.0)
                 .expect("the matching reactor wait remains registered");
             if let Some(reason) = registration.ready_reason(registration.fd_wait.is_some()) {
                 self.ready.push_back((key.0, reason));
@@ -2114,6 +2143,12 @@ impl LightweightTaskScheduler {
 
     fn admit_reactor_events_nonblocking(&mut self) -> io::Result<()> {
         let keys = self.reactor.poll_nonblocking()?;
+        self.admit_reactor_keys(keys);
+        Ok(())
+    }
+
+    fn admit_local_reactor_events_nonblocking(&mut self) -> io::Result<()> {
+        let keys = self.reactor.poll_local_nonblocking()?;
         self.admit_reactor_keys(keys);
         Ok(())
     }
@@ -2144,13 +2179,31 @@ impl LightweightTaskScheduler {
                 };
             }
 
-            self.admit_reactor_events_nonblocking().map_err(|error| {
-                Diagnostic::new(format!(
-                    "Aurora runtime reactor failed while admitting ready events: {error}"
-                ))
-            })?;
-            if let Some(diagnostic) = self.reactor_failure.take() {
-                return Err(diagnostic);
+            if !self.ready.is_empty() {
+                self.ready_turns_since_local_reactor_poll += 1;
+                self.ready_turns_since_io_reactor_poll += 1;
+                if self.ready_turns_since_io_reactor_poll >= READY_TURNS_PER_IO_REACTOR_POLL {
+                    self.ready_turns_since_local_reactor_poll = 0;
+                    self.ready_turns_since_io_reactor_poll = 0;
+                    self.admit_reactor_events_nonblocking().map_err(|error| {
+                        Diagnostic::new(format!(
+                            "Aurora runtime reactor failed while admitting ready events: {error}"
+                        ))
+                    })?;
+                } else if self.ready_turns_since_local_reactor_poll
+                    >= READY_TURNS_PER_LOCAL_REACTOR_POLL
+                {
+                    self.ready_turns_since_local_reactor_poll = 0;
+                    self.admit_local_reactor_events_nonblocking()
+                        .map_err(|error| {
+                            Diagnostic::new(format!(
+                                "Aurora runtime reactor failed while admitting local events: {error}"
+                            ))
+                        })?;
+                }
+                if let Some(diagnostic) = self.reactor_failure.take() {
+                    return Err(diagnostic);
+                }
             }
 
             if let Some((task_id, reason)) = self.ready.pop_front() {
@@ -2158,6 +2211,8 @@ impl LightweightTaskScheduler {
                 continue;
             }
 
+            self.ready_turns_since_local_reactor_poll = 0;
+            self.ready_turns_since_io_reactor_poll = 0;
             self.wait_for_external_events().map_err(|error| {
                 Diagnostic::new(format!(
                     "Aurora runtime reactor failed while waiting: {error}"
@@ -2212,7 +2267,7 @@ fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutio
     for flag in flags {
         flag.store(true, Ordering::SeqCst);
     }
-    runtime_scheduler().notify();
+    notify_runtime_scheduler_if_started();
 }
 
 fn notify_group_completion_wake_flags(task_state: &TaskState) {
@@ -2223,7 +2278,7 @@ fn notify_group_completion_wake_flags(task_state: &TaskState) {
     for flag in flags {
         flag.store(true, Ordering::SeqCst);
     }
-    runtime_scheduler().notify();
+    notify_runtime_scheduler_if_started();
 }
 
 pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
@@ -2561,8 +2616,8 @@ impl ChannelValue {
                     capacity,
                 }),
                 producer_tasks: Mutex::new(Vec::new()),
-                recv_reactor_subscribers: Mutex::new(Vec::new()),
-                send_reactor_subscribers: Mutex::new(Vec::new()),
+                recv_reactor_subscribers: Mutex::new(HashMap::new()),
+                send_reactor_subscribers: Mutex::new(HashMap::new()),
                 runtime_type_name: Mutex::new(None),
             }),
         }
@@ -2679,20 +2734,16 @@ pub(crate) enum TaskWaitStatus {
 
 impl ChannelValue {
     fn subscribe_reactor_recv(&self, subscription: &ReactorSubscription, ignore_closed: bool) {
-        let mut subscribers = lock_mutex(&self.inner.recv_reactor_subscribers);
-        if !subscribers.iter().any(|entry| {
-            entry.ignore_closed == ignore_closed && entry.target.same_wait(subscription)
-        }) {
-            subscribers.push(ReactorRecvSubscription {
+        lock_mutex(&self.inner.recv_reactor_subscribers)
+            .entry(subscription.identity())
+            .or_insert_with(|| ReactorRecvSubscription {
                 target: subscription.clone(),
                 ignore_closed,
             });
-        }
     }
 
     fn unsubscribe_reactor_recv(&self, subscription: &ReactorSubscription) {
-        lock_mutex(&self.inner.recv_reactor_subscribers)
-            .retain(|entry| !entry.target.same_wait(subscription));
+        lock_mutex(&self.inner.recv_reactor_subscribers).remove(&subscription.identity());
     }
 
     fn subscribe_reactor_send(&self, subscription: &ReactorSubscription) {
@@ -2703,12 +2754,31 @@ impl ChannelValue {
         unsubscribe_reactor_target(&self.inner.send_reactor_subscribers, subscription);
     }
 
-    fn wake_reactor_receivers(&self, closed_only: bool) {
-        let targets: Vec<_> = lock_mutex(&self.inner.recv_reactor_subscribers)
-            .iter()
-            .filter(|entry| !closed_only || !entry.ignore_closed)
-            .map(|entry| entry.target.clone())
-            .collect();
+    fn wake_reactor_receivers_for_value(&self) {
+        let targets = std::mem::take(&mut *lock_mutex(&self.inner.recv_reactor_subscribers));
+        let mut targets: Vec<_> = targets.into_values().collect();
+        targets.sort_unstable_by_key(|target| target.target.identity());
+        for target in targets {
+            let _ = target.target.wake();
+        }
+    }
+
+    fn wake_closed_reactor_receivers(&self) {
+        let targets = {
+            let mut subscribers = lock_mutex(&self.inner.recv_reactor_subscribers);
+            let mut targets = Vec::new();
+            subscribers.retain(|_, entry| {
+                if entry.ignore_closed {
+                    true
+                } else {
+                    targets.push(entry.target.clone());
+                    false
+                }
+            });
+            targets
+        };
+        let mut targets = targets;
+        targets.sort_unstable_by_key(ReactorSubscription::identity);
         for target in targets {
             let _ = target.wake();
         }
@@ -2757,10 +2827,15 @@ impl ChannelValue {
 
     pub(crate) fn try_recv(&self) -> TryRecvResult {
         let mut state = lock_mutex(&self.inner.state);
+        let was_full = state
+            .capacity
+            .is_some_and(|capacity| state.queue.len() >= capacity);
         if let Some(value) = state.queue.pop_front() {
             drop(state);
-            wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
-            runtime_scheduler().notify();
+            if was_full {
+                wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
+            }
+            notify_runtime_scheduler_if_started();
             return TryRecvResult::Value(value);
         }
         if state.closed {
@@ -2780,10 +2855,13 @@ impl ChannelValue {
         {
             return TrySendResult::Full(value);
         }
+        let was_empty = state.queue.is_empty();
         state.queue.push_back(value);
         drop(state);
-        self.wake_reactor_receivers(false);
-        runtime_scheduler().notify();
+        if was_empty {
+            self.wake_reactor_receivers_for_value();
+        }
+        notify_runtime_scheduler_if_started();
         TrySendResult::Sent
     }
 
@@ -2919,9 +2997,9 @@ impl ChannelValue {
         let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
         drop(state);
-        self.wake_reactor_receivers(true);
+        self.wake_closed_reactor_receivers();
         wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
-        runtime_scheduler().notify();
+        notify_runtime_scheduler_if_started();
     }
 }
 
@@ -7632,7 +7710,7 @@ impl TaskGroupValue {
 
     pub(crate) fn cancel(&self) {
         self.inner.cancel_flag.store(true, Ordering::SeqCst);
-        runtime_scheduler().notify();
+        notify_runtime_scheduler_if_started();
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -7696,7 +7774,7 @@ impl TaskValue {
         drop(flags);
         if self.unobserved_error().is_some() {
             flag.store(true, Ordering::SeqCst);
-            runtime_scheduler().notify();
+            notify_runtime_scheduler_if_started();
         }
     }
 
@@ -7708,7 +7786,7 @@ impl TaskValue {
         drop(flags);
         if self.completed_result().is_some() {
             flag.store(true, Ordering::SeqCst);
-            runtime_scheduler().notify();
+            notify_runtime_scheduler_if_started();
         }
     }
 
@@ -7741,7 +7819,7 @@ impl TaskValue {
             ready: Condvar::new(),
             lightweight: false,
             observed_failure: AtomicBool::new(false),
-            completion_reactor_subscribers: Mutex::new(Vec::new()),
+            completion_reactor_subscribers: Mutex::new(HashMap::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
@@ -7759,7 +7837,7 @@ impl TaskValue {
             notify_group_failure_wake_flags(&state, &result);
             notify_group_completion_wake_flags(&state);
             state.ready.notify_all();
-            runtime_scheduler().notify();
+            notify_runtime_scheduler_if_started();
         });
         Self { inner }
     }

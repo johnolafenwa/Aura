@@ -164,10 +164,58 @@ def parse_ready_line(
     return tuple(expected_fields)
 
 
-def read_process_ready(
+def parse_timer_ready_line(
+    line: bytes, expected_count: int, expected_duration_ms: int
+) -> Dict[str, float | int]:
+    fields = line.rstrip(b"\n").split(b" ")
+    if (
+        not line.endswith(b"\n")
+        or len(fields) != 6
+        or fields[:2] != [b"READY", b"timers"]
+    ):
+        raise BenchmarkError("unexpected timer READY line: " + repr(line))
+    try:
+        count = int(fields[2].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid timer READY count") from error
+    if count != expected_count:
+        raise BenchmarkError(
+            "unexpected timer READY count: expected "
+            + str(expected_count)
+            + ", got "
+            + str(count)
+        )
+    try:
+        duration_ms = int(fields[3].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid timer READY duration") from error
+    if duration_ms != expected_duration_ms:
+        raise BenchmarkError(
+            "unexpected timer READY duration: expected "
+            + str(expected_duration_ms)
+            + ", got "
+            + str(duration_ms)
+        )
+    min_start_ms = finite_float(fields[4], "timer min_start_ms")
+    max_start_ms = finite_float(fields[5], "timer max_start_ms")
+    if min_start_ms < 0.0 or max_start_ms < 0.0:
+        raise BenchmarkError("timer start observations must be nonnegative")
+    if max_start_ms < min_start_ms:
+        raise BenchmarkError(
+            "timer max_start_ms is before timer min_start_ms"
+        )
+    return {
+        "count": count,
+        "duration_ms": duration_ms,
+        "min_start_ms": min_start_ms,
+        "max_start_ms": max_start_ms,
+        "arm_span_ms": max_start_ms - min_start_ms,
+    }
+
+
+def read_process_ready_line(
     process: subprocess.Popen,
     benchmark: str,
-    expected_fields: Sequence[str],
     timeout_seconds: float = READY_TIMEOUT_SECONDS,
 ) -> bytes:
     assert process.stdout is not None
@@ -201,9 +249,18 @@ def read_process_ready(
                 break
     finally:
         selector.close()
-    parsed = bytes(line)
-    parse_ready_line(parsed, benchmark, expected_fields)
-    return parsed
+    return bytes(line)
+
+
+def read_process_ready(
+    process: subprocess.Popen,
+    benchmark: str,
+    expected_fields: Sequence[str],
+    timeout_seconds: float = READY_TIMEOUT_SECONDS,
+) -> bytes:
+    line = read_process_ready_line(process, benchmark, timeout_seconds)
+    parse_ready_line(line, benchmark, expected_fields)
+    return line
 
 
 def finite_float(text: bytes, field: str) -> float:
@@ -223,7 +280,7 @@ def parse_timer_samples(
     while len(by_index) < expected_count:
         line = read_bounded_line(stream, MAX_PROTOCOL_LINE_BYTES)
         fields = line.rstrip(b"\n").split(b" ")
-        if len(fields) != 5 or fields[:2] != [b"SAMPLE", b"timer"]:
+        if len(fields) != 4 or fields[:2] != [b"SAMPLE", b"timer"]:
             raise BenchmarkError("malformed timer sample line: " + repr(line))
         try:
             index = int(fields[2].decode("ascii"))
@@ -233,11 +290,11 @@ def parse_timer_samples(
             raise BenchmarkError("timer sample index is outside the expected range")
         if index in by_index:
             raise BenchmarkError("duplicate timer sample index " + str(index))
-        start_ms = finite_float(fields[3], "timer start_ms")
-        overshoot_ms = finite_float(fields[4], "timer overshoot_ms")
+        overshoot_ms = finite_float(fields[3], "timer overshoot_ms")
+        if overshoot_ms < 0.0:
+            raise BenchmarkError("timer overshoot_ms must be nonnegative")
         by_index[index] = {
             "index": index,
-            "start_ms": start_ms,
             "overshoot_ms": overshoot_ms,
         }
 
@@ -254,13 +311,6 @@ def parse_timer_samples(
     if trailing:
         raise BenchmarkError("timer benchmark emitted trailing output")
     return [by_index[index] for index in sorted(by_index)]
-
-
-def timer_arm_span_ms(samples: Sequence[Dict[str, float]]) -> float:
-    if not samples:
-        raise BenchmarkError("timer benchmark returned no samples")
-    starts = [sample["start_ms"] for sample in samples]
-    return max(starts) - min(starts)
 
 
 def timer_gate_summary(
@@ -646,7 +696,12 @@ def run_timers(binary: pathlib.Path) -> Dict[str, object]:
         allow_macos_ps_fallback=False,
     )
     try:
-        ready = read_process_ready(process, "timers", ("1000", "10"))
+        ready = read_process_ready_line(process, "timers")
+        ready_observation = parse_timer_ready_line(
+            ready,
+            expected_count=1000,
+            expected_duration_ms=10,
+        )
         monitor.start()
         try:
             stdout, stderr = process.communicate(timeout=TIMER_TIMEOUT_SECONDS)
@@ -666,11 +721,12 @@ def run_timers(binary: pathlib.Path) -> Dict[str, object]:
             + stderr.decode("utf-8", errors="replace")
         )
     samples = parse_timer_samples(io.BytesIO(stdout), expected_count=1000)
-    arm_span = timer_arm_span_ms(samples)
+    arm_span = float(ready_observation["arm_span_ms"])
     overshoots = [sample["overshoot_ms"] for sample in samples]
     return {
         "command": [str(binary)],
         "ready": ready.decode("ascii"),
+        "ready_observation": ready_observation,
         "arm_span_ms": arm_span,
         "arm_span_limit_ms": TIMER_ARM_SPAN_LIMIT_MS,
         "arm_span_valid": arm_span <= TIMER_ARM_SPAN_LIMIT_MS,
