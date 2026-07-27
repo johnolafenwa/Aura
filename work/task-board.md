@@ -17,8 +17,10 @@ Last updated: 2026-07-26
   Prerequisite hygiene repair `18b7f00`, Part-0 ratification commit `19a10f4`,
   completed B3.0-a commit `6afe47c`, and completed B3.0-b commit `fc22696` are
   isolated. B3.0-c is exact-tree green and isolated in `e05c5e6`; B3.0-d and
-  B3.0-e are both exact-tree green and committed in isolation. B3.0 is closed;
-  the ADR-0022 capability-syntax migration is the active work.
+  B3.0-e are both exact-tree green and committed in isolation. B3.0 is closed,
+  and the ADR-0022 capability-syntax migration landed across §1-§7. Batch 3 is
+  at its checkpoint; see `work/2026-07-27-batch3-checkpoint.md`. Phase 5 has
+  not been started and nothing is pushed.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;

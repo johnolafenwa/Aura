@@ -11,6 +11,9 @@ list below. Nothing is pushed.
 | `7998cc7` | B3.0-e — four diagnostic and comment polish items |
 | `d9382a0` | ADR-0022 §1 inventory and §2 migrator |
 | `9f7cb3f` | ADR-0022 §3–§7 — the capability-syntax flip |
+| `aae9498` | coverage-surface suite migrated to `match own` |
+| `ec90ad5` | io and process suites migrated to `match own` |
+| `3d7827b` | normative reference migrated; 42 Manual blocks re-verified |
 
 Each is an isolated decision commit with full gates green at the commit.
 
@@ -243,4 +246,54 @@ No provisional ADRs were needed.
 
 ## Gate evidence
 
-See the "Final gates" section below, filled in from the checkpoint CI run.
+Exact `npm run ci`, every stage on the committed tree:
+
+| Stage | Result |
+| --- | --- |
+| `check:format` | pass |
+| `test:rust` | 919 compiler unit tests, 266 CLI integration tests, and every fixture and package suite pass |
+| `test:backend-parity` | forced MIR vs forced direct across every runtime fixture: pass |
+| `test:lsp` | 73 pass, 0 fail |
+| `check:extension` / `test:extension` | 13 pass, 0 fail |
+| `coverage:compiler:check` | 96.13% lines, 96.88% functions, 94.34% regions |
+| `coverage:lsp:check` | 100% statements, branches, functions, lines (845/845 lines) |
+| `check:reference` | reference integrity passed |
+| `docs:build` | pass |
+| `check:audit` | 0 npm vulnerabilities; `cargo audit` clean across 173 crates |
+| `check:clippy` | pass with warnings denied |
+| `check:hygiene` | pass |
+
+### Reference-integrity re-baseline
+
+The manifest is content-hashed and fails closed, so the Manual migration
+invalidated 42 block hashes. Each was re-baselined and then re-executed by the
+integrity runner, which is what the fail-closed design asks for: the hashes
+changed because the migration deliberately changed the code, and re-running
+proves the migrated blocks still check and run with their recorded output.
+
+### Coverage re-ratchet
+
+Frozen floors were held at `96.07 / 96.81 / 94.29` for the whole migration, as
+instructed. At this checkpoint they are re-ratcheted once to the measured
+values:
+
+| Metric | Old floor | New floor |
+| --- | --- | --- |
+| lines | 96.07 | **96.13** |
+| functions | 96.81 | **96.88** |
+| regions | 94.29 | **94.34** |
+
+No synthetic coverage test, exclusion, or coverage-only branch was added at any
+point in this batch.
+
+### Build hygiene
+
+`target/` reached 26 GiB after the coverage runs, past the 20 GiB threshold.
+`cargo llvm-cov clean --workspace` brought it to 24 GiB with 139 GiB free — the
+narrowest appropriate cleanup. No source, fixture, lockfile, dependency cache,
+or user file was touched.
+
+## Stop
+
+This is the Batch 3 checkpoint. Phase 5 has not been started, and nothing has
+been pushed.
