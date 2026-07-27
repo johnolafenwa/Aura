@@ -659,3 +659,4 @@ fi
 
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
+python3 scripts/test_capability_migrate.py

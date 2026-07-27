@@ -417,8 +417,175 @@ sides of the matrix are forced explicitly and neither may fall back to `auto`.
   unaffected. The fixture uses distinct binding names, which is how the code
   reads better anyway.
 
+## ADR-0022 §1: syntax-aware inventory
+
+Published before the flip, as the plan requires. Produced by
+`scripts/capability_inventory.py`, which is deterministic and re-runnable:
+`borrow` is counted as a keyword token with comments and string bodies blanked,
+Markdown is counted only inside fenced blocks and inline code spans (ADR-0022
+Q7 retires the keyword, not the English word), and the match/parameter
+populations come from `aura ast-json` rather than from text matching.
+
+### Grammar productions
+
+Six normative productions in `docs/manual/grammar.md` mention `"borrow"`:
+`receiver`, `parameter`, `return-annotation`, `for-statement`,
+`match-statement`, and `match-expression`. The keyword also appears in the
+reserved-word list.
+
+### `borrow` keyword occurrences
+
+| Surface | Files | Tokens |
+| --- | --- | --- |
+| Aurora source (`*.au`, keyword tokens) | 438 | 952 |
+| Markdown, inside code only | 92 | 796 |
+| Markdown prose ("borrow", "borrowing") | — | 324 |
+| Rust sources, lowercase (embedded Aurora + prose) | — | 471 |
+| Rust sources, `Borrow` identifiers (`ReceiverKind::Borrow`) | — | 216 |
+
+The 324 Markdown prose words and the 216 Rust identifiers are explicitly out of
+scope: Q7 removes the keyword, not the vocabulary, and the internal
+`ReceiverKind` representation is unchanged by the flip.
+
+Aurora-source tokens by area: `test_edge` 492 in 217 files, compiler fixtures
+360 in 176 files, `examples` 89 in 36 files, `test_recheck` 11 in 9 files.
+
+Every one of the 952 tokens falls into exactly seven syntactic shapes, which is
+what makes a token-aware migrator sufficient:
+
+| Shape | Count | Becomes |
+| --- | --- | --- |
+| `borrow self` | 573 | `self` |
+| `borrow T` | 184 | `T` |
+| `borrow mut self` | 93 | `mut self` |
+| `borrow mut T` | 67 | `mut T` |
+| `borrow[label] T` | 32 | `T` (labels retired) |
+| `borrow mut (` (tuple type) | 2 | `mut (` |
+| `borrow (` (match scrutinee) | 1 | (see match forms) |
+
+Statement-position forms counted separately, since they overlap the shapes
+above: 55 `match borrow`, 13 `match borrow mut`, 16 `for ... in borrow`, 7
+`for ... in borrow mut`, 11 `for ... in own`, and 21 `-> borrow` returns.
+
+The 21 borrowed returns are the only non-mechanical `borrow` population. Per
+Q6 they become ordinary owned returns where the value is copy, and require a
+clone, index, handle, or owner operation where they expose non-copy internal
+state.
+
+### Bare matches
+
+764 matches parse across maintained source. 709 are bare and silently flip from
+consuming to shared; 42 are `match borrow` and 13 are `match borrow mut`, both
+mechanical respellings.
+
+Of the 709 bare matches, 566 bind at least one pattern variable — these are the
+candidates where consuming behavior may be load-bearing and the migrator must
+decide whether to insert `own`. By scrutinee shape, 390 match a place
+(`Name`, `Member`, or `Index`) and 319 match a temporary; a temporary
+scrutinee has no surviving owner, so the flip cannot be observed there.
+
+### Bare parameters and receivers
+
+1,175 parameters parse across maintained source:
+
+| Mode | Count |
+| --- | --- |
+| bare (`Default`) | 779 |
+| of which declaration-known copy | 416 |
+| explicit `borrow` | 133 |
+| explicit `borrow mut` | 48 |
+| `own` | 215 |
+
+The 416 bare copy parameters are the second silent-flip population: universal
+logical sharing (Q1) replaces ADR-0006's declaration-known copy snapshot, so
+each needs review for whether snapshot behavior is load-bearing.
+
+700 receivers, counted from source text because the AST cannot distinguish
+them — bare `self` and `borrow self` both lower to `ReceiverKind::Borrow`:
+565 `borrow self`, 93 `borrow mut self`, 29 `own self`, and 13 already-bare
+`self`. Receivers are therefore entirely mechanical; none has a semantic flip.
+
+### Files the AST cannot see
+
+103 of 1,669 tracked `.au` files do not parse under the current grammar: 72 in
+`test_edge`, 14 in `tests/fixtures/parse-fail`, 7 in `tests/fixtures/
+python-hints`, 6 in `test_recheck`, and 4 in `tests/fixtures/check-fail`. The
+fixture families are intentional parse rejections. The 78 scratch-corpus files
+are stale source that predates current syntax; `broad_scratch_corpus_*` gates
+them only for absence of panics, not for validity. This is the concrete reason
+the ADR calls for a token-aware migrator rather than an AST rewriter: 78 files
+that must still be transformed deterministically have no usable AST.
+
+## ADR-0022 §2: the capability-syntax migrator
+
+`scripts/capability_migrate.py`, with its behavioral suite in
+`scripts/test_capability_migrate.py` (37 tests). Both run from
+`scripts/check-reference.sh`, following the reference-integrity convention.
+
+It is token-aware rather than AST-based, which §1 justifies concretely: 78
+scratch-corpus files must still be transformed deterministically and have no
+usable AST. Comments, string bodies, and identifiers are masked before any
+rewrite, so `borrowed`, `reborrow`, `borrow_count`, `# borrow self`, and
+`"borrow mut String"` are all left alone. That masking bug — rules missing the
+identifier boundary — is exactly what the first red test run caught.
+
+### Mechanical rewrites
+
+    borrow self           -> self
+    borrow mut self       -> mut self
+    borrow T              -> T
+    borrow mut T          -> mut T
+    borrow[label] T       -> T                (labels retired with ADR-0009)
+    -> borrow[label] T    -> -> T
+    match borrow X        -> match X
+    match borrow mut X    -> match mut X
+    for v in borrow X     -> for v in X
+    for v in borrow mut X -> for v in mut X
+    for v in mut range()  -> for v in range()  (additional ruling)
+    for v in own range()  -> for v in range()
+
+Markdown is migrated only inside fenced blocks and inline code spans, because
+Q7 retires the keyword but not the English word. `architecture_docs/decisions/`
+is excluded entirely: historical ADR context keeps the old spellings.
+
+### The one semantic rewrite
+
+Bare `match` flips from consuming to shared. A bare match that both selects a
+*place* and *binds a payload* is annotated `match own`, preserving today's
+behavior. A match over a temporary stays bare — the scrutinee has no surviving
+owner, so the flip is unobservable there — and a match that binds nothing moves
+nothing.
+
+This rule is deliberately conservative rather than exhaustive. What it misses
+becomes a compile error after the flip, not a silent behavior change, because
+Q2 requires moving a payload out of a bare match to be rejected with an exact
+"write `match own <place>` to consume" diagnostic. The migrator never guesses
+silently.
+
+Bare copy parameters get no automatic annotation for the same reason: Q1's
+universal logical sharing changes their sequencing behavior, and every case
+where that matters surfaces as an `AU3002` rejection rather than as a silent
+flip.
+
+### Manifest, hashes, and modes
+
+`build` records every file the migration would change with its SHA-256 before
+and after, sorted by path. `check` reports pending files and writes nothing.
+`apply` rewrites only entries whose current content still matches the recorded
+pre-migration hash. A file matching the post-migration hash is already done and
+is skipped, which is what makes a second `apply` a no-op. A file matching
+neither raises `HashMismatch` and refuses to write, so the migration cannot
+silently clobber edits made after the manifest was built.
+
+### Dry-run result against the current tree
+
+1,931 maintained files considered, 688 would change, 0 non-idempotent, and 0
+`borrow` keyword tokens left in Aurora source afterwards. 333 `match own`
+annotations are added — the intersection of the 390 place-scrutinee and 566
+payload-binding bare matches.
+
 ## Follow-up
 
-The ADR-0022 inventory, migrator, and capability-syntax migration are next.
-Continue recording the syntax-aware source-inventory counts, migration results,
-and checkpoint disposition here as the batch advances.
+The capability-syntax migration itself is next: grammar, sema, MIR, and direct
+semantics, then the maintained-source flip. Continue recording migration results
+and the checkpoint disposition here as the batch advances.
