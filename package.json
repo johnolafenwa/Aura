@@ -12,7 +12,7 @@
   "scripts": {
     "coverage:compiler": "bash scripts/coverage-compiler.sh",
     "coverage:compiler:check": "bash scripts/coverage-compiler.sh --check",
-    "test:rust": "RUST_MIN_STACK=33554432 cargo test -- --test-threads=1",
+    "test:rust": "RUST_MIN_STACK=33554432 cargo test",
     "test:backend-parity": "cargo test -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture",
     "test:scheduler-stress": "bash scripts/stress-scheduler.sh",
     "test:scheduler-model": "cargo test -p aurora-compiler --test scheduler_model",

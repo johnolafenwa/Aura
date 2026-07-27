@@ -155,11 +155,14 @@ aura deps update util
 - `aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]`
   - `mir` executes the lowered MIR and is the default
   - `direct` builds a native binary and runs it, reporting build or launch failures rather than degrading
-  - `auto` prefers `direct` and degrades to the MIR runtime, printing the reason first
+  - `auto` prefers `direct` and degrades to the MIR runtime; human mode prints the reason before the fallback program runs, while JSON mode includes it in the final structured report
   - successful native builds are cached by content under `AURORA_CACHE_DIR`, defaulting to `~/.cache/aurora/native`; every hit verifies the entry identity, artifact SHA-256, regular-file/execute state, size bound, and executable shape, then launches a private copy of those verified bytes without a shell fallback
+  - on maintained Unix hosts, concurrent cold runs of the same content key coordinate through cross-process locks: one process builds and atomically publishes the entry, while the remaining processes wait and then reuse the verified result; established warm hits do not wait on that key's writer lock
+  - human output flushes `aura: waiting for a concurrent build...` before blocking and `aura: rebuilding native runtime...` before rebuild work; JSON mode currently buffers these notices so stderr remains exactly one JSON document, reporting them through `progress` on success or diagnostic `notes` on failure, while an `auto` fallback also records its direct-to-MIR transition and reason in `fallback`
   - malformed entries and executable-format/architecture failures are discarded and rebuilt; temporary-directory, process-resource, and other environmental launch failures preserve the verified entry and follow the selected backend's ordinary error/fallback policy
   - the cache directory is a trust boundary: use only a location private to the current OS account; on the maintained Unix hosts, Aurora rejects roots owned by another user or writable by group/other
   - cache keys independently include native cache format `v4`, semantic-interface schema `v2`, the exact linked runtime archive, and ordered native link arguments; inherited launch leases and owner-aware staging cleanup prevent interrupted-run cleanup from deleting a live native child
+  - caching is optional for an installed immutable runtime layout: an empty or unavailable cache does not prevent an otherwise valid direct build, but that build is not retained for a later hit
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`

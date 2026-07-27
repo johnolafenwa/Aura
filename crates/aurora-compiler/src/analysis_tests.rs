@@ -1453,6 +1453,29 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
 }
 
 #[test]
+fn analysis_infers_canonical_concrete_type_for_user_generic_specialization() {
+    let source = "class Parcel[T]:\n    value: T\n";
+    let mut program = checked_program(source);
+    program
+        .canonical_type_names
+        .insert("Parcel".to_string(), "inventory.Parcel".to_string());
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let specialized = expr(ExprKind::Specialize {
+        expr: Box::new(expr(ExprKind::Name("Parcel".to_string()))),
+        type_args: vec![type_ref("String")],
+    });
+
+    assert_eq!(
+        builder.infer_expr_type(&specialized, &BTreeMap::new()),
+        Some(Type::Named(
+            "inventory.Parcel".to_string(),
+            vec![Type::named("String")],
+        )),
+        "analysis clients must see both the canonical class identity and its concrete type argument"
+    );
+}
+
+#[test]
 fn completion_scope_walks_past_if_else_and_while_blocks() {
     let source = [
         "def scoped(flag: bool) -> int32:",

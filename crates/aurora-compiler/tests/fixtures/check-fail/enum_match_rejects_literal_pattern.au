@@ -1,0 +1,8 @@
+enum Status:
+    Ready
+
+def main():
+    status = Status.Ready
+    match status:
+        case 1:
+            pass

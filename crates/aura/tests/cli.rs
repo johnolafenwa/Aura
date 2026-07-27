@@ -1,7 +1,7 @@
 use std::fs;
-#[cfg(unix)]
-use std::io::Read;
 use std::io::Write;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1292,6 +1292,8 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
 #[cfg(unix)]
 struct NativeCacheFixture {
     cache: TempDir,
+    _install: TempDir,
+    installed_aura: PathBuf,
     _source: TempDir,
     source_path: PathBuf,
     entry: PathBuf,
@@ -1325,19 +1327,71 @@ impl NativeCacheFixture {
         );
         assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
 
+        // Timed cache-member checks must measure cache inspection, not
+        // unrelated source-checkout tests contending on the shared Cargo
+        // runtime lock. Copy a valid runtime plus its stable link arguments
+        // into an installed immutable layout, which needs no workspace-runtime
+        // lease. Populate the fixture's program entry through that installed
+        // binary so concurrent Cargo activity cannot make the entry key refer
+        // to different runtime bytes from the later timed checks.
+        let install = TempDir::new(&format!("{prefix}-install"));
+        let bin_dir = install.path().join("bin");
+        let runtime_dir = install.path().join("lib").join("aurora");
+        fs::create_dir_all(&bin_dir).expect("installed bin directory should be creatable");
+        fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
+        let installed_aura = bin_dir.join("aura");
+        fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
+        fs::copy(
+            repo_root()
+                .join("target")
+                .join("debug")
+                .join("libaurora_compiler.a"),
+            runtime_dir.join("libaurora_compiler.a"),
+        )
+        .expect("native runtime archive should be installable");
+        let runtime_memo = fs::read_to_string(cache.path().join("runtime-identity"))
+            .expect("cold run should record native link arguments");
+        let native_link_args = runtime_memo
+            .lines()
+            .nth(2)
+            .expect("runtime memo should contain native link arguments");
+        fs::write(
+            runtime_dir.join("native-link-args.json"),
+            format!("{native_link_args}\n"),
+        )
+        .expect("installed native-link manifest should be writable");
+        fs::remove_dir_all(cache.path().join("programs"))
+            .expect("workspace bootstrap entry should be removable");
+        let installed_cold = Command::new(&installed_aura)
+            .env("AURORA_CACHE_DIR", cache.path())
+            .arg("run")
+            .arg("--backend")
+            .arg("direct")
+            .arg(&source_path)
+            .output()
+            .expect("failed to populate the installed native cache");
+        assert!(
+            installed_cold.status.success(),
+            "installed native-cache cold run failed, stderr was:\n{}",
+            String::from_utf8_lossy(&installed_cold.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&installed_cold.stdout), "cached\n");
+
         let mut entries = fs::read_dir(cache.path().join("programs"))
-            .expect("program cache should exist")
+            .expect("installed program cache should exist")
             .map(|entry| entry.expect("cache entry should be readable").path())
             .collect::<Vec<_>>();
         entries.sort();
         assert_eq!(
             entries.len(),
             1,
-            "fixture should publish exactly one program entry, found {entries:?}"
+            "fixture should publish exactly one installed program entry, found {entries:?}"
         );
 
         Self {
             cache,
+            _install: install,
+            installed_aura,
             _source: source,
             source_path,
             entry: entries.remove(0),
@@ -1345,7 +1399,7 @@ impl NativeCacheFixture {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(aura_bin());
+        let mut command = Command::new(&self.installed_aura);
         command
             .env("AURORA_CACHE_DIR", self.cache.path())
             .arg("run")
@@ -1458,6 +1512,11 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
         String::from_utf8_lossy(&cold.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
+    assert!(
+        String::from_utf8_lossy(&cold.stderr).contains("aura: rebuilding native runtime..."),
+        "a cold direct run must explain the native-runtime rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
 
     let entries = |label: &str| {
         let mut found = fs::read_dir(cache.path().join("programs"))
@@ -1725,6 +1784,624 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     assert!(
         cache.path().join("runtime-identity").is_file(),
         "the runtime identity memo should be recorded at the cache root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_hits() {
+    use std::os::fd::AsRawFd;
+    use std::sync::mpsc;
+
+    let cache = TempDir::new("aurora-native-cache-concurrent");
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-cache-concurrent-run",
+        "def main() -> int32:\n    print(\"concurrent\")\n    return 0\n",
+    );
+
+    // Bootstrap the exact content key and its lock path, then remove only the
+    // program entry. Holding that key gives every child a deterministic cold
+    // miss and a real establishment barrier.
+    let bootstrap = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path)
+        .output()
+        .expect("failed to bootstrap concurrent native cache key");
+    assert!(
+        bootstrap.status.success(),
+        "concurrent-key bootstrap failed, stderr was:\n{}",
+        String::from_utf8_lossy(&bootstrap.stderr)
+    );
+    let mut bootstrapped_entries = fs::read_dir(cache.path().join("programs"))
+        .expect("bootstrapped program cache should exist")
+        .map(|entry| entry.expect("bootstrap entry should be readable").path())
+        .collect::<Vec<_>>();
+    assert_eq!(bootstrapped_entries.len(), 1);
+    let bootstrapped_entry = bootstrapped_entries.remove(0);
+    let key = bootstrapped_entry
+        .file_name()
+        .expect("bootstrap entry should have a key")
+        .to_string_lossy()
+        .into_owned();
+    fs::remove_dir_all(&bootstrapped_entry)
+        .expect("bootstrap program entry should be removable for the cold barrier");
+    let lock_path = cache.path().join("locks").join(format!("{key}.lock"));
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("the exact bootstrapped key lock should exist");
+    assert_eq!(
+        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "the parent should hold the exact cache-key barrier"
+    );
+
+    let mut children = (0..4)
+        .map(|_| {
+            Command::new(aura_bin())
+                .env("AURORA_CACHE_DIR", cache.path())
+                .arg("run")
+                .arg("--backend")
+                .arg("direct")
+                .arg(&source_path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("failed to spawn concurrent direct run")
+        })
+        .collect::<Vec<_>>();
+
+    // Read each child's first stderr line concurrently. It must be flushed
+    // while this process still owns the key lock, before the child can build.
+    let mut first_line_receivers = Vec::new();
+    let mut stderr_readers = Vec::new();
+    for child in &mut children {
+        let stderr = child
+            .stderr
+            .take()
+            .expect("concurrent stderr should be captured");
+        let (sender, receiver) = mpsc::channel();
+        first_line_receivers.push(receiver);
+        stderr_readers.push(std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut first_line = String::new();
+            let result = reader.read_line(&mut first_line);
+            let _ = sender.send((result, first_line));
+            let mut rest = Vec::new();
+            let _ = reader.read_to_end(&mut rest);
+            rest
+        }));
+    }
+    let mut first_lines = Vec::new();
+    let mut barrier_error = None;
+    for (index, receiver) in first_line_receivers.into_iter().enumerate() {
+        match receiver.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok((Ok(_), line)) if line == "aura: waiting for a concurrent build...\n" => {
+                first_lines.push(line)
+            }
+            Ok((Ok(_), line)) => {
+                barrier_error = Some(format!(
+                    "concurrent direct run {index} reported the wrong pre-block line: {line:?}"
+                ));
+                break;
+            }
+            Ok((Err(error), _)) => {
+                barrier_error = Some(format!(
+                    "concurrent direct run {index} stderr read failed: {error}"
+                ));
+                break;
+            }
+            Err(error) => {
+                barrier_error = Some(format!(
+                    "concurrent direct run {index} did not flush its wait line before blocking: {error}"
+                ));
+                break;
+            }
+        }
+    }
+    drop(held_lock);
+    if let Some(error) = barrier_error {
+        for child in &mut children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        panic!("{error}");
+    }
+
+    let mut outputs = Vec::new();
+    for (index, (child, stderr_reader)) in children.iter_mut().zip(stderr_readers).enumerate() {
+        let status =
+            wait_with_timeout(child, std::time::Duration::from_secs(60)).unwrap_or_else(|| {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("concurrent direct run {index} did not finish within 60 seconds")
+            });
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        child
+            .stdout
+            .take()
+            .expect("concurrent stdout should be captured")
+            .read_to_end(&mut stdout)
+            .expect("concurrent stdout should be readable");
+        stderr.extend_from_slice(first_lines[index].as_bytes());
+        stderr.extend(
+            stderr_reader
+                .join()
+                .expect("concurrent stderr reader should finish"),
+        );
+        outputs.push(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        });
+    }
+
+    for (index, output) in outputs.iter().enumerate() {
+        assert!(
+            output.status.success(),
+            "concurrent direct run {index} failed; stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "concurrent\n",
+            "concurrent direct run {index} produced the wrong result"
+        );
+    }
+
+    let rebuilds = outputs
+        .iter()
+        .filter(|output| {
+            String::from_utf8_lossy(&output.stderr).contains("aura: rebuilding native runtime...")
+        })
+        .count();
+    assert_eq!(
+        rebuilds,
+        1,
+        "four concurrent cold runs must perform exactly one build; stderr was:\n{}",
+        outputs
+            .iter()
+            .map(|output| String::from_utf8_lossy(&output.stderr))
+            .collect::<Vec<_>>()
+            .join("\n---\n")
+    );
+    for output in &outputs {
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr)
+                .matches("aura: waiting for a concurrent build...")
+                .count(),
+            1,
+            "each run must deduplicate its wait notice"
+        );
+    }
+
+    let entries = fs::read_dir(cache.path().join("programs"))
+        .expect("concurrent program cache should exist")
+        .map(|entry| {
+            entry
+                .expect("concurrent cache entry should be readable")
+                .path()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries.len(),
+        1,
+        "concurrent runs must publish exactly one verified cache entry, found {entries:?}"
+    );
+
+    let warm = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .env("CC", cache.path().join("missing-cc"))
+        .env("CARGO", cache.path().join("missing-cargo"))
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run poisoned-toolchain verified hit");
+    assert!(
+        warm.status.success(),
+        "the established entry must be a verified hit with CC and CARGO unavailable, stderr was:\n{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&warm.stdout), "concurrent\n");
+    assert!(
+        !String::from_utf8_lossy(&warm.stderr).contains("rebuilding native runtime"),
+        "a poisoned-toolchain warm hit must not rebuild"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
+    use std::os::fd::AsRawFd;
+
+    let fixture = NativeCacheFixture::new("aurora-native-cache-per-key");
+    let cache = &fixture.cache;
+    let first_path = &fixture.source_path;
+    let (_second_source, second_path) = write_temp_source(
+        "aurora-native-cache-per-key-second",
+        "def main() -> int32:\n    print(\"second\")\n    return 0\n",
+    );
+    let run = |path: &std::path::Path| {
+        Command::new(&fixture.installed_aura)
+            .env("AURORA_CACHE_DIR", cache.path())
+            .arg("run")
+            .arg("--backend")
+            .arg("direct")
+            .arg(path)
+            .output()
+            .expect("failed to populate per-key native cache")
+    };
+    let first_key = fixture
+        .entry
+        .file_name()
+        .expect("first program should publish a cache entry")
+        .to_string_lossy()
+        .into_owned();
+
+    let second = run(&second_path);
+    assert!(
+        second.status.success(),
+        "second per-key cold run failed, stderr was:\n{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&second.stdout), "second\n");
+    let mut keys = fs::read_dir(cache.path().join("programs"))
+        .expect("per-key program cache should exist")
+        .map(|entry| {
+            entry
+                .expect("per-key cache entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(keys.len(), 2, "two programs should produce two cache keys");
+
+    let warm = |label: &str, path: &std::path::Path| {
+        let mut warm_command = Command::new(&fixture.installed_aura);
+        warm_command
+            .env("AURORA_CACHE_DIR", cache.path())
+            .env("CC", cache.path().join("missing-cc"))
+            .env("CARGO", cache.path().join("missing-cargo"))
+            .arg("run")
+            .arg("--backend")
+            .arg("direct")
+            .arg(path);
+        command_output_with_timeout(warm_command, std::time::Duration::from_secs(10), label)
+    };
+
+    // Installed runtime inputs are immutable and therefore require no
+    // target-global runtime lease. Holding one exact program-key writer now
+    // isolates the property under test: verified hits for both that same key
+    // and an unrelated key must return through the optimistic read path.
+    let lock_path = cache.path().join("locks").join(format!("{first_key}.lock"));
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("the first cache-key lock should exist");
+    assert_eq!(
+        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "the test should hold one otherwise-idle cache-key lock"
+    );
+
+    for (label, path, expected) in [
+        ("same-key warm hit", first_path.as_path(), "cached\n"),
+        ("unrelated warm hit", &second_path, "second\n"),
+    ] {
+        let warm = warm(label, path);
+        assert!(
+            warm.status.success(),
+            "{label} must not wait or rebuild, stderr was:\n{}",
+            String::from_utf8_lossy(&warm.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&warm.stdout), expected);
+        let stderr = String::from_utf8_lossy(&warm.stderr);
+        assert!(
+            !stderr.contains("aura: waiting for a concurrent build..."),
+            "{label} must not wait on the held cache-key writer: {stderr}"
+        );
+        assert!(
+            !stderr.contains("aura: rebuilding native runtime..."),
+            "{label} must not rebuild through the poisoned toolchain: {stderr}"
+        );
+    }
+    drop(held_lock);
+}
+
+#[test]
+fn direct_run_json_failure_remains_one_document_when_a_rebuild_is_needed() {
+    let cache = TempDir::new("aurora-native-json-rebuild");
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-json-rebuild-source",
+        "def main() -> int32:\n    return 0\n",
+    );
+    let output = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .env("CC", cache.path().join("missing-cc"))
+        .arg("run")
+        .arg("--format")
+        .arg("json")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run JSON-mode direct rebuild failure");
+    assert!(
+        !output.status.success(),
+        "a missing linker must fail the forced direct backend"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+            panic!(
+                "JSON-mode stderr must remain exactly one document: {error}; stderr was:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert!(
+        report["diagnostics"][0]["notes"]
+            .as_array()
+            .is_some_and(|notes| notes
+                .iter()
+                .any(|note| note == "aura: rebuilding native runtime...")),
+        "JSON mode must preserve the exact rebuild notice as structured progress: {report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_run_json_buffers_wait_progress_into_one_document() {
+    use std::os::fd::AsRawFd;
+
+    let fixture = NativeCacheFixture::new("aurora-native-json-wait");
+    let key = fixture
+        .entry
+        .file_name()
+        .expect("the populated entry should have a content key")
+        .to_string_lossy()
+        .into_owned();
+    fs::remove_dir_all(&fixture.entry)
+        .expect("the populated entry should be removable to force a cache miss");
+
+    // Hold the exact content-key lock, not a neighboring or synthetic lock.
+    // JSON progress is intentionally buffered to preserve the one-document
+    // stderr contract, so the blocked child must not emit a partial document.
+    let lock_path = fixture
+        .cache
+        .path()
+        .join("locks")
+        .join(format!("{key}.lock"));
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("the populated entry's exact content-key lock should exist");
+    assert_eq!(
+        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "the test should hold the exact content-key barrier"
+    );
+
+    let mut child = Command::new(&fixture.installed_aura)
+        .env("AURORA_CACHE_DIR", fixture.cache.path())
+        .arg("run")
+        .arg("--format")
+        .arg("json")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&fixture.source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn JSON-mode direct run behind the cache-key barrier");
+
+    // The bounded poll is the only observable pre-release assertion available
+    // for deliberately buffered JSON output. The final exact wait message
+    // below proves that the child reached this held lock during the window.
+    if let Some(status) = wait_with_timeout(&mut child, std::time::Duration::from_secs(3)) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        child
+            .stdout
+            .take()
+            .expect("JSON wait stdout should be captured")
+            .read_to_end(&mut stdout)
+            .expect("JSON wait stdout should be readable");
+        child
+            .stderr
+            .take()
+            .expect("JSON wait stderr should be captured")
+            .read_to_end(&mut stderr)
+            .expect("JSON wait stderr should be readable");
+        panic!(
+            "JSON-mode direct run completed before the held content-key lock was released \
+             (status {status}); stdout was:\n{}stderr was:\n{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+
+    drop(held_lock);
+    let status =
+        wait_with_timeout(&mut child, std::time::Duration::from_secs(60)).unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("JSON-mode direct run did not finish after releasing the content-key lock")
+        });
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("JSON wait stdout should be captured")
+        .read_to_end(&mut stdout)
+        .expect("JSON wait stdout should be readable");
+    child
+        .stderr
+        .take()
+        .expect("JSON wait stderr should be captured")
+        .read_to_end(&mut stderr)
+        .expect("JSON wait stderr should be readable");
+
+    assert!(
+        status.success(),
+        "JSON-mode direct run should succeed after the lock release; stderr was:\n{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&stdout), "cached\n");
+    let stderr_text = String::from_utf8(stderr).expect("JSON-mode stderr should be UTF-8");
+    assert_eq!(
+        stderr_text.lines().count(),
+        1,
+        "JSON-mode stderr must contain exactly one JSON document: {stderr_text:?}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stderr_text).unwrap_or_else(|error| {
+        panic!(
+            "JSON-mode wait stderr must be exactly one JSON document: {error}; stderr was:\n\
+                 {stderr_text}"
+        )
+    });
+    assert_eq!(report["schema_version"], 1);
+    let progress = report["progress"]
+        .as_array()
+        .unwrap_or_else(|| panic!("JSON wait report should contain progress: {report}"));
+    assert_eq!(
+        progress
+            .iter()
+            .filter(|message| *message == "aura: waiting for a concurrent build...")
+            .count(),
+        1,
+        "the buffered report must preserve exactly one exact wait notice: {report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_run_json_fallback_preserves_native_progress_in_one_document() {
+    let fixture = NativeCacheFixture::new("aurora-native-json-auto-fallback");
+    fs::remove_dir_all(&fixture.entry)
+        .expect("the warm entry should be removable to force a direct build");
+    let output = Command::new(&fixture.installed_aura)
+        .env("AURORA_CACHE_DIR", fixture.cache.path())
+        .env("CC", fixture.cache.path().join("missing-cc"))
+        .arg("run")
+        .arg("--format")
+        .arg("json")
+        .arg("--backend")
+        .arg("auto")
+        .arg(&fixture.source_path)
+        .output()
+        .expect("failed to run JSON-mode automatic backend fallback");
+    assert!(
+        output.status.success(),
+        "the MIR fallback should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "cached\n");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+            panic!(
+                "JSON-mode fallback stderr must remain exactly one document: {error}; stderr was:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    assert_eq!(report["schema_version"], 1);
+    assert!(
+        report["progress"]
+            .as_array()
+            .is_some_and(|progress| progress
+                .iter()
+                .any(|message| message == "aura: rebuilding native runtime...")),
+        "the automatic fallback must retain the exact direct rebuild notice: {report}"
+    );
+    assert_eq!(report["fallback"]["from"], "direct");
+    assert_eq!(report["fallback"]["to"], "mir");
+    assert!(
+        report["fallback"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("failed to run native linker")),
+        "the structured fallback must retain the direct failure reason: {report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
+    let bootstrap_cache = TempDir::new("aurora-installed-no-cache-bootstrap");
+    let (_source, source_path) = write_temp_source(
+        "aurora-installed-no-cache-source",
+        "def main() -> int32:\n    print(\"uncached\")\n    return 0\n",
+    );
+    let bootstrap = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", bootstrap_cache.path())
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path)
+        .output()
+        .expect("failed to establish installable runtime artifacts");
+    assert!(
+        bootstrap.status.success(),
+        "runtime bootstrap failed, stderr was:\n{}",
+        String::from_utf8_lossy(&bootstrap.stderr)
+    );
+
+    let prefix = TempDir::new("aurora-installed-no-cache-prefix");
+    let bin_dir = prefix.path().join("bin");
+    let runtime_dir = prefix.path().join("lib").join("aurora");
+    fs::create_dir_all(&bin_dir).expect("installed bin directory should be creatable");
+    fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
+    let installed_aura = bin_dir.join("aura");
+    fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
+    fs::copy(
+        repo_root()
+            .join("target")
+            .join("debug")
+            .join("libaurora_compiler.a"),
+        runtime_dir.join("libaurora_compiler.a"),
+    )
+    .expect("native runtime archive should be installable");
+    let runtime_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
+        .expect("bootstrap should record native link arguments");
+    let native_link_args = runtime_memo
+        .lines()
+        .nth(2)
+        .expect("runtime memo should contain native link arguments");
+    fs::write(
+        runtime_dir.join("native-link-args.json"),
+        format!("{native_link_args}\n"),
+    )
+    .expect("installed native-link manifest should be writable");
+
+    let output = Command::new(&installed_aura)
+        .env("AURORA_CACHE_DIR", "")
+        .env_remove("HOME")
+        .arg("run")
+        .arg("--backend")
+        .arg("direct")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run installed aura without a native cache");
+    assert!(
+        output.status.success(),
+        "installed direct execution must not require a cache merely to lock, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "uncached\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("aura: rebuilding native runtime..."),
+        "an uncached installed build should still report its long operation"
     );
 }
 

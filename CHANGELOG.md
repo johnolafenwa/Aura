@@ -16,3 +16,6 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
 - Built a typed bootstrap compiler, MIR runtime, direct native backend, package/workspace support, structured concurrency, file/network/process APIs, LSP, VS Code extension, and maintained book.
 - Froze syntax expansion while the 0.1 distribution, safety validation, editor responsiveness, and control-plane standard library are hardened.
 - Made release archives carry a relocatable native runtime and linker manifest.
+- On maintained Unix hosts, serialized native cache establishment across processes by runtime identity and content key, so concurrent cold direct runs perform one build and the remaining runs consume the verified publication without blocking established warm hits.
+- Made long direct-backend operations visible in human output with `aura: waiting for a concurrent build...` and `aura: rebuilding native runtime...`. JSON output provisionally buffers the same notices into its single structured stderr document rather than streaming them, including when `auto` records a direct-to-MIR fallback.
+- Kept native caching optional for installed immutable runtime layouts: disabling or losing the cache no longer prevents an otherwise valid direct build.

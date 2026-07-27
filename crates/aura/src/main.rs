@@ -90,19 +90,49 @@ fn main() {
             let (diagnostic_format, input_args) = parse_diagnostic_format(input_args.to_vec());
             let (run_backend, input_args) = parse_run_backend(input_args);
             let input = read_input(&mut input_args.into_iter());
+            let mut json_native_fallback = None;
             if run_backend != RunBackend::Mir {
-                match run_through_native_backend(&input, program_args, run_backend) {
-                    NativeRunOutcome::Ran(code) => process::exit(code),
+                let mut native_progress = Vec::new();
+                match run_through_native_backend(
+                    &input,
+                    program_args,
+                    run_backend,
+                    diagnostic_format == DiagnosticFormat::Human,
+                    &mut native_progress,
+                ) {
+                    NativeRunOutcome::Ran(code) => {
+                        if diagnostic_format == DiagnosticFormat::Json
+                            && !native_progress.is_empty()
+                        {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "schema_version": 1,
+                                    "progress": native_progress,
+                                })
+                            );
+                        }
+                        process::exit(code);
+                    }
                     NativeRunOutcome::Failed(message) => {
-                        let error = Diagnostic::new(message);
+                        let mut error = Diagnostic::new(message);
+                        if diagnostic_format == DiagnosticFormat::Json {
+                            for progress in native_progress {
+                                error = error.with_note(progress);
+                            }
+                        }
                         emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                         process::exit(1);
                     }
                     NativeRunOutcome::FellBack(reason) => {
-                        eprintln!(
-                            "aura: direct backend unavailable; using the MIR runtime:\n{}",
-                            reason
-                        );
+                        if diagnostic_format == DiagnosticFormat::Json {
+                            json_native_fallback = Some((native_progress, reason));
+                        } else {
+                            eprintln!(
+                                "aura: direct backend unavailable; using the MIR runtime:\n{}",
+                                reason
+                            );
+                        }
                     }
                 }
             }
@@ -123,11 +153,33 @@ fn main() {
             };
             match result {
                 Ok(output) => {
+                    if let Some((progress, reason)) = json_native_fallback {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({
+                                "schema_version": 1,
+                                "progress": progress,
+                                "fallback": {
+                                    "from": "direct",
+                                    "to": "mir",
+                                    "reason": reason,
+                                },
+                            })
+                        );
+                    }
                     if let Value::Int(code) = output.value {
                         process::exit(code.as_i128().unwrap_or(1) as i32);
                     }
                 }
-                Err(error) => {
+                Err(mut error) => {
+                    if let Some((progress, reason)) = json_native_fallback {
+                        for message in progress {
+                            error = error.with_note(message);
+                        }
+                        error = error.with_note(format!(
+                            "direct backend unavailable; MIR fallback reason: {reason}"
+                        ));
+                    }
                     emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                     process::exit(1);
                 }
@@ -931,6 +983,8 @@ fn run_through_native_backend(
     input: &Input,
     program_args: &[String],
     backend: RunBackend,
+    report_progress: bool,
+    progress: &mut Vec<String>,
 ) -> NativeRunOutcome {
     let mir = if input.from_stdin {
         lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
@@ -944,47 +998,206 @@ fn run_through_native_backend(
         Err(error) => return NativeRunOutcome::Failed(error.message),
     };
 
-    let cache_key = native_runtime_identity_for_cache()
-        .as_ref()
-        .and_then(|runtime_identity| native_cache_key(&mir, runtime_identity));
-    if let Some(cached) = cache_key.as_deref().and_then(cached_native_binary) {
-        // A warm launch skips compiling and linking entirely. The key covers
-        // every input that can change the binary, and the cache hit itself has
-        // passed content and native-shape verification.
-        match launch_verified_native_binary(&cached, program_args) {
-            Ok(code) => return NativeRunOutcome::Ran(code),
-            Err(error) if error.invalidates_cache => {
-                // A plausible header can still be malformed, or a verified
-                // artifact can otherwise be unlaunchable. Discard it and
-                // rebuild once instead of allowing disposable cache state to
-                // force failure or fallback.
-                invalidate_cached_native_binary(&cached);
-            }
-            Err(error) => {
-                return native_backend_failure(backend, error.message);
+    let caching_available = native_cache_root().is_some();
+    let mut launch_invalidated_entry = None;
+    let mut progress = NativeProgressReporter {
+        report_human: report_progress,
+        messages: progress,
+        wait_reported: false,
+        rebuild_reported: false,
+    };
+    loop {
+        // A stable runtime memo plus a fully verified program entry is enough
+        // for a warm launch. The memo reader validates the archive stamp
+        // before and after reading (or hashes stable bytes after a harmless
+        // restamp), so this optimistic path need not wait behind unrelated
+        // Cargo/runtime establishment. Misses and invalid launches still enter
+        // the single-writer protocol below.
+        if launch_invalidated_entry.is_none() {
+            let optimistic_key = native_runtime_identity_for_cache()
+                .as_ref()
+                .and_then(|runtime_identity| native_cache_key(&mir, runtime_identity));
+            if let Some(cached) = optimistic_key
+                .as_deref()
+                .and_then(peek_cached_native_binary)
+            {
+                match launch_verified_native_binary(&cached, program_args) {
+                    Ok(code) => return NativeRunOutcome::Ran(code),
+                    Err(error) if error.invalidates_cache => {
+                        launch_invalidated_entry = Some(cached);
+                    }
+                    Err(error) => {
+                        return native_backend_failure(backend, error.message);
+                    }
+                }
             }
         }
-    }
 
-    let output_path = temporary_run_binary_path(&input.path);
-    let outcome = select_run_outcome(
-        backend,
-        || {
-            let runtime_identity = build_direct_native_binary_with_identity(
-                &input.path,
-                &input.source,
-                &mir,
-                &output_path,
-            )?;
-            if let Some(key) = native_cache_key(&mir, &runtime_identity) {
-                store_native_binary(&key, &output_path);
+        // Derive the content key under the short workspace-runtime lease. No
+        // cache-key lock is held while this potentially waits, which keeps the
+        // lock order acyclic across sibling processes.
+        let acquired_runtime_lock = {
+            let mut on_wait = || progress.wait();
+            acquire_native_runtime_build_lock(Some(&mut on_wait))
+        };
+        let first_runtime_lock = match acquired_runtime_lock {
+            Ok(lock) => lock,
+            Err(error) => return native_backend_failure(backend, error),
+        };
+        let initial_key = native_runtime_identity_for_cache()
+            .as_ref()
+            .and_then(|runtime_identity| native_cache_key(&mir, runtime_identity));
+
+        if initial_key.is_none() && caching_available {
+            progress.rebuild();
+            let established = establish_native_runtime_identity_memo();
+            drop(first_runtime_lock);
+            if let Err(error) = established {
+                return native_backend_failure(backend, error);
+            }
+            // Re-enter through the ordinary key path. The shared memo now
+            // supplies the same content identity to every cache root.
+            continue;
+        }
+        drop(first_runtime_lock);
+
+        let mut cache_lock = match initial_key.as_deref() {
+            Some(key) => {
+                let acquired_cache_lock = {
+                    let mut on_wait = || progress.wait();
+                    acquire_native_cache_build_lock(key, Some(&mut on_wait))
+                };
+                match acquired_cache_lock {
+                    Ok(lock) => lock,
+                    Err(error) => return native_backend_failure(backend, error),
+                }
+            }
+            None => None,
+        };
+
+        // A waiter must recheck the runtime identity after obtaining the
+        // per-key lease. If Cargo changed the content key meanwhile, release
+        // this obsolete key and retry rather than publishing under it.
+        let acquired_runtime_lock = {
+            let mut on_wait = || progress.wait();
+            acquire_native_runtime_build_lock(Some(&mut on_wait))
+        };
+        let runtime_lock = match acquired_runtime_lock {
+            Ok(lock) => lock,
+            Err(error) => return native_backend_failure(backend, error),
+        };
+        let cache_key = native_runtime_identity_for_cache()
+            .as_ref()
+            .and_then(|runtime_identity| native_cache_key(&mir, runtime_identity));
+        if cache_key != initial_key {
+            drop(runtime_lock);
+            drop(cache_lock);
+            continue;
+        }
+
+        if let Some(invalidated) = launch_invalidated_entry.take() {
+            // A plausible native header can still fail the exec probe. Remove
+            // exactly the entry we launched only after reacquiring the writer
+            // lock; a concurrent verified replacement is preserved.
+            invalidate_cached_native_binary(&invalidated);
+        }
+
+        if let Some(cached) = cache_key.as_deref().and_then(cached_native_binary) {
+            // Launching is outside the establishment lock. Long-running Aurora
+            // programs must not prevent unrelated processes from consulting or
+            // populating the cache after these bytes have been privately staged.
+            drop(runtime_lock);
+            drop(cache_lock);
+            match launch_verified_native_binary(&cached, program_args) {
+                Ok(code) => return NativeRunOutcome::Ran(code),
+                Err(error) if error.invalidates_cache => {
+                    launch_invalidated_entry = Some(cached);
+                    continue;
+                }
+                Err(error) => {
+                    return native_backend_failure(backend, error.message);
+                }
+            }
+        }
+
+        progress.rebuild();
+        let output_path = temporary_run_binary_path(&input.path);
+        let build = build_direct_native_binary_with_identity(
+            &input.path,
+            &input.source,
+            &mir,
+            &output_path,
+            runtime_lock,
+        );
+        let build = build.and_then(|runtime_identity| {
+            let final_key = native_cache_key(&mir, &runtime_identity);
+            if final_key != cache_key {
+                // Cargo may legitimately replace the runtime with different
+                // bytes while establishing it. The shared memo is already
+                // updated, so release the obsolete key before waiting for the
+                // final content key; old-key waiters will recheck and follow.
+                drop(cache_lock.take());
+                cache_lock = match final_key.as_deref() {
+                    Some(key) => {
+                        let mut on_wait = || progress.wait();
+                        acquire_native_cache_build_lock(key, Some(&mut on_wait))?
+                    }
+                    None => None,
+                };
+            }
+            if let Some(key) = final_key {
+                if cached_native_binary(&key).is_none() {
+                    store_native_binary(&key, &output_path);
+                }
             }
             Ok(())
-        },
-        || launch_native_binary(&output_path, program_args),
-    );
-    let _ = fs::remove_file(&output_path);
-    outcome
+        });
+        // Cache establishment and the runtime-identity memo are complete.
+        // Release before executing arbitrary user code.
+        drop(cache_lock);
+        let outcome = match build {
+            Ok(()) => launch_native_binary(&output_path, program_args)
+                .map(NativeRunOutcome::Ran)
+                .unwrap_or_else(|reason| native_backend_failure(backend, reason)),
+            Err(reason) => native_backend_failure(backend, reason),
+        };
+        let _ = fs::remove_file(&output_path);
+        return outcome;
+    }
+}
+
+struct NativeProgressReporter<'a> {
+    report_human: bool,
+    messages: &'a mut Vec<String>,
+    wait_reported: bool,
+    rebuild_reported: bool,
+}
+
+impl NativeProgressReporter<'_> {
+    fn wait(&mut self) {
+        if self.wait_reported {
+            return;
+        }
+        self.wait_reported = true;
+        self.report("aura: waiting for a concurrent build...");
+    }
+
+    fn rebuild(&mut self) {
+        if self.rebuild_reported {
+            return;
+        }
+        self.rebuild_reported = true;
+        self.report("aura: rebuilding native runtime...");
+    }
+
+    fn report(&mut self, message: &str) {
+        self.messages.push(message.to_string());
+        if self.report_human {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr, "{message}");
+            let _ = stderr.flush();
+        }
+    }
 }
 
 fn native_backend_failure(backend: RunBackend, reason: String) -> NativeRunOutcome {
@@ -1121,6 +1334,7 @@ fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
 /// `auto` degrades to the MIR runtime; a forced `direct` run reports the
 /// failure so a parity or benchmark caller never silently measures the wrong
 /// backend.
+#[cfg(test)]
 fn select_run_outcome(
     backend: RunBackend,
     build: impl FnOnce() -> std::result::Result<(), String>,
@@ -1154,6 +1368,144 @@ fn native_cache_root() -> Option<PathBuf> {
     };
     create_private_cache_directory_all(&root).ok()?;
     Some(root)
+}
+
+const NATIVE_RUNTIME_BUILD_LOCK: &str = ".aurora-native-runtime-build.lock";
+const NATIVE_CACHE_LOCKS: &str = "locks";
+
+struct NativeBuildLock {
+    _file: fs::File,
+}
+
+/// Acquires the cross-process single-writer lease for native runtime identity
+/// and cache establishment.
+///
+/// The first non-blocking attempt distinguishes a genuinely uncontended
+/// acquisition from a wait, so users hear about the latter before the process
+/// blocks in the kernel.
+fn acquire_native_cache_build_lock(
+    key: &str,
+    on_wait: Option<&mut dyn FnMut()>,
+) -> std::result::Result<Option<NativeBuildLock>, String> {
+    let Some(root) = native_cache_root() else {
+        // An unavailable cache retains the historical direct-build fallback.
+        // Runtime artifact access is still protected by the shared lease.
+        return Ok(None);
+    };
+    let locks = root.join(NATIVE_CACHE_LOCKS);
+    create_private_cache_directory_all(&locks).map_err(|error| {
+        format!(
+            "failed to create native cache lock directory `{}`: {error}",
+            locks.display()
+        )
+    })?;
+    acquire_native_build_lock_at(&locks.join(format!("{key}.lock")), on_wait).map(Some)
+}
+
+fn acquire_native_runtime_build_lock(
+    on_wait: Option<&mut dyn FnMut()>,
+) -> std::result::Result<Option<NativeBuildLock>, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the running aura executable: {error}"))?;
+    let directory = match resolve_installed_runtime_artifacts_from_executable(&executable)? {
+        // Installed runtime artifacts are immutable inputs. Optional native
+        // caching must not become mandatory merely to obtain a runtime lock.
+        Some(_) => return Ok(None),
+        None => {
+            let directory = native_runtime_target_dir();
+            fs::create_dir_all(&directory).map_err(|error| {
+                format!(
+                    "failed to create native runtime target directory `{}` for build locking: {error}",
+                    directory.display()
+                )
+            })?;
+            directory
+        }
+    };
+    acquire_native_build_lock_at(&directory.join(NATIVE_RUNTIME_BUILD_LOCK), on_wait).map(Some)
+}
+
+fn acquire_native_build_lock_at(
+    path: &Path,
+    mut on_wait: Option<&mut dyn FnMut()>,
+) -> std::result::Result<NativeBuildLock, String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path).map_err(|error| {
+        format!(
+            "failed to open native build lock `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect native build lock `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "native build lock `{}` is not a regular file",
+            path.display()
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err(format!(
+                "native build lock `{}` must be owned by the current user and not group- or world-writable",
+                path.display()
+            ));
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| {
+                format!(
+                    "failed to secure native build lock `{}`: {error}",
+                    path.display()
+                )
+            })?;
+
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
+            let error = io::Error::last_os_error();
+            if !matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            ) {
+                return Err(format!(
+                    "failed to acquire native build lock `{}`: {error}",
+                    path.display()
+                ));
+            }
+            if let Some(on_wait) = on_wait.as_mut() {
+                on_wait();
+            }
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == -1 {
+                return Err(format!(
+                    "failed to wait for native build lock `{}`: {}",
+                    path.display(),
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(NativeBuildLock { _file: file })
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok(NativeBuildLock { _file: file })
+    }
 }
 
 fn create_private_cache_directory_all(path: &Path) -> io::Result<()> {
@@ -1360,29 +1712,46 @@ fn native_runtime_identity_for_cache() -> Option<NativeRuntimeIdentity> {
     // source-checkout executables use the current workspace archive. Cache
     // lookup must fingerprint the same selection the builder will make.
     let executable = std::env::current_exe().ok()?;
-    let (path, installed_link_args) =
+    let (path, installed_link_args, memo) =
         match resolve_installed_runtime_artifacts_from_executable(&executable) {
-            Ok(Some(artifacts)) => (artifacts.staticlib, Some(artifacts.native_link_args)),
-            Ok(None) => (
-                resolve_static_library_path_in_target_dir(
-                    native_runtime_target_dir(),
-                    current_profile(),
-                )
-                .ok()?,
-                None,
+            Ok(Some(artifacts)) => (
+                artifacts.staticlib,
+                Some(artifacts.native_link_args),
+                native_cache_root()?.join(RUNTIME_IDENTITY_MEMO),
             ),
+            Ok(None) => {
+                let target = native_runtime_target_dir();
+                (
+                    resolve_static_library_path_in_target_dir(target.clone(), current_profile())
+                        .ok()?,
+                    None,
+                    target.join(RUNTIME_IDENTITY_MEMO),
+                )
+            }
             // An incomplete or invalid installed layout must not be hidden by a
             // cache hit labeled with unrelated workspace artifacts.
             Err(_) => return None,
         };
     let metadata = fs::metadata(&path).ok()?;
     let stamp = runtime_archive_memo_stamp(&path, &metadata)?;
-    let memo = native_cache_root()?.join(RUNTIME_IDENTITY_MEMO);
     if let Some(mut identity) = read_runtime_identity_memo(&memo, &stamp) {
-        if let Some(link_args) = installed_link_args {
-            identity.native_link_args = link_args;
+        let stamp_after = fs::metadata(&path)
+            .ok()
+            .and_then(|metadata| runtime_archive_memo_stamp(&path, &metadata));
+        if stamp_after.as_deref() == Some(stamp.as_str()) {
+            if let Some(link_args) = installed_link_args.as_ref() {
+                identity.native_link_args = link_args.clone();
+            }
+            return Some(identity);
         }
-        return Some(identity);
+    }
+    if installed_link_args.is_none() {
+        // Cargo may replace an unchanged archive inode while another cache
+        // root is being established. Under the shared runtime lease, compare
+        // bytes before treating that cheap-stamp change as a semantic change.
+        if let Some(identity) = read_runtime_identity_memo_by_content(&memo, &stamp, &path) {
+            return Some(identity);
+        }
     }
 
     // Workspace link arguments are known only after the cold Cargo query.
@@ -1428,19 +1797,118 @@ fn runtime_archive_memo_stamp(path: &Path, metadata: &fs::Metadata) -> Option<St
 }
 
 fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<NativeRuntimeIdentity> {
+    let (recorded_stamp, identity) = parse_runtime_identity_memo(memo)?;
+    (recorded_stamp == stamp).then_some(identity)
+}
+
+fn read_runtime_identity_memo_by_content(
+    memo: &Path,
+    stamp: &str,
+    archive: &Path,
+) -> Option<NativeRuntimeIdentity> {
+    let (_, identity) = parse_runtime_identity_memo(memo)?;
+    let before = fs::metadata(archive)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(archive, &metadata))?;
+    let contents = fs::read(archive).ok()?;
+    let after = fs::metadata(archive)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(archive, &metadata))?;
+    if before != stamp
+        || after != stamp
+        || aurora_compiler::sha256_hex(&contents) != identity.archive_sha256
+    {
+        return None;
+    }
+    write_runtime_identity_memo(memo, stamp, &identity);
+    Some(identity)
+}
+
+fn parse_runtime_identity_memo(memo: &Path) -> Option<(String, NativeRuntimeIdentity)> {
     let recorded = read_limited_regular_file(memo, MAX_RUNTIME_IDENTITY_MEMO_BYTES, false)?;
     let recorded = std::str::from_utf8(&recorded).ok()?;
     let mut lines = recorded.lines();
     let recorded_stamp = lines.next()?;
     let archive_sha256 = lines.next()?;
     let native_link_args = lines.next()?;
-    if recorded_stamp != stamp || !is_sha256_hex(archive_sha256) || lines.next().is_some() {
+    if !is_sha256_hex(archive_sha256) || lines.next().is_some() {
         return None;
     }
-    Some(NativeRuntimeIdentity {
-        archive_sha256: archive_sha256.to_string(),
-        native_link_args: serde_json::from_str(native_link_args).ok()?,
-    })
+    Some((
+        recorded_stamp.to_string(),
+        NativeRuntimeIdentity {
+            archive_sha256: archive_sha256.to_string(),
+            native_link_args: serde_json::from_str(native_link_args).ok()?,
+        },
+    ))
+}
+
+fn write_runtime_identity_memos(stamp: &str, identity: &NativeRuntimeIdentity) {
+    let executable = std::env::current_exe().ok();
+    let installed = executable
+        .as_deref()
+        .and_then(|path| {
+            resolve_installed_runtime_artifacts_from_executable(path)
+                .ok()
+                .flatten()
+        })
+        .is_some();
+    let authoritative = if installed {
+        native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO))
+    } else {
+        Some(native_runtime_target_dir().join(RUNTIME_IDENTITY_MEMO))
+    };
+    if let Some(memo) = authoritative.as_ref() {
+        write_runtime_identity_memo(memo, stamp, identity);
+    }
+    // Keep the cache-local memo for the existing cache layout contract and
+    // installed packages. Workspace lookup is authoritative at the target
+    // root so sibling cache roots refresh one shared content identity.
+    if let Some(cache_memo) = native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO)) {
+        if authoritative.as_ref() != Some(&cache_memo) {
+            write_runtime_identity_memo(&cache_memo, stamp, identity);
+        }
+    }
+}
+
+fn establish_native_runtime_identity_memo() -> std::result::Result<NativeRuntimeIdentity, String> {
+    let native_runtime = ensure_native_runtime_artifacts()?;
+    let before = fs::metadata(&native_runtime.staticlib)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata))
+        .ok_or_else(|| {
+            format!(
+                "failed to fingerprint Aurora runtime library `{}`",
+                native_runtime.staticlib.display()
+            )
+        })?;
+    let contents = fs::read(&native_runtime.staticlib).map_err(|error| {
+        format!(
+            "failed to read Aurora runtime library `{}`: {error}",
+            native_runtime.staticlib.display()
+        )
+    })?;
+    let after = fs::metadata(&native_runtime.staticlib)
+        .ok()
+        .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata))
+        .ok_or_else(|| {
+            format!(
+                "failed to recheck Aurora runtime library `{}`",
+                native_runtime.staticlib.display()
+            )
+        })?;
+    if before != after {
+        return Err(format!(
+            "Aurora runtime library `{}` changed while its identity was being established",
+            native_runtime.staticlib.display()
+        ));
+    }
+    let identity = NativeRuntimeIdentity {
+        archive_sha256: aurora_compiler::sha256_hex(&contents),
+        native_link_args: native_runtime.native_link_args,
+    };
+    write_runtime_identity_memos(&after, &identity);
+    Ok(identity)
 }
 
 fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntimeIdentity) {
@@ -1494,6 +1962,17 @@ struct VerifiedNativeBinary {
 /// An invalid entry is disposable cache state, not a program artifact. It is
 /// removed and reported as a miss so the caller rebuilds before executing.
 fn cached_native_binary(key: &str) -> Option<VerifiedNativeBinary> {
+    inspect_cached_native_binary(key, true)
+}
+
+fn peek_cached_native_binary(key: &str) -> Option<VerifiedNativeBinary> {
+    inspect_cached_native_binary(key, false)
+}
+
+fn inspect_cached_native_binary(
+    key: &str,
+    invalidate_invalid: bool,
+) -> Option<VerifiedNativeBinary> {
     let programs = native_cache_root()?.join(NATIVE_CACHE_PROGRAMS);
     cleanup_stale_native_cache_artifacts(&programs);
     let entry = programs.join(key);
@@ -1535,8 +2014,10 @@ fn cached_native_binary(key: &str) -> Option<VerifiedNativeBinary> {
             entry,
             entry_id: entry_id.expect("verified cache entry has an identity"),
         })
-    } else {
+    } else if invalidate_invalid {
         remove_native_cache_entry_if_unchanged(&entry, observed_entry_id.as_deref());
+        None
+    } else {
         None
     }
 }
@@ -2246,7 +2727,9 @@ fn build_direct_native_binary(
     mir: &MirModule,
     output_path: &Path,
 ) -> std::result::Result<(), String> {
-    build_direct_native_binary_with_identity(path, source, mir, output_path).map(|_| ())
+    let runtime_lock = acquire_native_runtime_build_lock(None)?;
+    build_direct_native_binary_with_identity(path, source, mir, output_path, runtime_lock)
+        .map(|_| ())
 }
 
 fn build_direct_native_binary_with_identity(
@@ -2254,6 +2737,7 @@ fn build_direct_native_binary_with_identity(
     source: &str,
     mir: &MirModule,
     output_path: &Path,
+    runtime_lock: Option<NativeBuildLock>,
 ) -> std::result::Result<NativeRuntimeIdentity, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -2307,6 +2791,18 @@ fn build_direct_native_binary_with_identity(
             error
         )
     })?;
+    if let Some(stamp) = stable_archive_stamp {
+        let current_stamp = fs::metadata(&native_runtime.staticlib)
+            .ok()
+            .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
+        if current_stamp.as_deref() == Some(stamp.as_str()) {
+            write_runtime_identity_memos(&stamp, &runtime_identity);
+        }
+    }
+    // The linker consumes the private staticlib snapshot written above. Once
+    // that snapshot and its identity memo exist, another process may refresh
+    // the workspace runtime without changing this build's inputs.
+    drop(runtime_lock);
 
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let mut command = Command::new(cc);
@@ -2332,16 +2828,6 @@ fn build_direct_native_binary_with_identity(
             "direct backend link failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
-    }
-    if let Some(stamp) = stable_archive_stamp {
-        let current_stamp = fs::metadata(&native_runtime.staticlib)
-            .ok()
-            .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
-        if current_stamp.as_deref() == Some(stamp.as_str()) {
-            if let Some(memo) = native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO)) {
-                write_runtime_identity_memo(&memo, &stamp, &runtime_identity);
-            }
-        }
     }
     Ok(runtime_identity)
 }
@@ -2930,6 +3416,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    use super::{
+        acquire_native_build_lock_at, create_private_directory,
+        create_verified_native_launch_lease, spawn_verified_native_binary_with_lease,
+    };
     use super::{
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
         configure_native_runtime_cargo, create_private_cache_directory_all, lsp_response_for_line,
@@ -2940,11 +3431,6 @@ mod tests {
         runtime_archive_memo_stamp, select_build_backend, select_run_outcome,
         write_unique_temp_file, write_unique_temp_file_with_writer, BuildBackend, NativeRunOutcome,
         NativeRuntimeIdentity, RunBackend, SelectedBuildBackend, NATIVE_CACHE_ENTRY_ID,
-    };
-    #[cfg(unix)]
-    use super::{
-        create_private_directory, create_verified_native_launch_lease,
-        spawn_verified_native_binary_with_lease,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -3019,6 +3505,39 @@ mod tests {
         assert_ne!(
             second_stamp, first_stamp,
             "file identity or ctime must invalidate a same-size, same-mtime archive memo"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_build_lock_rejects_symlinks_and_shared_writable_files() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = unique_temp_dir("native-build-lock-safety");
+        let target = root.join("target");
+        let symlink_lock = root.join("symlink.lock");
+        fs::write(&target, b"external").expect("symlink target should be writable");
+        symlink(&target, &symlink_lock).expect("lock symlink should be creatable");
+        let symlink_error = acquire_native_build_lock_at(&symlink_lock, None)
+            .err()
+            .expect("a lock symlink must be rejected");
+        assert!(
+            symlink_error.contains("failed to open native build lock"),
+            "{symlink_error}"
+        );
+
+        let writable_lock = root.join("writable.lock");
+        fs::write(&writable_lock, []).expect("writable lock should be creatable");
+        fs::set_permissions(&writable_lock, fs::Permissions::from_mode(0o666))
+            .expect("writable lock permissions should be configurable");
+        let writable_error = acquire_native_build_lock_at(&writable_lock, None)
+            .err()
+            .expect("a shared-writable lock must be rejected");
+        assert!(
+            writable_error.contains("not group- or world-writable"),
+            "{writable_error}"
         );
 
         let _ = fs::remove_dir_all(root);

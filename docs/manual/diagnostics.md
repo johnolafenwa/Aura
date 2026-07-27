@@ -164,7 +164,13 @@ the same `path`, `start`, and `end` fields plus a string `label`. Each edit has
 `aura check --format json` emits schema version 1 with an empty diagnostics
 array. Successful `run` and `build` retain their ordinary program-output and
 artifact contracts; `--format` selects their diagnostic representation, not
-the program's data format.
+the program's data format. A direct run that performs long native work may also
+write one schema-version-1 status document on standard error. Its `progress`
+array contains the exact wait/rebuild notices. If `auto` falls back
+successfully, the same document contains
+`"fallback":{"from":"direct","to":"mir","reason":"..."}`. If the fallback
+then fails, its progress and direct failure are retained as notes in the one
+diagnostic document.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

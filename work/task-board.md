@@ -14,10 +14,41 @@ Last updated: 2026-07-27
   worktree opened from that clean checkpoint with compiler coverage floors
   frozen at `96.13/96.89/94.35`; see
   `work/2026-07-27-batch4-scalable-runtime.md`.
-- Current stage: B4.0 is in progress. Cross-process native-cache locking and
-  truthful wait/rebuild status, capability diagnostic polish, and
-  gate-condition suite-count precision are the only open implementation
-  surface. Phase 5 proper has not started.
+- Current stage: B4.0 implementation and its exact repository gates are
+  complete. Cross-process runtime-identity and per-content-key locks now give
+  concurrent cold direct runs one builder plus verified consumers without
+  blocking established warm hits. Human mode flushes the exact wait/rebuild
+  notices before the long operation; JSON mode provisionally buffers those
+  notices to preserve one structured stderr document and retains them with the
+  direct failure when `auto` falls back to MIR. Installed immutable runtimes
+  remain able to build with caching disabled or unavailable.
+  Capability diagnostic polish is committed at `4f0461e`, and suite-count
+  precision is committed at `5cb4476`.
+- B4.0 verification so far: all five `native_run_cache_*` tests, the full
+  274-test CLI integration suite, and the complete Rust workspace pass under
+  default parallelism. The
+  deterministic four-process regression proves one rebuild, four successful
+  results, one published entry, and a later verified hit with both `CC` and
+  `CARGO` unavailable. Broad serialization has been removed from the ordinary
+  Rust gate. The compiler-coverage gate retains a narrow single-threaded
+  constraint after default-parallel instrumentation passed behavior but
+  undercounted function coverage at 96.86%; the serialized run restored the
+  stable pre-closure result to 4201/4336 functions (96.886531%) while
+  retaining the 15 known LLVM profile-data warnings. Dedicated parity, stress,
+  and sanitizer ordering also remains. Behavior-focused AU2999 and canonical
+  generic-analysis tests then produced final exact coverage of 96.142124%
+  lines, 96.909594% functions, and 94.360014% regions, clearing the frozen
+  96.13/96.89/94.35 floors with no synthetic coverage test.
+  The timed warm-hit regression uses an installed immutable runtime so
+  parallel Cargo activity cannot change its runtime identity while it holds an
+  exact key lock; production identity remains strict and content-derived. The
+  exact final-tree `npm run ci` is green across format, default-parallel Rust,
+  the 529.82-second forced-backend matrix, all 79 LSP tests at 100% coverage,
+  all 13 extension tests, compiler coverage, reference and stale-syntax
+  integrity, docs, both audits, warning-denied Clippy, and hygiene. This
+  checkpoint change lands B4.0-a/b and its behavior-focused coverage closure
+  as one isolated commit family. Phase 5 proper has not started; the next
+  action is the before-reactor benchmark baseline.
 - Benchmark host: Mac14,9 Apple M2 Pro, 10 logical CPUs, 16 GiB RAM, macOS
   26.5.2 (25F84). Contractual measurements require the dedicated quiet-machine
   protocol and per-stage before/after evidence.
