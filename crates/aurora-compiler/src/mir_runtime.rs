@@ -41,15 +41,16 @@ use crate::runtime_value::{
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
-    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
+    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
+    NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -2859,6 +2860,13 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Bool(poll_cancellation(&self.cancellation)));
+                }
+
+                if name == "yield_now" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    yield_now_with_runtime_scheduler();
+                    return Ok(Value::Unit);
                 }
 
                 if name == "sleep" {

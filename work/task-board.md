@@ -91,9 +91,18 @@ Last updated: 2026-07-27
   reference execution, docs, audits, warning-denied Clippy, and hygiene. The
   affected native-build and scheduler test watchdogs were widened only after
   isolated and CPU-saturated replays proved default-parallel cold compilation,
-  rather than product deadlock, caused the earlier expirations. The next action
-  is the isolated Phase 5.1 sign-off commit, followed by Phase 5.2
-  `yield_now()`.
+  rather than product deadlock, caused the earlier expirations. Phase 5.1 is
+  committed through `df104fa`.
+- Phase 5.2 `yield_now() -> None` is implemented through the existing
+  ready-tail scheduler requeue on both backends, with a void direct ABI.
+  Source diagnostics pin zero arguments and builtin-name reservation; the
+  future-multicore-safe fairness fixture requires an already-runnable sibling
+  to progress without specifying global task order. Focused Rust tests,
+  fixtures, MIR/direct example execution, 80 LSP tests at 100% coverage, 13
+  extension tests, reference integrity, and docs are green. The next action is
+  the clean-tree Phase 5.2 benchmark after the complete forced-backend matrix
+  passed in 761.72 seconds, then frozen coverage and exact full CI before
+  automatic safepoints.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions

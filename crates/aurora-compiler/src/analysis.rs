@@ -4085,6 +4085,7 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Print => Some(Type::Unit),
         BuiltinFunction::Range => Some(Type::named("Range")),
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
+        BuiltinFunction::YieldNow => Some(Type::Unit),
         BuiltinFunction::Sleep => Some(Type::Unit),
         BuiltinFunction::WaitAny => None,
         BuiltinFunction::WaitAll => None,

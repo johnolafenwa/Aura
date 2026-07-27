@@ -185,9 +185,25 @@ before-reactor baseline is recorded in
   Every formerly timing-sensitive test then passed both the normal and
   instrumented CLI suites. Cargo audit retains only the repository's allowed
   `rustls-pemfile` unmaintained warning.
+- Phase 5.2 exposes `yield_now() -> None` as a zero-argument builtin backed by
+  the scheduler's existing ready-tail requeue operation. MIR and direct calls
+  share that implementation; direct codegen uses a void runtime ABI rather
+  than allocating a boxed Unit value. The call keeps the task runnable, does
+  not wait for an event or deadline, does not inspect cancellation, and does
+  not promise that a different task or any particular runnable task executes
+  next.
+- The Phase 5.2 behavior matrix pins AU2004 for arguments, AU2007 for builtin
+  redefinition, compiler/LSP completion and hover, Unit inference, MIR
+  dispatch, malformed-MIR argument rejection, the direct void ABI, and a
+  bounded fairness fixture whose success requires an already-runnable sibling
+  to make progress. Focused Rust fixtures, MIR and direct example execution,
+  80 LSP tests at 100% coverage, 13 extension tests, reference integrity, and
+  the docs build are green. The complete serialized forced-backend fixture
+  matrix also passes in 761.72 seconds with no MIR/direct mismatch.
 
 ## Follow-up
 
-Commit the exact Phase 5.1 closure tree, then begin the public `yield_now()`
-stage. Coverage floors remain frozen until the one-time Batch 4 sign-off
-re-ratchet.
+Commit the isolated Phase 5.2 implementation tree, record its clean-tree
+after-stage benchmark, then run frozen coverage and exact full CI before
+starting automatic safepoints. Coverage floors remain frozen until the
+one-time Batch 4 sign-off re-ratchet.

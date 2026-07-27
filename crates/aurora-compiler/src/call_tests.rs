@@ -220,6 +220,19 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
     assert!(wait_error
         .message
         .contains("`wait_any` expects 2 arguments"));
+
+    assert!(BuiltinFunction::YieldNow
+        .bind_args(&[], Span::new(1, 1))
+        .expect("yield_now should accept no arguments")
+        .is_empty());
+    let yield_arg = [dummy_arg(None)];
+    let yield_error = BuiltinFunction::YieldNow
+        .bind_args(&yield_arg, Span::new(1, 1))
+        .expect_err("yield_now should reject arguments");
+    assert_eq!(yield_error.code, "AU2004");
+    assert!(yield_error
+        .message
+        .contains("`yield_now` expects 0 arguments, found 1"));
 }
 
 #[test]
@@ -1429,6 +1442,10 @@ fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
     assert_eq!(
         BuiltinFunction::from_name("wait_all"),
         Some(BuiltinFunction::WaitAll)
+    );
+    assert_eq!(
+        BuiltinFunction::from_name("yield_now"),
+        Some(BuiltinFunction::YieldNow)
     );
 
     assert_eq!(

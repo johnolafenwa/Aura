@@ -623,6 +623,31 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_yield_now_uses_void_runtime_abi_without_boxing_unit() {
+    let source = r#"
+def main() -> int32:
+    yield_now()
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("yield_now source should lower to MIR");
+    let object = emit_host_object(&mir).expect("yield_now source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now")),
+        "direct yield_now calls must use the void runtime ABI: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_yield_now_value")),
+        "direct yield_now calls must not use a boxed-value ABI: {referenced:?}"
+    );
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",
@@ -7871,6 +7896,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         ),
         ("TaskGroup", DirectType::Opaque(Type::named("TaskGroup"))),
         ("cancelled", DirectType::Scalar(ScalarKind::Bool)),
+        ("yield_now", DirectType::Scalar(ScalarKind::Unit)),
         ("sleep", DirectType::Scalar(ScalarKind::Unit)),
         (
             "parse_int32",

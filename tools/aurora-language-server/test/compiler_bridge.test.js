@@ -1044,6 +1044,39 @@ test("compiler bridge preserves assert operand occurrences and keyword completio
   }
 });
 
+test("compiler bridge exposes yield_now completion and hover metadata", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-yield-now-"));
+  const source = ["def main():", "    yield_now()", ""].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const hover = compilerHoverAtPosition(analysis, 1, 5);
+    assert.ok(hover, "yield_now call should expose builtin hover");
+    assert.ok(
+      hover.value.startsWith("```aurora\nyield_now() -> None\n```"),
+      `yield_now hover should expose its signature, found ${hover.value}`
+    );
+
+    const completions = await completeWithCompiler(mainUri, source, 1, 4, null);
+    assert.ok(completions);
+    assert.deepEqual(
+      completions.find((completion) => completion.name === "yield_now"),
+      {
+        name: "yield_now",
+        kind: "function",
+        detail: "yield_now() -> None"
+      }
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge exposes invalid assert diagnostics at the keyword", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-invalid-assert-"));
   const source = ["def main():", "    assert 1", ""].join("\n");

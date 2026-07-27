@@ -324,6 +324,7 @@ Current builtin functions:
 - `print`
 - `range`
 - `cancelled`
+- `yield_now`
 - `sleep`
 - `wait_any`
 - `wait_all`
@@ -658,7 +659,7 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without a scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
+Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without `yield_now()`, `cancelled()`, or another scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
 
 Current collection notes:
 
@@ -755,7 +756,7 @@ Current expression/ergonomics limitations:
   plus associated methods without `self`, using task-owned captures
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
-- concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, and `wait_all(...)` surface
+- concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `yield_now()`, `wait_any(...)`, and `wait_all(...)` surface
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime

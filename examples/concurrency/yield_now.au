@@ -1,0 +1,13 @@
+def count(label: String):
+    mut step: int32 = 1
+    while step <= 3:
+        print(f"{label}: {step}")
+        step += 1
+        yield_now()
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_soon(count, "alpha")
+        group.start_soon(count, "beta")
+
+    return 0

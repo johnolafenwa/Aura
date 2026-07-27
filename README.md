@@ -177,6 +177,8 @@ Current compiler workflow:
   - execute bounded queues with `Queue[T](capacity=...)` on the shared scheduler
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
+- `cargo run -p aura -- run examples/concurrency/yield_now.au`
+  - execute bounded CPU-work chunks with explicit cooperative scheduling points
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
   - compile a standalone native binary through the default auto backend
 - `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`

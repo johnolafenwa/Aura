@@ -65,11 +65,12 @@ Aurora 0.1 uses structured concurrency:
 - `TaskGroup.start(...)` returns a `Task[T]`
 - `TaskGroup.start_soon(...)` starts a child whose result is not retained
 - `Queue[T]` provides bounded or unbounded task-aware communication
+- `yield_now()` provides an explicit cooperative scheduling point
 - `wait_any(...)` and `wait_all(...)` coordinate task completion
 
 There is no `Channel`, language-level `select`, bare `spawn`, or detached task.
 
-Task bodies execute on one cooperative scheduler thread rather than in parallel. CPU code without a scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Waits use persistent descriptor registrations, heap-managed deadlines, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Results containing exclusive runtime resources are single-observer-only, although that restriction is not yet statically enforced. See [Execution Model](/manual/execution-model) and [Current Limits](/manual/current-limits).
+Task bodies execute on one cooperative scheduler thread rather than in parallel. CPU code without `yield_now()`, `cancelled()`, or another scheduler boundary can starve siblings, and each task reserves a fixed 1 MiB coroutine stack. Waits use persistent descriptor registrations, heap-managed deadlines, and direct Queue, task-completion, and blocking-pool notifications; an idle scheduler blocks until an event or deadline without a periodic tick. Results containing exclusive runtime resources are single-observer-only, although that restriction is not yet statically enforced. See [Execution Model](/manual/execution-model) and [Current Limits](/manual/current-limits).
 
 ## Platform And Distribution Support
 

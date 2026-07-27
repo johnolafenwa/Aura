@@ -5864,6 +5864,24 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert_eq!(
         runtime
             .evaluate_call(
+                &crate::mir::CallTarget::Name("yield_now".to_string()),
+                &[],
+                &mut env,
+            )
+            .expect("yield_now() should succeed"),
+        Value::Unit
+    );
+    let yield_arg_error = runtime
+        .evaluate_call(
+            &crate::mir::CallTarget::Name("yield_now".to_string()),
+            &[mir_arg(None, Operand::Int(1))],
+            &mut env,
+        )
+        .expect_err("yield_now() should reject arguments in malformed MIR");
+    assert_eq!(yield_arg_error.message, "too many MIR arguments");
+    assert_eq!(
+        runtime
+            .evaluate_call(
                 &crate::mir::CallTarget::Name("sleep".to_string()),
                 &[MirArg {
                     name: Some("duration".to_string()),

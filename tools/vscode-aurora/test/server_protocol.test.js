@@ -178,7 +178,7 @@ test("bundled language server completes safely while a function header is incomp
   );
   assert.ok(Array.isArray(completion.result), "completion should return a list");
   const labels = new Set(completion.result.map((item) => item.label));
-  for (const expected of ["String", "Path", "write_to_path"]) {
+  for (const expected of ["String", "Path", "write_to_path", "yield_now"]) {
     assert.ok(labels.has(expected), `recovery completion should include ${expected}`);
   }
 });

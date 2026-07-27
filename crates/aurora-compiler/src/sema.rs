@@ -9681,6 +9681,7 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::named("Range"))
                     }
                     BuiltinFunction::Cancelled => Ok(Type::named("bool")),
+                    BuiltinFunction::YieldNow => Ok(Type::Unit),
                     BuiltinFunction::Sleep => {
                         let duration_arg = required_ordered_arg(
                             &ordered_args,

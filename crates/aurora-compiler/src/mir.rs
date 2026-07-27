@@ -5625,6 +5625,9 @@ impl<'a> Lowerer<'a> {
                         if name == "cancelled" {
                             return Some(Type::named("bool"));
                         }
+                        if name == "yield_now" {
+                            return Some(Type::Unit);
+                        }
                         if name == "sleep" {
                             return Some(Type::Unit);
                         }

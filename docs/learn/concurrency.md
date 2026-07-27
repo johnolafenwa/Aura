@@ -227,6 +227,22 @@ Cancellation is not an exception that lands at arbitrary points in the code. It 
 
 Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in parallel. CPU code without a scheduler boundary can starve sibling tasks, and each task reserves a fixed 1 MiB coroutine stack. Scheduler waits are event-driven: descriptors stay registered, deadlines are kept in a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. An idle scheduler blocks until an event or deadline instead of waking on a periodic tick.
 
+For CPU work that is not checking cancellation on every chunk, `yield_now()`
+adds an explicit cooperative scheduling point:
+
+```python
+def crunch():
+    mut chunk: int32 = 0
+    while chunk < 100:
+        process_chunk(chunk)
+        chunk += 1
+        yield_now()
+```
+
+It gives runnable siblings an opportunity to proceed, but does not sleep,
+promise that another task runs, or check cancellation. Use `cancelled()` when
+the task must also respond to a cancellation request.
+
 ## The Shape Worth Copying
 
 Good Aurora concurrency tends to look the same across programs:
@@ -234,7 +250,7 @@ Good Aurora concurrency tends to look the same across programs:
 - one `with TaskGroup()` per concurrent operation
 - queues owned by the parent, closed by the producers
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
-- long CPU loops that check `cancelled()`
+- long CPU loops that check `cancelled()` or yield between bounded chunks
 - no detached background work; Aurora 0.1 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.

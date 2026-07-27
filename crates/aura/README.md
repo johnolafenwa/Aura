@@ -59,6 +59,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/io/websocket_roundtrip.au
 ./target/release/aura run examples/io/unix_tls_roundtrip.au
 ./target/release/aura run examples/concurrency/sleep_builtin.au
+./target/release/aura run examples/concurrency/yield_now.au
 ./target/release/aura build -o ./target/aurora-point examples/point.au
 ./target/release/aura build --backend direct -o ./target/aurora-direct examples/basic_addition.au
 ./target/release/aura ast examples/classes/point_distance.au
@@ -135,7 +136,7 @@ aura deps update util
   - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
   - run a program through the MIR runtime
-  - this now includes the maintained `pass` and `assert` statements and the `sleep(duration)` builtin
+  - this now includes the maintained `pass` and `assert` statements plus the `sleep(duration)` and `yield_now()` builtins
   - the maintained user-facing surface now also includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`

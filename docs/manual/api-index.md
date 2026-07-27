@@ -13,6 +13,7 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `print` | `print(value) -> None` | Renders `value` and writes a newline. |
 | `range` | `range(stop: int32) -> Range`; `range(start: int32, stop: int32) -> Range` | End-exclusive integer range. |
 | `cancelled` | `cancelled() -> bool` | Returns the current task cancellation state. |
+| `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task to the scheduler. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task using the scheduler. |
 | `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; requires clone-safe `T`. |

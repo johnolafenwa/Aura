@@ -51,7 +51,8 @@ const BUILTINS = [
   "int32",
   "int64",
   "print",
-  "range"
+  "range",
+  "yield_now"
 ];
 
 function indentation(line) {

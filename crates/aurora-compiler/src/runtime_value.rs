@@ -1798,6 +1798,10 @@ fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::YieldNow)
 }
 
+pub(crate) fn yield_now_with_runtime_scheduler() {
+    let _ = yield_now_current_lightweight_task();
+}
+
 fn exit_current_lightweight_task(result: TaskExecutionResult) -> ! {
     CURRENT_LIGHTWEIGHT_TASK_EXIT.with(|slot| *slot.borrow_mut() = Some(result));
     let _ = yield_current_lightweight_task(TaskYield::Exit);

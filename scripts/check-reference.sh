@@ -437,6 +437,12 @@ grep -Fq 'NOT explicitly define or inherit a trait method whose name is a builti
 grep -Fq 'builtin target members always retain builtin dispatch' docs/manual/generics-and-traits.md
 grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
+test -s examples/concurrency/yield_now.au
+grep -Fq 'yield_now()' examples/concurrency/yield_now.au
+grep -Fq '| `yield_now` | `yield_now() -> None` |' docs/manual/api-index.md
+grep -Fq 'places the current lightweight task back in the scheduler ready set' docs/manual/concurrency.md
+grep -Fq '[examples/concurrency/yield_now.au](../examples/concurrency/yield_now.au)' tutorials/13-concurrency.md
+grep -Fq '`yield_now` cooperative scheduling' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md

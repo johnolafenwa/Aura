@@ -249,11 +249,33 @@ If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scop
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
-Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `cancelled()` or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack. Descriptor registrations persist across waits, deadlines use a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. With nothing ready, the scheduler blocks until an event or deadline rather than waking on a periodic tick.
+Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `yield_now()`, `cancelled()`, or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack. Descriptor registrations persist across waits, deadlines use a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly. With nothing ready, the scheduler blocks until an event or deadline rather than waking on a periodic tick.
 
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 
 See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
+
+## `yield_now`
+
+Long CPU-bound work should be divided into bounded chunks. Calling
+`yield_now()` between chunks voluntarily gives other runnable lightweight
+tasks an opportunity to proceed:
+
+```python
+def count(label: String):
+    mut step: int32 = 1
+    while step <= 3:
+        print(f"{label}: {step}")
+        step += 1
+        yield_now()
+```
+
+The call returns `None` when the current task is scheduled again. It does not
+sleep or guarantee that a different task runs, and runnable-task ordering is
+not part of the language contract. It also does not inspect cancellation; call
+`cancelled()` separately when cancellation matters.
+
+See [examples/concurrency/yield_now.au](../examples/concurrency/yield_now.au).
 
 ## `sleep`
 

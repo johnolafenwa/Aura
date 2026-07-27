@@ -156,9 +156,24 @@ explicitly is still the clearest program shape.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
+| `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task so other runnable work can proceed. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
 | `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait; requires clone-safe `T`. |
+
+### Explicit Cooperative Yielding
+
+`yield_now()` places the current lightweight task back in the scheduler ready set
+and returns `None` when that task is selected to run again. It gives other
+runnable tasks an opportunity to proceed, but it does not guarantee that
+another task runs before it returns or specify which runnable task is selected.
+If there is no current schedulable lightweight task, the call returns without
+effect.
+
+The call does not sleep, wait for an event or deadline, or inspect or change
+cancellation state. Use it between bounded chunks of CPU work when an explicit
+cooperative scheduling point is useful. Use `cancelled()` separately when the
+task must also respond to cancellation.
 
 `WaitAny[T]` variants:
 
@@ -183,6 +198,7 @@ explicitly is still the clearest program shape.
 Cancellation is cooperative. `group.cancel()` marks child tasks as cancelled. Tasks observe that state through:
 
 - `cancelled()`; the check is also a cooperative scheduler yield point
+- `yield_now()` is a scheduling point but does not itself inspect cancellation
 - `sleep(...)`
 - queue send and receive waits
 - task result waits
@@ -198,7 +214,7 @@ while not cancelled():
 
 Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
 
-Aurora 0.1 task scheduling is cooperative and single-threaded. CPU code that never reaches `cancelled()` or another scheduler-aware operation can starve sibling tasks. Each lightweight task reserves a fixed 1 MiB coroutine stack. When no task is ready, the event reactor blocks until a notification, descriptor event, or deadline; it does not wake on a periodic scheduler tick.
+Aurora 0.1 task scheduling is cooperative and single-threaded. CPU code that never reaches `yield_now()`, `cancelled()`, or another scheduler-aware operation can starve sibling tasks. Each lightweight task reserves a fixed 1 MiB coroutine stack. When no task is ready, the event reactor blocks until a notification, descriptor event, or deadline; it does not wake on a periodic scheduler tick.
 
 ## Detached Work
 
@@ -209,9 +225,10 @@ For operating-system child processes, use the `process` module and decide explic
 ## Grammar
 
 Concurrency introduces no `async`, `await`, or detached-spawn grammar.
-`TaskGroup`, `Task`, `Queue`, `sleep`, `cancelled`, `wait_any`, and `wait_all`
-use ordinary construction and call syntax; structured groups use the ordinary
-`with` statement. Queue iteration uses only `for item in queue:`. Duration
+`TaskGroup`, `Task`, `Queue`, `yield_now`, `sleep`, `cancelled`, `wait_any`, and
+`wait_all` use ordinary construction and call syntax; structured groups use
+the ordinary `with` statement. Queue iteration uses only
+`for item in queue:`. Duration
 literal spelling is defined in [Lexical Structure](/manual/lexical-structure)
 and the relevant statement and call productions are in
 [Grammar](/manual/grammar).

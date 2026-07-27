@@ -513,6 +513,7 @@ struct NativeCodegen<'a> {
     tls_stream_write_all: FuncId,
     tls_stream_close: FuncId,
     cancelled: FuncId,
+    yield_now: FuncId,
     sleep_value_void: FuncId,
     start_task_call: FuncId,
     string_data: HashMap<Vec<u8>, DataId>,
@@ -988,6 +989,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all => ("aurora_direct_tls_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
             tls_stream_close => ("aurora_direct_tls_stream_close", [types::I64], Some(types::I64)),
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
+            yield_now => ("aurora_direct_yield_now", [], None),
             sleep_value_void => ("aurora_direct_sleep_value_void", [types::I64], None),
             start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
@@ -1378,6 +1380,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
+            yield_now,
             sleep_value_void,
             start_task_call,
             string_data: HashMap::new(),
@@ -2518,6 +2521,9 @@ impl<'a> NativeCodegen<'a> {
         let cancelled = self
             .object
             .declare_func_in_func(self.cancelled, builder.func);
+        let yield_now = self
+            .object
+            .declare_func_in_func(self.yield_now, builder.func);
         let sleep_value_void = self
             .object
             .declare_func_in_func(self.sleep_value_void, builder.func);
@@ -2843,6 +2849,7 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
+            yield_now,
             sleep_value_void,
             start_task_call,
         };
@@ -3512,6 +3519,7 @@ struct FunctionCompiler<'a> {
     tls_stream_write_all: cranelift_codegen::ir::FuncRef,
     tls_stream_close: cranelift_codegen::ir::FuncRef,
     cancelled: cranelift_codegen::ir::FuncRef,
+    yield_now: cranelift_codegen::ir::FuncRef,
     sleep_value_void: cranelift_codegen::ir::FuncRef,
     start_task_call: cranelift_codegen::ir::FuncRef,
 }
@@ -4985,6 +4993,15 @@ impl<'a> FunctionCompiler<'a> {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Bool),
             });
+        }
+        if name == "yield_now" {
+            if !args.is_empty() {
+                return Err(
+                    "direct backend expected `yield_now()` to take no arguments".to_string()
+                );
+            }
+            self.builder.ins().call(self.yield_now, &[]);
+            return Ok(unit_value(&mut self.builder));
         }
         if name == "sleep" {
             let [argument] = args else {
@@ -12423,6 +12440,9 @@ fn infer_rvalue_type(
             }
             CallTarget::Name(name) if name == "cancelled" => {
                 Some(DirectType::Scalar(ScalarKind::Bool))
+            }
+            CallTarget::Name(name) if name == "yield_now" => {
+                Some(DirectType::Scalar(ScalarKind::Unit))
             }
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) if host_builtin_return_type(name).is_some() => {

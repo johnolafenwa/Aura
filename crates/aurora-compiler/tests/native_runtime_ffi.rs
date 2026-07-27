@@ -243,6 +243,8 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         aurora_direct_sleep_value_void(zero_duration);
         release(zero_duration);
 
+        aurora_direct_yield_now();
+
         let first_monotonic_ms = aurora_direct_monotonic_time_ms();
         let second_monotonic_ms = aurora_direct_monotonic_time_ms();
         assert!(

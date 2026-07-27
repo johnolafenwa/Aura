@@ -261,9 +261,15 @@ Explicitly closing a resource before scope exit is permitted only where the reso
 
 ## Tasks And Scheduler
 
-Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
+Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. A task can also yield explicitly with `yield_now()`. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
 
-The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `cancelled()` or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack.
+The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `yield_now()`, `cancelled()`, or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack.
+
+`yield_now()` places the current lightweight task back in the ready set and
+returns when the scheduler selects it again. It gives other runnable tasks an
+opportunity to proceed without waiting for an event or deadline, but neither a
+different task running nor any particular ready-task order is guaranteed. With
+no current schedulable lightweight task, it returns without effect.
 
 The scheduler owns a persistent event reactor. Nonblocking descriptors remain
 registered across scheduler turns, deadlines are ordered in a timer heap, and
@@ -294,7 +300,10 @@ A task stores its completed result. Repeated result observation clones the store
 - a task failure observed through its `Task` result does not also abort the group as unread
 - an unread child failure aborts the group scope and wakes queue iteration/waits that depend on that group
 
-Cancellation is cooperative. Pure CPU code observes cancellation at maintained task boundaries/yields, while scheduler-aware blocking operations receive cancellation context directly.
+Cancellation is cooperative. Pure CPU code observes cancellation through
+`cancelled()`; `yield_now()` is a scheduling point but does not inspect
+cancellation. Scheduler-aware blocking operations receive cancellation context
+directly.
 
 ## Host I/O And Cancellation
 

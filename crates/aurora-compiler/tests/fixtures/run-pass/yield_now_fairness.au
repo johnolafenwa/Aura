@@ -1,0 +1,55 @@
+def yielding_worker(gate: Queue[int32], completed: Queue[int32]) -> int32:
+    gate.put(1)
+    mut attempts = 0
+    while attempts < 1000:
+        yield_now()
+        match completed.get(timeout=0ms):
+            case QueueReceive.Item(value):
+                return value
+            case QueueReceive.Closed:
+                return -2
+            case QueueReceive.TimedOut:
+                attempts += 1
+            case QueueReceive.Cancelled:
+                return -3
+    return -1
+
+def ready_sibling(gate: Queue[int32], completed: Queue[int32]) -> int32:
+    match gate.get():
+        case QueueReceive.Item(_):
+            completed.put(42)
+            return 0
+        case QueueReceive.Closed:
+            return -2
+        case QueueReceive.TimedOut:
+            return -1
+        case QueueReceive.Cancelled:
+            return -3
+
+def main() -> int32:
+    gate = Queue[int32]()
+    completed = Queue[int32]()
+    with TaskGroup() as group:
+        yielding = group.start(yielding_worker, gate, completed)
+        sibling = group.start(ready_sibling, gate, completed)
+
+        match yielding.result(timeout=1s):
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(_):
+                print(-4)
+            case TaskResult.TimedOut:
+                print(-5)
+            case TaskResult.Cancelled:
+                print(-6)
+
+        match sibling.result(timeout=1s):
+            case TaskResult.Ready(_):
+                pass
+            case TaskResult.Error(_):
+                return 1
+            case TaskResult.TimedOut:
+                return 2
+            case TaskResult.Cancelled:
+                return 3
+    return 0

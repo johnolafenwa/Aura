@@ -42,12 +42,13 @@ use crate::runtime_value::{
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
-    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -4901,6 +4902,11 @@ pub extern "C-unwind" fn aurora_direct_cancelled() -> i64 {
             0
         }
     })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_yield_now() {
+    task_runtime_boundary(yield_now_with_runtime_scheduler)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

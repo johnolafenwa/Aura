@@ -140,7 +140,8 @@ pub mod native_runtime_coverage {
         aurora_direct_wait_any_timeout_value, aurora_direct_websocket_close,
         aurora_direct_websocket_listener_accept, aurora_direct_websocket_listener_local_addr,
         aurora_direct_websocket_recv_bytes, aurora_direct_websocket_recv_text,
-        aurora_direct_websocket_send_bytes, aurora_direct_websocket_send_text, OpaqueValue,
+        aurora_direct_websocket_send_bytes, aurora_direct_websocket_send_text,
+        aurora_direct_yield_now, OpaqueValue,
     };
 }
 

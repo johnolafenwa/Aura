@@ -1031,6 +1031,11 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
     assert!(names.contains(&"min".to_string()));
     assert!(names.contains(&"max".to_string()));
     assert!(names.contains(&"sqrt".to_string()));
+    let yield_now = completions
+        .iter()
+        .find(|item| item.name == "yield_now")
+        .expect("yield_now builtin should appear in completions");
+    assert_eq!(yield_now.detail, "yield_now() -> None");
     let range = completions
         .iter()
         .find(|item| item.name == "range")
@@ -4222,6 +4227,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     assert_eq!(builtin_function_return_type("max"), None);
     assert_eq!(builtin_function_return_type("sqrt"), None);
     assert_eq!(builtin_function_return_type("sleep"), Some(Type::Unit));
+    assert_eq!(builtin_function_return_type("yield_now"), Some(Type::Unit));
     assert_eq!(
         builtin_function_return_type("parse_int32"),
         Some(Type::Named(

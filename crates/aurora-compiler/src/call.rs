@@ -371,6 +371,7 @@ pub enum BuiltinFunction {
     Print,
     Range,
     Cancelled,
+    YieldNow,
     Sleep,
     WaitAny,
     WaitAll,
@@ -389,6 +390,7 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Print,
     BuiltinFunction::Range,
     BuiltinFunction::Cancelled,
+    BuiltinFunction::YieldNow,
     BuiltinFunction::Sleep,
     BuiltinFunction::WaitAny,
     BuiltinFunction::WaitAll,
@@ -409,6 +411,7 @@ impl BuiltinFunction {
             "print" => Some(Self::Print),
             "range" => Some(Self::Range),
             "cancelled" => Some(Self::Cancelled),
+            "yield_now" => Some(Self::YieldNow),
             "sleep" => Some(Self::Sleep),
             "wait_any" => Some(Self::WaitAny),
             "wait_all" => Some(Self::WaitAll),
@@ -430,6 +433,7 @@ impl BuiltinFunction {
             Self::Print => "print",
             Self::Range => "range",
             Self::Cancelled => "cancelled",
+            Self::YieldNow => "yield_now",
             Self::Sleep => "sleep",
             Self::WaitAny => "wait_any",
             Self::WaitAll => "wait_all",
@@ -450,6 +454,7 @@ impl BuiltinFunction {
             Self::Print => "print(value) -> None",
             Self::Range => "range(stop: int32) -> Range; range(start: int32, stop: int32) -> Range",
             Self::Cancelled => "cancelled() -> bool",
+            Self::YieldNow => "yield_now() -> None",
             Self::Sleep => "sleep(duration: Duration) -> None",
             Self::WaitAny => "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]",
             Self::WaitAll => "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]",
@@ -472,6 +477,9 @@ impl BuiltinFunction {
                 "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
             }
             Self::Cancelled => "Returns true when the current task has been cancelled.",
+            Self::YieldNow => {
+                "Keeps the current task runnable while yielding its scheduler turn to other ready tasks."
+            }
             Self::Sleep => "Blocks the current task for the requested duration.",
             Self::WaitAny => {
                 "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation."
@@ -547,7 +555,7 @@ impl BuiltinFunction {
             Self::Range => {
                 BuiltinCallShape::fixed(&RANGE_START_STOP_PARAMS, CallConvention::PositionalOrNamed)
             }
-            Self::Cancelled => {
+            Self::Cancelled | Self::YieldNow => {
                 BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
             }
             Self::Sleep => {
