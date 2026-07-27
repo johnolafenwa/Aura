@@ -4,4 +4,4 @@ error[AU3002]: cannot consume `values` while `values` remains shared-borrowed by
 6 |     print(values.contains([eat(values)]))
   |                                ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_rejects_list_nested_consumption.au:6:11: shared borrow for the method receiver begins here
-  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

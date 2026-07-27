@@ -1032,6 +1032,166 @@ def main():
 }
 
 #[test]
+fn retained_access_help_names_the_conflicting_access_kind() {
+    // `AU3002` fires for shared reads and pure consumption as well as for
+    // mutation, so the recovery clause must name the access that actually
+    // conflicts instead of always telling the caller to move "the mutation".
+    for (source, access) in [
+        (
+            r#"
+def id_s(s: own String) -> String:
+    return s
+
+def use_both(text: borrow String, owned: own String) -> None:
+    print(text)
+    print(owned)
+
+def main() -> None:
+    value = "hello"
+    use_both(value, id_s(value))
+"#,
+            "consumption",
+        ),
+        (
+            r#"
+class Box:
+    value: int32
+
+def take(item: own Box, detail: int32):
+    print(item.value)
+    print(detail)
+
+def main():
+    box = Box(value=1)
+    take(box, box.value)
+"#,
+            "read",
+        ),
+        (
+            r#"
+def replace_and_return(value: borrow mut String) -> String:
+    value = "B"
+    return "C"
+
+def main():
+    mut value: String = "A"
+    print(value + replace_and_return(value))
+"#,
+            "mutation",
+        ),
+    ] {
+        let rejected = crate::check_source(source).expect_err("the overlap must be rejected");
+        assert_eq!(rejected.code, "AU3002", "{source}");
+        assert_eq!(
+            rejected.help,
+            vec![format!(
+                "call `.clone()` before the expression when an independent value is intended, or perform the {access} in a separate statement first"
+            )],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn indexed_read_guidance_follows_the_element_clone_safety() {
+    // A clone-safe element keeps the explicit cloned-read guidance.
+    for (source, message) in [
+        (
+            "def main():\n    values: Vec[String] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
+            "cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead",
+        ),
+        (
+            "def main():\n    mut values = Map[String, String]()\n    values.set(\"a\", \"b\")\n    taken = values[\"a\"]\n    print(taken)\n",
+            "cannot implicitly copy `String` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("a non-copy indexed read must be rejected");
+        assert_eq!(rejected.code, "AU3005", "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    // A value that contains non-cloneable state must not be sent to `get`,
+    // whose own clone would be rejected with AU3007. The guidance names the
+    // transfer that actually works.
+    for (source, message) in [
+        (
+            "import random\n\ndef main():\n    mut generators = Vec[random.Rng]()\n    generators.push(random.Rng(seed=1))\n    chosen = generators[0]\n    print(chosen.next_float())\n",
+            "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership instead",
+        ),
+        (
+            "import random\n\nclass Holder:\n    generator: random.Rng\n\ndef main():\n    mut holders = Map[String, Holder]()\n    holders.set(\"a\", Holder(generator=random.Rng(seed=1)))\n    chosen = holders[\"a\"]\n    print(chosen.generator.next_float())\n",
+            "cannot implicitly copy `Holder` out of a map index; `get(key)` cannot clone it because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership instead",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("an RNG-containing indexed read must be rejected");
+        assert_eq!(rejected.code, "AU3005", "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    // An unresolved element cannot be proven clone-safe, so the guidance says
+    // what `get` would require and still offers the transfer.
+    for (source, message) in [
+        (
+            "def first[T](values: Vec[T]) -> T:\n    return values[0]\n\ndef main():\n    print(\"ok\")\n",
+            "cannot implicitly copy `T` out of a vector index; `get(index)` requires a clone-safe `T`, or use `remove(index)` to transfer ownership",
+        ),
+        (
+            "def lookup[V](values: Map[String, V], key: String) -> V:\n    return values[key]\n\ndef main():\n    print(\"ok\")\n",
+            "cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("an unresolved indexed read must be rejected");
+        assert_eq!(rejected.code, "AU3005", "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+
+    // The recommended transfer is the operation that actually succeeds.
+    let vec_transfer = crate::run_source(
+        r#"
+import random
+
+def main():
+    mut generators = Vec[random.Rng]()
+    generators.push(random.Rng(seed=7))
+    match generators.remove(0):
+        case Option.Some(chosen):
+            mut taken = chosen
+            print(taken.next_int(lo=1, hi=10))
+        case Option.None:
+            print("none")
+    print(generators.len())
+"#,
+    )
+    .expect("`remove` transfers a non-cloneable element out of a vector");
+    assert_eq!(vec_transfer.stdout, "4\n0\n");
+
+    let map_transfer = crate::run_source(
+        r#"
+import random
+
+class Holder:
+    generator: random.Rng
+
+def main():
+    mut holders = Map[String, Holder]()
+    holders.set("a", Holder(generator=random.Rng(seed=7)))
+    match holders.remove("a"):
+        case Option.Some(chosen):
+            mut taken = chosen
+            print(taken.generator.next_int(lo=1, hi=10))
+        case Option.None:
+            print("none")
+    print(holders.len())
+"#,
+    )
+    .expect("`remove` transfers a non-cloneable value out of a map");
+    assert_eq!(map_transfer.stdout, "4\n0\n");
+}
+
+#[test]
 fn len_delegates_to_the_value_and_str_renders_it() {
     let output = crate::run_source(
         r#"
@@ -1111,7 +1271,7 @@ def main():
         );
         let rejected = crate::check_source(&source)
             .expect_err("a builtin function name must not be redefined");
-        assert_eq!(rejected.code, "AU2999", "{name}");
+        assert_eq!(rejected.code, "AU2007", "{name}");
         assert_eq!(
             rejected.message,
             format!("`{name}` is a builtin function name and cannot be redefined"),

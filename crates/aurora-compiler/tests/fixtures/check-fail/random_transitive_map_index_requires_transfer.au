@@ -1,0 +1,10 @@
+import random
+
+class Holder:
+    generator: random.Rng
+
+def main():
+    mut holders = Map[String, Holder]()
+    holders.set("a", Holder(generator=random.Rng(seed=1)))
+    chosen = holders["a"]
+    print(chosen.generator.next_float())

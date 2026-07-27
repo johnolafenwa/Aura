@@ -104,6 +104,35 @@ grep -Fq 'nested_with_score' crates/aurora-compiler/tests/fixtures/run-pass/tupl
 grep -Fq 'generic_equal' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
 grep -Fq 'trace_singleton' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
 grep -Fq 'trace_text' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+
+# B3.0-e: `AU3005` guidance is classified the same way the rejection is, so the
+# recommended recovery is never something `AU3007` rejects in turn.
+test -s crates/aurora-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
+test -s crates/aurora-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
+test -s crates/aurora-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
+test -s crates/aurora-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+test -s crates/aurora-compiler/tests/fixtures/run-pass/random_index_remove_transfers_ownership.stdout
+grep -Fq 'cannot clone it because' crates/aurora-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
+grep -Fq 'cannot clone it because' crates/aurora-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
+grep -Fq 'requires a clone-safe' crates/aurora-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
+grep -Fq 'requires a clone-safe' crates/aurora-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+grep -Fq 'clone-safety' docs/manual/diagnostics.md
+grep -Fq 'clone-safety' docs/manual/conformance.md
+grep -Fq 'clone-safety classification' architecture_docs/decisions/0014-map-literals-and-indexing.md
+grep -Fq 'remove(index)' tutorials/02-bindings-and-types.md
+grep -Fq 'remove(index)' tutorials/14-current-language-surface.md
+
+# B3.0-e: builtin function redefinition owns `AU2007` instead of the `AU2999`
+# catch-all.
+grep -Fq 'error[AU2007]' crates/aurora-compiler/tests/fixtures/check-fail/builtin_function_names_cannot_be_redefined.diag
+grep -Fq '`AU2007` builtin function redefinition' docs/manual/diagnostics.md
+grep -Fq 'AU2007' tutorials/14-current-language-surface.md
+
+# B3.0-e: `AU3002` recovery help names the access that actually conflicts, so a
+# pure read or consumption is never told to move "the mutation".
+grep -Fq 'perform the consumption in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.diag
+grep -Fq 'perform the read in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_rejected.diag
+grep -Fq 'perform the mutation in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/binary_left_borrow_rejects_later_mutation.diag
 test -s crates/aurora-compiler/tests/fixtures/check-pass/tuple_equality_contextual_literals.au
 test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au
 test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag

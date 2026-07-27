@@ -4,4 +4,4 @@ error[AU3002]: cannot consume `group` while `group` remains shared-borrowed by t
 6 |     group.start_soon(worker, group)
   |                              ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/task_group_receiver_rejects_owned_variadic_capture.au:6:5: shared borrow for the method receiver begins here
-  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

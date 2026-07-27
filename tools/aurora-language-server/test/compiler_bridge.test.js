@@ -1358,6 +1358,71 @@ test("compiler bridge preserves indexed non-copy ownership diagnostic codes", as
   }
 });
 
+test("compiler bridge propagates clone-safety-aware indexed read guidance", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-index-clone-safety-"));
+  const cases = [
+    {
+      name: "clone_safe_vector",
+      source: [
+        "def main():",
+        "    values: Vec[String] = [\"one\"]",
+        "    value: String = values[0]",
+        ""
+      ].join("\n"),
+      message:
+        "cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead"
+    },
+    {
+      name: "rng_vector",
+      source: [
+        "import random",
+        "",
+        "def main():",
+        "    mut generators = Vec[random.Rng]()",
+        "    generators.push(random.Rng(seed=1))",
+        "    chosen = generators[0]",
+        ""
+      ].join("\n"),
+      message:
+        "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership instead"
+    },
+    {
+      name: "generic_map",
+      source: [
+        "def lookup[V](values: Map[String, V], key: String) -> V:",
+        "    return values[key]",
+        "",
+        "def main():",
+        "    print(\"ok\")",
+        ""
+      ].join("\n"),
+      message:
+        "cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership"
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const entry of cases) {
+      const mainPath = path.join(tempRoot, `${entry.name}.au`);
+      const mainUri = `file://${mainPath}`;
+      const analysis = await analyzeWithCompiler(mainUri, entry.source);
+
+      assert.ok(analysis, `${entry.name} should return compiler analysis`);
+      assert.equal(analysis.diagnostics.length, 1, entry.name);
+      assert.equal(analysis.diagnostics[0].code, "AU3005", entry.name);
+      assert.equal(analysis.diagnostics[0].message, entry.message, entry.name);
+
+      const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+      assert.equal(diagnostic.code, "AU3005", entry.name);
+      assert.equal(diagnostic.source, "aurora-compiler", entry.name);
+      assert.equal(diagnostic.message, entry.message, entry.name);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge reports typed self with the receiver-forms diagnostic", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-typed-self-"));
   const source = [

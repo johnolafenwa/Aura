@@ -16,8 +16,9 @@ Last updated: 2026-07-26
   under the repository hygiene rule before the repeated Batch 3 gates.
   Prerequisite hygiene repair `18b7f00`, Part-0 ratification commit `19a10f4`,
   completed B3.0-a commit `6afe47c`, and completed B3.0-b commit `fc22696` are
-  isolated. B3.0-c is exact-tree green and isolated in `e05c5e6`; B3.0-d is
-  exact-tree green and committed in isolation; B3.0-e is the active ticket.
+  isolated. B3.0-c is exact-tree green and isolated in `e05c5e6`; B3.0-d and
+  B3.0-e are both exact-tree green and committed in isolation. B3.0 is closed;
+  the ADR-0022 capability-syntax migration is the active work.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
@@ -113,7 +114,15 @@ Last updated: 2026-07-26
   every fixture and package suite, the 516.80-second forced MIR/direct parity
   matrix, all 72 LSP tests, all 13 extension tests, compiler coverage, 100% LSP
   coverage, reference integrity, docs build, npm and Rust audits, Clippy with
-  warnings denied, and hygiene. B3.0-e is next.
+  warnings denied, and hygiene.
+- B3.0-e closed the four polish items in one isolated commit: clone-safety-aware
+  `AU3005` guidance, the dedicated `AU2007` builtin-redefinition code,
+  access-kind-specific `AU3002` recovery help, and the stale pre-selector
+  comment in `backend_parity.rs`. Its full `npm run ci` was green end to end:
+  918 compiler unit tests, 265 CLI tests, the forced parity matrix in 529.30s,
+  73 language-server tests, 13 extension tests, coverage at 96.12/96.85/94.32
+  against the frozen 96.07/96.81/94.29 floors, reference integrity, the docs
+  build, both audits, Clippy with warnings denied, and hygiene.
 
 ## Batch 2 Checkpoint (complete)
 

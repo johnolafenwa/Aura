@@ -1235,7 +1235,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             }
             Item::Function(function_decl) => {
                 if BuiltinFunction::from_name(&function_decl.name).is_some() {
-                    return Err(Diagnostic::at(
+                    return Err(Diagnostic::coded_at(
+                        "AU2007",
                         function_decl.span,
                         format!(
                             "`{}` is a builtin function name and cannot be redefined",
@@ -3960,6 +3961,29 @@ impl<'a> FunctionChecker<'a> {
             self.imported_modules,
             self.module_registry,
         )
+    }
+
+    /// Builds the `AU3005` message for a rejected non-copy indexed read.
+    ///
+    /// The recommended recovery depends on whether the selected value can be
+    /// cloned at all. Recommending `get(...)` unconditionally sends a caller
+    /// holding non-cloneable `random.Rng` state to an `AU3007` dead end, so the
+    /// guidance follows the same tri-state classification that rejection uses.
+    fn indexed_read_guidance(&self, container: &str, selector: &str, ty: &Type) -> String {
+        match self.rng_clone_safety(ty) {
+            RngCloneSafety::Safe if container == "map" => format!(
+                "cannot implicitly copy `{ty}` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
+            ),
+            RngCloneSafety::Safe => format!(
+                "cannot implicitly copy `{ty}` out of a vector index; use `get(index)` for an explicit cloned read instead"
+            ),
+            RngCloneSafety::ContainsRng => format!(
+                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because `{ty}` contains non-cloneable `random.Rng` state, so use `remove({selector})` to transfer ownership instead"
+            ),
+            RngCloneSafety::Unknown => format!(
+                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership"
+            ),
+        }
     }
 
     fn rng_clone_safety(&self, ty: &Type) -> RngCloneSafety {
@@ -8382,10 +8406,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
-                            format!(
-                                "cannot implicitly copy `{}` out of a vector index; use `get(index)` for an explicit cloned read instead",
-                                element_ty
-                            ),
+                            self.indexed_read_guidance("vector", "index", &element_ty),
                         ));
                     }
                     return Ok(element_ty);
@@ -8424,10 +8445,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
-                            format!(
-                                "cannot implicitly copy `{}` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
-                                value_ty
-                            ),
+                            self.indexed_read_guidance("map", "key", value_ty),
                         ));
                     }
                     return Ok(value_ty.clone());
@@ -15209,6 +15227,15 @@ impl<'a> FunctionChecker<'a> {
                     ReceiverKind::BorrowMut => "mutably borrow",
                     ReceiverKind::Value => "consume",
                 };
+                // The recovery clause names the conflicting access. A pure
+                // read or consumption has no mutation to sequence, so the
+                // blanket "perform the mutation" wording misdescribed those
+                // sites.
+                let conflicting_access = match current.passing {
+                    ReceiverKind::Borrow => "read",
+                    ReceiverKind::BorrowMut => "mutation",
+                    ReceiverKind::Value => "consumption",
+                };
                 let retained_state = match prior.passing {
                     ReceiverKind::Borrow => "shared-borrowed",
                     ReceiverKind::BorrowMut => "mutably borrowed",
@@ -15234,9 +15261,9 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 )
                 .with_secondary(prior.origin_span, origin_label)
-                .with_help(
-                    "call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first",
-                ));
+                .with_help(format!(
+                    "call `.clone()` before the expression when an independent value is intended, or perform the {conflicting_access} in a separate statement first"
+                )));
             }
         }
         Ok(())

@@ -4,4 +4,4 @@ error[AU3002]: cannot borrow `box.value` while `box` remains reserved for consum
 10 |     take(box, box.value)
    |                   ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_rejected.au:10:10: consumption by the parameter `item` begins here
-  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the read in a separate statement first

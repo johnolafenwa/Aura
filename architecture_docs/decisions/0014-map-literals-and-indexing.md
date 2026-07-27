@@ -25,9 +25,20 @@ or permit a hidden clone/destructive read during compound assignment.
 - When a later literal entry has a key equal to an earlier entry, its value
   replaces the earlier value while the key retains its first insertion slot.
 - `map[key]` returns the stored value only when `V` is a copy type. For a
-  non-copy `V`, checking rejects the indexed read and directs callers to
-  `get(key)` for the existing explicit cloned optional read or `remove(key)`
-  to transfer ownership. This rejection uses `AU3005`.
+  non-copy `V`, checking rejects the indexed read. This rejection uses
+  `AU3005`, and its guidance follows the same clone-safety classification the
+  rejection itself uses, so it never recommends a recovery that a later check
+  would reject:
+  - a clone-safe `V` is directed to `get(key)` for the explicit cloned
+    optional read, or `remove(key)` to transfer ownership;
+  - a `V` that carries non-cloneable `random.Rng` state is directed to
+    `remove(key)` only, and the message says `get(key)` cannot clone it —
+    recommending `get(key)` here would send the caller to an `AU3007` dead
+    end;
+  - an unresolved generic `V` is told `get(key)` requires a clone-safe `V`,
+    with `remove(key)` offered as the unconditional alternative.
+  The identical three-way rule applies to `Vec` element reads, except that
+  `Vec.get(index)` returns the cloned element directly.
 - A missing key in an indexed read traps at runtime with `AU4003`.
 - Simple indexed assignment, `map[key] = value`, inserts an absent key or
   replaces an equal existing key; it does not trap merely because the key was

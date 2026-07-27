@@ -1,0 +1,5 @@
+def lookup[V](values: Map[String, V], key: String) -> V:
+    return values[key]
+
+def main():
+    print("ok")

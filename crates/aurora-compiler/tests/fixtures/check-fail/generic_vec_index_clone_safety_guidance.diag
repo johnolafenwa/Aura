@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `T` out of a vector index; `get(index)` requires a clone-safe `T`, or use `remove(index)` to transfer ownership
+ --> crates/aurora-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.au:2:12
+  |
+2 |     return values[0]
+  |            ^

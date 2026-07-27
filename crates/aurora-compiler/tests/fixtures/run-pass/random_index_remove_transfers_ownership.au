@@ -1,0 +1,29 @@
+import random
+
+class Holder:
+    generator: random.Rng
+
+def main():
+    # `generators[0]` is rejected by AU3005 because `random.Rng` cannot be
+    # cloned, so `remove(index)` is the transfer that actually works.
+    mut generators = Vec[random.Rng]()
+    generators.push(random.Rng(seed=7))
+    match generators.remove(0):
+        case Option.Some(chosen):
+            mut owned_generator = chosen
+            print(owned_generator.next_int(lo=1, hi=10))
+        case Option.None:
+            print("none")
+    print(generators.len())
+
+    # The same holds transitively: `Holder` is rejected because it carries
+    # `random.Rng` state, and `remove(key)` transfers it out of the map.
+    mut holders = Map[String, Holder]()
+    holders.set("a", Holder(generator=random.Rng(seed=7)))
+    match holders.remove("a"):
+        case Option.Some(chosen):
+            mut owned_holder = chosen
+            print(owned_holder.generator.next_int(lo=1, hi=10))
+        case Option.None:
+            print("none")
+    print(holders.len())

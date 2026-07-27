@@ -171,8 +171,9 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
 #[test]
 #[ignore = "full forced-backend fixture matrix; invoked by npm run test:backend-parity"]
 fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
-    // `aura run` is the forced MIR product path today. When Phase 4 gives
-    // `run` a backend selector, keep this gate explicit with `--backend mir`.
+    // Phase 4 landed the `run` backend selector, so both sides of the matrix
+    // are forced explicitly: `run --backend mir` against `build --backend
+    // direct`. Neither side may fall back to `auto`.
     let root = repo_root();
     let temp = TempDir::new("aurora-backend-parity");
     let aura = packaged_test_aura(&temp);

@@ -339,9 +339,86 @@ Phase 5 is outside this target and must not begin.
   about 146 GiB free, so neither repository cleanup threshold was crossed.
 - Status: complete and ready for the isolated B3.0-d decision commit.
 
+## B3.0-e: diagnostic and comment polish
+
+Four independent polish items, landed together in one isolated commit because
+each is a small correction to guidance the batch already touched.
+
+### 1. `AU3005` indexed-read guidance is now clone-safety aware
+
+The rejection already classified the selected type through
+`rng_clone_safety`, but its recovery text did not: every non-copy element was
+told to call `get(...)`. For a `Vec[random.Rng]` that recommendation is a dead
+end, confirmed by running it:
+
+- `generators[0]` was rejected with `AU3005`, recommending `get(index)`;
+- `generators.get(0)` was then rejected with `AU3007: cannot use `Vec.get`
+  because `random.Rng` contains non-cloneable `random.Rng` state`;
+- `generators.remove(0)` ran and printed a value.
+
+The guidance now follows the same tri-state classification the rejection uses,
+so the recommended recovery is never something a later check rejects in turn:
+
+- `Safe` keeps the existing explicit-cloned-read wording, with `remove(key)`
+  also offered on maps;
+- `ContainsRng` names the reason `get(...)` cannot work and directs the caller
+  to `remove(...)`;
+- `Unknown` states that `get(...)` requires a clone-safe type and offers
+  `remove(...)` unconditionally.
+
+The two pre-existing `AU3005` fixtures are unchanged: both select `String`, a
+clone-safe type, so their text is deliberately identical.
+
+### 2. Builtin function redefinition owns `AU2007`
+
+Redefining `len`, `str`, `abs`, or `print` was reported through the `AU2999`
+catch-all. It now has a dedicated `names/types` code, registered append-only
+after `AU2006`. The message is unchanged; only the code moved.
+
+### 3. `AU3002` recovery help names the conflicting access
+
+The help clause always read "perform the mutation in a separate statement
+first", including at sites where the conflicting access is a pure shared read
+or a pure consumption and there is no mutation to sequence. The clause is now
+selected from the conflicting access kind: read, mutation, or consumption.
+Regenerating the affected oracles shows the real distribution across the
+fixture corpus: 17 consumption sites, 12 mutation sites, and 3 read sites. The
+12 that still say "mutation" are genuinely mutations.
+
+### 4. Stale pre-selector comment in `backend_parity.rs`
+
+The comment atop the runtime-fixture matrix still described the `run` backend
+selector as future work. Phase 4 landed it; the comment now states that both
+sides of the matrix are forced explicitly and neither may fall back to `auto`.
+
+### Deliberate follow-ups, not folded into this commit
+
+- **`AU3006` keeps its unconditional clone wording.** Its help has the same
+  shape of problem, but the authoritative ticket names `AU3005` only. Recorded
+  here rather than silently expanded.
+- **Direct backend collapses same-named match-arm bindings of different
+  types.** Found while writing the `remove(...)` transfer fixture, and
+  unrelated to any diagnostic in this ticket. When one `mut` binding name is
+  declared in two sibling match arms with two different types, the direct
+  backend keeps a single slot for it and `Member` inference then fails:
+
+  ```
+  error[AU2002]: direct backend could not infer direct type for temporary
+  `%t29` in `main`
+  ```
+
+  Minimal repro: match `Vec[random.Rng].remove(0)` binding `mut taken`, then
+  match `Map[String, Holder].remove("a")` binding `mut taken` again and read
+  `taken.generator`. Renaming the second binding compiles and runs correctly
+  on both backends, and either match alone compiles. The MIR is well-formed —
+  `%t29 = Member { object: Place("taken"), field: "generator" }` — so this is
+  a direct-backend binding-slot isolation gap, the same family as the loop
+  target binding slots isolated in `fc22696`, and the MIR backend is
+  unaffected. The fixture uses distinct binding names, which is how the code
+  reads better anyway.
+
 ## Follow-up
 
-B3.0-e diagnostic and comment polish is next, followed by the ADR-0022
-inventory, migrator, and capability-syntax migration. Continue recording the
-syntax-aware source-inventory counts, migration results, and checkpoint
-disposition here as the batch advances.
+The ADR-0022 inventory, migrator, and capability-syntax migration are next.
+Continue recording the syntax-aware source-inventory counts, migration results,
+and checkpoint disposition here as the batch advances.

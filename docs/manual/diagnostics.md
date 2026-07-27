@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
@@ -44,11 +44,21 @@ the builtin value types such as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
 renamed; backend dispatch is never selected by which implementation happens to
 run first.
 
+`AU2007` rejects a module-level function declaration whose name is already a
+builtin function name, such as `len`, `str`, `abs`, or `print`. The builtin
+surface is closed, so the declaration must be renamed. This rejection is
+distinct from the `AU2006` method collision: it covers free functions rather
+than trait methods on a builtin target.
+
 `AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
-For collections, use the explicit cloned `get` surface when the stored type is
-clone-safe, or transfer ownership with `remove` where available. For tuples,
-unpack the whole tuple to move its non-copy elements. `AU3006` rejects the
+For collections its guidance is clone-safety aware, classified exactly as the
+rejection is: a clone-safe type is directed to the explicit cloned `get`
+surface; a type carrying non-cloneable `random.Rng` state is directed to
+`remove` alone, because `get` on it would be rejected in turn by `AU3007`; and
+an unresolved generic type is told that `get` requires a clone-safe type, with
+`remove` offered unconditionally. For tuples, unpack the whole tuple to move
+its non-copy elements. `AU3006` rejects the
 corresponding `Vec` or `Map` indexed compound assignment because
 read-modify-write would otherwise require a hidden clone or destructive move
 of the stored value.

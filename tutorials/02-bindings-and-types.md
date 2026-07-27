@@ -201,7 +201,8 @@ Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` a
 For clone-safe non-copy element types like `String` or ordinary user-defined
 classes, indexed reads require `get(index)` instead of `items[index]` so the
 cloned read stays explicit. A value containing `random.Rng` must be transferred
-with `remove(index)` instead of cloned:
+with `remove(index)` instead of cloned, and the rejection names that reason
+directly rather than recommending an unusable `get(index)`:
 
 ```python
 names = ["Ada", "Grace"]
@@ -251,8 +252,11 @@ print(f"value: {counts['aurora']}")
 ```
 
 For a non-copy value type, direct `map[key]` is rejected rather than performing
-a hidden clone. Use `get(key)` for an explicit cloned optional read, or
-`remove(key)` to transfer the stored value out.
+a hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
+cloned optional read and `remove(key)` transfers the stored value out. When the
+value type carries `random.Rng` state, only `remove(key)` works, and the
+rejection says so rather than pointing you at a `get(key)` that would itself be
+rejected.
 
 `items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:
 

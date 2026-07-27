@@ -255,7 +255,7 @@ The current compiler supports these expression forms:
   - backslashes and physical newlines inside ordinary/f-strings do not
     continue source
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
+Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read, and elements carrying `random.Rng` state must use `remove(index)` because they cannot be cloned at all. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
 
 ## Methods
 
@@ -664,7 +664,8 @@ Current collection notes:
 - bare and explicit-`borrow` Vec iteration are shared; `for value in own vec:`
   consumes; `for value in borrow mut vec:` supports writeback
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
-- indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
+- indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
+- module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
 - `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
 - `insert(-1, value)` inserts before the last element;
