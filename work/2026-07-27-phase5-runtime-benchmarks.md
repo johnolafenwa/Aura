@@ -261,6 +261,21 @@ npm run bench:scalable-runtime -- \
   --json /tmp/aurora-phase53-after-safepoints.json
 ```
 
-The exact commit, report hash, competing-process inventory, starvation
-observations, existing scheduler gates, and V6 comparison will be added after
-the implementation commit so the report remains contractual.
+The accepted report records clean commit
+`a339c61503a358842acb2601e42f5d195b25a749`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. Raw
+report path: `/tmp/aurora-phase53-after-safepoints.json`. SHA-256:
+`a25589f602e7c30a1e9be1fce75d468ea7e704676ec299cab98b01c542d2428e`.
+
+| Workload | Repetitions | Accepted after-safepoint result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | peak RSS 204,193,792 bytes worst; individual peaks 204,062,720, 204,013,568, 204,193,792 bytes | PASS, at most 512 MiB |
+| 1,000 timers | 5 | arm span 4 ms in every run; p99 2 ms in every run | PASS, arm span and p99 both at most 10/5 ms |
+| 10 idle tasks | 3 | CPU 0.000010609%, 0.000011116%, 0.000011333%; worst 0.000011333% | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 14, 18, 18 ms; worst 18 ms | PASS, at most 50 ms |
+| V6 int32 loop | 21 plus warmup | median 47.882667 ms; MAD 0.075792 ms; p95 48.405584 ms; best 47.518792 ms | recorded stage evidence |
+| V6 int64 loop | 21 plus warmup | median 16.793333 ms; MAD 0.788209 ms; p95 17.985083 ms; best 15.824000 ms | PASS, 23.377% faster than the accepted Phase 5.2 median and below the 22.355170 ms ceiling |
+
+Every process completed naturally with the exact protocol marker, zero status,
+empty standard error, and no sampling error. All five contractual gates pass.
+No Phase 5 benchmark escape hatch is needed for the safepoint stage.

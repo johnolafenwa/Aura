@@ -246,12 +246,18 @@ before-reactor baseline is recorded in
   bypass loop writeback on both backends. Explicit `return`, `break`, and
   `continue` write back correctly. This is outside the safepoint behavior and
   is recorded rather than silently absorbed into Phase 5.3.
+- The clean `a339c61` after-stage benchmark is contractual and passes every
+  gate: 204,193,792-byte worst 10,000-sleeper RSS; 4 ms timer arm spans and
+  2 ms p99; 0.000011333% worst idle CPU; and 14-18 ms starvation results
+  against the 50 ms limit. The 21-sample native int64 median is 16.793333 ms,
+  23.377% faster than the accepted Phase 5.2 baseline and safely below its
+  22.355170 ms two-percent ceiling. Exact report provenance and SHA-256 are in
+  `work/2026-07-27-phase5-runtime-benchmarks.md`.
 
 ## Follow-up
 
-Commit the Phase 5.3 implementation, run its clean-tree contractual benchmark
-against the accepted Phase 5.2 V6 baseline, then run exact full CI. After that,
-begin the stack-diet stage with protocol service offload, guarded smaller task
-stacks, a collision-free per-task override, and measured incremental memory per
-parked task. Coverage floors remain frozen until the one-time Batch 4 sign-off
+Run exact full CI on the committed Phase 5.3 tree, then begin the stack-diet
+stage with protocol service offload, guarded smaller task stacks, a
+collision-free per-task override, and measured incremental memory per parked
+task. Coverage floors remain frozen until the one-time Batch 4 sign-off
 re-ratchet.

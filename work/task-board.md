@@ -124,7 +124,11 @@ Last updated: 2026-07-27
   and hygiene. Frozen coverage is green at 65,842/68,478 lines (96.150589%),
   4,337/4,476 functions (96.894549%), and 97,258/103,032 regions (94.395916%)
   with no synthetic test or exclusion. Remaining Phase 5.3 closure is the
-  clean-tree contractual benchmark, exact full CI, and evidence commit.
+  exact full CI and its evidence commit. The clean `a339c61` contractual
+  benchmark passes all five gates: 204,193,792-byte worst sleeper RSS; 4 ms
+  timer arm spans and 2 ms p99; 0.000011333% worst idle CPU; 18 ms worst
+  starvation result; and a 16.793333 ms native int64 median, 23.377% faster
+  than the accepted Phase 5.2 baseline.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the
