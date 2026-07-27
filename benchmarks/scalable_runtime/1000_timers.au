@@ -1,0 +1,101 @@
+import io
+import sys
+
+
+def timer(
+    index: int32,
+    prepared: Queue[int32],
+    release: Queue[int32],
+    armed: Queue[int32],
+    samples: Queue[String]
+):
+    prepared.put(index)
+
+    match release.get():
+        case QueueReceive.Item(_):
+            start_ms: int64 = sys.monotonic_time_ms()
+            armed.put(index)
+            sleep(10ms)
+
+            elapsed_ms: int64 = sys.monotonic_time_ms() - start_ms
+            mut overshoot_ms: int64 = elapsed_ms - 10
+            if overshoot_ms < 0:
+                overshoot_ms = 0
+
+            samples.put(
+                f"SAMPLE timer {index} {start_ms} {overshoot_ms}"
+            )
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
+            pass
+
+
+def main() -> int32:
+    prepared = Queue[int32]()
+    release = Queue[int32]()
+    armed = Queue[int32]()
+    samples = Queue[String]()
+
+    with TaskGroup() as group:
+        for index in range(1000):
+            group.start_soon(
+                timer,
+                index,
+                prepared,
+                release,
+                armed,
+                samples
+            )
+
+        mut prepared_count: int32 = 0
+        while prepared_count < 1000:
+            match prepared.get():
+                case QueueReceive.Item(_):
+                    prepared_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        for token in range(1000):
+            release.put(token)
+
+        mut armed_count: int32 = 0
+        while armed_count < 1000:
+            match armed.get():
+                case QueueReceive.Item(_):
+                    armed_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        print("READY timers 1000 10")
+        match io.flush():
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 1
+
+        mut sample_count: int32 = 0
+        while sample_count < 1000:
+            match samples.get():
+                case QueueReceive.Item(sample):
+                    print(sample)
+                    sample_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+    print("DONE timers 1000")
+    return 0

@@ -1,0 +1,39 @@
+import io
+
+
+def sleeper(ready: Queue[int32]):
+    ready.put(1)
+    sleep(1m)
+
+
+def main() -> int32:
+    ready = Queue[int32]()
+
+    with TaskGroup() as group:
+        for _ in range(10000):
+            group.start_soon(sleeper, ready)
+
+        mut parked: int32 = 0
+        while parked < 10000:
+            match ready.get():
+                case QueueReceive.Item(_):
+                    parked += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        print("READY sleepers 10000")
+        match io.flush():
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 1
+
+        sleep(30s)
+        group.cancel()
+
+    print("DONE sleepers 10000")
+    return 0

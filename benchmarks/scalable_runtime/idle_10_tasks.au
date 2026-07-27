@@ -1,0 +1,51 @@
+import io
+
+
+def queue_waiter(ready: Queue[int32], blocked: Queue[int32]):
+    ready.put(1)
+    blocked.get()
+
+
+def timer_waiter(ready: Queue[int32]):
+    ready.put(1)
+    sleep(1m)
+
+
+def main() -> int32:
+    ready = Queue[int32]()
+    blocked = Queue[int32]()
+
+    with TaskGroup() as group:
+        for _ in range(5):
+            group.start_soon(queue_waiter, ready, blocked)
+
+        for _ in range(5):
+            group.start_soon(timer_waiter, ready)
+
+        mut parked: int32 = 0
+        while parked < 10:
+            match ready.get():
+                case QueueReceive.Item(_):
+                    parked += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        print("READY idle 10 30000")
+        match io.flush():
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 1
+
+        sleep(30s)
+        # Keep the process alive beyond the advertised measurement boundary so
+        # the host can take its final CPU reading without racing cancellation.
+        sleep(250ms)
+        group.cancel()
+
+    print("DONE idle 10")
+    return 0

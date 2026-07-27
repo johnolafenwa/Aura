@@ -51,7 +51,9 @@ Last updated: 2026-07-27
   action is the before-reactor benchmark baseline.
 - Benchmark host: Mac14,9 Apple M2 Pro, 10 logical CPUs, 16 GiB RAM, macOS
   26.5.2 (25F84). Contractual measurements require the dedicated quiet-machine
-  protocol and per-stage before/after evidence.
+  protocol and per-stage before/after evidence. B4.0 is committed at `665d540`;
+  the dedicated runner and workloads for the before-reactor baseline are now in
+  progress, with no Phase 5.1 runtime production edit started.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions
