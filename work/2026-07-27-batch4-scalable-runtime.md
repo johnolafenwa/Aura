@@ -200,10 +200,26 @@ before-reactor baseline is recorded in
   80 LSP tests at 100% coverage, 13 extension tests, reference integrity, and
   the docs build are green. The complete serialized forced-backend fixture
   matrix also passes in 761.72 seconds with no MIR/direct mismatch.
+- The clean `d22ae10` after-stage benchmark is contractual with empty competing
+  process inventories and passes every existing gate: 205,799,424-byte worst
+  sleeper RSS; 4-9 ms timer arm spans and 2-5 ms p99; and 0.000020959% worst
+  idle CPU. The full V6 comparison, raw report path, and SHA-256 are recorded
+  in `work/2026-07-27-phase5-runtime-benchmarks.md`.
+- Frozen compiler coverage passes without a closure pass at 65,767/68,407
+  lines (96.140746%), 4,335/4,474 functions (96.893160%), and
+  97,103/102,880 regions (94.384720%), above the unchanged
+  96.13/96.89/94.35 floors. Every added test pins public diagnostics,
+  scheduler progress, tooling metadata, MIR behavior, or native ABI behavior;
+  no synthetic test or coverage exclusion was added.
+- Exact full `npm run ci` is green on the committed Phase 5.2 implementation:
+  275 CLI tests, 971 compiler library tests, the complete forced MIR/direct
+  parity matrix, 80 LSP tests, 13 extension tests, both coverage gates,
+  executable reference integrity, the docs build, audits, warning-denied
+  Clippy, and hygiene. Cargo audit retains only the repository's allowed
+  `rustls-pemfile` unmaintained warning.
 
 ## Follow-up
 
-Commit the isolated Phase 5.2 implementation tree, record its clean-tree
-after-stage benchmark, then run frozen coverage and exact full CI before
-starting automatic safepoints. Coverage floors remain frozen until the
-one-time Batch 4 sign-off re-ratchet.
+Start automatic loop-backedge safepoints, using the accepted Phase 5.2 V6
+measurements as the before-stage baseline. Coverage floors remain frozen until
+the one-time Batch 4 sign-off re-ratchet.

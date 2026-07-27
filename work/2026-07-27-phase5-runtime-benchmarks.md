@@ -181,3 +181,47 @@ report SHA-256:
 Every sleeper, timer, and idle process completed naturally with its exact
 `DONE` marker, zero status, empty standard error, and no sampling error. No
 Phase 5 benchmark escape hatch is needed for the reactor stage.
+
+## Phase 5.2 `yield_now()`
+
+The accepted Phase 5.1 reactor result above is the before-stage measurement.
+The Phase 5.2 implementation does not change any existing benchmark workload:
+none of the sleeper, timer, idle, or V6 sources call `yield_now()`. The
+after-stage run nevertheless re-executes the complete protocol so unintended
+scheduler or code-generation regressions remain visible.
+
+The contractual run used:
+
+```bash
+cargo build --release -p aura
+npm run bench:scalable-runtime -- \
+  --label after-yield-now \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 5 \
+  --v6-repeats 7 \
+  --idle-seconds 30 \
+  --json /tmp/aurora-phase52-after-yield-now.json
+```
+
+The report records commit
+`d22ae10c5d7096bbc978812c25d0bc44d0bedc6f`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. Raw
+report SHA-256:
+`1db729bde174f92c6b8da5752f33a01735c8a0d471de831e73cd30ec4dfff9aa`.
+
+| Workload | Repetitions | Accepted after-`yield_now` result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | peak RSS 205,799,424 bytes worst; individual peaks 205,799,424, 204,046,336, 203,997,184 bytes | PASS, at most 512 MiB |
+| 1,000 timers | 5 | arm spans 7, 6, 9, 4, 5 ms; per-run p99 4, 3, 4, 5, 2 ms; worst p99 5 ms | PASS, arm span and p99 both at most 10/5 ms |
+| 10 idle tasks | 3 | CPU 0.000020959%, 0.000012223%, 0%; worst 0.000020959% | PASS, less than 2% |
+| V6 int32 loop | 7 plus warmup | median 53.354167 ms; MAD 0.649124 ms; p95 55.018833 ms; best 51.944750 ms | recorded stage evidence |
+| V6 int64 loop | 7 plus warmup | median 21.916833 ms; MAD 0.539417 ms; p95 22.654208 ms; best 20.744291 ms | recorded stage evidence |
+
+All four contractual gates pass. Every process completed naturally with the
+expected protocol marker, zero status, empty standard error, and no sampling
+error. No Phase 5 benchmark escape hatch is needed for the `yield_now` stage.
+The subsequent exact full `npm run ci` gate is green: 275 CLI tests, 971
+compiler library tests, forced MIR/direct parity, 80 LSP tests, 13 extension
+tests, compiler and LSP coverage, reference integrity, documentation, audits,
+warning-denied Clippy, and hygiene.

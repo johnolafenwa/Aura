@@ -99,10 +99,20 @@ Last updated: 2026-07-27
   future-multicore-safe fairness fixture requires an already-runnable sibling
   to progress without specifying global task order. Focused Rust tests,
   fixtures, MIR/direct example execution, 80 LSP tests at 100% coverage, 13
-  extension tests, reference integrity, and docs are green. The next action is
-  the clean-tree Phase 5.2 benchmark after the complete forced-backend matrix
-  passed in 761.72 seconds, then frozen coverage and exact full CI before
-  automatic safepoints.
+  extension tests, reference integrity, and docs are green. The complete
+  forced-backend matrix passed in 761.72 seconds and the contractual
+  clean-tree benchmark passed all gates at `d22ae10`: 205,799,424-byte worst
+  sleeper RSS; 4-9 ms timer arm spans with 2-5 ms p99; and 0.000020959% worst
+  idle CPU. Exact report provenance is recorded in
+  `work/2026-07-27-phase5-runtime-benchmarks.md`.
+  Frozen compiler coverage passes without additional closure at
+  65,767/68,407 lines (96.140746%), 4,335/4,474 functions (96.893160%), and
+  97,103/102,880 regions (94.384720%). No synthetic test or exclusion was
+  added. Exact full `npm run ci` is green with 275 CLI tests, 971 compiler
+  library tests, forced MIR/direct parity, 80 LSP tests, 13 extension tests,
+  both coverage gates, reference integrity, docs, audits, warning-denied
+  Clippy, and hygiene. Phase 5.2 is complete; the next action is automatic
+  loop-backedge safepoints.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions
