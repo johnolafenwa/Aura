@@ -1,4 +1,4 @@
 def render(flag: bool) -> String:
-    match flag:
+    match own flag:
         case true:
             return "yes"

@@ -1,6 +1,9 @@
 # Working With Collections
 
-A program that manipulates a handful of values usually needs one of three shapes: an ordered sequence, a keyed lookup, or a membership test. Aurora ships these as `Vec[T]`, `Map[K, V]`, and `Set[T]`. All three are owned move types. A bare non-copy parameter or loop borrows them; write `own` when ownership should transfer.
+A program that manipulates a handful of values usually needs one of three
+shapes: an ordered sequence, a keyed lookup, or a membership test. Aurora ships
+these as `Vec[T]`, `Map[K, V]`, and `Set[T]`. All three are owned move types. A
+bare parameter or loop shares them; write `own` when ownership should transfer.
 
 This chapter uses each of them to solve a small problem, then shows the patterns they share.
 
@@ -142,7 +145,7 @@ for name in own names:
 # names is no longer available
 ```
 
-`for name in names:` is the explicit shared spelling.
+`for name in names:` is the bare shared spelling.
 
 When the loop body needs to mutate the elements, borrow mutably:
 
@@ -156,7 +159,7 @@ for value in values:
     print(value)
 ```
 
-`mut ` iteration requires a mutable binding.
+`mut` iteration requires a mutable binding.
 
 ## `Map[K, V]`: Lookup Tables
 
@@ -229,7 +232,7 @@ if not users.insert("ada"):
     print("already present")
 ```
 
-Sets support bare/default shared iteration as well as explicit ``:
+Sets support bare shared iteration:
 
 ```python
 for value in users:
@@ -261,8 +264,8 @@ The lookup only lends `key`; the later `set` transfers it into the map.
 
 ### Borrow to inspect, move to transfer
 
-Helpers that need to read a collection may use the bare non-copy default or
-spell `` explicitly. Helpers that take ownership use `own`. The compiler
+Helpers that need to read a collection use the bare shared form. Helpers that
+take ownership use `own`. The compiler
 enforces this boundary, so inspection and transfer remain visible.
 
 ## A Larger Example: Unique Count

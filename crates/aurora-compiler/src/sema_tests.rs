@@ -1198,6 +1198,41 @@ def main():
 }
 
 #[test]
+fn indexed_compound_assignment_guidance_follows_the_element_clone_safety() {
+    for (source, message) in [
+        (
+            "def main():\n    mut values: Vec[String] = [\"A\"]\n    values[0] += \"B\"\n",
+            "cannot implicitly copy `String` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`",
+        ),
+        (
+            "class Box:\n    value: int32\n\ndef main():\n    mut values: Map[String, Box] = {\"one\": Box(value=1)}\n    values[\"one\"] += Box(value=2)\n",
+            "cannot implicitly copy `Box` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+        ),
+        (
+            "import random\n\ndef main():\n    mut values: Vec[random.Rng] = [random.Rng(seed=1)]\n    values[0] += random.Rng(seed=2)\n",
+            "cannot implicitly copy `random.Rng` out of a vector index for compound assignment; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+        ),
+        (
+            "import random\n\ndef main():\n    mut values: Map[String, random.Rng] = {\"one\": random.Rng(seed=1)}\n    values[\"one\"] += random.Rng(seed=2)\n",
+            "cannot implicitly copy `random.Rng` out of a map index for compound assignment; `get(key)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+        ),
+        (
+            "def update[T](values: mut Vec[T], rhs: T):\n    values[0] += rhs\n",
+            "cannot implicitly copy `T` out of a vector index for compound assignment; `get(index)` requires a clone-safe `T`, or use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+        ),
+        (
+            "def update[V](values: mut Map[String, V], rhs: V):\n    values[\"one\"] += rhs\n",
+            "cannot implicitly copy `V` out of a map index for compound assignment; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("a non-copy indexed compound assignment must be rejected");
+        assert_eq!(rejected.code, "AU3006", "{source}");
+        assert_eq!(rejected.message, message, "{source}");
+    }
+}
+
+#[test]
 fn len_delegates_to_the_value_and_str_renders_it() {
     let output = crate::run_source(
         r#"
@@ -2410,6 +2445,31 @@ def main() -> int32:
 }
 
 #[test]
+fn range_iteration_rejects_ownership_modifiers_and_keeps_the_bare_form() {
+    crate::check_source(
+        r#"
+def main() -> int32:
+    mut total: int32 = 0
+    for value in range(0, 3):
+        total += value
+    return total
+"#,
+    )
+    .expect("bare Range iteration should keep yielding copy int32 values");
+
+    let expected = "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+    for mode in ["mut ", "own "] {
+        let source = format!(
+            "def main() -> int32:\n    for item in {mode}range(0, 3):\n        print(item)\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("Range iteration must reject every ownership modifier");
+        assert_eq!(error.code, "AU3004", "{mode}");
+        assert_eq!(error.message, expected, "{mode}");
+    }
+}
+
+#[test]
 fn d6_task_captures_are_owned_while_shared_child_parameters_are_allowed() {
     crate::check_source(
         r#"
@@ -2454,9 +2514,11 @@ def main() -> int32:
 "#,
     )
     .expect_err("child tasks cannot write back through their starting frame");
-    assert!(mutable_target
-        .message
-        .contains("does not support `borrow mut` parameter `value`"));
+    assert_eq!(mutable_target.code, "AU3002");
+    assert_eq!(
+        mutable_target.message,
+        "task starting does not support mutable parameter `value` on function `worker`; child tasks cannot write back through the starting call frame"
+    );
 }
 
 #[test]
@@ -2607,9 +2669,10 @@ fn random_static_surface_rejects_wrong_types_and_immutable_places() {
     )
     .expect_err("shuffle requires a mutable vector place");
     assert_eq!(immutable_values.code, "AU3002");
-    assert!(immutable_values
-        .message
-        .contains("builtin method `shuffle` argument is declared `borrow mut`"));
+    assert_eq!(
+        immutable_values.message,
+        "builtin method `shuffle` argument is declared `mut` and requires a mutable place"
+    );
 
     let explicit_type_args = crate::check_source(
         "import random\n\ndef main() -> int32:\n    mut rng = random.Rng[int64](seed=1)\n    return 0\n",
@@ -4374,8 +4437,8 @@ fn local_binding(
         passing,
         borrow_origin: None,
         borrowed_at: None,
-        match_borrow_mut_place: None,
-        stale_match_borrow_mut_place: None,
+        match_borrow_place: None,
+        stale_match_borrow_place: None,
         shared_match_scrutinee: None,
         moved,
         moved_at: moved.then_some(Span::new(1, 1)),
@@ -4384,6 +4447,7 @@ fn local_binding(
             .map(|field| (projection_path(field), Span::new(1, 1)))
             .collect(),
         frozen_places: BTreeMap::new(),
+        shared_match_places: BTreeMap::new(),
     }
 }
 
@@ -5373,6 +5437,24 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 &mut locals,
             )
             .expect("task group start should type check"),
+        Type::Named("Task".to_string(), vec![Type::named("int32")])
+    );
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                        field: "start".to_string(),
+                    })),
+                    args: vec![
+                        arg(expr(ExprKind::Name("work".to_string()))),
+                        named_arg("value", expr(ExprKind::Int(1))),
+                    ],
+                }),
+                &mut locals,
+            )
+            .expect("task group start should forward named arguments to its target"),
         Type::Named("Task".to_string(), vec![Type::named("int32")])
     );
     assert_eq!(
@@ -10767,13 +10849,14 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrowed_at: None,
-            match_borrow_mut_place: None,
-            stale_match_borrow_mut_place: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
             shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
         },
     )]);
     checker
@@ -10796,13 +10879,14 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Borrow,
             borrow_origin: Some("borrowed".to_string()),
             borrowed_at: None,
-            match_borrow_mut_place: None,
-            stale_match_borrow_mut_place: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
             shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
         },
     )]);
     let borrowed_error = checker
@@ -10822,13 +10906,14 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrowed_at: None,
-            match_borrow_mut_place: None,
-            stale_match_borrow_mut_place: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
             shared_match_scrutinee: None,
             moved: true,
             moved_at: Some(span),
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
         },
     )]);
     let moved_error = checker
@@ -11055,7 +11140,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
     branch_binding
         .moved_fields
         .insert(projection_path("text"), Span::new(1, 1));
-    branch_binding.stale_match_borrow_mut_place = Some(place_path("holder.text"));
+    branch_binding.stale_match_borrow_place = Some(place_path("holder.text"));
     let branch_without_binding = HashMap::new();
     checker.merge_control_flow_moves(
         &mut merged_locals,
@@ -11066,7 +11151,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .moved_fields
         .contains_key(&projection_path("text")));
     assert_eq!(
-        merged_locals["holder"].stale_match_borrow_mut_place,
+        merged_locals["holder"].stale_match_borrow_place,
         Some(place_path("holder.text"))
     );
 
@@ -15753,8 +15838,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::BorrowMut,
                 borrow_origin: Some("counter".to_string()),
                 borrowed_at: None,
-                match_borrow_mut_place: None,
-                stale_match_borrow_mut_place: None,
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
                 shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
@@ -15763,6 +15848,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                     (projection_path("value.inner"), Span::new(1, 1)),
                 ]),
                 frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
             },
         ),
         (
@@ -15797,13 +15883,14 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("borrowed".to_string()),
                 borrowed_at: None,
-                match_borrow_mut_place: None,
-                stale_match_borrow_mut_place: None,
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
                 shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
             },
         ),
         (
@@ -15816,13 +15903,14 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("self".to_string()),
                 borrowed_at: None,
-                match_borrow_mut_place: None,
-                stale_match_borrow_mut_place: None,
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
                 shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
             },
         ),
     ]);
@@ -15962,13 +16050,14 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrowed_at: None,
-            match_borrow_mut_place: None,
-            stale_match_borrow_mut_place: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
             shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -16069,9 +16158,11 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             span,
         )
         .expect_err("mutable borrowed params should not be task-startable");
-    assert!(task_start_error
-        .message
-        .contains("does not support `borrow mut` parameter `value`"));
+    assert_eq!(task_start_error.code, "AU3002");
+    assert_eq!(
+        task_start_error.message,
+        "task starting does not support mutable parameter `value` on function `work`; child tasks cannot write back through the starting call frame"
+    );
 
     let consumed_then_borrowed = checker
         .reject_overlapping_borrow(
@@ -17718,4 +17809,665 @@ def main():
     )
     .expect("`match own` should consume the scrutinee");
     assert_eq!(consumed.stdout, "hi\n");
+}
+
+#[test]
+fn mutable_noncopy_sources_cannot_form_local_aliases() {
+    let cases = [
+        (
+            "parameter/plain",
+            r#"
+class User:
+    name: String
+
+def rename(user: mut User):
+    alias = user
+    alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "parameter/mut",
+            r#"
+class User:
+    name: String
+
+def rename(user: mut User):
+    mut alias = user
+    alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "receiver/plain",
+            r#"
+class User:
+    name: String
+
+    def rename(mut self):
+        alias = self
+        alias.name = "Grace"
+"#,
+            "self",
+        ),
+        (
+            "receiver/mut",
+            r#"
+class User:
+    name: String
+
+    def rename(mut self):
+        mut alias = self
+        alias.name = "Grace"
+"#,
+            "self",
+        ),
+        (
+            "match/plain",
+            r#"
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+
+def rename(slot: mut Slot):
+    match mut slot:
+        case Filled(user):
+            alias = user
+            alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "match/mut",
+            r#"
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+
+def rename(slot: mut Slot):
+    match mut slot:
+        case Filled(user):
+            mut alias = user
+            alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "loop/plain",
+            r#"
+class User:
+    name: String
+
+def rename(users: mut Vec[User]):
+    for user in mut users:
+        alias = user
+        alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "loop/mut",
+            r#"
+class User:
+    name: String
+
+def rename(users: mut Vec[User]):
+    for user in mut users:
+        mut alias = user
+        alias.name = "Grace"
+"#,
+            "user",
+        ),
+        (
+            "member projection",
+            r#"
+class Profile:
+    name: String
+
+class User:
+    profile: Profile
+
+def rename(user: mut User):
+    alias = user.profile
+    alias.name = "Grace"
+"#,
+            "user.profile",
+        ),
+    ];
+
+    for (label, source, mutable_source) in cases {
+        let rejected = crate::check_source(source).expect_err(
+            "a non-copy value reached through mutable access cannot form a local alias",
+        );
+        assert_eq!(rejected.code, "AU3002", "{label}");
+        assert_eq!(
+            rejected.message,
+            format!(
+                "cannot create local alias `alias` from mutable access to `{mutable_source}`; local mutable aliases do not write through to their source"
+            ),
+            "{label}"
+        );
+        assert_eq!(
+            rejected.help,
+            vec![format!(
+                "mutate `{mutable_source}` directly, or pass it to another `mut` parameter"
+            )],
+            "{label}"
+        );
+    }
+
+    // Copy-typed assignments materialize independent snapshots, so they do not
+    // form the write-through aliases rejected above.
+    crate::check_source(
+        r#"
+def snapshot(counter: mut int32):
+    mut copy = counter
+    copy += 1
+"#,
+    )
+    .expect("a copy-typed mutable source may still be copied into an independent local");
+}
+
+#[test]
+fn shared_match_aliases_keep_source_provenance_until_last_use() {
+    for (label, alias_expr, alias_use) in [
+        ("direct", "user", "alias.profile.name"),
+        ("member", "user.profile", "alias.name"),
+    ] {
+        let source = format!(
+            r#"
+class Profile:
+    name: String
+
+class User:
+    profile: Profile
+
+enum Slot:
+    Filled(User)
+    Empty
+
+def main():
+    mut slot = Slot.Filled(User(profile=Profile(name="Ada")))
+    match slot:
+        case Filled(user):
+            alias = {alias_expr}
+            slot = Slot.Empty
+            print({alias_use})
+        case Empty:
+            pass
+"#
+        );
+        let rejected = crate::check_source(&source)
+            .expect_err("a shared match alias cannot outlive mutation of its source");
+        assert_eq!(rejected.code, "AU3002", "{label}");
+        assert_eq!(
+            rejected.message,
+            "cannot use shared match binding `alias` after changing match scrutinee `slot`",
+            "{label}"
+        );
+        assert_eq!(
+            rejected.help,
+            vec!["finish using `alias` before changing `slot`; use `match mut slot` to update its payload or `match own slot` to consume it"],
+            "{label}"
+        );
+    }
+
+    let direct_payload = crate::check_source(
+        r#"
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+    Empty
+
+def main():
+    mut slot = Slot.Filled(User(name="Ada"))
+    match slot:
+        case Filled(user):
+            slot = Slot.Empty
+            print(user.name)
+        case Empty:
+            pass
+"#,
+    )
+    .expect_err("the original shared payload must retain its match provenance");
+    assert_eq!(direct_payload.code, "AU3002");
+    assert_eq!(
+        direct_payload.message,
+        "cannot use shared match binding `user` after changing match scrutinee `slot`"
+    );
+
+    let branch_change = crate::check_source(
+        r#"
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+    Empty
+
+def main():
+    mut slot = Slot.Filled(User(name="Ada"))
+    match slot:
+        case Filled(user):
+            alias = user
+            if true:
+                slot = Slot.Empty
+            print(alias.name)
+        case Empty:
+            pass
+"#,
+    )
+    .expect_err("a possible source change in control flow must conservatively stale the alias");
+    assert_eq!(branch_change.code, "AU3002");
+    assert_eq!(
+        branch_change.message,
+        "cannot use shared match binding `alias` after changing match scrutinee `slot`"
+    );
+
+    let after_last_use = crate::run_source(
+        r#"
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+    Empty
+
+def main():
+    mut slot = Slot.Filled(User(name="Ada"))
+    match slot:
+        case Filled(user):
+            alias = user
+            print(alias.name)
+            slot = Slot.Empty
+            print("updated")
+        case Empty:
+            pass
+"#,
+    )
+    .expect("source mutation after an alias's last use should remain valid");
+    assert_eq!(after_last_use.stdout, "Ada\nupdated\n");
+}
+
+#[test]
+fn bare_copy_matches_retain_logical_shared_access_through_the_arm() {
+    let cases = [
+        (
+            "statement root mutation",
+            r#"
+def bump(value: mut int32):
+    value += 1
+
+def main():
+    mut value: int32 = 1
+    match value:
+        case 1:
+            bump(value)
+        case _:
+            pass
+"#,
+            "cannot mutate `value` while `value` remains shared by a bare match",
+        ),
+        (
+            "statement member mutation",
+            r#"
+class Counter:
+    value: int32
+
+def bump(value: mut int32):
+    value += 1
+
+def main():
+    mut counter = Counter(value=1)
+    match counter.value:
+        case 1:
+            bump(counter.value)
+        case _:
+            pass
+"#,
+            "cannot mutate `counter.value` while `counter.value` remains shared by a bare match",
+        ),
+        (
+            "expression mutation",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    mut value: int32 = 1
+    result = match value:
+        case 1: bump(value)
+        case _: value
+    print(result)
+"#,
+            "cannot mutate `value` while `value` remains shared by a bare match",
+        ),
+        (
+            "owned copy access",
+            r#"
+def take(value: own int32):
+    print(value)
+
+def main():
+    mut value: int32 = 1
+    match value:
+        case 1:
+            take(value)
+        case _:
+            pass
+"#,
+            "cannot consume `value` while `value` remains shared by a bare match",
+        ),
+        (
+            "owned copy member access",
+            r#"
+class Counter:
+    value: int32
+
+def take(value: own int32):
+    print(value)
+
+def main():
+    mut counter = Counter(value=1)
+    match counter.value:
+        case 1:
+            take(counter.value)
+        case _:
+            pass
+"#,
+            "cannot consume `counter.value` while `counter.value` remains shared by a bare match",
+        ),
+        (
+            "nested owned copy match",
+            r#"
+def main():
+    mut value: int32 = 1
+    match value:
+        case 1:
+            match own value:
+                case 1:
+                    pass
+                case _:
+                    pass
+        case _:
+            pass
+"#,
+            "cannot consume `value` while `value` remains shared by a bare match",
+        ),
+        (
+            "owned copy receiver",
+            r#"
+copy class Counter:
+    value: int32
+
+    def take(own self):
+        print(self.value)
+
+def main():
+    mut counter = Counter(value=1)
+    match counter.value:
+        case 1:
+            counter.take()
+        case _:
+            pass
+"#,
+            "cannot consume `counter` while `counter.value` remains shared by a bare match",
+        ),
+    ];
+
+    for (label, source, expected) in cases {
+        let rejected = crate::check_source(source)
+            .expect_err("a bare copy match keeps a logical shared access through its arm");
+        assert_eq!(rejected.code, "AU3002", "{label}");
+        assert_eq!(rejected.message, expected, "{label}");
+    }
+
+    crate::check_source(
+        r#"
+def main():
+    mut value: int32 = 1
+    match value:
+        case 1:
+            snapshot = value
+            print(snapshot)
+        case _:
+            pass
+"#,
+    )
+    .expect("ordinary copy snapshots inside a bare match are not ownership transfers");
+}
+
+#[test]
+fn builtin_bare_copy_arguments_retain_shared_access_through_later_arguments() {
+    let cases = [
+        (
+            "range start",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    mut value: int32 = 1
+    selected = range(value, bump(value))
+"#,
+        ),
+        (
+            "min left",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    mut value: int32 = 1
+    selected = min(value, bump(value))
+"#,
+        ),
+        (
+            "max left",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    mut value: int32 = 1
+    selected = max(value, bump(value))
+"#,
+        ),
+        (
+            "random lower bound",
+            r#"
+import random
+
+def bump(value: mut int64) -> int64:
+    value += 1
+    return value
+
+def sample(rng: mut random.Rng, value: mut int64):
+    selected = rng.next_int(value, bump(value))
+"#,
+        ),
+        (
+            "Vec.set index",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def update(values: mut Vec[int32], index: mut int32):
+    values.set(index, bump(index))
+"#,
+        ),
+        (
+            "Vec.insert index",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def update(values: mut Vec[int32], index: mut int32):
+    values.insert(index, bump(index))
+"#,
+        ),
+        (
+            "Vec.swap first",
+            r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def update(values: mut Vec[int32], index: mut int32):
+    values.swap(index, bump(index))
+"#,
+        ),
+        (
+            "HTTP text status",
+            r#"
+import net
+
+def text_after_bump(status: mut int32) -> String:
+    status += 1
+    return "done"
+
+def respond(exchange: net.HttpExchange, status: mut int32):
+    exchange.respond_text(status, text_after_bump(status), {})
+"#,
+        ),
+        (
+            "HTTP bytes status",
+            r#"
+import net
+
+def bytes_after_bump(status: mut int32) -> Vec[uint8]:
+    status += 1
+    return [1 as uint8]
+
+def respond(exchange: net.HttpExchange, status: mut int32):
+    exchange.respond_bytes(status, bytes_after_bump(status), {})
+"#,
+        ),
+        (
+            "TCP read_bytes maximum",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(stream: net.TcpStream, count: mut int32):
+    stream.read_bytes(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "TCP read_exact count",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(stream: net.TcpStream, count: mut int32):
+    stream.read_exact(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "Unix read_exact count",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(stream: net.UnixStream, count: mut int32):
+    stream.read_exact(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "TLS read_exact count",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(stream: net.TlsStream, count: mut int32):
+    stream.read_exact(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "UDP recv maximum",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(socket: net.UdpSocket, count: mut int32):
+    socket.recv(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "UDP recv_from maximum",
+            r#"
+import net
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(socket: net.UdpSocket, count: mut int32):
+    socket.recv_from(count, timeout_after_bump(count))
+"#,
+        ),
+        (
+            "process pipe read_bytes maximum",
+            r#"
+import process
+
+def timeout_after_bump(count: mut int32) -> Duration:
+    count += 1
+    return Duration.ms(1)
+
+def read(pipe: process.Pipe, count: mut int32):
+    pipe.read_bytes(count, timeout_after_bump(count))
+"#,
+        ),
+    ];
+
+    for (label, source) in cases {
+        let rejected = crate::check_source(source)
+            .expect_err("a bare copy builtin argument must retain shared access");
+        assert_eq!(rejected.code, "AU3002", "{label}");
+        assert!(
+            rejected.message.contains("remains shared-borrowed"),
+            "{label}: {}",
+            rejected.message
+        );
+    }
+
+    crate::check_source(
+        r#"
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def update(values: mut Vec[int32], index: mut int32):
+    values.set(value=bump(index), index=index)
+"#,
+    )
+    .expect("a mutation completed before the later shared argument does not overlap it");
 }

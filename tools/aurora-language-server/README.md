@@ -23,7 +23,16 @@ The server starts one persistent compiler service:
 
 - `aura lsp`
 
-Requests and responses are newline-delimited JSON. The server caches compiler analysis per document version, debounces changes, cancels obsolete completion work, guards asynchronous responses by document version, and invalidates only changed documents and their dependents.
+Requests and responses are newline-delimited JSON and carry compiler-owned
+`semantic_interface_version: 2`. This identity is distinct from the public
+diagnostic document's numeric schema version. The transport rejects and
+disposes a compiler with a missing or different semantic identity, invalidates
+all cached document analysis, and uses lexical recovery for the failed request;
+pre-migration ownership metadata therefore cannot survive a compiler upgrade.
+With a matching compiler, the server caches analysis per document version,
+debounces changes, cancels obsolete completion work, guards asynchronous
+responses by document version, and invalidates only changed documents and their
+dependents.
 
 Compiler diagnostics keep the stable `AU####` code, related source spans,
 notes, help, and machine-applicable edits through the LSP mapping. The bridge

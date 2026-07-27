@@ -75,9 +75,10 @@ each received item is already owned by the loop binding, and the queue handle is
 a copy value. Consequently `own`, `borrow`, and `borrow mut` modifiers are all
 rejected for Queue iteration. Use the bare `for value in queue:` form.
 
-Range modifiers retain their established 0.1 behavior; rationalizing modifiers
-on non-place iterables is a separate follow-up rather than part of this
-ownership migration.
+ADR-0022 supersedes the earlier Range-modifier deferral. Range iteration yields
+copy `int32` values rather than traversing places, so only the bare form is
+valid; `mut` and `own` are rejected with a teaching diagnostic because there is
+nothing to modify or transfer.
 
 ## Task capture
 

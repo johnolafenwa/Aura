@@ -12,7 +12,7 @@ def extract(w: Wrapper) -> int32:
             return v
 
 def check(u: Unit) -> String:
-    match u:
+    match own u:
         case Unit.Only:
             return "only"
 

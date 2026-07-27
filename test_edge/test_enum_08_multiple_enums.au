@@ -14,7 +14,7 @@ enum Sound:
     Chirp
 
 def animal_sound(a: Animal) -> Sound:
-    match a:
+    match own a:
         case Animal.Cat:
             return Sound.Meow
         case Animal.Dog:
@@ -23,7 +23,7 @@ def animal_sound(a: Animal) -> Sound:
             return Sound.Chirp
 
 def sound_to_string(s: Sound) -> String:
-    match s:
+    match own s:
         case Sound.Meow:
             return "meow"
         case Sound.Bark:
@@ -32,7 +32,7 @@ def sound_to_string(s: Sound) -> String:
             return "chirp"
 
 def size_to_string(sz: Size) -> String:
-    match sz:
+    match own sz:
         case Size.Small:
             return "small"
         case Size.Medium:

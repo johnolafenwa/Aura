@@ -1,0 +1,5 @@
+error[AU1101]: `mut` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/capability_prefix_enum_payload_type_rejected.au:2:12
+  |
+2 |     Loaded(mut String)
+  |            ^

@@ -8,7 +8,7 @@ enum Weekday:
     Sunday
 
 def is_weekend(d: Weekday) -> bool:
-    match d:
+    match own d:
         case Weekday.Monday:
             return false
         case Weekday.Tuesday:

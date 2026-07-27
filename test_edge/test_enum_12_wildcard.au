@@ -5,7 +5,7 @@ enum Priority:
     Critical
 
 def is_urgent(p: Priority) -> bool:
-    match p:
+    match own p:
         case Priority.Critical:
             return true
         case _:

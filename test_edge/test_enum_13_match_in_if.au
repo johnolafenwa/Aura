@@ -3,7 +3,7 @@ enum Toggle:
     Off
 
 def is_on(t: Toggle) -> bool:
-    match t:
+    match own t:
         case Toggle.On:
             return true
         case Toggle.Off:

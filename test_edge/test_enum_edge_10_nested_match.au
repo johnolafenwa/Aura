@@ -9,9 +9,9 @@ enum Size:
     Large
 
 def describe(c: Color, s: Size) -> String:
-    match c:
+    match own c:
         case Color.Red:
-            match s:
+            match own s:
                 case Size.Small:
                     return "small red"
                 case Size.Medium:
@@ -19,7 +19,7 @@ def describe(c: Color, s: Size) -> String:
                 case Size.Large:
                     return "large red"
         case Color.Blue:
-            match s:
+            match own s:
                 case Size.Small:
                     return "small blue"
                 case _:

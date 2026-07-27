@@ -7,7 +7,7 @@ enum B:
     Y
 
 def check(a: A) -> int32:
-    match a:
+    match own a:
         case B.X:
             return 1
         case B.Y:

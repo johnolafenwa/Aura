@@ -7,7 +7,7 @@ def main() -> int32:
     mut counts = {'key': 7}
     print(counts['key'])
     print(f"{echo('{left')}")
-    match text:
+    match own text:
         case 'it\'s "Aurora"':
             print('matched')
         case _:

@@ -118,19 +118,17 @@ There are a few choices worth calling out because they affect later stages:
 
 - parameter and receiver passing modes
   The AST preserves whether an ordinary parameter was written with no
-  modifier, `own`, ``, or `mut `. That source mode is deliberately
-  separate from the resolved call ABI: an unmodified parameter resolves to a
-  value for copy types and to a shared borrow for non-copy types. Receiver
-  syntax is normalized more aggressively: bare `self` and `self`
-  become the shared receiver mode, `own self` becomes the value mode, and
-  `mut self` becomes the exclusive mutable mode.
-- `return_passing` and `return_borrow_source`
-  Function declarations carry borrowed-return metadata in the AST so the checker can validate it.
+  modifier, `own`, or `mut`. Bare is logical shared access for every type;
+  the eventual ABI may still pass copy bits directly. Receiver syntax is
+  normalized to shared `self`, consuming `own self`, or mutable `mut self`.
+- owned return types
+  Function declarations carry one `return_type`. Return-source modifiers and
+  labels are not represented because every return is owned.
 - ownership modes on `match` and `for`
-  A `for` statement preserves its default, `own`, ``, or `mut `
-  spelling so collection-specific checking can resolve it. A `match`
-  statement retains its explicit borrow mode; unlike `for`, an unmodified
-  `match` still consumes a non-copy scrutinee.
+  A `for` statement preserves its bare, `own`, or `mut` capability so
+  iterable-specific checking can resolve it. A `match` statement always has a
+  normalized capability: bare is shared, `match own` consumes, and `match mut`
+  grants mutable access.
 - `top_level_stmts`
   Aurora explicitly supports file-level execution, so the AST models it directly.
 - `Specialize`
@@ -209,10 +207,10 @@ Aurora's real AST adds:
 - spans for diagnostics
 - imports and module structure
 - classes, enums, traits, impls
-- `match`, `with`, and borrowed control-flow forms
+- `match`, `with`, and shared/mutable control-flow forms
 - generics and trait bounds
 - f-strings and map/set/list literals
-- borrowed parameters and borrowed returns
+- bare shared, `mut`, and `own` callable capabilities plus owned returns
 
 ## How this stage connects to the next one
 

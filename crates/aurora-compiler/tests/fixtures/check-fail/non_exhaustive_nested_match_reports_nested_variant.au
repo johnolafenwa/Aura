@@ -7,7 +7,7 @@ enum Outer:
     Empty
 
 def describe(value: own Outer) -> int32:
-    return match value:
+    return match own value:
         case Outer.Wrapped(Inner.Pair(a, b)): a + b
         case Outer.Empty: 0
 

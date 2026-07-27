@@ -44,9 +44,9 @@ def main() -> int32:
                                             return 1
                             case Result.Err(_):
                                 return 1
-                        match server.result():
+                        match own server.result():
                             case TaskResult.Ready(result):
-                                match result:
+                                match own result:
                                     case Result.Ok(_):
                                         return 0
                                     case Result.Err(_):

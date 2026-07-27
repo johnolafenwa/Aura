@@ -5,7 +5,7 @@ enum Direction:
     Right
 
 def opposite(d: Direction) -> Direction:
-    match d:
+    match own d:
         case Direction.Up:
             return Direction.Down
         case Direction.Down:
@@ -16,7 +16,7 @@ def opposite(d: Direction) -> Direction:
             return Direction.Left
 
 def move(x: int32, y: int32, d: Direction, steps: int32) -> int32:
-    match d:
+    match own d:
         case Direction.Up:
             return y + steps
         case Direction.Down:
@@ -31,7 +31,7 @@ def double_reverse(d: Direction) -> Direction:
     return opposite(opposite(d))
 
 def show_dir(d: Direction) -> String:
-    match d:
+    match own d:
         case Direction.Up:
             return "up"
         case Direction.Down:

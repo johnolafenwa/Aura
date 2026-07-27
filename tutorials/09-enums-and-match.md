@@ -101,7 +101,9 @@ This is especially convenient with built-in enums like `Result` and `Option`.
 
 ## Borrowed Matching
 
-By default, `match` takes ownership of the value. If you want to inspect a value without consuming it, use `match `. This is important for non-copy types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+Bare `match` inspects without consuming the value. Write `match own` when an
+arm must receive owned payloads. This distinction matters for non-copy types
+(see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 ```python
 result: Result[String, String] = Result.Ok("ok")

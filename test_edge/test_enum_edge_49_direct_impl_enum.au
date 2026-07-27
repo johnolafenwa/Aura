@@ -13,7 +13,7 @@ enum Status:
 
 impl Checkable for Status:
     def is_on(self) -> bool:
-        match self:
+        match own self:
             case Status.On:
                 return true
             case Status.Off:

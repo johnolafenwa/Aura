@@ -1023,6 +1023,7 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
 
     assert!(names.contains(&"class".to_string()));
     assert!(names.contains(&"trait".to_string()));
+    assert!(!names.contains(&"borrow".to_string()));
     assert!(names.contains(&"Point".to_string()));
     assert!(names.contains(&"distance".to_string()));
     assert!(names.contains(&"print".to_string()));

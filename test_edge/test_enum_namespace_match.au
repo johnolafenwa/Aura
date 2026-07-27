@@ -3,7 +3,7 @@ import modules.shapes.circle
 
 def main() -> int32:
     kind = modules.shapes.circle.ShapeKind.Round
-    match kind:
+    match own kind:
         case modules.shapes.circle.ShapeKind.Round:
             print("round via namespace")
         case modules.shapes.circle.ShapeKind.Angular:

@@ -24,8 +24,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
   recursive equality.
 - [Assertions](/manual/assertions): exact boolean conditions, lazy messages,
   `AU4001` failures, cleanup precedence, and backend behavior.
-- [Functions](/manual/functions): signatures, default/`own`/borrowed parameter
-  modes, default arguments, named arguments, `main`, returns, and call binding.
+- [Functions](/manual/functions): signatures, bare/`own`/`mut` parameter
+  modes, default arguments, named arguments, `main`, owned returns, and call
+  binding.
 - [Classes](/manual/classes): fields, constructors, methods, receivers, associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads, exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait declarations, impls, bounds, dispatch, and current restrictions.

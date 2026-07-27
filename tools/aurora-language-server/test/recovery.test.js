@@ -46,6 +46,7 @@ test("recovery completion exposes keywords builtins and declarations but no memb
   assert.ok(names.includes("int32"));
   assert.ok(names.includes("int64"));
   assert.ok(names.includes("own"));
+  assert.equal(names.includes("borrow"), false);
   assert.ok(names.includes("print"));
   assert.ok(names.includes("Point"));
   assert.ok(names.includes("main"));

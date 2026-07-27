@@ -4,7 +4,7 @@ enum Many:
 
 def main() -> int32:
     value = Many.Two
-    match value:
+    match own value:
         case Many.One:
             print(1)
         case _:

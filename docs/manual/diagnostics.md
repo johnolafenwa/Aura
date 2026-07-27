@@ -211,9 +211,9 @@ primary span and the retained selection is a labeled borrow-origin secondary
 span. Guidance may suggest an explicit clone when the type supports it or a
 separate earlier mutation, but the compiler does not deep-clone implicitly.
 
-For example, consuming a shared default parameter reports
-``parameter `x` is borrowed; declare it as `own String` to take ownership, or
-clone the value before consuming it``. The parameter name and concrete type in
+For example, consuming a bare shared parameter reports that parameter `x` is
+borrowed and recommends declaring it as `own String` to take ownership or
+cloning the value before consuming it. The parameter name and concrete type in
 that message come from the rejected declaration.
 
 ## Python-Migration Guidance

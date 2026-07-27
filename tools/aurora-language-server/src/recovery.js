@@ -6,7 +6,6 @@
 
 const KEYWORDS = [
   "assert",
-  "borrow",
   "break",
   "case",
   "class",

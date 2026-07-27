@@ -1,0 +1,8 @@
+class User:
+    name: String
+
+def main():
+    mut users = [User(name="Ada")]
+    for user in mut users:
+        alias = user
+        print(alias.name)

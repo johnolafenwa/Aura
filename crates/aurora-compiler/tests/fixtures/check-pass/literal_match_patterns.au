@@ -1,5 +1,5 @@
 def describe_number(value: int32) -> String:
-    match value:
+    match own value:
         case 0:
             return "zero"
         case 1:
@@ -8,7 +8,7 @@ def describe_number(value: int32) -> String:
             return "many"
 
 def describe_flag(flag: bool) -> String:
-    match flag:
+    match own flag:
         case true:
             return "yes"
         case false:
@@ -22,7 +22,7 @@ def describe_name(name: String) -> String:
             return "other"
 
 def describe_negative(value: int32) -> String:
-    match value:
+    match own value:
         case -1:
             return "negative"
         case _:

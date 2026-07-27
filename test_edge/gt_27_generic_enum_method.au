@@ -6,7 +6,7 @@ enum Maybe[T]:
     Nothing
 
     def is_some(self) -> int32:
-        match self:
+        match own self:
             case Maybe.Some(_):
                 return 1
             case Maybe.Nothing:

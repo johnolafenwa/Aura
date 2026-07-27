@@ -9,7 +9,7 @@ enum Minimal:
 
 def main() -> int32:
     m = Minimal.Only
-    match m:
+    match own m:
         case Minimal.Only:
             print("only")
     return 0

@@ -191,21 +191,23 @@ match result:
 
 Use the qualified form in public examples and reference material when ambiguity is possible. A qualified pattern must name the scrutinee's actual enum and an existing variant.
 
-## Borrowed Matches
+## Match Capabilities
 
-A by-value match consumes a non-copy scrutinee place and yields owned payload bindings:
+`match own` consumes a non-copy scrutinee place and yields owned payload
+bindings:
 
 ```python
 result: Result[String, String] = Result.Ok("hello")
 
-match result:
+match own result:
     case Result.Ok(message):
         print(message)
     case Result.Err(error):
         print(error)
 ```
 
-Use `match ` to retain the scrutinee and expose borrowed non-copy payload bindings:
+Use bare `match` to retain the scrutinee and expose shared non-copy payload
+bindings:
 
 ```python
 result: Result[String, String] = Result.Ok("hello")
@@ -219,10 +221,15 @@ match result:
 print("result is still owned")
 ```
 
-`match mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected. A payload binding becomes stale if the exact matched place, its root, or an ancestor field is reassigned; a proven-disjoint sibling-field write remains valid.
+`match mut` requires a mutable place scrutinee. It gives mutable-borrowed
+payload bindings and reconstructs/writes the enum value back on normal arm
+exit, `return`, `break`, `continue`, and `try` propagation. Overlapping nested
+mutable matches are rejected. A payload binding becomes stale if the exact
+matched place, its root, or an ancestor field is reassigned; a proven-disjoint
+sibling-field write remains valid.
 
-For tuple patterns, by-value matching consumes a non-copy tuple as one whole
-value and gives owned leaf bindings. `match ` retains the tuple and gives
+For tuple patterns, `match own` consumes a non-copy tuple as one whole value
+and gives owned leaf bindings. Bare `match` retains the tuple and gives
 shared leaf provenance. `match mut` with a tuple pattern is rejected;
 the minimal tuple surface has no recursive reconstruction and writeback rule.
 
@@ -275,7 +282,7 @@ Treat every documented timeout, cancellation, closure, and error variant as sema
 ## Grammar
 
 The normative enum declaration, generic parameter, variant payload,
-construction, statement-match, expression-match, pattern, and `match `
+construction, statement-match, expression-match, pattern, and match-capability
 productions are in [Grammar](/manual/grammar#enums),
 [Grammar](/manual/grammar#patterns-and-statement-matches), and
 [Grammar](/manual/grammar#match-expressions). Payload-free variants omit
@@ -302,13 +309,13 @@ enum identity, variant, and payload values. A match evaluates its scrutinee exac
 tests arms in source order, and executes only the first matching arm. A match
 expression evaluates only its selected result expression. `match mut`
 reconstructs and writes the selected enum value back to its mutable place on
-normal arm exit.
+every arm exit.
 
 ## Ownership And Evaluation Order
 
-Every variant payload is an owned destination. By-value matching consumes a
-non-copy scrutinee and gives owned non-copy payload bindings. `match `
-retains the scrutinee and exposes shared payload borrows; `match mut`
+Every variant payload is an owned destination. `match own` consumes a non-copy
+scrutinee and gives owned non-copy payload bindings. Bare `match` retains the
+scrutinee and exposes shared payload borrows; `match mut`
 requires one exclusive mutable place and exposes mutable payload borrows.
 Copy payloads copy normally. Pattern bindings are arm-local, and reassigning a
 matched place or ancestor invalidates dependent mutable bindings while a
@@ -323,9 +330,9 @@ literal-pattern type mismatch, and incompatible match-expression results.
 `AU2004` reports invalid variant-constructor argument binding. `AU2999` covers
 duplicate variants, invalid payload shapes, missing or unreachable arms,
 non-exhaustive matches, unsupported pattern forms, and remaining enum/match
-rejections. `AU3001` reports use after a by-value match or payload move.
-`AU3002` reports moving through a borrowed match, overlapping mutable matches,
-requiring a mutable match place, or invalid borrowed-result materialization.
+rejections. `AU3001` reports use after `match own` or a payload move.
+`AU3002` reports moving through a shared match, overlapping mutable matches, or
+requiring a mutable match place.
 `AU3003` reports mutation or reassignment through an immutable enum/payload
 place.
 
@@ -338,7 +345,7 @@ resource or I/O failure.
 
 User and builtin generic enums, structural enum equality, construction and
 inference, statement and expression matches, exhaustiveness, nested patterns,
-short variants, scalar literal patterns, by-value matching, and shared/mutable
+short variants, scalar literal patterns, owned/shared/mutable matching, and
 borrowed matching are implemented for MIR execution and direct native
 generation. Both backends receive the same checked arm decision tree and are
 forced to agree on selected arms, payload values, writeback, and primary
@@ -350,7 +357,6 @@ Aurora 0.1 has no match guards, or-patterns, range/rest patterns, named-payload
 patterns, class/collection destructuring, top-level catch-all binding pattern,
 arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.
-Non-copy borrowed results remain contained even when produced inside a match.
 `TaskResult`, `WaitAny`, and `WaitAll` remain move outcome types regardless of
 copy payloads. Scrutinee and arm order, exhaustiveness, payload order, and
 borrowed-match writeback are language-defined rather than
@@ -362,7 +368,8 @@ Nominal and generic enums, positional and named payloads, qualified and
 contextual builtin construction, structural copy/move classification,
 statement and expression matches, exhaustiveness, nested enum patterns, scalar
 literal patterns, wildcards, short variants, and borrowed matching are
-implemented for the post-Phase 1.5 surface. Live non-copy borrowed match
-results are reserved for the Phase 6 alias work. Tuple patterns are implemented
-under Accepted ADR-0026. Guards, or-patterns, class/collection destructuring
-beyond the tuple kernel, and arbitrary predicate patterns are unavailable.
+implemented for the post-Phase 1.5 surface. Match expressions, like every
+expression, produce owned results; a non-copy result must come from an owned
+source. Tuple patterns are implemented under Accepted ADR-0026. Guards,
+or-patterns, class/collection destructuring beyond the tuple kernel, and
+arbitrary predicate patterns are unavailable.

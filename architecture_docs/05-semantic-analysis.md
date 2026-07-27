@@ -91,7 +91,6 @@ Aurora's checker covers more than "basic type checking". It performs:
 - default argument validation
 - trait declaration and impl validation
 - return checking
-- borrow-source validation for borrowed returns
 - expression typing
 - move analysis and use-after-move detection
 - mutable borrow exclusivity checks
@@ -100,34 +99,36 @@ Aurora's checker covers more than "basic type checking". It performs:
 
 ## Ownership and borrowing are semantic, not syntactic
 
-Aurora's syntax can say ``, `mut `, and borrowed return labels, but those words are only meaningful once the checker validates them.
+Aurora's syntax uses bare, `mut`, and `own` capabilities, which become
+meaningful only after the checker validates the requested access or transfer.
 
-Receiver syntax is normalized before body checking. Bare `self` and
-`self` both install a shared borrowed `self` binding. `own self`
-installs an owned binding and consumes a non-copy receiver at the call
-boundary. `mut self` installs an exclusive mutable binding and requires
-a mutable receiver place. Trait and implementation receiver matching compares
-these resolved modes, so bare and explicit shared receivers are compatible
-while an `own self` implementation cannot satisfy a shared receiver contract.
+Receiver syntax is normalized before body checking. Bare `self` installs a
+shared binding, `own self` installs an owned binding and consumes a non-copy
+receiver at the call boundary, and `mut self` installs an exclusive mutable
+binding that requires a mutable receiver place. Trait and implementation
+receiver matching compares these resolved modes.
 
 Ordinary parameters keep their source mode until signature resolution. A bare
-`value: T` resolves to a value ABI when `T` is copyable and a shared-borrow ABI
-when `T` is non-copy. If `T` is unresolved at the declaration, the mode is
-fixed as a shared borrow and remains declaration-stable when a call later
-specializes `T` to a copy type. Explicit `own`, ``, and `mut `
-spelling overrides that default. Trait conformance and calls compare the
-resolved ABI, while hover and diagnostics retain enough source information to
-teach the spelling that created it.
+`value: T` is logical shared access for every type and remains
+declaration-stable under specialization. The ABI may pass declaration-known
+copy bits directly without changing that source contract. Explicit `own` and
+`mut` select transfer and mutable access. Trait conformance and calls compare
+the resolved capability, while hover and diagnostics retain enough source
+information to teach the spelling that created it.
 
 Loop ownership is resolved independently. Bare iteration over `Vec` and `Set`
-is shared, `own` consumes the collection, and `mut ` supplies mutable
+is shared, `own` consumes the collection, and `mut` supplies mutable
 places only for collections that support writeback. Bare Queue iteration is a
 receive operation: each received item is already owned by the loop binding and
 the Queue handle is copyable, so all explicit loop ownership modifiers are
-rejected. Match and local assignment deliberately retain their consuming
-defaults.
+rejected. Bare matching is shared, `match own` consumes, and `match mut`
+requires mutable access with writeback. Local assignment retains its ordinary
+copy-or-move behavior.
 
-For Aurora 0.1, the checker permits borrowed-return calls only when the substituted result type is copyable. Those calls materialize copies. Non-copy borrowed-return declarations still receive provenance and trait-conformance checking, but calls are rejected before MIR lowering until Phase 6 supplies live alias storage.
+Every return is owned. Copy results are ordinary copies. A non-copy result must
+be constructed, cloned when clone-safe, moved from an owned input, or produced
+through an owner operation. The checker has no return-source or label contract;
+any future first-class loan or view design starts from a new specification.
 
 Aurora's `FunctionChecker` tracks local bindings with information such as:
 
@@ -237,7 +238,7 @@ The checker is where Aurora enforces:
 - move-after-use and use-after-move
 - borrow exclusivity
 - receiver consumption and mutable-receiver requirements
-- borrow-return source constraints
+- owned-return move and clone-safety constraints
 - `with` resource requirements
 
 ### 5. It prepares later stages

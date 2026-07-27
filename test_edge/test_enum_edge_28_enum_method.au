@@ -10,7 +10,7 @@ enum Color:
 
 impl Displayable for Color:
     def name(self) -> String:
-        match self:
+        match own self:
             case Color.Red:
                 return "red"
             case Color.Green:
@@ -19,7 +19,7 @@ impl Displayable for Color:
                 return "blue"
 
     def is_primary(self) -> bool:
-        match self:
+        match own self:
             case Color.Green:
                 return false
             case _:

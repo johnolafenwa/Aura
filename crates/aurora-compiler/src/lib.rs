@@ -39,6 +39,13 @@ pub use native_codegen::{
 };
 pub use runtime_value::{RunOutput, Value};
 
+/// Version of the compiler's exported semantic interface.
+///
+/// Every persisted artifact or long-lived tooling cache that can contain
+/// compiler semantic metadata must bind this value. Bump it whenever the
+/// meaning or representation of checked source changes incompatibly.
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 2;
+
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = bytes_codec::sha256_bytes(bytes).expect("SHA-256 output always fits its buffer");

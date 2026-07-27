@@ -5,7 +5,7 @@ enum Status:
     Inactive
 
 def describe_status(s: Status) -> String:
-    match s:
+    match own s:
         case Status.Active:
             return "active"
         case Status.Inactive:
@@ -13,7 +13,7 @@ def describe_status(s: Status) -> String:
 
 # Pass enum as borrow
 def is_active(s: Status) -> bool:
-    match s:
+    match own s:
         case Status.Active:
             return true
         case Status.Inactive:

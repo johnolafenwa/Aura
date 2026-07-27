@@ -56,8 +56,8 @@ def consume(name: String, jobs: Queue[Job], results: Queue[String]):
 ```
 
 The bare `for` loop does the receive structurally and each item arrives already
-owned by `job`. Queue iteration is not collection-place traversal, so `own`,
-``, and `mut ` modifiers are rejected. There is no sentinel value,
+owned by `job`. Queue iteration is not collection-place traversal, so `own`
+and `mut` modifiers are rejected. There is no sentinel value,
 no magic token, no special return code — closing the queue is the signal.
 
 ## Step 4: The Parent

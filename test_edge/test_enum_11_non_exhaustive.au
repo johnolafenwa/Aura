@@ -4,7 +4,7 @@ enum Fruit:
     Cherry
 
 def name(f: Fruit) -> String:
-    match f:
+    match own f:
         case Fruit.Apple:
             return "apple"
         case Fruit.Banana:

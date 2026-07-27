@@ -191,7 +191,7 @@ because its declaration contains owned String, Vec, Map, and recursive Value
 payloads. `json.Error` is also a move type because `Syntax` contains a String.
 
 Every variant payload uses the normal owned enum-construction rule.
-`json.parse` and `json.dumps` use ordinary bare non-copy parameters, which are
+`json.parse` and `json.dumps` use ordinary bare parameters, which are
 shared borrows under Aurora's declaration-stable parameter policy.
 `indent=None` is an `Option[int64]` default evaluated at the call boundary.
 

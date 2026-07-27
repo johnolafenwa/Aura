@@ -10,7 +10,7 @@ These tutorials teach the language as it exists in this repository today, not th
 
 - top-level scripts and explicit `main`
 - bindings, mutability, `None`, and the current builtin type names
-- functions, return rules, typed parameters, and borrowed parameters
+- functions, owned return values, typed parameters, and shared or mutable access
 - classes, keyword construction, defaults, receivers, and methods
 - ownership, borrowing, move semantics, copy types, and cloning
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing, and iteration
@@ -20,7 +20,7 @@ These tutorials teach the language as it exists in this repository today, not th
 - statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
 - `with`, `try expr`, queues, structured task groups, task waiting helpers, and task timeouts
 - expression-form `match`, nested enum patterns, and multi-payload variants
-- borrowed-return declarations with explicit source syntax and copy-result calls
+- owned returns, including ordinary copies and explicit non-copy clones or transfers
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
 - local file modules with `import`, `from ... import ...`, and `public` visibility
@@ -41,7 +41,7 @@ Today's working subset includes:
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
 - builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
-- class methods with shared `self`/`self`, consuming `own self`, and mutable `mut self`
+- class methods with shared `self`, consuming `own self`, and mutable `mut self`
 - arithmetic, comparisons, strings, booleans, and Duration literals, constructors, conversions, and checked operators
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`
 - `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`
@@ -52,7 +52,8 @@ Today's working subset includes:
 The repository is not at the full proposal yet. Notable gaps include:
 
 - full dependency registries and version solving beyond local/git package dependencies
-- live non-copy borrowed returns and broader lifetime/borrowing work
+- any future first-class loan or view values, whose design is not reserved by
+  the current return syntax
 - further direct-backend hardening and the remaining coverage push toward 100%
 
 ## Recommended Companion Material

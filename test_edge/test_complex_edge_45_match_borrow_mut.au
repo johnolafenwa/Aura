@@ -9,14 +9,14 @@ def main() -> int32:
     mut c = Color.Red
 
     # Match and then reassign
-    match c:
+    match own c:
         case Color.Red:
             print("red")
             c = Color.Blue
         case _:
             print("other")
 
-    match c:
+    match own c:
         case Color.Blue:
             print("now blue")
         case _:

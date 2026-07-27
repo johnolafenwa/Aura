@@ -86,6 +86,36 @@ class ReceiverTests(unittest.TestCase):
 
 
 class ParameterTests(unittest.TestCase):
+    def test_bare_copy_parameter_is_flagged_for_snapshot_review(self) -> None:
+        result = migrate.analyze_aurora(
+            "def add(left: int32, right: String):\n",
+            path="sample.au",
+        )
+        self.assertEqual(result.text, "def add(left: int32, right: String):\n")
+        self.assertEqual(
+            [
+                (record["kind"], record["line"], record["action"])
+                for record in result.occurrences
+            ],
+            [("bare_copy_parameter", 1, "review_required")],
+        )
+        self.assertEqual(len(result.findings), 1)
+        self.assertIn("call-site review", result.findings[0]["message"])
+
+    def test_structural_copy_parameter_is_also_inspected(self) -> None:
+        self.assertEqual(
+            migrate.migrate_aurora(
+                "def inspect(value: Option[(int32, bool)]):\n"
+            ),
+            "def inspect(value: Option[(int32, bool)]):\n",
+        )
+
+    def test_already_explicit_and_noncopy_parameters_are_unchanged(self) -> None:
+        original = (
+            "def inspect(a: own int32, b: mut int32, c: String, d: T):\n"
+        )
+        self.assertEqual(migrate.migrate_aurora(original), original)
+
     def test_shared_parameter_loses_the_keyword(self) -> None:
         self.assertEqual(
             migrate.migrate_aurora("def f(value: borrow String):\n"),
@@ -119,18 +149,30 @@ class ParameterTests(unittest.TestCase):
 
 class ReturnAnnotationTests(unittest.TestCase):
     def test_labelled_borrowed_return_becomes_an_ordinary_return(self) -> None:
-        self.assertEqual(
-            migrate.migrate_aurora(
-                "def name_ref(user: borrow User) -> borrow[user] String:\n"
-            ),
-            "def name_ref(user: User) -> String:\n",
+        result = migrate.analyze_aurora(
+            "def score_ref(user: borrow User) -> borrow[user] int32:\n",
+            path="score.au",
         )
+        self.assertEqual(result.text, "def score_ref(user: User) -> int32:\n")
+        self.assertEqual(result.findings, [])
+        self.assertEqual(result.occurrences[0]["action"], "ordinary_owned_return")
 
-    def test_unlabelled_borrowed_return_becomes_an_ordinary_return(self) -> None:
-        self.assertEqual(
-            migrate.migrate_aurora("def pick(a: borrow String) -> borrow String:\n"),
-            "def pick(a: String) -> String:\n",
+    def test_noncopy_borrowed_return_is_not_blindly_rewritten(self) -> None:
+        original = "def pick(a: borrow String) -> borrow String:\n"
+        result = migrate.analyze_aurora(original, path="pick.au")
+        self.assertEqual(result.text, "def pick(a: String) -> borrow String:\n")
+        self.assertEqual(len(result.findings), 1)
+        self.assertEqual(result.findings[0]["kind"], "borrowed_return_redesign")
+        self.assertEqual(result.findings[0]["line"], 1)
+        self.assertIn("owned result, clone, index, handle, or owner operation", result.findings[0]["message"])
+
+    def test_unresolved_borrowed_return_requires_review(self) -> None:
+        result = migrate.analyze_aurora(
+            "def pick[T](a: borrow T) -> borrow T:\n",
+            path="pick.au",
         )
+        self.assertEqual(result.text, "def pick[T](a: T) -> borrow T:\n")
+        self.assertEqual(result.findings[0]["classification"], "unresolved")
 
 
 class LoopTests(unittest.TestCase):
@@ -191,9 +233,9 @@ class MatchTests(unittest.TestCase):
         )
         self.assertIn("match own holder:", migrate.migrate_aurora(original))
 
-    def test_bare_match_over_a_temporary_stays_bare(self) -> None:
-        # A call result has no surviving owner, so the consuming-to-shared flip
-        # is unobservable and `own` would only add noise.
+    def test_bare_match_over_a_temporary_stays_bare_and_is_flagged(self) -> None:
+        # The call result has no surviving owner, but nested payload transfer
+        # can still need `own`, so the tool must preserve and flag it.
         original = source(
             """
             def main():
@@ -204,21 +246,88 @@ class MatchTests(unittest.TestCase):
                         pass
             """
         )
-        self.assertIn("match compute():", migrate.migrate_aurora(original))
-        self.assertNotIn("match own", migrate.migrate_aurora(original))
+        result = migrate.analyze_aurora(original, path="temporary.au")
+        self.assertIn("match compute():", result.text)
+        self.assertNotIn("match own", result.text)
+        self.assertEqual(result.findings[0]["kind"], "bare_match")
 
-    def test_bare_match_without_bindings_stays_bare(self) -> None:
+    def test_bare_match_without_bindings_gains_own(self) -> None:
         original = source(
             """
             def main():
                 match holder:
                     case Option.Some(_):
                         print("some")
-                    case Option.None:
-                        print("none")
+                case Option.None:
+                    print("none")
             """
         )
-        self.assertNotIn("match own", migrate.migrate_aurora(original))
+        self.assertIn("match own holder:", migrate.migrate_aurora(original))
+
+    def test_every_bare_place_match_is_recorded_per_occurrence(self) -> None:
+        original = source(
+            """
+            match holder:
+                case _:
+                    pass
+            match holder.value:
+                case _:
+                    pass
+            match items[index]:
+                case _:
+                    pass
+            match compute():
+                case _:
+                    pass
+            """
+        )
+        result = migrate.analyze_aurora(original, path="matches.au")
+        self.assertIn("match own holder:", result.text)
+        self.assertIn("match own holder.value:", result.text)
+        self.assertIn("match own items[index]:", result.text)
+        self.assertIn("match compute():", result.text)
+        self.assertEqual(
+            [
+                (record["line"], record["classification"], record["action"])
+                for record in result.occurrences
+                if record["kind"] == "bare_match"
+            ],
+            [
+                (1, "place", "insert_own"),
+                (4, "place", "insert_own"),
+                (7, "place", "insert_own"),
+                (10, "temporary", "review_required"),
+            ],
+        )
+
+    def test_match_expressions_receive_the_same_place_preservation(self) -> None:
+        original = source(
+            """
+            def choose(value: Option[int32]) -> int32:
+                return match value:
+                    case Option.Some(inner): inner
+                    case Option.None: 0
+
+            def temporary() -> int32:
+                return match compute():
+                    case Option.Some(inner): inner
+                    case Option.None: 0
+            """
+        )
+        result = migrate.analyze_aurora(original, path="expressions.au")
+        self.assertIn("return match own value:", result.text)
+        self.assertIn("return match compute():", result.text)
+        self.assertEqual(
+            [
+                (record["line"], record["classification"], record["action"])
+                for record in result.occurrences
+                if record["kind"] == "bare_match"
+            ],
+            [
+                (2, "place", "insert_own"),
+                (7, "temporary", "review_required"),
+            ],
+        )
 
     def test_explicitly_shared_match_never_gains_own(self) -> None:
         # `match borrow X` was already shared. Collapsing it to `match X` and
@@ -278,12 +387,12 @@ class IdempotenceTests(unittest.TestCase):
         def name_ref(user: borrow[src] Holder) -> borrow[src] int32:
             return user.generator
 
-        def scan(values: borrow mut Vec[String], limit: borrow int32):
+        def scan(values: borrow mut Vec[String], limit: own int32):
             for value in borrow mut values:
                 print(value)
             for index in mut range(0, limit):
                 print(index)
-            match borrow values:
+            match compute():
                 case _:
                     pass
             match holder:
@@ -363,6 +472,53 @@ class ManifestTests(unittest.TestCase):
         self.assertNotEqual(entry["before"], entry["after"])
         self.assertEqual(len(entry["before"]), 64)
 
+    def test_manifest_is_a_per_occurrence_semantic_ledger(self) -> None:
+        self.target.write_text(
+            source(
+                """
+                def inspect(value: int32):
+                    match state:
+                        case Flag.Ready:
+                            pass
+                """
+            )
+        )
+        manifest = self.build_manifest()
+        self.assertEqual(manifest["version"], 2)
+        self.assertEqual(
+            [
+                (record["kind"], record["line"], record["action"])
+                for record in manifest["semantic_occurrences"]
+            ],
+            [
+                ("bare_copy_parameter", 1, "review_required"),
+                ("bare_match", 2, "insert_own"),
+            ],
+        )
+        self.assertEqual(len(manifest["findings"]), 1)
+        self.assertEqual(manifest["findings"][0]["kind"], "bare_copy_parameter")
+
+    def test_manifest_exposes_nonmechanical_borrowed_return_findings(self) -> None:
+        self.target.write_text(
+            "def expose(value: borrow String) -> borrow String:\n"
+        )
+        manifest = self.build_manifest()
+        self.assertEqual(len(manifest["findings"]), 1)
+        self.assertEqual(
+            manifest["findings"][0]["kind"], "borrowed_return_redesign"
+        )
+        self.assertEqual(
+            manifest["semantic_occurrences"][0]["action"],
+            "redesign_required",
+        )
+        self.assertEqual(
+            migrate.unresolved_semantic_findings(manifest),
+            manifest["findings"],
+        )
+        manifest["findings"][0]["status"] = "resolved"
+        manifest["findings"][0]["resolution"] = "return an owned clone"
+        self.assertEqual(migrate.unresolved_semantic_findings(manifest), [])
+
     def test_apply_rewrites_every_manifest_entry(self) -> None:
         manifest = self.build_manifest()
         changed = migrate.apply_manifest(self.root, manifest)
@@ -394,6 +550,27 @@ class ManifestTests(unittest.TestCase):
         migrate.apply_manifest(self.root, manifest)
         self.assertEqual(migrate.check_manifest(self.root, manifest), [])
 
+    def test_check_accepts_a_clean_post_migration_edit(self) -> None:
+        manifest = self.build_manifest()
+        migrate.apply_manifest(self.root, manifest)
+        self.target.write_text("def read(self) -> int32:\n    return 1\n")
+        self.assertEqual(migrate.check_manifest(self.root, manifest), [])
+
+    def test_check_rejects_post_migration_drift_that_restores_old_syntax(self) -> None:
+        manifest = self.build_manifest()
+        migrate.apply_manifest(self.root, manifest)
+        self.target.write_text("def read(borrow self) -> int32:\n    return 1\n")
+        with self.assertRaises(migrate.HashMismatch) as caught:
+            migrate.check_manifest(self.root, manifest)
+        self.assertIn("still contains retired capability syntax", str(caught.exception))
+
+    def test_check_rejects_a_missing_manifest_entry(self) -> None:
+        manifest = self.build_manifest()
+        self.target.unlink()
+        with self.assertRaises(migrate.HashMismatch) as caught:
+            migrate.check_manifest(self.root, manifest)
+        self.assertIn("listed in the manifest but missing", str(caught.exception))
+
     def test_manifest_omits_files_the_migration_would_not_change(self) -> None:
         unchanged = self.root / "clean.au"
         unchanged.write_text("def read(self) -> int32:\n    return 0\n")
@@ -405,6 +582,181 @@ class ManifestTests(unittest.TestCase):
         second.write_text("def f(v: borrow String):\n    pass\n")
         manifest = migrate.build_manifest(self.root, [self.target, second])
         self.assertEqual([e["path"] for e in manifest["files"]], ["aaa.au", "sample.au"])
+
+
+class RetiredSyntaxGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+
+    def write(self, relative: str, text: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source(text))
+        return path
+
+    def test_clean_aurora_and_explanatory_borrow_words_pass(self) -> None:
+        aurora = self.write(
+            "example.au",
+            '''
+            # A shared borrow does not consume the value.
+            def explain(value: String):
+                note = "borrow mut T is retired syntax"
+                print(value)
+            ''',
+        )
+        manual = self.write(
+            "manual.md",
+            """
+            A bare parameter borrows a non-copy value. The borrow ends at the
+            call boundary, and the borrow checker reports overlapping access.
+            """,
+        )
+        self.assertEqual(
+            migrate.find_retired_syntax(self.root, [aurora, manual], {}),
+            [],
+        )
+
+    def test_retired_keyword_in_aurora_source_fails(self) -> None:
+        aurora = self.write(
+            "example.au",
+            """
+            def read(value: borrow String):
+                print(value)
+            """,
+        )
+        findings = migrate.find_retired_syntax(self.root, [aurora], {})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("example.au:1", findings[0])
+        self.assertIn("retired `borrow` keyword", findings[0])
+
+    def test_aurora_retirement_fixture_requires_an_exact_counted_exemption(self) -> None:
+        fixture = self.write(
+            "fixtures/retired.au",
+            """
+            def read(value: borrow String):
+                print(value)
+            """,
+        )
+        allowlist = {
+            "fixtures/retired.au": {
+                "borrow_keywords": 1,
+                "reason": "compiler replacement diagnostic fixture",
+            }
+        }
+        self.assertEqual(
+            migrate.find_retired_syntax(self.root, [fixture], allowlist),
+            [],
+        )
+        fixture.write_text(
+            "def read(value: borrow String, other: borrow String):\n    pass\n"
+        )
+        findings = migrate.find_retired_syntax(
+            self.root,
+            [fixture],
+            allowlist,
+        )
+        self.assertTrue(
+            any("allowlist expects 1 retired keyword token, found 2" in f for f in findings)
+        )
+
+    def test_stale_markdown_source_spelling_fails_but_retirement_teaching_passes(self) -> None:
+        stale = self.write(
+            "stale.md",
+            """
+            To advance the stream, accept `rng: borrow mut random.Rng`.
+            """,
+        )
+        teaching = self.write(
+            "teaching.md",
+            """
+            The old spelling `value: borrow mut T` was removed; write
+            `value: mut T` instead.
+            """,
+        )
+        findings = migrate.find_retired_syntax(
+            self.root,
+            [stale, teaching],
+            {},
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("stale.md:1", findings[0])
+
+    def test_stale_multiline_inline_code_is_detected(self) -> None:
+        manual = self.write(
+            "manual.md",
+            """
+            A function that advances a stream takes `rng: borrow mut
+            random.Rng`.
+            """,
+        )
+        findings = migrate.find_retired_syntax(self.root, [manual], {})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("manual.md:1", findings[0])
+
+    def test_stale_indented_markdown_code_is_detected(self) -> None:
+        manual = self.write(
+            "manual.md",
+            """
+            Example:
+
+                def update(value: borrow mut Counter):
+                    pass
+            """,
+        )
+        findings = migrate.find_retired_syntax(self.root, [manual], {})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("manual.md:3", findings[0])
+
+    def test_stale_diagnostic_and_rust_message_fail(self) -> None:
+        diagnostic = self.write(
+            "sample.diag",
+            """
+            error[AU3002]: cannot start `match borrow mut` here
+            """,
+        )
+        rust = self.write(
+            "sample.rs",
+            '''
+            let message = "parameter is declared `borrow mut`";
+            ''',
+        )
+        findings = migrate.find_retired_syntax(
+            self.root,
+            [diagnostic, rust],
+            {},
+        )
+        self.assertEqual(len(findings), 2)
+        self.assertTrue(any("sample.diag:1" in f for f in findings))
+        self.assertTrue(any("sample.rs:1" in f for f in findings))
+
+    def test_parser_retirement_diagnostic_and_internal_rust_comment_pass(self) -> None:
+        rust = self.write(
+            "parser.rs",
+            '''
+            // The old AST represented `borrow mut` with a receiver mode.
+            let message = "`borrow mut T` was removed; write `mut T`";
+            ''',
+        )
+        self.assertEqual(
+            migrate.find_retired_syntax(self.root, [rust], {}),
+            [],
+        )
+
+    def test_historical_work_notes_and_adrs_are_not_current_syntax(self) -> None:
+        work = self.write(
+            "work/2026-01-01-old.md",
+            "The implementation used `value: borrow mut T`.\n",
+        )
+        adr = self.write(
+            "architecture_docs/decisions/0006-old.md",
+            "The accepted spelling was `value: borrow mut T`.\n",
+        )
+        self.assertEqual(
+            migrate.find_retired_syntax(self.root, [work, adr], {}),
+            [],
+        )
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ def select_owned_text(flag: bool, text: own String) -> String:
     return take_text(text) if flag else text
 
 def select_owned_text_match(flag: bool, text: own String) -> String:
-    return match flag:
+    return match own flag:
         case true: take_text(text)
         case false: text
 

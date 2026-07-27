@@ -217,8 +217,8 @@ specified below; partial or deterministic fallback output is forbidden.
 Assigning or passing an `Rng` through an owned position moves it. A moved
 source cannot be reused. `next_int`, `next_float`, and `shuffle` require a
 mutable generator place; an ordinary immutable binding is insufficient. A
-function that should advance a caller's stream takes `rng: borrow mut
-random.Rng`.
+function that should advance a caller's stream takes
+`rng: mut random.Rng`.
 
 Moving a generator into or out of a collection preserves its single owner.
 Cloning an enclosing value would not, so the transitive clone restrictions in

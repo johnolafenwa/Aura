@@ -10,7 +10,7 @@ enum Switch:
 
 impl Describable for Switch:
     def describe(self) -> String:
-        match self:
+        match own self:
             case Switch.On:
                 return "on"
             case Switch.Off:

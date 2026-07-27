@@ -290,7 +290,9 @@ A receiver, when present, is the first method parameter. Bare `self` is the shar
 
 Bare means shared access for every type, including declaration-known copy types. Return annotations carry no capability: every return is an ordinary owned return.
 
-`borrow` is a reserved retired keyword. It is parsed only far enough to emit its exact replacement diagnostic, such as ``` `borrow mut T` was removed; write `mut T` ```.
+`borrow` is a reserved retired keyword. It is parsed only far enough to emit
+its exact replacement diagnostic. For example, a retired `borrow mut T`
+parameter receives guidance to write `mut T`.
 
 Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, and mutable task targets.
 
@@ -420,10 +422,11 @@ The loop target is one identifier or a recursively nested tuple unpack target.
 Tuple leaves inherit the yielded element's ownership provenance. A tuple
 target is rejected with `mut` iteration because the minimal tuple
 surface has no recursive writeback. Loop `else` clauses are not supported.
-An absent modifier is shared iteration. Explicit modifiers are rejected for
-Queue iteration because it is a receive operation rather than collection-place
-traversal, and for range iteration because a range yields copy values with
-nothing to modify or transfer.
+For collection-place traversal, an absent modifier is shared iteration. Queue
+and Range use their iterable-specific bare defaults instead: Queue receives
+owned items, while Range yields independent copy `int32` values. Explicit
+modifiers are rejected for Queue because it is a receive operation and for
+Range because there is no place or ownership transfer to modify.
 
 The iterable position also recognizes two compiler-known call shapes,
 `enumerate(expression)` and `zip(expression, expression)`. They are not values
@@ -686,7 +689,7 @@ The grammar intentionally excludes:
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
 - match guards, alternative patterns, and collection patterns
-- call-site `` annotations
+- call-site capability annotations
 - exception statements, `raise`, and `yield`
 - detached `spawn`, `select`, and proposal-only concurrency syntax
 

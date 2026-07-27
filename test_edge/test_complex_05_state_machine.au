@@ -19,9 +19,9 @@ enum Event:
     Timeout
 
 def transition(state: State, event: Event) -> State:
-    match state:
+    match own state:
         case State.Closed:
-            match event:
+            match own event:
                 case Event.PassiveOpen:
                     return State.Listen
                 case Event.ActiveOpen:
@@ -29,7 +29,7 @@ def transition(state: State, event: Event) -> State:
                 case _:
                     return State.Closed
         case State.Listen:
-            match event:
+            match own event:
                 case Event.SynAck:
                     return State.SynReceived
                 case Event.Close:
@@ -37,7 +37,7 @@ def transition(state: State, event: Event) -> State:
                 case _:
                     return State.Listen
         case State.SynSent:
-            match event:
+            match own event:
                 case Event.SynAck:
                     return State.Established
                 case Event.Close:
@@ -45,32 +45,32 @@ def transition(state: State, event: Event) -> State:
                 case _:
                     return State.SynSent
         case State.SynReceived:
-            match event:
+            match own event:
                 case Event.Ack:
                     return State.Established
                 case _:
                     return State.SynReceived
         case State.Established:
-            match event:
+            match own event:
                 case Event.Close:
                     return State.FinWait
                 case _:
                     return State.Established
         case State.FinWait:
-            match event:
+            match own event:
                 case Event.Ack:
                     return State.TimeWait
                 case _:
                     return State.FinWait
         case State.TimeWait:
-            match event:
+            match own event:
                 case Event.Timeout:
                     return State.Closed
                 case _:
                     return State.TimeWait
 
 def state_name(state: State) -> String:
-    match state:
+    match own state:
         case State.Closed:
             return "Closed"
         case State.Listen:

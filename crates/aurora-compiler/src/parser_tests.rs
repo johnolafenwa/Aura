@@ -2492,3 +2492,53 @@ fn retired_borrowed_returns_report_their_replacement() {
         "borrowed returns were removed; return an owned value instead"
     );
 }
+
+#[test]
+fn misplaced_capability_prefixes_name_the_valid_positions() {
+    let type_position_message = |capability: &str| {
+        format!(
+            "`{capability}` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)"
+        )
+    };
+    let expression_position_message = |capability: &str| {
+        format!(
+            "`{capability}` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)"
+        )
+    };
+
+    for capability in ["mut", "own"] {
+        for source in [
+            format!("class C:\n    value: {capability} String\n"),
+            format!("enum Maybe:\n    Some({capability} String)\n"),
+            format!("def pick(value: String) -> {capability} String:\n    return value\n"),
+            format!(
+                "def convert(value: int32) -> int32:\n    return value as {capability} int32\n"
+            ),
+        ] {
+            let error = parse_item_from(&source).expect_err(&source);
+            assert_eq!(error.code, "AU1101", "{source}");
+            assert_eq!(error.message, type_position_message(capability), "{source}");
+        }
+
+        let source = format!(
+            "def use(value: String):\n    pass\n\ndef main():\n    value = \"aurora\"\n    use({capability} value)\n"
+        );
+        let error = parse(&source).expect_err(&source);
+        assert_eq!(error.code, "AU1101", "{source}");
+        assert_eq!(
+            error.message,
+            expression_position_message(capability),
+            "{source}"
+        );
+    }
+
+    // Existing capability-bearing positions remain unambiguous.
+    parse_item_from(
+        "def use(shared: String, changed: mut String, consumed: own String):\n    mut local = shared\n",
+    )
+    .expect("parameter capabilities and mutable local bindings remain valid");
+    parse_stmt_from("for item in mut values:\n    pass\n")
+        .expect("mutable loop selectors remain valid");
+    parse_stmt_from("match own value:\n    case _:\n        pass\n")
+        .expect("owned match selectors remain valid");
+}

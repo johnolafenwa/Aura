@@ -82,7 +82,8 @@ Aurora is not "just another parser plus interpreter". The implementation has som
 - significant indentation
   The lexer emits `Indent` and `Dedent`, so the parser works on explicit block tokens.
 - ownership and borrowing checks
-  The checker tracks moves, partial moves, mutable borrows, borrowed returns, and cleanup obligations.
+  The checker tracks moves, partial moves, shared and mutable access, owned
+  returns, and cleanup obligations.
 - builtin namespaces as first-class imports
   `io`, `fs`, and `net` are modeled as module namespaces, not hard-coded special cases in every caller.
 - shared call-binding rules

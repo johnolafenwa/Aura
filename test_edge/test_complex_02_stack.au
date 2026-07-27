@@ -19,7 +19,7 @@ class Stack:
         self.size += 1
 
     def pop(mut self) -> int32:
-        match self.top:
+        match own self.top:
             case Some(node):
                 self.top = node.next
                 self.size -= 1

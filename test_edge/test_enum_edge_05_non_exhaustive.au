@@ -5,7 +5,7 @@ enum Season:
     Winter
 
 def name(s: Season) -> String:
-    match s:
+    match own s:
         case Season.Spring:
             return "spring"
         case Season.Summer:

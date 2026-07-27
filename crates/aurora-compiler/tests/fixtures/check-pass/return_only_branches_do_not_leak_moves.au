@@ -10,7 +10,7 @@ def allow_if_fallthrough(flag: bool) -> None:
 
 def allow_match_fallthrough(flag: bool) -> None:
     text = "match"
-    match flag:
+    match own flag:
         case true:
             consume(text)
             return

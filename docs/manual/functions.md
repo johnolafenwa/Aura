@@ -48,7 +48,7 @@ grouping does not discard that context. Other contextual literal typing and
 the complete symmetric option-equality rule follow [Static
 Semantics](/manual/static-semantics#contextual-inference).
 
-Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `self`, `own self`, or `mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
+Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `own self`, or `mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
 
 A function is private to its defining module by default. Prefix the declaration with `public` to make it importable from another module:
 
@@ -65,9 +65,8 @@ The passing mode is part of the function signature:
 
 | Declaration | Contract at the call boundary |
 | --- | --- |
-| `value: T` | Shared borrow when `T` is non-copy; by value when `T` is copy. |
+| `value: T` | Shared access. An implementation may pass copy bits directly without changing the source contract. |
 | `value: own T` | Owned argument. A move value is consumed; a copy value is duplicated. |
-| `value: T` | Explicit shared borrow. The caller retains ownership; the callee cannot move through the borrow. |
 | `value: mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
 
 ```python
@@ -82,7 +81,7 @@ def push_name(names: mut Vec[String], name: own String):
 ```
 
 The modifier is written in the declaration after the colon. Calls pass the
-expression directly; Aurora has no call-site `own` or `` syntax:
+expression directly; Aurora has no call-site capability prefix:
 
 ```python
 mut names = Vec[String]()
@@ -131,8 +130,8 @@ not accept trailing commas in Aurora 0.1.
 
 ## Default Arguments
 
-A default is permitted on an ordinary default-mode, `own`, or shared-``
-parameter of a top-level function or class method:
+A default is permitted on a bare shared or `own` parameter of a top-level
+function or class method:
 
 ```python
 def greet(name: String = "world"):
@@ -141,7 +140,7 @@ def greet(name: String = "world"):
 
 The complete rules are:
 
-- `mut ` parameters cannot have defaults, regardless of whether their
+- `mut` parameters cannot have defaults, regardless of whether their
   types are copyable; the default would be a caller-invisible temporary, so
   every mutation would be a silent lost write. Require the caller to pass a
   value, or take the parameter as `own T` and return the result
@@ -195,34 +194,44 @@ def parse_total(left: String, right: String) -> Result[int32, String]:
 
 `Result.Ok(value)` makes `try` evaluate to `value`. `Result.Err(error)` returns from the enclosing function immediately. `E1` must equal `E2`, or an applicable `impl From[E1] for E2` with a `from` method must be visible. Active `with` cleanups run during this early return. See [Execution Model](/manual/execution-model#try).
 
-## Borrowed Returns
+## Owned Returns
 
-A return annotation can identify a borrow source in an API contract:
-
-```python
-def identity(value: int32) -> int32:
-    return value
-```
-
-The source in brackets is either the borrowed parameter name or its borrow label. In Aurora 0.1, calls returning a copy type materialize an ordinary copied value. Calls returning a non-copy borrowed result are rejected until the Phase 6 live-alias representation is implemented.
-
-Eligible source rules are:
-
-- `-> T` may derive from a shared- or mutable-borrowed parameter or receiver
-- `-> mut T` may derive only from a mutable-borrowed parameter or receiver
-- when exactly one eligible source exists, the source may be omitted and is inferred
-- when multiple eligible sources exist, the return annotation must select one by parameter name, `self`, or label
-- for non-copy declarations, the returned expression must actually derive from the selected source
-- an owned non-copy expression cannot satisfy a borrowed return contract
-
-Labels are signature-level provenance names, not general lexical lifetime variables:
+Every return annotation describes an owned result:
 
 ```python
-def choose(left: int32, right: int32) -> int32:
-    return left
+class User:
+    name: String
+    score: int32
+
+def score(user: User) -> int32:
+    return user.score
 ```
 
-A borrowed return of a copy type is materialized as an ordinary copy value. A call producing a borrowed `String`, collection, resource, ordinary class, or other non-copy value fails during checking with guidance to return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Non-copy borrowed-return declarations remain checked so source and trait contracts are reserved consistently for Phase 6. Trait implementations must preserve the trait method's parameter passing, return passing, and semantic return-source slot; parameter names and labels themselves may be renamed. See [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-returns-and-provenance).
+Here the caller receives an ordinary `int32` copy. Copy results need no
+provenance annotation because they are independent owned values.
+
+For a non-copy result, the function must produce ownership. It can construct a
+fresh value, clone a clone-safe value, move from an `own` parameter, or invoke
+an operation that consumes an owner:
+
+```python
+def copy_name(user: User) -> String:
+    return user.name.clone()
+
+def into_name(user: own User) -> String:
+    return user.name
+```
+
+A bare or `mut` parameter grants access but does not give the function
+ownership of a non-copy value stored behind that access. Moving such a value
+into the result is rejected; use one of the owned-result patterns above.
+
+Aurora has no return-source modifier, mutable-return capability, or
+signature-level return label. Retired spellings receive migration diagnostics
+instead of reserving a hidden provenance contract. If Aurora later adds
+first-class loans or views, that feature will define its types, lifetimes,
+storage, and call rules from scratch. See [Ownership And
+Borrowing](/manual/ownership-and-borrowing#owned-returns).
 
 ## Generic Functions
 
@@ -273,9 +282,9 @@ with group = TaskGroup():
 
 Task capture ownership is independent of the target function's call ABI. Each
 argument is first copied or moved into task-owned capture storage: `own` target
-parameters consume their capture, while default-mode and explicit shared
-parameters borrow from that storage for the duration of the child call.
-`mut ` targets are rejected because mutable access to detached capture
+parameters consume their capture, while bare shared parameters access that
+storage for the duration of the child call. `mut` targets are rejected because
+mutable access to detached capture
 storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
 
 ## `main`
@@ -299,8 +308,8 @@ The alternate top-level execution form, evaluation order, cleanup on return, and
 ## Grammar
 
 Function and method declarations, generic parameters and bounds, receiver and
-ordinary parameter forms, defaults, borrowed-return sources, return annotations,
-and call arguments are normative in [Grammar](/manual/grammar). Ordinary
+ordinary parameter forms, defaults, owned return annotations, and call
+arguments are normative in [Grammar](/manual/grammar). Ordinary
 functions are module items; nested function declarations and lambda syntax are
 not accepted.
 
@@ -310,9 +319,9 @@ Every ordinary parameter has one declared type and declaration-stable passing
 mode. Calls bind positional then named arguments, substitute inferred or
 explicit generic arguments, enforce bounds and exact types, and fill only legal
 defaults. They also enforce inferred clone-safety obligations after
-substitution. Every reachable non-`None` path returns the declared type. Borrowed
-return provenance is checked at the declaration and call; non-copy results are
-contained until live aliases exist.
+substitution. Every reachable non-`None` path returns the declared type. Shared
+or mutable access never authorizes moving a non-copy value into the result;
+non-copy returns require an owned source.
 
 ## Runtime Semantics
 
@@ -325,8 +334,8 @@ and `return` transfers its value after exited cleanups run.
 
 ## Ownership And Evaluation Order
 
-Copy arguments are copied. Default-mode and explicit shared non-copy parameters
-borrow for the call; `own` parameters consume their arguments; `mut `
+Bare parameters grant shared access; an implementation may pass copy bits
+directly. `own` parameters consume their arguments; `mut`
 requires one exclusive mutable place and writes through it. Borrowed default
 temporaries live through the call, owned defaults are consumed, and mutable
 borrow defaults are rejected as guaranteed lost writes. Task start first stores
@@ -368,14 +377,13 @@ order are otherwise not implementation-defined.
 
 ## Status
 
-The function, method, generic, default-argument, named-argument, borrowed-return
-containment, inferred clone-safety, task-target, and entrypoint contracts described above are
+The function, method, generic, default-argument, named-argument, owned-return,
+inferred clone-safety, task-target, and entrypoint contracts described above are
 implemented. Supplied/default evaluation and argument capture follow
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
 which is **Accepted**. The rules are pinned
 by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
-on both backends. Borrowed-return declarations reserve a provenance contract
-for a future live-alias representation, but calls producing non-copy borrowed
-values are unavailable today. First-class callables, closures, and FFI call
+on both backends. Return values are owned; no return-source or label contract
+is reserved. First-class loan/view values, callables, closures, and FFI call
 signatures are unavailable and are not part of the frozen Batch 1 surface.

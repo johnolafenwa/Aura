@@ -5,7 +5,7 @@ enum Light:
     Green
 
 def show(l: Light) -> String:
-    match l:
+    match own l:
         case Light.Red:
             return "red"
         case Light.Yellow:

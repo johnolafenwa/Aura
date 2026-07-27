@@ -1,6 +1,6 @@
 def main() -> int32:
     value: int32 = 1
-    text: String = match value:
+    text: String = match own value:
         case 1: "a"
         case _: "b"
     print(text)

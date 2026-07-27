@@ -5734,9 +5734,11 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             ..by_value
         })
         .expect_err("mutable borrowed params should not be task-startable in MIR");
-    assert!(task_start_error
-        .message
-        .contains("does not support `borrow mut` parameter `value`"));
+    assert_eq!(task_start_error.code, "AU3002");
+    assert_eq!(
+        task_start_error.message,
+        "task starting does not support mutable MIR parameter `value` on function `work`; child tasks cannot write back through the starting call frame"
+    );
 }
 
 #[test]

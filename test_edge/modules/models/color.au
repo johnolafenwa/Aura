@@ -4,7 +4,7 @@ public enum Color:
     Blue
 
 public def color_name(c: Color) -> String:
-    match c:
+    match own c:
         case Color.Red:
             return "red"
         case Color.Green:

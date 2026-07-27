@@ -184,7 +184,11 @@
         },
         {
           "name": "storage.modifier.aurora",
-          "match": "\\b(public|mut|borrow|own|indirect|copy)\\b"
+          "match": "\\b(public|mut|own|indirect|copy)\\b"
+        },
+        {
+          "name": "invalid.deprecated.aurora",
+          "match": "\\bborrow\\b"
         },
         {
           "name": "constant.language.aurora",

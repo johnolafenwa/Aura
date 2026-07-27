@@ -1,0 +1,4 @@
+def main() -> int32:
+    for value in mut range(0, 3):
+        print(value)
+    return 0

@@ -4,7 +4,7 @@ enum Signal:
 
 def main() -> None:
     signal = Signal.Ready
-    match signal:
+    match own signal:
         case Ready:
             print("ready")
         case Busy:

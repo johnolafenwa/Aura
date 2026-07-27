@@ -8,7 +8,7 @@ enum Color:
     Blue
 
 def name(f: Fruit) -> String:
-    match f:
+    match own f:
         case Color.Red:
             return "red"
         case Fruit.Apple:

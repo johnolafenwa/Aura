@@ -10,7 +10,7 @@ def main() -> int32:
         case Empty:
             pass
 
-    match mut value:
+    match own value:
         case Filled(v):
             print(v)
         case Empty:

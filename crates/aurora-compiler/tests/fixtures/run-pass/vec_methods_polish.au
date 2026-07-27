@@ -1,5 +1,5 @@
 def print_bool(value: bool):
-    match value:
+    match own value:
         case true:
             print("true")
         case false:

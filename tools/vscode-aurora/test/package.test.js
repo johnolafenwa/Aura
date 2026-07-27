@@ -67,16 +67,24 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.match(keywordRule.match, /assert/);
 });
 
-test("syntax grammar treats own as an Aurora storage modifier", () => {
+test("syntax grammar treats mut and own as Aurora storage modifiers without retired borrow", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");
   const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
   const modifierRule = grammar.repository.keywords.patterns.find(
     (pattern) => pattern.name === "storage.modifier.aurora"
   );
+  const retiredRule = grammar.repository.keywords.patterns.find(
+    (pattern) => pattern.name === "invalid.deprecated.aurora"
+  );
 
   assert.ok(modifierRule);
-  assert.match(modifierRule.match, /borrow\|own/);
+  const modifierPattern = new RegExp(modifierRule.match);
+  assert.equal(modifierPattern.test("mut"), true);
+  assert.equal(modifierPattern.test("own"), true);
+  assert.equal(modifierPattern.test("borrow"), false);
+  assert.ok(retiredRule);
+  assert.equal(new RegExp(retiredRule.match).test("borrow"), true);
 });
 
 test("syntax grammar distinguishes ordinary quotes and nests strings in f-string interpolation", () => {

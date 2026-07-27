@@ -1,4 +1,4 @@
-error[AU3002]: task starting does not support `borrow mut` parameter `counter` on function `mutate`; child tasks cannot write back through the starting call frame
+error[AU3002]: task starting does not support mutable parameter `counter` on function `mutate`; child tasks cannot write back through the starting call frame
  --> crates/aurora-compiler/tests/fixtures/check-fail/task_group_borrow_mut_target_rejected.au:10:26
    |
 10 |         group.start_soon(mutate, counter)

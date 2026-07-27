@@ -223,7 +223,9 @@ for entry in counts.items():
 
 There are two details in `bump` worth slowing down for.
 
-`counts: mut Map[String, int32]` says the helper will mutate a map owned by its caller. The parameter type is where the borrow is declared; the caller does not write `` at the call site. Aurora supplies it from the signature.
+`counts: mut Map[String, int32]` says the helper will mutate a map owned by its
+caller. The parameter declaration selects mutable access; the caller writes no
+capability prefix at the call site.
 
 `Map.get` borrows its key, so the same owned `key` can be moved into the later
 `counts.set`. The `own` annotation says `bump` takes responsibility for storing

@@ -5,7 +5,7 @@ enum Status:
     Pending
 
 def always_same(s: Status) -> int32:
-    match s:
+    match own s:
         case _:
             return 42
 

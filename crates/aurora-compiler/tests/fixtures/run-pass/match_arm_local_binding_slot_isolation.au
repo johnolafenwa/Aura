@@ -1,0 +1,22 @@
+class Person:
+    name: String
+
+class Score:
+    value: int64
+
+enum Selection:
+    PersonCase
+    ScoreCase
+
+def describe(selection: own Selection):
+    match own selection:
+        case Selection.PersonCase:
+            mut item = Person(name="Ada")
+            print(item.name)
+        case Selection.ScoreCase:
+            mut item = Score(value=42)
+            print(item.value)
+
+def main():
+    describe(Selection.PersonCase)
+    describe(Selection.ScoreCase)

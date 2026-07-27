@@ -79,26 +79,24 @@ the source usable.
 
 | Form | Meaning |
 | --- | --- |
-| `value: T` | By value for copy `T`; shared borrow for non-copy or unresolved generic `T`. |
+| `value: T` | Shared access for every `T`; copy bits may be passed directly as an implementation detail. |
 | `value: own T` | Explicit owned ordinary parameter. |
-| `value: T` | Shared borrowed ordinary parameter. |
 | `value: mut T` | Exclusive mutable borrowed ordinary parameter. |
 | `self` | Shared method receiver and the default receiver spelling. |
-| `self` | Explicit synonym for shared `self`. |
 | `own self` | Consuming method receiver. |
 | `mut self` | Exclusive mutable method receiver. |
 | `for value in collection:` | Default shared iteration for `Vec` and `Set`. |
 | `for value in own collection:` | Consuming iteration for `Vec` and `Set`. |
-| `for value in collection:` | Shared-borrow iteration. |
 | `for value in mut collection:` | Mutable-borrow iteration where supported. |
 | `match value:` | Shared borrowed pattern matching. |
+| `match own value:` | Consuming pattern matching. |
 | `match mut value:` | Mutable borrowed pattern matching with writeback. |
-| `-> T` | Shared borrowed result from one declared source. |
-| `-> mut[source] T` | Mutable borrowed result from one mutable source. |
+| `-> T` | Owned result. A copy result is an ordinary independent copy. |
 
 The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
 
-Call sites never prefix arguments with `` or `own`. The parameter or receiver declaration selects the mode:
+Call sites never prefix arguments with a capability. The parameter or receiver
+declaration selects the mode:
 
 ```python
 def render(name: String) -> String:
@@ -113,7 +111,7 @@ A shared borrow permits reading but cannot be moved and cannot be used as a muta
 
 Shared-borrow and `own` parameters may have defaults. An omitted shared default
 creates a fresh temporary that lives through the call; an omitted owned default
-creates a fresh value that the call consumes. A `mut ` parameter cannot
+creates a fresh value that the call consumes. A `mut` parameter cannot
 have a default, even for a copy type: its caller-invisible temporary would make
 every mutation a silent lost write. Require the caller to pass a mutable value,
 or take `own T` and return the result.
@@ -126,7 +124,10 @@ mut names = Vec[String]()
 add_name(names, "Ada")
 ```
 
-Only a mutable place can satisfy `mut `. A local becomes mutable with `mut`; a field is mutable when its base place is mutable; a `mut ` receiver or parameter is a mutable place inside its body. Parameter bindings themselves are not reassigned.
+Only a mutable place can satisfy `mut T`. A local becomes mutable with `mut`; a
+field is mutable when its base place is mutable; a `mut` receiver or parameter
+is a mutable place inside its body. Parameter bindings themselves are not
+reassigned.
 
 ## Call-Boundary Exclusivity
 
@@ -188,24 +189,42 @@ Moves inside a loop need an additional invariant: the loop may execute again. Au
 
 Block-local bindings do not escape their branch, arm, loop, or `with` body. See [Names And Scopes](/manual/names-and-scopes#block-scope-and-control-flow).
 
-## Borrowed Returns And Provenance
+## Owned Returns
 
-A borrowed-return signature identifies which receiver or parameter is the source:
+Every function return transfers an owned value to its caller. Copy values are
+ordinary independent copies. A non-copy return must come from an owned source:
 
 ```python
 def identity(value: int32) -> int32:
     return value
+
+class User:
+    name: String
+
+def copy_name(user: User) -> String:
+    return user.name.clone()
+
+def into_name(user: own User) -> String:
+    return user.name
 ```
 
-The returned expression must derive from the selected source. A source may be named by its parameter name, `self`, or a borrow label. When exactly one eligible source exists, it may be inferred; multiple eligible sources require an explicit selection.
+A function can construct a fresh non-copy value, clone a clone-safe value,
+accept an `own` parameter, or consume an owner through an `own self` method.
 
-Shared borrowed-return declarations may derive from shared or mutable borrows. Mutable borrowed-return declarations may derive only from mutable borrows. A call returning a copy type becomes an ordinary copied value. Aurora 0.1 rejects calls producing non-copy borrowed results because neither maintained backend has live alias storage yet; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method instead.
+Shared or mutable access does not transfer ownership of a non-copy field, so
+returning that field directly is rejected as an invalid move through access
+the function does not own.
 
-Borrow labels describe source equivalence across a call signature. They do not create arbitrary reference values, permit returning a local owned non-copy temporary, or extend the lifetime of a source. Non-copy declarations remain checked for provenance so the reserved contract is stable for Phase 6. The detailed signature rules are in [Functions](/manual/functions#borrowed-returns).
+There are no return-source labels or mutable-return capabilities in Aurora
+0.1, and current syntax reserves no hidden lifetime contract. A future
+first-class loan or view design must specify its representation and lifetime
+rules from scratch. The detailed return rules are in
+[Functions](/manual/functions#owned-returns).
 
 ## Borrowed Pattern Matching
 
-By-value matching consumes a non-copy enum scrutinee. `match ` retains the enum and gives non-copy payload bindings shared-borrow provenance:
+`match own` consumes a non-copy enum scrutinee. Bare `match` retains the enum
+and gives non-copy payload bindings shared-borrow provenance:
 
 ```python
 result: Result[String, String] = Result.Ok("ready")
@@ -217,10 +236,16 @@ match result:
         print(error)
 ```
 
-`match mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the exact scrutinee, its root, or an ancestor field invalidates payload bindings tied to the old value. A write to a proven-disjoint sibling field does not invalidate them.
+`match mut` requires a mutable place. Its non-copy payload bindings are mutable
+borrows, and mutations are written back by reconstructing the enum on normal
+arm exit, `return`, `break`, `continue`, and `try` propagation. A nested
+mutable match cannot overlap an already active mutable match. Reassigning the
+exact scrutinee, its root, or an ancestor field invalidates payload bindings
+tied to the old value. A write to a proven-disjoint sibling field does not
+invalidate them.
 
-Tuple patterns follow a smaller rule. A by-value tuple match consumes the
-whole non-copy scrutinee and gives owned leaf bindings. `match ` retains
+Tuple patterns follow a smaller rule. A `match own` tuple match consumes the
+whole non-copy scrutinee and gives owned leaf bindings. Bare `match` retains
 the tuple and gives shared leaf provenance. Tuple patterns are rejected under
 `match mut`; Aurora does not reconstruct and write back recursive tuple
 targets.
@@ -235,12 +260,11 @@ a loop-private source and yields owned elements. Reinitializing the consumed
 source binding in the body cannot switch or truncate that active iteration.
 That one-time source selection is accepted under ADR-0017; ADR-0006's
 accepted loop ownership modes are unchanged.
-`for value in collection` is the explicit shared form.
 `for value in mut vec` requires a mutable vector place and yields
 mutable-borrowed elements.
 
-The place selected by bare or explicit borrowed iteration is frozen against
-overlapping mutation for the loop body.
+The place selected by bare iteration is frozen against overlapping mutation
+for the loop body.
 Mutable-borrow set iteration is not supported; mutate a set through `insert`
 and `remove` outside borrowed iteration. Queue iteration receives values; it is
 a scheduler operation, not a place traversal. The bare form copies the Queue
@@ -253,8 +277,8 @@ also accepted under ADR-0017. See
 When an iteration item is a tuple, recursive target leaves inherit the item
 provenance. Shared collection iteration gives shared non-copy leaves, `own`
 collection iteration gives owned leaves, and bare Queue iteration gives owned
-leaves because it receives the item. A tuple target is rejected with
-`mut ` iteration; recursive mutable tuple writeback is not defined.
+leaves because it receives the item. A tuple target is rejected with `mut`
+iteration; recursive mutable tuple writeback is not defined.
 
 ## Clone
 
@@ -283,8 +307,7 @@ with `AU3007`.
 ## Tasks And Borrowing
 
 `TaskGroup.start` and `start_soon` accept named functions or associated methods
-with default-mode, `own`, or explicit shared-borrow parameters. `mut `
-targets are rejected.
+with bare shared or `own` parameters. `mut` targets are rejected.
 
 ```python
 def worker(label: String):
@@ -297,9 +320,9 @@ with group = TaskGroup():
 ```
 
 Each task argument is copied or moved into task-owned capture storage before
-the child runs. The target then borrows or consumes that capture according to
-its declared mode; a default non-copy parameter is a shared borrow from the
-capture. Copy task and queue handles still refer to shared runtime state. See
+the child runs. The target then shares or consumes that capture according to
+its declared mode. Copy task and queue handles still refer to shared runtime
+state. See
 [Concurrency](/manual/concurrency) and [Execution Model](/manual/execution-model#tasks-and-scheduler).
 
 ## Resources And `with`
@@ -323,24 +346,23 @@ Builtin resource behavior is defined by its module chapter. A user class must be
 
 ## Grammar
 
-The normative ownership spellings are parameter and return type-position
-`own`, ``, `mut `, ``, and
-`mut `; the four receiver forms; loop-prefix `own`, ``,
-and `mut `; `match ` and
-`match mut`; mutable bindings; and `with`. Their productions are in
-[Grammar](/manual/grammar). Call arguments themselves never carry an ownership
-prefix.
+The normative capability spellings are bare, `own`, and `mut` ordinary
+parameters; `self`, `own self`, and `mut self` receivers; bare, `own`, and
+`mut` collection loops where the iterable supports them; bare, `match own`,
+and `match mut` matching; mutable bindings; owned return annotations; and
+`with`. Their productions are in [Grammar](/manual/grammar). Call arguments
+themselves never carry a capability prefix.
 
 ## Typing Rules
 
 Every expression has one static copy/move category and every parameter has one
-declaration-stable passing mode. Bare copy parameters pass by value; bare
-non-copy and unresolved generic parameters share-borrow; explicit `own`
-consumes; `mut ` requires one exclusive mutable place. Shared and owned
+declaration-stable passing mode. Bare parameters grant logical shared access
+for every type; an implementation may pass copy bits directly. Explicit `own`
+consumes; `mut` requires one exclusive mutable place. Shared and owned
 defaults are legal, with shared temporaries lasting through the call;
-`mut ` defaults are rejected. Place-prefix overlap, partial moves,
-control-flow joins, loop repetition, borrowed-return provenance, borrowed
-matches, borrowed iteration, task capture, and managed-resource containment are
+`mut` defaults are rejected. Place-prefix overlap, partial moves,
+control-flow joins, loop repetition, owned-return moves, borrowed matches,
+borrowed iteration, task capture, and managed-resource containment are
 checked before lowering. Clone-producing generic operations infer obligations
 that are propagated through calls and discharged after specialization.
 
@@ -350,7 +372,7 @@ A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
 runtime reference values in Aurora 0.1. Mutable borrowed calls and Vec
 iteration write through the original place; `match mut` reconstructs
-and writes back on normal arm exit. Simple Map indexed assignment accepts and
+and writes back on every arm exit. Simple Map indexed assignment accepts and
 owns any value type; direct compound indexed assignment requires a copy `Vec`
 element or `Map` value.
 Task start first transfers captures into child-owned storage. `with` owns one cleanup registration and runs it exactly
@@ -383,20 +405,21 @@ applicable user-defined operator traits for root and projected targets. A copy
 target is captured before the right operand. A non-copy root or projected
 target remains borrowed across that operand, so overlapping mutable borrow or
 consumption is `AU3002`. A non-copy `Vec` element or `Map` value cannot be a
-direct compound target until live aliases exist; Aurora rejects the operation
-instead of cloning or destructively moving the stored value.
+direct compound target because Aurora 0.1 has no indexed-place identity and
+writeback model; Aurora rejects the operation instead of cloning or
+destructively moving the stored value.
 
 ## Diagnostics
 
-`AU1101` reports malformed ownership, receiver, loop, match-borrow, or return
-syntax. `AU2002` covers type and provenance-source type mismatch, while
+`AU1101` reports malformed ownership, receiver, loop, match, or return syntax.
+`AU2002` covers type mismatch, while
 `AU2004` reports argument binding that cannot satisfy a required mutable place.
 `AU2999` covers unsupported move/control-flow/resource cases without a narrower
 category. `AU3001`
 reports use of a moved or partially moved place. `AU3002`
-reports overlapping or invalid borrows, moving through a borrow, borrowed-
-return provenance/materialization failure, invalid mutable-borrow defaults or
-task targets, stale borrowed-pattern bindings, and later mutable or consuming
+reports overlapping or invalid borrows, moving through a borrow, invalid
+mutable-borrow defaults or task targets, stale borrowed-pattern bindings, and
+later mutable or consuming
 access that overlaps a retained non-copy binary operand, index base, method
 receiver, or indexed-assignment target. In a retained-expression conflict, the
 diagnostic points to both the later access and the retained-borrow origin.
@@ -424,9 +447,8 @@ and primary-diagnostic behavior.
 ## Limits And Implementation-Defined Behavior
 
 Place analysis tracks local roots and field-prefix paths; it proves disjoint
-sibling fields but is not a general alias theorem. Non-copy borrowed-return
-declarations are provenance-checked but calls are contained until live alias
-storage lands. Mutable Set iteration, explicit Queue ownership modifiers,
+sibling fields but is not a general alias theorem. Mutable Set iteration,
+explicit Queue ownership modifiers,
 mutable-borrow task targets, moving out of a managed resource, and arbitrary
 reference values are unavailable. Loop move analysis intentionally uses only
 the limited Boolean reasoning described above. Ownership mode and evaluation
@@ -436,11 +458,10 @@ order are language-defined, not backend- or host-defined.
 
 Copy/move classification, declaration-stable parameter defaults, explicit
 owned/shared/mutable passing, all receiver modes, call-boundary exclusivity,
-partial moves and reinitialization, flow-sensitive checks, borrowed-return
-containment, borrowed matching and Vec/Set iteration, task capture, cloning,
+partial moves and reinitialization, flow-sensitive checks, owned returns,
+borrowed matching and Vec/Set iteration, task capture, cloning,
 and lexical resource ownership are implemented for the post-Phase 1.5
 surface; the one-time Vec/Set/Queue iteration-source rule is accepted under
-ADR-0017. Live non-copy borrowed aliases and their runtime storage are reserved
-for Phase 6. General reference values outside that reserved contract, mutable
-Set iteration, Queue ownership modifiers, and mutable-borrow task capture are
-unavailable.
+ADR-0017. First-class loan or view values would require a new design; current
+syntax reserves no such contract. Mutable Set iteration, Queue ownership
+modifiers, and mutable-borrow task capture are unavailable.

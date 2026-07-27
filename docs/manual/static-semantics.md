@@ -212,17 +212,15 @@ omitted parameters are then evaluated in declaration order. Binding a named argu
 declaration slot does not reorder evaluation, and no default is evaluated for a
 supplied parameter. Defaults may refer only to names valid under the
 declaration's default-expression rules; they do not capture a caller's locals.
-A shared-borrow default's temporary lives through the call. An `own` default is
-consumed. A `mut ` default is rejected because mutations to its
+A bare shared default's temporary lives through the call. An `own` default is
+consumed. A `mut` default is rejected because mutations to its
 caller-invisible temporary would be silently lost.
 
-A bare parameter resolves to value passing for a copy type and shared borrowing
-for a non-copy type. An unresolved generic type is not assumed copyable, so its
-bare mode resolves to shared borrow and remains declaration-stable after
-specialization. An `own` parameter consumes a non-copy argument. A ``
-parameter requires a readable place or compatible borrowed value. A `borrow
-mut` parameter requires a mutable place. All arguments at one call boundary
-are checked together for overlapping move/shared/mutable access.
+A bare parameter grants logical shared access for every type. The ABI may pass
+copy bits directly, but specialization never changes the declared capability.
+An `own` parameter consumes a non-copy argument, and a `mut` parameter requires
+a mutable place. All arguments at one call boundary are checked together for
+overlapping move/shared/mutable access.
 
 ## Class Construction
 
@@ -305,10 +303,10 @@ The managed binding cannot be moved out in a way that would prevent required cle
 
 `TaskGroup.start` and `start_soon` accept named functions and associated methods
 without `self`. Target arguments are copied or moved into task-owned capture
-storage independently of the target ABI. Default-mode and explicit shared
-target parameters borrow that storage for the child call; `own` parameters
+storage independently of the target ABI. Bare shared target parameters borrow
+that storage for the child call; `own` parameters
 consume it. Generic targets also enforce their inferred clone-safety
-obligations after specialization. `mut ` target parameters are rejected.
+obligations after specialization. `mut` target parameters are rejected.
 
 Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
 

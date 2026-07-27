@@ -3,7 +3,7 @@ enum Color:
     Green
 
 def check(c: Color) -> int32:
-    match c:
+    match own c:
     return 0
 
 def main() -> int32:

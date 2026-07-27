@@ -4,7 +4,7 @@ enum Color:
     Blue
 
 c = Color.Red
-match c:
+match own c:
     case Color.Red:
         print("red")
     case Color.Green:

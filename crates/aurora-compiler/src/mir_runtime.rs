@@ -3623,10 +3623,13 @@ impl MirRuntime {
             .iter()
             .find(|param| param.passing == MirReceiverKind::BorrowMut)
         {
-            return Err(Diagnostic::new(format!(
-                "task starting does not support `borrow mut` parameter `{}` on function `{}` in the MIR runtime",
+            return Err(Diagnostic::coded(
+                "AU3002",
+                format!(
+                "task starting does not support mutable MIR parameter `{}` on function `{}`; child tasks cannot write back through the starting call frame",
                 param.name, function.name
-            )));
+            ),
+            ));
         }
         Ok(())
     }

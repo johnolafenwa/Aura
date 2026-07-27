@@ -283,29 +283,38 @@ Types fall into one of these broad categories:
 - **move types**: heap-owning or resource-owning types like vectors, strings, sockets, files
 - **borrowed references**: temporary non-owning access
 
-Canonical borrow syntax:
+Canonical capability syntax:
 
 ```python
-T       # shared borrow
-mut T   # exclusive mutable borrow
+T       # shared access
+mut T   # exclusive mutable access
+own T   # ownership transfer
 ```
 
-Aurora uses the `` keyword in both type positions and expression positions:
+Capabilities are written on parameters, receivers, collection loops, and
+matches. Bare means shared, `mut` means mutable, and `own` means transfer:
 
 ```python
 name: str = ...
-reader = config
-writer = mut config
+def inspect(config: Config):
+    pass
+
+def update(config: mut Config):
+    pass
+
+def consume(config: own Config):
+    pass
 ```
 
-Borrowing must stay visually obvious.
-
-Applying `` to an already borrowed value creates a reborrow rather than a nested surface type such as `T`.
+Shared access is the visually quiet default; mutation and transfer stay
+visually explicit.
 
 Reborrows still obey the ordinary exclusivity rules:
 
-- `` of a shared or mutable borrow creates a temporary shared reborrow
-- `mut ` requires mutable access and may not be derived from a shared borrow
+- passing existing shared or mutable access through a bare capability creates
+  temporary shared access
+- `mut` access requires a mutable place and may not be derived from shared
+  access
 
 Shared borrows allow read-only aliasing:
 
@@ -320,7 +329,7 @@ Exclusive mutable borrows allow mutation, but they must be unique while active:
 mut counter = Counter(value=0)
 
 reader = counter
-# writer = borrow mut counter   # error: cannot take a mutable borrow while `reader` is alive
+# writer = mut counter          # error: cannot take mutable access while `reader` is alive
 ```
 
 ```python
@@ -328,8 +337,8 @@ mut counter = Counter(value=0)
 
 writer = mut counter
 writer.value += 1
-# reader = borrow counter       # error: cannot take a shared borrow while `writer` is alive
-# other = borrow mut counter    # error: cannot take a second mutable borrow while `writer` is alive
+# reader = counter              # error: cannot take shared access while `writer` is alive
+# other = mut counter           # error: cannot take a second mutable access while `writer` is alive
 ```
 
 Once the mutable borrow ends, borrowing again is valid:
@@ -339,7 +348,7 @@ def bump(counter: mut Counter):
     counter.value += 1
 
 mut counter = Counter(value=0)
-bump(mut counter)
+bump(counter)
 snapshot = counter
 ```
 
@@ -411,8 +420,8 @@ Rules:
 - class values are move types by default
 - a class may be declared with `copy class Name:` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
 - passing a class through an explicit `own` parameter or returning it by value moves ownership unless the class is `copy`; a bare non-copy parameter borrows
-- method calls do not create hidden aliasing; shared `self`/`self`, consuming `own self`, and mutable `mut self` obey normal ownership and borrow rules
-- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self`, `self`, or `mut self` is illegal unless an explicit extraction operation is defined
+- method calls do not create hidden aliasing; shared `self`, consuming `own self`, and mutable `mut self` obey normal ownership and borrow rules
+- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self` or `mut self` is illegal unless an explicit extraction operation is defined
 - class fields are stored inline by default
 - direct recursive class fields are illegal; recursive structures use the built-in `indirect` storage modifier
 - `indirect T` means the field owns a `T` value stored indirectly rather than inline; moving the outer object moves ownership of that indirect child
@@ -463,7 +472,7 @@ def into_name(user: own User) -> String:
     return user.name           # valid: `user` is owned by this function
 
 # invalid:
-# def bad_name(user: borrow User) -> String:
+# def bad_name(user: User) -> String:
 #     return user.name         # illegal: cannot move a non-copy field out of a borrow
 
 class Counter:
@@ -624,8 +633,8 @@ Aurora should include pattern matching from v1.
 
 Canonical v1 rules:
 
-- `match value:` matches by value and may move non-copy payloads out of the scrutinee
-- `match value:` and `match mut value:` borrow the scrutinee instead of consuming it
+- `match own value:` matches by value and may move non-copy payloads out of the scrutinee
+- `match value:` and `match mut value:` access the scrutinee without consuming it
 - bindings introduced by a by-value match receive owned values for move types and copied values for copy types
 - bindings introduced by a borrowed match are borrowed values
 
@@ -813,10 +822,9 @@ The self model must make ownership and mutability clear.
 
 Recommended receiver kinds:
 
-- `self` for shared borrow by default
-- `self` as an explicit synonym for shared borrow
+- `self` for shared access by default
 - `own self` for by-value consumption
-- `mut self` for exclusive mutable borrow
+- `mut self` for exclusive mutable access
 
 The typed spelling `self: SomeType` is not a receiver and is rejected with a
 diagnostic naming these forms.
@@ -851,23 +859,25 @@ Aurora distinguishes between iterable values and iterator objects.
 
 Core rules (as amended by the implemented 0.1 ownership defaults):
 
-- bare `for x in expr:` over `Vec` or `Set` iterates by shared borrow
+- bare `for x in expr:` over `Vec` or `Set` iterates by shared access
 - `for x in own expr:` consumes a `Vec` or `Set` and yields owned elements
-- `for x in expr:` iterates by shared borrow
-- `for x in mut expr:` iterates by mutable borrow
+- `for x in mut expr:` iterates with mutable access
 - iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide consuming `into_iter(own self)` to yield an iterator object
 - iterator objects provide `next(mut self) -> Option[T]`
-- if `expr` already has a borrowed type, `for x in expr:` uses that borrowed iteration behavior
-- `for x in expr:` where `expr` is already borrowed is treated as a reborrow, not as a nested `...` type
-- shared borrowed iteration yields copied element values for copy element types and `T` for non-copy element types
-- mutable borrowed iteration yields `mut T` elements
-- borrowed iteration works through ordinary `Iterable` implementations for borrowed receiver types such as `` and `Vec[T]`, not through a separate compiler-only escape hatch
+- if `expr` already provides shared or mutable access, a bare loop reuses that
+  capability without creating a nested surface type
+- shared iteration yields copied element values for copy element types and
+  shared element access for non-copy element types
+- mutable iteration yields mutable element access
+- both forms use ordinary `Iterable` implementations rather than a separate
+  compiler-only escape hatch
 
 This lets ownership stay explicit:
 
 - iterating over `Vec[T]` with `own` consumes the vector
-- iterating over `` yields copied `int32` values because `int32` is copy
-- iterating over `` yields `String` elements
+- iterating over `Vec[int32]` by shared access yields copied `int32` values
+  because `int32` is copy
+- iterating over `Vec[String]` by shared access yields shared `String` elements
 - iterating over a channel receives values until the channel is closed
 
 Example:
@@ -2009,9 +2019,9 @@ Aurora does not use Python-style `__init__`.
 
 ## 23.8 Match ownership model
 
-`match value:` matches by value and may move non-copy payloads.
+`match own value:` matches by value and may move non-copy payloads.
 
-`match value:` and `match mut value:` borrow the scrutinee instead.
+`match value:` and `match mut value:` access the scrutinee without consuming it.
 
 ## 23.9 Historical task and channel model
 
@@ -2078,28 +2088,26 @@ Attribute syntax and `@test` were proposed here but are not implemented in Auror
 The implemented 0.1 surface amends earlier proposal text that described every
 ordinary parameter and bare collection loop as by-value:
 
-- a bare ordinary parameter `value: T` resolves at its declaration to value
-  passing for a copy type and shared borrowing for a non-copy type
-- an unresolved generic `T` is not assumed copyable, so its bare parameter is
-  a shared borrow; this decision is declaration-stable even when a later call
-  specializes `T` to a copy type
-- `value: own T` explicitly consumes, while `value: T` and `value:
-  borrow mut T` explicitly share or mutate
+- a bare ordinary parameter `value: T` is logical shared access for every
+  type, including declaration-known copy types; an implementation may still
+  pass copy bits at the ABI boundary
+- an unresolved generic `T` uses the same declaration-stable shared default
+- `value: own T` explicitly consumes, while `value: T` and `value: mut T`
+  explicitly share or mutate
 - class fields and enum payloads are owned constructor positions, as are the
   retained/storing builtin arguments shown with `own` in the API reference
-- bare `Vec` and `Set` loops share; `own` consumes; `` is the explicit
-  shared spelling; `mut ` is supported only where element writeback is
-  defined
+- bare `Vec` and `Set` loops share; `own` consumes; `mut` is supported only
+  where element writeback is defined
 - Queue iteration receives each item already owned. The Queue handle is a copy
-  value, so `own`, ``, and `mut ` modifiers are all rejected; use
-  `for item in queue:`
-- match and local assignment retain their consuming defaults
+  value, so `own` and `mut` modifiers are rejected; use `for item in queue:`
+- bare match is shared, `match mut` is mutable, and `match own` consumes;
+  local assignment retains its consuming default
 - shared-borrow defaults are valid and their temporary lives through the call;
-  `own` defaults are consumed; `mut ` defaults are rejected because they
+  `own` defaults are consumed; `mut` defaults are rejected because they
   would create silent lost writes to caller-invisible temporaries
 - task-start capture is independent of the target ABI. Arguments first move or
   copy into task-owned storage; default/shared targets borrow that capture,
-  `own` targets consume it, and `mut ` targets are rejected
+  `own` targets consume it, and `mut` targets are rejected
 
 These rules supersede any incompatible historical examples elsewhere in this
 proposal. The normative detail is in the language manual and ADR-0006.

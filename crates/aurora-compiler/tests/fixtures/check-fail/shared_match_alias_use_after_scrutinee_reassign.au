@@ -1,0 +1,16 @@
+class User:
+    name: String
+
+enum Slot:
+    Filled(User)
+    Empty
+
+def main():
+    mut slot = Slot.Filled(User(name="Ada"))
+    match slot:
+        case Filled(user):
+            alias = user
+            slot = Slot.Empty
+            print(alias.name)
+        case Empty:
+            pass

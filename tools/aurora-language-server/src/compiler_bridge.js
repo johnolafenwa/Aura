@@ -9,8 +9,22 @@ const { uriToPath } = require("./uri");
 let workspaceRoots = [];
 let compilerService = null;
 let compilerServiceKey = null;
+let compilerSchemaMismatchHandler = null;
 const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
+// The compiler owns the canonical identity; this transport declares the one
+// compiler interface it can safely decode.
+const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 2;
+
+function setCompilerSchemaMismatchHandler(handler) {
+  compilerSchemaMismatchHandler = typeof handler === "function" ? handler : null;
+}
+
+function notifyCompilerSchemaMismatch(details) {
+  if (compilerSchemaMismatchHandler) {
+    compilerSchemaMismatchHandler(details);
+  }
+}
 
 function setWorkspaceRoots(roots) {
   const nextRoots = Array.isArray(roots) ? roots.filter(Boolean) : [];
@@ -63,7 +77,9 @@ function requestCompiler(method, params, cancellationToken) {
   const key = JSON.stringify(command);
   if (!compilerService || compilerService.closed || compilerServiceKey !== key) {
     disposeCompilerService();
-    compilerService = new CompilerService(command);
+    compilerService = new CompilerService(command, {
+      onSemanticSchemaMismatch: notifyCompilerSchemaMismatch
+    });
     compilerServiceKey = key;
   }
   return compilerService.request(method, params, cancellationToken);
@@ -74,7 +90,8 @@ class CompilerService {
     command,
     {
       requestTimeoutMs = COMPILER_REQUEST_TIMEOUT_MS,
-      responseLimitBytes = COMPILER_RESPONSE_LIMIT_BYTES
+      responseLimitBytes = COMPILER_RESPONSE_LIMIT_BYTES,
+      onSemanticSchemaMismatch = () => {}
     } = {}
   ) {
     this.command = command;
@@ -85,6 +102,7 @@ class CompilerService {
     this.closed = false;
     this.requestTimeoutMs = requestTimeoutMs;
     this.responseLimitBytes = responseLimitBytes;
+    this.onSemanticSchemaMismatch = onSemanticSchemaMismatch;
     this.child = spawn(command.cmd, [...command.args, "lsp"], {
       cwd: command.cwd,
       stdio: ["pipe", "pipe", "pipe"]
@@ -129,11 +147,21 @@ class CompilerService {
           })
         : null;
       this.pending.set(id, { resolve, reject, timer, cancellation });
-      this.child.stdin.write(`${JSON.stringify({ id, method, ...params })}\n`);
+      this.child.stdin.write(
+        `${JSON.stringify({
+          id,
+          method,
+          ...params,
+          semantic_interface_version: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+        })}\n`
+      );
     });
   }
 
   handleStdout(chunk) {
+    if (this.closed) {
+      return;
+    }
     this.stdoutBuffer += chunk;
     if (Buffer.byteLength(this.stdoutBuffer, "utf8") > this.responseLimitBytes) {
       this.fail(new Error("Aurora compiler response exceeded 16 MiB"), true);
@@ -150,6 +178,26 @@ class CompilerService {
           response = JSON.parse(line);
         } catch (error) {
           this.fail(new Error(`invalid Aurora compiler response: ${error.message}`), true);
+          return;
+        }
+        if (
+          response.semantic_interface_version !==
+          SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+        ) {
+          const actualSchema = Object.prototype.hasOwnProperty.call(
+            response,
+            "semantic_interface_version"
+          )
+            ? response.semantic_interface_version
+            : "<missing>";
+          const error = new Error(
+            `Aurora compiler semantic schema mismatch: received \`${actualSchema}\`; expected \`${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}\``
+          );
+          this.fail(error, true);
+          this.onSemanticSchemaMismatch({
+            actual: actualSchema,
+            expected: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+          });
           return;
         }
         const pending = this.pending.get(response.id);
@@ -433,6 +481,8 @@ module.exports = {
   disposeCompilerService,
   resolveCompilerCommand,
   runCommand,
+  SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
+  setCompilerSchemaMismatchHandler,
   setWorkspaceRoots,
   uriToPath
 };

@@ -228,28 +228,31 @@ pub fn bind_call_arguments<'arg, 'param>(
     Ok(ordered_args)
 }
 
-const PRINT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
-const RANGE_STOP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("stop")];
-const RANGE_START_STOP_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("start"),
-    CallableParam::required("stop"),
+const PRINT_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const RANGE_STOP_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "stop", ReceiverKind::Borrow)];
+const RANGE_START_STOP_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "start", ReceiverKind::Borrow),
+    builtin_param!(required, "stop", ReceiverKind::Borrow),
 ];
-const ABS_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
-const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("left"),
-    CallableParam::required("right"),
+const ABS_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const MIN_MAX_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "left", ReceiverKind::Borrow),
+    builtin_param!(required, "right", ReceiverKind::Borrow),
 ];
-const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
-const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
-const RNG_SEED_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("seed")];
-const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
-const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
-    CallableParam::required("tasks"),
-    CallableParam::optional("timeout"),
+const SQRT_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const PARSE_TEXT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "text", ReceiverKind::Borrow)];
+const RNG_SEED_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "seed", ReceiverKind::Borrow)];
+const SLEEP_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "duration", ReceiverKind::Borrow)];
+const TASK_LIST_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "tasks", ReceiverKind::Borrow),
+    builtin_param!(optional, "timeout", ReceiverKind::Borrow),
 ];
 const NO_BUILTIN_PARAMS: [BuiltinParam; 0] = [];
 const DURATION_VALUE_PARAMS: [BuiltinParam; 1] =
-    [builtin_param!(required, "value", ReceiverKind::Value)];
+    [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const STRING_FROM_BYTES_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "bytes", ReceiverKind::Borrow)];
 const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
@@ -490,13 +493,6 @@ impl BuiltinFunction {
 
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         match self {
-            Self::Print => bind_call_arguments(
-                "`print`",
-                &PRINT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
             Self::Range => {
                 if args.len() > 2 {
                     return Err(Diagnostic::at(
@@ -507,86 +503,68 @@ impl BuiltinFunction {
                 let use_two_arg_signature =
                     args.len() == 2 || args.iter().any(|arg| arg.name.as_deref() == Some("start"));
                 if use_two_arg_signature {
-                    bind_call_arguments(
-                        "`range`",
+                    BuiltinCallShape::fixed(
                         &RANGE_START_STOP_PARAMS,
-                        args,
-                        span,
                         CallConvention::PositionalOrNamed,
                     )
+                    .bind_args("`range`", args, span)
                 } else {
-                    bind_call_arguments(
-                        "`range`",
-                        &RANGE_STOP_PARAMS,
-                        args,
-                        span,
-                        CallConvention::PositionalOrNamed,
-                    )
+                    BuiltinCallShape::fixed(&RANGE_STOP_PARAMS, CallConvention::PositionalOrNamed)
+                        .bind_args("`range`", args, span)
                 }
             }
-            Self::Cancelled => bind_call_arguments(
-                "`cancelled`",
-                &[],
-                args,
-                span,
-                CallConvention::PositionalOnly,
-            ),
-            Self::Sleep => bind_call_arguments(
-                "`sleep`",
-                &SLEEP_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::WaitAny | Self::WaitAll => bind_call_arguments(
-                &format!("`{}`", self.name()),
+            _ => self
+                .call_shape()
+                .bind_args(&format!("`{}`", self.name()), args, span),
+        }
+    }
+
+    pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].passing)
+        } else {
+            None
+        }
+    }
+
+    pub const fn argument_name(self, index: usize) -> Option<&'static str> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].binding.name)
+        } else {
+            None
+        }
+    }
+
+    const fn call_shape(self) -> BuiltinCallShape {
+        match self {
+            Self::Print | Self::Len | Self::Str => {
+                BuiltinCallShape::fixed(&PRINT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            // Argument binding chooses the one- or two-argument shape, while
+            // capability metadata is identical for both signatures.
+            Self::Range => {
+                BuiltinCallShape::fixed(&RANGE_START_STOP_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::Cancelled => {
+                BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
+            }
+            Self::Sleep => {
+                BuiltinCallShape::fixed(&SLEEP_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::WaitAny | Self::WaitAll => BuiltinCallShape::fixed(
                 &TASK_LIST_TIMEOUT_PARAMS,
-                args,
-                span,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::Len | Self::Str => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &PRINT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::Abs => bind_call_arguments(
-                "`abs`",
-                &ABS_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::Min => bind_call_arguments(
-                "`min`",
-                &MIN_MAX_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::Max => bind_call_arguments(
-                "`max`",
-                &MIN_MAX_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::Sqrt => bind_call_arguments(
-                "`sqrt`",
-                &SQRT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::ParseInt32 | Self::ParseInt64 | Self::ParseFloat64 => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &PARSE_TEXT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
+            Self::Abs => BuiltinCallShape::fixed(&ABS_PARAMS, CallConvention::PositionalOrNamed),
+            Self::Min | Self::Max => {
+                BuiltinCallShape::fixed(&MIN_MAX_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::Sqrt => BuiltinCallShape::fixed(&SQRT_PARAMS, CallConvention::PositionalOrNamed),
+            Self::ParseInt32 | Self::ParseInt64 | Self::ParseFloat64 => {
+                BuiltinCallShape::fixed(&PARSE_TEXT_PARAMS, CallConvention::PositionalOrNamed)
+            }
         }
     }
 }
@@ -740,13 +718,34 @@ impl BuiltinClassConstructor {
     }
 
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
-        bind_call_arguments(
-            &format!("`{}`", self.qualified_name()),
-            &RNG_SEED_PARAMS,
-            args,
-            span,
-            CallConvention::PositionalOrNamed,
-        )
+        self.call_shape()
+            .bind_args(&format!("`{}`", self.qualified_name()), args, span)
+    }
+
+    pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].passing)
+        } else {
+            None
+        }
+    }
+
+    pub const fn argument_name(self, index: usize) -> Option<&'static str> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].binding.name)
+        } else {
+            None
+        }
+    }
+
+    const fn call_shape(self) -> BuiltinCallShape {
+        match self {
+            Self::RandomRng => {
+                BuiltinCallShape::fixed(&RNG_SEED_PARAMS, CallConvention::PositionalOrNamed)
+            }
+        }
     }
 }
 
@@ -1956,6 +1955,17 @@ impl BuiltinMember {
             Some(shape.params[index].passing)
         } else {
             shape.variadic_passing
+        }
+    }
+
+    pub const fn argument_name(self, index: usize) -> Option<&'static str> {
+        let shape = self.call_shape();
+        if index < shape.params.len() {
+            Some(shape.params[index].binding.name)
+        } else if shape.variadic_passing.is_some() {
+            Some("variadic argument")
+        } else {
+            None
         }
     }
 

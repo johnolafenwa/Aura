@@ -10,7 +10,7 @@ enum Color:
 
 impl Describe for Color:
     def describe(self) -> String:
-        match self:
+        match own self:
             case Color.Red:
                 return "red"
             case Color.Green:

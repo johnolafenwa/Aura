@@ -167,8 +167,8 @@ capability:
 - `match own value:` -- consuming pattern matching
 
 The `borrow` keyword is retired and reserved. Writing it produces a diagnostic
-naming the exact replacement, such as ``` `borrow mut T` was removed; write
-`mut T` ```.
+naming the exact replacement. For example, a retired `borrow mut T` parameter
+receives guidance to write `mut T`.
 
 Mutable arguments must be mutable places. Overlapping `mut` arguments with
 other shared access to the same value are rejected. Non-copy fields cannot be
@@ -282,15 +282,16 @@ Ordinary functions, instance methods, and associated methods support:
 - named arguments
 - mixed calls where positional arguments come first and named arguments come after
 - default parameter values on ordinary functions and class methods
-- ordinary default, `own`, ``, and `mut ` parameters
+- ordinary bare, `own`, and `mut` parameters
 - builtin named arguments for `print(value=...)`, `range(...)`, `wait_any(...)`, and `wait_all(...)`
 
-Bare non-copy parameters and unresolved generic parameters resolve to shared
-borrows at their declarations; the generic choice is stable after
-specialization. Task starts move/copy arguments into task-owned capture
-storage, then allow default/shared or `own` target parameters; `mut `
+Bare parameters grant logical shared access for every type, and that choice is
+stable after specialization. Task starts move/copy arguments into task-owned
+capture storage, then allow bare shared or `own` target parameters; `mut`
 targets are rejected.
-Calls also reject overlapping borrowed arguments whenever a `mut ` parameter participates, including a `mut self` receiver overlapping another borrowed argument in the same method call.
+Calls also reject overlapping borrowed arguments whenever a `mut` parameter
+participates, including a `mut self` receiver overlapping another borrowed
+argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
 Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = {}`, or you can use `Set[int32]()` explicitly.
@@ -667,7 +668,7 @@ Current collection notes:
 - `range(...)` bounds and Vec indexes remain `int32`, so length-driven
   iteration narrows explicitly with the checked
   `range(values.len() as int32)` form
-- bare and explicit-`` Vec iteration are shared; `for value in own vec:`
+- bare Vec iteration is shared; `for value in own vec:`
   consumes; `for value in mut vec:` supports writeback
 - `for value in mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
@@ -683,7 +684,7 @@ Current collection notes:
 - `Map[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads only when `V` is copy, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`; non-copy reads use `get` for an explicit clone or `remove` for ownership transfer
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
 - `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
-- bare and explicit-`` Set iteration are shared; `for value in own set:` consumes
+- bare Set iteration is shared; `for value in own set:` consumes
 - `for value in mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
@@ -733,7 +734,8 @@ Not yet implemented:
 
 - non-numeric casts
 - direct recursive fields without `indirect`
-- broader lifetime inference beyond explicit borrowed-return sources and labels
+- first-class loan or view values; the current return syntax reserves no future
+  aliasing contract
 
 Current module/import limitations:
 
@@ -758,4 +760,6 @@ Current expression/ergonomics limitations:
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not
-- borrowed return labels such as `` are checked on declarations; copy-valued calls materialize copies, while non-copy borrowed-result calls are rejected until live aliases exist
+- every function return is owned: copy results are ordinary copies, while a
+  non-copy result must be constructed, cloned, moved from owned input, or
+  obtained through an owner operation

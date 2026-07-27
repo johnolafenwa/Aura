@@ -4,7 +4,7 @@ enum TrafficLight:
     Green
 
 def describe(light: own TrafficLight) -> String:
-    match light:
+    match own light:
         case TrafficLight.Red:
             return "red"
         case TrafficLight.Yellow:

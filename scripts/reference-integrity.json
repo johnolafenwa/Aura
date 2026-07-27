@@ -161,7 +161,7 @@
       "stderr": ""
     },
     "docs/manual/classes.md#aurora-12": {
-      "sha256": "11b7e04bdb917981d38a016f51e2e5ac4a2eb0867c129d263aa0821fd9e0239f",
+      "sha256": "4d453fc11a3a40fffb0b5e8c60d9a2695f90eddbb1dbfd8b064dfd9877280f1e",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -325,9 +325,9 @@
       "stderr": ""
     },
     "docs/manual/collections.md#aurora-4": {
-      "sha256": "aa9e393ccae09acb9e77f280c7cb708531953b4bed068b6ec03a85f0214d1627",
+      "sha256": "07bc6dc4d8d917e2aa3a2e524775928492310f1101d770f7bf6045130b44c663",
       "mode": "illustrative",
-      "reason": "Iteration-form catalog: the four alternatives use a placeholder collection and are independent examples, not one sequential program."
+      "reason": "Iteration-form catalog: the three alternatives use a placeholder collection and are independent examples, not one sequential program."
     },
     "docs/manual/collections.md#aurora-5": {
       "sha256": "8491695394e0fbf4cf80a88e261ef94482079a9ea8321c5c179b8a955a134a2d",
@@ -417,7 +417,7 @@
       "reason": "Short-pattern fragment: result is an input supplied by the surrounding example."
     },
     "docs/manual/enums-and-match.md#aurora-11": {
-      "sha256": "455159f69b185616aa35eb74f2de78b2e2e9cc6a67f77deb2c42064755c95526",
+      "sha256": "b3479d0c6dab57aa9a7863eba3f5e693f9ba40563a4c221babe2a9d4521c08cd",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
@@ -639,16 +639,15 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aurora-12": {
-      "sha256": "3de84cfc78dd2867b320fe5fb62caa3ab5d63bb6081e03f1286db8875e2a9fb5",
+      "sha256": "bcaf5816eff5d27b50defc8208ffc976fb235411b63947d0196888e2b33d3d93",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aurora-13": {
-      "sha256": "fa6708b9e45f07776174efd4478b2335706b5082d1e593d358cb71cf25d634b1",
-      "mode": "check",
-      "stdout": "ok\n",
-      "stderr": ""
+      "sha256": "5b92b8d8732e9f5613eac1b4b9b8113034644c80272efaed59c8fbf1ba2ebe97",
+      "mode": "illustrative",
+      "reason": "Owned-return patterns: this fragment depends on the User declaration in the preceding verified block."
     },
     "docs/manual/functions.md#aurora-14": {
       "sha256": "742cfab3eb9dbcce5cdae2ebdd3a87478167695dc5a3677f0a36bdfead03f278",
@@ -1160,15 +1159,15 @@
     "docs/manual/ownership-and-borrowing.md#aurora-7": {
       "sha256": "9cc4dafdb99c06b772f3c5cfa459f8f5e2f8a2f3ace3faaf67f9f276beddf62f",
       "mode": "illustrative",
-      "reason": "Rejected borrowed-return fragment: it depends on the User declaration shown in the preceding example."
+      "reason": "Rejected owned-return fragment: it depends on the User declaration shown in the preceding example."
     },
     "docs/manual/ownership-and-borrowing.md#aurora-8": {
       "sha256": "df79f45482d7535f9fa56f7a5b129839a9c55b223b5cb8b8ebe6e3a86ea9bea5",
       "mode": "illustrative",
-      "reason": "Borrowed-return repair fragment: it depends on the User declaration shown in the preceding example."
+      "reason": "Owned-return repair fragment: it depends on the User declaration shown in the preceding example."
     },
     "docs/manual/ownership-and-borrowing.md#aurora-9": {
-      "sha256": "3de84cfc78dd2867b320fe5fb62caa3ab5d63bb6081e03f1286db8875e2a9fb5",
+      "sha256": "b0a84c69ebd6def9912574d3ca29e142cb003a74c85ed4a4c8d874c3d3739fb7",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""

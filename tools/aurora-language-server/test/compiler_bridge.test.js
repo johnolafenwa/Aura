@@ -21,12 +21,17 @@ const {
   disposeCompilerService,
   resolveCompilerCommand,
   runCommand,
-  setWorkspaceRoots
-  ,
+  SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
+  setCompilerSchemaMismatchHandler,
+  setWorkspaceRoots,
   uriToPath
 } = require("../src/compiler_bridge");
+const { createDocumentStateCache } = require("../src/document_state");
 
-test.after(() => disposeCompilerService());
+test.after(() => {
+  setCompilerSchemaMismatchHandler(null);
+  disposeCompilerService();
+});
 
 const repoRoot = path.join(__dirname, "../../..");
 const pointPath = path.join(repoRoot, "examples/point.au");
@@ -487,7 +492,9 @@ test("compiler bridge reuses one persistent compiler process", async () => {
         "  const result = request.method === 'analyze'",
         "    ? { diagnostics: [], symbols: [], occurrences: [] }",
         "    : [{ name: 'len', kind: 'method', detail: 'len() -> intsize' }];",
-        "  process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
+          SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+        )}, result }) + '\\n');`,
         "});"
       ].join("\n")
     );
@@ -518,6 +525,150 @@ test("compiler bridge reuses one persistent compiler process", async () => {
   }
 });
 
+test("persistent compiler service sends and accepts the current semantic schema", async () => {
+  const script = [
+    "const readline = require('node:readline');",
+    "const lines = readline.createInterface({ input: process.stdin });",
+    "lines.on('line', (line) => {",
+    "  const request = JSON.parse(line);",
+    "  process.stdout.write(JSON.stringify({",
+    "    id: request.id,",
+    `    semantic_interface_version: ${JSON.stringify(
+      SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+    )},`,
+    "    result: { received_schema: request.semantic_interface_version }",
+    "  }) + '\\n');",
+    "});"
+  ].join("\n");
+  const service = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", script],
+    cwd: repoRoot
+  });
+
+  assert.deepEqual(await service.request("analyze", {}), {
+    received_schema: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+  });
+  assert.equal(service.closed, false);
+  service.dispose();
+});
+
+test("persistent compiler service rejects and disposes a mismatched semantic schema", async () => {
+  const script = [
+    "const readline = require('node:readline');",
+    "const lines = readline.createInterface({ input: process.stdin });",
+    "lines.on('line', (line) => {",
+    "  const request = JSON.parse(line);",
+    "  process.stdout.write(JSON.stringify({",
+    "    id: request.id,",
+    "    semantic_interface_version: 1,",
+    "    result: { diagnostics: [], symbols: [], occurrences: [] }",
+    "  }) + '\\n');",
+    "});"
+  ].join("\n");
+  let invalidations = 0;
+  const service = new CompilerService(
+    { cmd: process.execPath, args: ["-e", script], cwd: repoRoot },
+    { onSemanticSchemaMismatch: () => invalidations++ }
+  );
+
+  await assert.rejects(
+    service.request("analyze", {
+      path: "/virtual/main.au",
+      source: "def main():\n    pass\n"
+    }),
+    /semantic schema mismatch.*received `1`.*expected `2`/
+  );
+  assert.equal(service.closed, true);
+  assert.equal(invalidations, 1);
+  service.handleStdout(
+    `${JSON.stringify({
+      id: 99,
+      semantic_interface_version: 1,
+      result: {}
+    })}\n`
+  );
+  assert.equal(invalidations, 1);
+  await assert.rejects(service.request("analyze", {}), /closed/);
+});
+
+test("persistent compiler service treats a missing semantic schema as incompatible", async () => {
+  const script = [
+    "process.stdin.once('data', (line) => {",
+    "  const request = JSON.parse(line);",
+    "  process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + '\\n');",
+    "});"
+  ].join("\n");
+  const service = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", script],
+    cwd: repoRoot
+  });
+
+  await assert.rejects(service.request("analyze", {}), /received `<missing>`/);
+  assert.equal(service.closed, true);
+});
+
+test("compiler schema mismatch invalidates cached document ownership metadata", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-schema-mismatch-"));
+  const fakeCompiler = path.join(tempRoot, "aurora-schema");
+  const script = path.join(tempRoot, "compiler.js");
+  const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
+  let analyses = 0;
+  let invalidations = 0;
+  const cache = createDocumentStateCache(async () => ({
+    stamp: ++analyses,
+    ownership_mode: analyses === 1 ? "pre-migration-borrow" : "shared"
+  }));
+  const document = {
+    uri: "file:///workspace/main.au",
+    version: 1,
+    getText: () => "def main():\n    pass\n"
+  };
+
+  try {
+    assert.equal((await cache.get(document)).compilerAnalysis.ownership_mode, "pre-migration-borrow");
+    setCompilerSchemaMismatchHandler(() => {
+      invalidations += 1;
+      cache.invalidateAll();
+    });
+    fs.writeFileSync(
+      script,
+      [
+        "const readline = require('node:readline');",
+        "const lines = readline.createInterface({ input: process.stdin });",
+        "lines.on('line', (line) => {",
+        "  const request = JSON.parse(line);",
+        "  process.stdout.write(JSON.stringify({",
+        "    id: request.id,",
+        "    semantic_interface_version: 1,",
+        "    result: { diagnostics: [], symbols: [], occurrences: [] }",
+        "  }) + '\\n');",
+        "});"
+      ].join("\n")
+    );
+    fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+    fs.chmodSync(fakeCompiler, 0o755);
+    process.env.AURORA_LSP_AURA_PATH = fakeCompiler;
+    disposeCompilerService();
+    setWorkspaceRoots([]);
+
+    assert.equal(await analyzeWithCompiler(document.uri, document.getText()), null);
+    assert.equal(invalidations, 1);
+    assert.equal((await cache.get(document)).compilerAnalysis.ownership_mode, "shared");
+    assert.equal(analyses, 2);
+  } finally {
+    setCompilerSchemaMismatchHandler(null);
+    disposeCompilerService();
+    if (originalEnvPath === undefined) {
+      delete process.env.AURORA_LSP_AURA_PATH;
+    } else {
+      process.env.AURORA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("persistent compiler service handles errors, cancellation, and closed requests", async () => {
   const script = [
     "const readline = require('node:readline');",
@@ -525,7 +676,9 @@ test("persistent compiler service handles errors, cancellation, and closed reque
     "lines.on('line', (line) => {",
     "  const request = JSON.parse(line);",
     "  if (request.method === 'error') {",
-    "    process.stdout.write(JSON.stringify({ id: request.id, error: 'compiler boom' }) + '\\n');",
+    `    process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
+      SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+    )}, error: 'compiler boom' }) + '\\n');`,
     "  }",
     "});"
   ].join("\n");
@@ -624,7 +777,9 @@ test("compiler bridge accepts non-file URIs when using the compiler subprocess h
         "  const result = request.method === 'analyze'",
         "    ? { diagnostics: [], symbols: [], occurrences: [{ line: 0, start_character: 0, end_character: 3, hover: request.path, definition: null }] }",
         "    : [{ label: request.path }];",
-        "  process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
+          SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+        )}, result }) + '\\n');`,
         "});"
       ].join("\n")
     );
@@ -878,6 +1033,11 @@ test("compiler bridge preserves assert operand occurrences and keyword completio
         (completion) => completion.name === "assert" && completion.kind === "keyword"
       ),
       "compiler completion should include the assert keyword"
+    );
+    assert.equal(
+      completions.some((completion) => completion.name === "borrow"),
+      false,
+      "compiler completion must not suggest the retired borrow keyword"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1223,6 +1383,147 @@ test("compiler bridge preserves real ownership provenance, help, and safe edits"
   }
 });
 
+test("compiler bridge preserves exact ADR-0022 retired-borrow migration diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-retired-borrow-"));
+  const cases = [
+    {
+      name: "shared-parameter",
+      source: "def inspect(value: borrow String):\n    pass\n",
+      message: "`borrow T` was removed; write `T` for shared access"
+    },
+    {
+      name: "mutable-parameter",
+      source: "def replace(value: borrow mut String):\n    pass\n",
+      message: "`borrow mut T` was removed; write `mut T`"
+    },
+    {
+      name: "shared-receiver",
+      source: "class Box:\n    def read(borrow self):\n        pass\n",
+      message: "`borrow self` was removed; write `self` for a shared receiver"
+    },
+    {
+      name: "mutable-receiver",
+      source: "class Box:\n    def replace(borrow mut self):\n        pass\n",
+      message: "`borrow mut self` was removed; write `mut self`"
+    },
+    {
+      name: "shared-loop",
+      source: "def main():\n    for value in borrow values:\n        pass\n",
+      message: "`in borrow` was removed; write `in` for shared iteration"
+    },
+    {
+      name: "mutable-loop",
+      source: "def main():\n    for value in borrow mut values:\n        pass\n",
+      message: "`in borrow mut` was removed; write `in mut`"
+    },
+    {
+      name: "shared-match",
+      source: "def main():\n    match borrow value:\n        case _:\n            pass\n",
+      message: "`match borrow` was removed; write `match` for shared access"
+    },
+    {
+      name: "mutable-match",
+      source: "def main():\n    match borrow mut value:\n        case _:\n            pass\n",
+      message: "`match borrow mut` was removed; write `match mut`"
+    },
+    {
+      name: "borrowed-return",
+      source: "def choose(value: String) -> borrow String:\n    return value\n",
+      message: "borrowed returns were removed; return an owned value instead"
+    },
+    {
+      name: "reserved-identifier",
+      source: "def borrow():\n    pass\n",
+      message: "expected identifier"
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const entry of cases) {
+      const mainPath = path.join(tempRoot, `${entry.name}.au`);
+      const mainUri = `file://${mainPath}`;
+      const analysis = await analyzeWithCompiler(mainUri, entry.source);
+
+      assert.ok(analysis, `${entry.name} should return compiler analysis`);
+      assert.equal(analysis.diagnostics.length, 1, entry.name);
+      assert.equal(analysis.diagnostics[0].code, "AU1101", entry.name);
+      assert.equal(analysis.diagnostics[0].message, entry.message, entry.name);
+
+      const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+      assert.equal(diagnostic.code, "AU1101", entry.name);
+      assert.equal(diagnostic.source, "aurora-compiler", entry.name);
+      assert.equal(diagnostic.message, entry.message, entry.name);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves Queue and Range iteration carve-out diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-iteration-capability-"));
+  const queueMessage =
+    "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
+  const rangeMessage =
+    "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+  const cases = [
+    {
+      name: "queue-mut",
+      source: "def main():\n    queue = Queue[int32]()\n    for item in mut queue:\n        print(item)\n",
+      message: queueMessage
+    },
+    {
+      name: "queue-own",
+      source: "def main():\n    queue = Queue[int32]()\n    for item in own queue:\n        print(item)\n",
+      message: queueMessage
+    },
+    {
+      name: "range-mut",
+      source: "def main():\n    for item in mut range(0, 3):\n        print(item)\n",
+      message: rangeMessage
+    },
+    {
+      name: "range-own",
+      source: "def main():\n    for item in own range(0, 3):\n        print(item)\n",
+      message: rangeMessage
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    for (const entry of cases) {
+      const analysis = await analyzeWithCompiler(mainUri, entry.source);
+      assert.ok(analysis, `${entry.name} should return compiler analysis`);
+      assert.equal(analysis.diagnostics.length, 1, entry.name);
+      assert.equal(analysis.diagnostics[0].code, "AU3004", entry.name);
+      assert.equal(analysis.diagnostics[0].message, entry.message, entry.name);
+
+      const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+      assert.equal(diagnostic.code, "AU3004", entry.name);
+      assert.equal(diagnostic.source, "aurora-compiler", entry.name);
+      assert.equal(diagnostic.message, entry.message, entry.name);
+    }
+
+    const bareRange = await analyzeWithCompiler(
+      mainUri,
+      "def main():\n    for item in range(0, 3):\n        print(item)\n"
+    );
+    assert.ok(bareRange);
+    assert.deepEqual(bareRange.diagnostics, []);
+
+    const bareQueue = await analyzeWithCompiler(
+      mainUri,
+      "def main():\n    queue = Queue[int32]()\n    for item in queue:\n        print(item)\n"
+    );
+    assert.ok(bareQueue);
+    assert.deepEqual(bareQueue.diagnostics, []);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge returns member completions from the compiler", async () => {
   setWorkspaceRoots([repoRoot]);
   const lineIndex = pointSource.split("\n").findIndex((line) => line.includes("a.x"));
@@ -1524,7 +1825,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
   const source = [
     "def inspect(value: String):",
     "    print(value)",
-    "def consume(value: own String):",
+    "def consume(value: own String = \"owned fallback\"):",
     "    print(value)",
     "def explicit(value: String = \"fallback\"):",
     "    print(value)",
@@ -1533,6 +1834,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     "def main():",
     "    mut text = \"aurora\"",
     "    inspect(text)",
+    "    consume()",
     "    consume(text.clone())",
     "    explicit()",
     "    mutate(text)",
@@ -1549,7 +1851,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     assert.equal(analysis.diagnostics.length, 0);
     for (const signature of [
       "function inspect(value: String) -> None",
-      "function consume(value: own String) -> None",
+      "function consume(value: own String = ...) -> None",
       "function explicit(value: String = ...) -> None",
       "function mutate(value: mut String) -> None"
     ]) {

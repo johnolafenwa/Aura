@@ -53,7 +53,7 @@ The current tutorial set covers:
 - ownership, declaration-stable parameter defaults, explicit `own`, move
   semantics, copy types, and the exclusivity rule for mutable borrows
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals,
-  storing APIs, shared-default/`own` iteration, and mutable Vec iteration
+  storing APIs, bare-shared/`own` iteration, and mutable Vec iteration
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls

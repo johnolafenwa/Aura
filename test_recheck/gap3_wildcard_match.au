@@ -6,7 +6,7 @@ enum Color:
 
 def main():
     c = Color.Red
-    match c:
+    match own c:
         case Color.Red:
             print("red")
         case _:

@@ -1,5 +1,5 @@
 def check(x: int32) -> int32:
-    match x:
+    match own x:
         case 0:
             return 1
         case 1:

@@ -12,7 +12,10 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Parser nesting/postfix/binary-chain guards are limited to 128 operations; deeper input is rejected with a diagnostic.
 - Non-numeric casts are not implemented.
 - Direct recursive fields require `indirect`.
-- Borrowed-return declarations use explicit sources and labels. Calls returning copy types materialize copies; calls producing non-copy borrowed results are rejected until Phase 6 live aliases.
+- Return values are always owned. Copy results are ordinary copies; a non-copy
+  result must be constructed, cloned when clone-safe, moved from owned input,
+  or produced by an owner operation. First-class loan or view returns are not
+  part of Aurora 0.1, and current syntax reserves no future contract for them.
 - Empty list, map, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `String(...)` is not a constructor; use string literals and string methods.
@@ -35,7 +38,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 - `for` loop bindings cannot shadow names already visible in the same scope.
 - Duration literals have only the integral `ms`, `s`, and `m` suffixes; there is no `ns` or fractional Duration literal and no unary `-Duration`. Associated constructors and checked Duration arithmetic provide signed and sub-millisecond results instead.
 - Task starting currently supports named functions and associated methods without `self`.
-- `TaskGroup.start(...)` and `start_soon(...)` support default/shared and `own` target parameters; `mut ` targets are rejected because child tasks cannot write back through the starting call frame.
+- `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
+  target parameters; `mut` targets are rejected because child tasks cannot
+  write back through the starting call frame.
 - Detached lightweight tasks are not a language form; use `TaskGroup`.
 - `for value in mut set:` is not currently supported.
 

@@ -242,11 +242,9 @@ Maintained iterable forms include:
 | `for i in range(start, end):` | Yields `int32` values from `start` up to `end`, excluding `end`. |
 | `for value in vec:` | Retains the vector and yields shared-borrowed access for non-copy elements. |
 | `for value in own vec:` | Consumes the vector and yields owned elements. |
-| `for value in vec:` | Explicit form of shared iteration. |
 | `for value in mut vec:` | Retains a mutable vector and yields mutable-borrowed access; the iterable place must be mutable. |
 | `for value in set:` | Retains the set and yields shared-borrowed access. |
 | `for value in own set:` | Consumes the set and yields owned elements. |
-| `for value in set:` | Explicit form of shared iteration. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 | `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
@@ -254,13 +252,13 @@ Maintained iterable forms include:
 When an iterable yields tuples, bare/shared collection iteration gives
 non-copy tuple leaves shared provenance; `own` collection iteration gives
 owned leaves; and bare Queue iteration receives an owned item and gives owned
-leaves. `mut ` iteration with a tuple target is rejected because the
+leaves. `mut` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
 `for value in mut set:` is not supported in Aurora 0.1. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
-queue handle is a copy value. Consequently `own`, ``, and `mut `
-are all rejected for Queue iteration; use the bare form. That form evaluates
+queue handle is a copy value. Consequently `own` and `mut` are rejected for
+Queue iteration; use the bare form. That form evaluates
 and copies the Queue handle once at loop entry without freezing the source
 binding. Rebinding the source in the body does not switch later receives.
 Queue iteration ends according to close, cancellation, producer-completion,
@@ -295,10 +293,11 @@ for host, port in zip(hosts, ports):
     print(port)
 ```
 
-The parser also accepts ownership modifiers before a `range(...)` expression.
-In Aurora 0.1 they do not change Range iteration: every form yields the same
-copy `int32` values. This historical behavior is preserved pending a separate
-decision about modifiers on non-place iterables.
+Range iteration accepts only the bare form. Every yielded `int32` is an
+independent copy, so `mut` has no place through which to write back and `own`
+has nothing to transfer. Either modifier reports `AU3004`, explains that
+ownership modifiers do not apply to these copy values, and suggests
+`for item in range(...):`.
 
 ## `break` And `continue`
 
@@ -331,9 +330,9 @@ Every statement arm contains an indented suite. Inline statement arms such as `c
 
 Matches over enums and booleans must be exhaustive unless `_` covers the remainder. Integer, float, and string literal matches require `_` because their value spaces are open. Duplicate, unreachable, type-incompatible, or wrong-arity patterns are rejected.
 
-`match value` may consume a non-copy scrutinee. This includes a non-copy tuple,
+`match own value` consumes a non-copy scrutinee. This includes a non-copy tuple,
 which is consumed as one whole value and unpacked into owned pattern bindings.
-`match value` retains ownership and exposes shared enum-payload or tuple
+Bare `match value` retains ownership and exposes shared enum-payload or tuple
 leaf access. `match mut value` permits enum-payload mutation and
 writeback, but a tuple pattern is rejected because recursive mutable tuple
 writeback is not part of the minimal surface. See
@@ -488,8 +487,8 @@ every exited cleanup in reverse registration order.
 ## Ownership And Evaluation Order
 
 Bindings own, copy, or borrow their initializer according to type and context.
-`own` Vec/Set iteration consumes once into a loop-private source, bare or
-`` collection iteration retains and freezes its selected place, and Queue
+`own` Vec/Set iteration consumes once into a loop-private source, bare
+collection iteration retains and freezes its selected place, and Queue
 iteration captures a copy handle once while receiving already-owned items.
 The one-time iterable selection is the accepted ADR-0017 rule; the ownership
 modes themselves remain those accepted in ADR-0006.
@@ -535,9 +534,9 @@ direct lowering is contained rather than silently given different semantics.
 Suites require a real statement, loop `else` is unavailable, statement match
 arms cannot be inline, a statement may span
 physical lines only through an open `(`, `[`, or `{`, backslash continuation is
-unavailable, and items cannot nest in suites. Range ownership
-modifiers are accepted but have no effect on copy `int32` iteration as recorded
-above. No statement evaluation order is implementation-defined.
+unavailable, and items cannot nest in suites. Range iteration yields copy
+`int32` values and accepts only the bare form as recorded above. No statement
+evaluation order is implementation-defined.
 
 ## Status
 

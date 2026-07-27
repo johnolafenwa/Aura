@@ -124,7 +124,10 @@ For a class value, member lookup considers fields and methods declared by the cl
 
 Trait method selection uses the receiver type, explicit or inferred trait arguments, type-parameter bounds, and implementation specificity. Multiple equally applicable implementations are ambiguous and MUST be rejected instead of selected by source order.
 
-Associated methods are methods without a receiver and are referenced through the type, for example `Worker.create(...)`. Instance methods require a receiver compatible with their declared shared (`self`/`self`), consuming (`own self`), or mutable (`mut self`) contract.
+Associated methods are methods without a receiver and are referenced through
+the type, for example `Worker.create(...)`. Instance methods require a receiver
+compatible with their declared shared (`self`), consuming (`own self`), or
+mutable (`mut self`) contract.
 
 ## Builtin Names And Modules
 

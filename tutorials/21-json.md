@@ -81,7 +81,7 @@ after extracting the payload.
 ## Borrow To Inspect, Consume To Extract
 
 `json.is_null`, `json.as_bool`, `json.as_int`, and `json.as_float` use the
-ordinary bare non-copy parameter default: a shared borrow, so the JSON value
+ordinary bare parameter default: shared access, so the JSON value
 remains available. Owned String, Array, and
 Object payloads use the consuming module functions `json.into_string`,
 `json.into_array`, and `json.into_object`:

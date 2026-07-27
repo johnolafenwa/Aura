@@ -10,7 +10,7 @@ enum HttpStatus:
     ServiceUnavailable
 
 def status_code(s: HttpStatus) -> int32:
-    match s:
+    match own s:
         case HttpStatus.Ok:
             return 200
         case HttpStatus.Created:
@@ -31,7 +31,7 @@ def status_code(s: HttpStatus) -> int32:
             return 503
 
 def is_success(s: HttpStatus) -> bool:
-    match s:
+    match own s:
         case HttpStatus.Ok:
             return true
         case HttpStatus.Created:
@@ -40,7 +40,7 @@ def is_success(s: HttpStatus) -> bool:
             return false
 
 def is_client_error(s: HttpStatus) -> bool:
-    match s:
+    match own s:
         case HttpStatus.BadRequest:
             return true
         case HttpStatus.Unauthorized:

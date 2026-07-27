@@ -119,7 +119,6 @@ The receiver, when present, is the first method parameter:
 | Receiver | Call contract |
 | --- | --- |
 | `self` | Shared receiver and the default spelling. It can read, but cannot mutate or move non-copy fields out. |
-| `self` | Explicit synonym for the shared `self` receiver. |
 | `own self` | Consuming receiver. A non-copy instance is moved into the call. |
 | `mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
 | none | Associated method. It is called through the type, not an instance. |
@@ -131,7 +130,12 @@ print(counter.get())
 value = counter.into_value()
 ```
 
-Methods otherwise follow the function rules for generic parameters, ordinary parameters, defaults, returns, and borrowed returns. Ordinary parameter names are unique and cannot collide with a declared `self` receiver. A typed first parameter such as `self: Counter` is not a receiver and is rejected with a diagnostic naming the valid forms. `Self` may be used in class method parameter and return type positions and denotes the enclosing class specialization.
+Methods otherwise follow the function rules for generic parameters, ordinary
+parameters, defaults, and owned returns. Ordinary parameter names are unique
+and cannot collide with a declared `self` receiver. A typed first parameter
+such as `self: Counter` is not a receiver and is rejected with a diagnostic
+naming the valid forms. `Self` may be used in class method parameter and return
+type positions and denotes the enclosing class specialization.
 
 An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type.
 
@@ -172,17 +176,19 @@ class User:
         return self.name.clone()
 ```
 
-Copy-valued APIs may declare a borrowed return tied to `self`; calls materialize a copy:
+Returning a copy-valued field produces an ordinary independent copy:
 
 ```python
 class Counter:
     value: int32
 
-    def value_ref(self) -> int32:
+    def value_copy(self) -> int32:
         return self.value
 ```
 
-Aurora 0.1 rejects a corresponding non-copy call such as `-> String`; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
+Returning a non-copy field requires ownership: clone it when clone-safe, or
+consume the owner with `own self`. Return annotations do not carry a source
+label or reserve an aliasing contract. See [Functions](/manual/functions#owned-returns).
 
 ## `copy class`
 
@@ -289,8 +295,8 @@ argument-binding failures. `AU2999` covers duplicate declarations, invalid
 visibility or recursive layout, unsupported member use, and other class
 rejections without a narrower category. `AU3001` reports use of a moved class
 or field. `AU3002` reports overlapping receiver/argument borrows, moving a
-field through a borrow, invalid borrowed-return materialization, or an invalid
-user-resource borrow contract. `AU3003` reports mutation through an immutable
+field through shared access, or an invalid user-resource close contract.
+`AU3003` reports mutation through an immutable
 class place, including a shared `self` receiver, and `AU3004` reports an
 invalid ownership or receiver mode. A field default, method, or cleanup body
 retains the diagnostic for the operation that traps: `AU4001` for a general
@@ -313,8 +319,7 @@ Aurora 0.1 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
 managed directly by `with`. A class field default cannot call a user-defined
 function in the current compiler; compute that value before construction and
-pass it as an explicit field argument. Calls producing non-copy borrowed field results
-are contained until live alias storage exists. `indirect` is only a recursive
+pass it as an explicit field argument. `indirect` is only a recursive
 field-layout marker; its storage representation and the physical order or
 padding of fields are not observable language contracts. Construction and
 method evaluation order are language-defined rather than
@@ -325,8 +330,9 @@ implementation-defined.
 Ordinary and copy classes, generic classes, construction, defaults,
 visibility, inherent and associated methods, all maintained receiver modes,
 partial-field moves, recursive `indirect` fields, and non-generic user-resource
-classes are implemented for the post-Phase 1.5 surface. Live non-copy borrowed
-field aliases are reserved for the Phase 6 alias work. Inheritance, properties,
+classes are implemented for the post-Phase 1.5 surface. First-class field loans
+or views would require a new design; current return syntax reserves no such
+contract. Inheritance, properties,
 custom constructor/destructor hooks, and generic `with` resources are
 unavailable and MUST NOT be inferred from accepted class syntax. The
 constructor evaluation rule is implemented under

@@ -155,8 +155,8 @@ String and `Vec` length domains. The invalid hexadecimal byte payload is
 `AU4005` instead of constructing a lossy payload. Match handling follows the
 ordinary exhaustive enum rules.
 
-All successful functions return owned values. Ordinary bare non-copy inputs
-are shared for the call, so a caller may reuse the input after `to_bytes`,
+All successful functions return owned values. Ordinary bare inputs grant
+shared access for the call, so a caller may reuse the input after `to_bytes`,
 `from_bytes`, encode, decode, or hash. Explicit `own` is neither required nor
 implied by these signatures.
 

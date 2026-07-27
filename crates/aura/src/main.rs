@@ -652,6 +652,7 @@ fn handle_lsp_service() {
             Ok(line) => lsp_response_for_line(&line),
             Err(error) => serde_json::json!({
                 "id": JsonValue::Null,
+                "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
                 "error": format!("failed to read LSP compiler request: {error}")
             }),
         };
@@ -675,6 +676,7 @@ fn lsp_response_for_line(line: &str) -> JsonValue {
         Err(error) => {
             return serde_json::json!({
                 "id": JsonValue::Null,
+                "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
                 "error": format!("invalid LSP compiler request JSON: {error}")
             });
         }
@@ -682,12 +684,36 @@ fn lsp_response_for_line(line: &str) -> JsonValue {
     let id = request.get("id").cloned().unwrap_or(JsonValue::Null);
     let result = lsp_result_for_request(&request);
     match result {
-        Ok(result) => serde_json::json!({ "id": id, "result": result }),
-        Err(error) => serde_json::json!({ "id": id, "error": error }),
+        Ok(result) => serde_json::json!({
+            "id": id,
+            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "result": result
+        }),
+        Err(error) => serde_json::json!({
+            "id": id,
+            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "error": error
+        }),
     }
 }
 
 fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
+    let request_schema = request
+        .get("semantic_interface_version")
+        .and_then(JsonValue::as_u64);
+    if request_schema
+        != Some(u64::from(
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+        ))
+    {
+        let reported = request_schema
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| "<missing>".to_string());
+        return Err(format!(
+            "Aurora semantic schema mismatch: client reported `{reported}`, compiler requires `{}`",
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        ));
+    }
     let method = request
         .get("method")
         .and_then(JsonValue::as_str)
@@ -1283,11 +1309,25 @@ struct NativeRuntimeIdentity {
 }
 
 fn native_cache_key(mir: &MirModule, runtime_identity: &NativeRuntimeIdentity) -> Option<String> {
+    native_cache_key_for_semantic_schema(
+        mir,
+        runtime_identity,
+        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+    )
+}
+
+fn native_cache_key_for_semantic_schema(
+    mir: &MirModule,
+    runtime_identity: &NativeRuntimeIdentity,
+    semantic_schema_version: u32,
+) -> Option<String> {
     let lowered = serde_json::to_vec(mir).ok()?;
     let runtime = native_runtime_identity_material(runtime_identity)?;
+    let semantic_schema = semantic_schema_version.to_le_bytes();
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
+        semantic_schema.as_slice(),
         env!("CARGO_PKG_VERSION").as_bytes(),
         std::env::consts::ARCH.as_bytes(),
         std::env::consts::OS.as_bytes(),
@@ -1305,9 +1345,9 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
     serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
 }
 
-// Bumped to `v4` by the ADR-0022 capability migration. Q9 requires every
-// Phase-4 artifact and LSP analysis cache built from the old grammar to be
-// invalidated, and this string is part of every native cache key.
+// Bumped to `v4` by the ADR-0022 capability migration. The compiler-owned
+// semantic schema version is an additional, independent key component, so a
+// semantic migration need not pretend that the cache container format changed.
 const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v4";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
@@ -2892,7 +2932,8 @@ mod tests {
 
     use super::{
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
-        configure_native_runtime_cargo, create_private_cache_directory_all,
+        configure_native_runtime_cargo, create_private_cache_directory_all, lsp_response_for_line,
+        native_cache_key, native_cache_key_for_semantic_schema,
         native_launch_error_invalidates_cache, native_runtime_identity_material, parse_run_backend,
         parse_static_library_artifact_path, remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
@@ -3005,6 +3046,89 @@ mod tests {
                 "archive bytes, argument order, duplication, and boundaries must contribute independently"
             );
         }
+    }
+
+    #[test]
+    fn native_cache_key_independently_tracks_the_semantic_interface_schema() {
+        let mir = aurora_compiler::lower_source_to_mir("def main() -> int32:\n    return 0\n")
+            .expect("cache-key fixture should lower");
+        let runtime_identity = NativeRuntimeIdentity {
+            archive_sha256: "a".repeat(64),
+            native_link_args: vec!["-laurora_compiler".to_string()],
+        };
+
+        let old_key = native_cache_key_for_semantic_schema(&mir, &runtime_identity, 1)
+            .expect("old-schema key should serialize");
+        let current_key = native_cache_key_for_semantic_schema(
+            &mir,
+            &runtime_identity,
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+        )
+        .expect("current-schema key should serialize");
+        let production_key =
+            native_cache_key(&mir, &runtime_identity).expect("production key should serialize");
+
+        assert_ne!(
+            old_key, current_key,
+            "identical MIR and runtime inputs must not reuse an artifact across semantic schemas"
+        );
+        assert_eq!(
+            production_key, current_key,
+            "every production native key must bind the compiler-owned semantic schema"
+        );
+    }
+
+    #[test]
+    fn lsp_service_rejects_a_client_from_another_semantic_schema() {
+        let response = lsp_response_for_line(
+            &serde_json::json!({
+                "id": 7,
+                "semantic_interface_version": 1,
+                "method": "analyze",
+                "path": "/virtual/main.au",
+                "source": "def main():\n    pass\n"
+            })
+            .to_string(),
+        );
+
+        assert_eq!(response["id"], 7);
+        assert_eq!(
+            response["semantic_interface_version"],
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        );
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("semantic schema mismatch")),
+            "mismatched clients must receive an explicit schema error: {response}"
+        );
+    }
+
+    #[test]
+    fn every_lsp_service_error_identifies_the_compiler_semantic_schema() {
+        let malformed = lsp_response_for_line("not JSON");
+        assert_eq!(
+            malformed["semantic_interface_version"],
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        );
+        assert!(malformed["error"].is_string());
+
+        let missing_schema = lsp_response_for_line(
+            &serde_json::json!({
+                "id": 8,
+                "method": "analyze",
+                "path": "/virtual/main.au",
+                "source": "def main():\n    pass\n"
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            missing_schema["semantic_interface_version"],
+            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        );
+        assert!(missing_schema["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("client reported `<missing>`")));
     }
 
     #[cfg(target_os = "macos")]

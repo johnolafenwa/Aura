@@ -1,0 +1,11 @@
+def main():
+    mut value: int32 = 1
+    match value:
+        case 1:
+            match own value:
+                case 1:
+                    pass
+                case _:
+                    pass
+        case _:
+            pass

@@ -75,10 +75,11 @@ operators are accepted under ADR-0007.
 
 Numeric literals are checked against the target type. Integer literals must fit an annotated integer target, and a float-context integer literal must be exactly representable in its `float32` or `float64` target. An inexact literal must make rounding explicit with a floating spelling or `.to_float()`. Integer-to-float casts also reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
-A bare `value: String` parameter resolves to a shared borrow; use `borrow
-String` when that contract should be explicit in source. The spelling `str` is
-accepted for compatibility but currently lowers to the same canonical `String`
-type; code must not assume a separate slice layout or lifetime-bearing runtime
+A bare `value: String` parameter grants shared access. Bare parameters do the
+same for copy and move types; an implementation may pass copy bits directly
+without changing that source contract. The spelling `str` is accepted for
+compatibility but currently lowers to the same canonical `String` type; code
+must not assume a separate slice layout or lifetime-bearing runtime
 representation.
 
 `String.len() -> int64` scans the text and counts Unicode scalar values in
@@ -120,7 +121,9 @@ Move values transfer ownership:
 - `TaskGroup`
 - file, process, supervisor, and network resources
 
-Move values can still be shared through `` and `mut `, or duplicated explicitly through methods such as `.clone()` when the type supports cloning.
+Move values can still be shared through a bare parameter, accessed mutably
+through a `mut` parameter, or duplicated explicitly through methods such as
+`.clone()` when the type supports cloning.
 
 `Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying the handle does not copy queued values or task results; it gives another reference to the same queue or task.
 
@@ -327,9 +330,10 @@ def parse_answer() -> Result[int32, String]:
 
 Type syntax consists of an identifier or module-qualified type path, optional
 bracketed type arguments, the optional marker `?`, and `indirect` in class-field
-position, as collected in [Grammar](/manual/grammar). ``, `mut `,
-and `own` on parameters and returns are passing contracts around a type; they
-do not construct separate runtime type values.
+position, as collected in [Grammar](/manual/grammar). `mut` and `own` parameter
+modifiers are not type constructors. Bare, `mut`, and `own` parameter
+capabilities govern access at a call boundary, while every `-> T` annotation
+describes an owned result.
 
 ## Typing Rules
 
@@ -386,8 +390,8 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`str` is currently an alias rather than a borrowed view; non-copy borrowed
-returns are contained; callable types, user-defined numeric casts, and
+`str` is currently an alias rather than a distinct view; first-class loan or
+view values are unavailable; callable types, user-defined numeric casts, and
 non-numeric casts are unavailable; and recursive value fields require
 `indirect`. `intsize` and `uintsize` follow the target pointer width, and host
 process exit transport may narrow an `int32` after Aurora returns it. Other
@@ -398,9 +402,9 @@ implementation-defined.
 
 The scalar, collection, enum, class, trait-bound, resource, optional, result,
 and indirect types described by this Manual are implemented for the post-Phase
-1.5 surface. Borrowed-return syntax reserves the provenance contract for a
-future live non-copy alias representation; calls cannot produce such aliases
-today. Callable, closure, and FFI types are unavailable. Structural tuple types
+1.5 surface. Return values are owned, and current syntax reserves no future
+loan or view contract. Callable, closure, and FFI types are unavailable.
+Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the implemented compatibility alias for `String`; a distinct borrowed
 `str` view type is unavailable. None of those unavailable types may be inferred

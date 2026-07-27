@@ -1,4 +1,4 @@
-error[AU3006]: cannot implicitly copy `String` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, or `remove(index)` to transfer ownership and assign the result explicitly
+error[AU3006]: cannot implicitly copy `String` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`
  --> crates/aurora-compiler/tests/fixtures/check-fail/vec_compound_assignment_noncopy_element_rejected.au:3:5
   |
 3 |     values[0] += "B"

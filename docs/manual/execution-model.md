@@ -89,9 +89,15 @@ diagnostic.
 
 ## Calls And Returns
 
-A call evaluates and binds arguments, then transfers control to the target body or runtime builtin. Explicitly owned non-copy arguments have been moved at the call boundary; default-mode non-copy and explicitly borrowed arguments remain owned by the caller and are constrained for the duration of the call.
+A call evaluates and binds arguments, then transfers control to the target body
+or runtime builtin. Explicitly owned non-copy arguments have been moved at the
+call boundary; bare shared arguments remain owned by the caller and are
+constrained for the duration of the call.
 
-`return value` evaluates `value`, performs any required borrow-source or move operation, runs active lexical cleanups, and returns to the caller. Reaching the end of a `None` function returns `None`. A non-`None` function cannot pass static checking if a reachable path falls through.
+`return value` evaluates `value`, copies or moves it into the owned result,
+runs active lexical cleanups, and returns to the caller. Reaching the end of a
+`None` function returns `None`. A non-`None` function cannot pass static
+checking if a reachable path falls through.
 
 A recursive Aurora call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aurora calls with a source diagnostic rather than allowing the host stack to overflow.
 
@@ -192,20 +198,22 @@ for the loop and yields shared element access. `own` iteration moves the
 collection into a loop-private source once at entry and yields owned elements;
 reinitializing the consumed source binding in the body does not switch or
 truncate the active iteration. That one-time source selection is accepted
-under ADR-0017 and does not alter ADR-0006's ownership modes. Explicit `` and `mut ` iteration
+under ADR-0017 and does not alter ADR-0006's ownership modes. `mut` iteration
 retain the collection as allowed by the static rules. Range iteration yields `int32` values from
 `start` inclusive to `end` exclusive; its currently accepted modifiers do not
 change behavior and remain a tracked language-design follow-up.
 
-Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, ``, and `mut ` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
+Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own` and `mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
 
 ## Pattern Matching
 
 The scrutinee is evaluated exactly once. Arms are considered in source order. The first matching arm executes.
 
-- by-value match consumes a non-copy scrutinee place when ownership rules require it
-- `match ` leaves the scrutinee owned and exposes shared payload borrows for non-copy data
-- `match mut` permits payload mutation and writes the reconstructed enum value back to the matched mutable place on normal arm exit
+- `match own` consumes a non-copy scrutinee place
+- bare `match` leaves the scrutinee owned and exposes shared payload borrows for non-copy data
+- `match mut` permits payload mutation and writes the reconstructed enum value
+  back on normal arm exit, `return`, `break`, `continue`, and `try`
+  propagation
 - literal patterns compare against the scrutinee value
 - `_` always matches and binds nothing
 
@@ -262,9 +270,9 @@ Scheduling order among multiple ready tasks is not specified. Programs coordinat
 `Task[T]` and `Queue[T]` are copy handles to shared runtime state. Copying a handle does not duplicate the underlying task or queue.
 
 Starting a task first copies or moves every argument into task-owned capture
-storage. The child then applies the target's declared parameter ABI to that
-capture: a default non-copy or explicit shared parameter borrows it, and an
-`own` parameter consumes it. Mutable-borrow targets are rejected statically.
+storage. The child then applies the target's declared parameter capability to
+that capture: a bare parameter borrows it, and an `own` parameter consumes it.
+Mutable targets are rejected statically.
 
 A task stores its completed result. Repeated result observation clones the stored runtime value. For ordinary copy data this produces another ordinary value. A result containing an exclusive runtime resource is single-observer-only in 0.1; the checker does not yet enforce that restriction, and a second observation can alias the same host resource through shared handles. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 

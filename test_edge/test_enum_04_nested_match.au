@@ -9,13 +9,13 @@ enum Inner:
 def nested_match(o: Outer, i: Inner) -> int32:
     match own o:
         case Outer.A(val):
-            match i:
+            match own i:
                 case Inner.X:
                     return val + 1
                 case Inner.Y:
                     return val + 2
         case Outer.B(val):
-            match i:
+            match own i:
                 case Inner.X:
                     return val + 10
                 case Inner.Y:

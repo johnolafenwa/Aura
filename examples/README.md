@@ -51,18 +51,18 @@ The examples are organized by topic so they can serve both as quick references a
     - `6`
     - `12`
 - `borrow_parameters.au`
-  - free-function `` and `mut ` parameters with caller-visible mutation
+  - free-function bare shared and `mut` parameters with caller-visible mutation
   - prints:
     - `41`
     - `42`
     - `42`
 - `borrowed_returns.au`
-  - copy-valued borrowed returns with explicit source syntax like `-> int32`
+  - ordinary owned `int32` copies returned from shared class input
   - prints:
     - `7`
     - `7`
 - `borrowed_lifetime_labels.au`
-  - borrowed return labels like `` flowing through copy-valued calls and locals
+  - choosing and forwarding ordinary owned copies without return-source labels
   - prints `7`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
@@ -119,14 +119,14 @@ The examples are organized by topic so they can serve both as quick references a
     - `false`
 - `vec_iteration.au`
   - empty-vector construction with `Vec[T]()`, `extend(...)`, explicit `Vec[T]`
-    annotations, explicit shared iteration, and consuming `own` iteration
+    annotations, bare shared iteration, and consuming `own` iteration
   - prints:
     - `Ada`
     - `Grace`
     - `2`
     - `9`
 - `vec_polish.au`
-  - negative direct/method indexes, non-copy cloned reads, `mut `
+  - negative direct/method indexes, non-copy cloned reads, `mut`
     iteration, an explicit checked `as int32` conversion from `Vec.len()` for
     `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`,
     `clear()`, and Vec equality

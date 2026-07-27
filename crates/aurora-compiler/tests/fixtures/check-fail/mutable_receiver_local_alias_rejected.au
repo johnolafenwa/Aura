@@ -1,0 +1,6 @@
+class User:
+    name: String
+
+    def rename(mut self):
+        alias = self
+        print(alias.name)

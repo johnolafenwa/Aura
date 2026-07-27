@@ -12,9 +12,10 @@ Programs in Aurora tend to be easier to read when three questions are answered n
 Numbers, booleans, durations, queue handles, and task handles are copy values:
 binding one to a new name is cheap and both names remain valid. Strings,
 collections, deterministic random generators, class instances, file handles,
-process resources, task groups, and network resources are move values: assignment or an explicit `own`
-position transfers ownership, while a bare non-copy parameter borrows. This
-rule is visible in the type and signature.
+process resources, task groups, and network resources are move values:
+assignment transfers ownership. At a call boundary, a bare parameter grants
+logical shared access for every type, while an explicit `own` position
+transfers ownership. This rule is visible in the signature.
 
 **Can this call fail?**
 Failure that a caller might sensibly handle lives in the return type. `Result[T, E]`, `Option[T]`, `QueueReceive[T]`, `TaskResult[T]`, and the I/O and process error enums let a program decide what to do with a given failure on a given line rather than catching a broad exception somewhere else.

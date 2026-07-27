@@ -1,0 +1,7 @@
+def bump(value: mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    mut value: int32 = 1
+    selected = range(value, bump(value))

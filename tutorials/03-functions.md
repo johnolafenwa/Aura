@@ -39,9 +39,9 @@ def distance(a: Point, b: Point) -> float64:
 
 See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
-An unmodified parameter uses Aurora's familiar default: copy types are passed
-by value, while non-copy types are shared-borrowed. Write `own` when the
-function takes ownership:
+An unmodified parameter grants shared access for every type. An implementation
+may pass copy bits directly, but that does not change the source-level
+contract. Write `own` when the function takes ownership:
 
 ```python
 def archive(doc: own Document):
@@ -70,7 +70,7 @@ def bump(counter: mut Counter):
     counter.value += 1
 ```
 
-A `mut ` parameter requires a mutable binding at the call site:
+A `mut` parameter requires a mutable binding at the call site:
 
 ```python
 mut counter = Counter(value=41)
@@ -78,7 +78,8 @@ bump(counter)
 print(counter.value)    # 42
 ```
 
-Aurora rejects overlapping arguments when `mut ` is involved. A mutable borrow must be exclusive -- no other borrow of the same value can exist in the same call:
+Aurora rejects overlapping arguments when `mut` is involved. Mutable access
+must be exclusive -- no other overlapping access can exist in the same call:
 
 ```python
 # This would be rejected:
@@ -89,9 +90,9 @@ This rule prevents subtle bugs where a function reads from and writes to the sam
 
 See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.au).
 
-Task targets may use bare/default, `own`, or explicit shared-borrow parameters.
+Task targets may use bare shared or `own` parameters.
 Arguments are moved or copied into task-owned capture storage before the child
-runs, and a shared target borrows that capture. `mut ` targets are
+runs, and a shared target borrows that capture. `mut` targets are
 rejected.
 
 ## Calling Functions
@@ -127,8 +128,8 @@ greet(name="aurora")  # "hello aurora"
 
 Default values are evaluated on each call, in parameter order. They cannot
 reference other parameters, and are not allowed in trait or trait-impl method
-declarations. Bare/shared-borrow defaults are valid and the temporary lives
-through the call; `own` defaults are consumed. `mut ` defaults are
+declarations. Bare shared defaults are valid and the temporary lives through
+the call; `own` defaults are consumed. `mut` defaults are
 rejected because mutations to a caller-invisible temporary would be lost.
 
 See [examples/basics/default_arguments.au](../examples/basics/default_arguments.au).
@@ -160,19 +161,22 @@ The bootstrap compiler supports functions returning:
 - `Task[T]`
 - `None`
 
-Copy-valued borrowed returns are supported when the source is explicit:
+Every function return is an owned value. Returning a copy type produces an
+ordinary independent copy:
 
 ```python
 class User:
     score: int32
 
-def score_ref(user: User) -> int32:
+def score(user: User) -> int32:
     return user.score
 ```
 
-The call materializes an ordinary `int32` copy. The same syntax works for methods as `-> T`.
+The call produces an ordinary `int32` copy. Methods use the same `-> T`
+return annotation.
 
-When multiple borrowed parameters share the same lifetime, you can give them a shared borrow label and return that label explicitly:
+When several shared parameters have copy types, the function can select and
+return any one of their values without a source label:
 
 ```python
 def choose_positive(left: int32, right: int32) -> int32:
@@ -181,11 +185,17 @@ def choose_positive(left: int32, right: int32) -> int32:
     return right
 ```
 
-Aurora 0.1 rejects calls producing non-copy borrowed results. Return an owned
-clone when the value is clone-safe, consume an owner, or expose an owner
-method. Live borrowed aliases are reserved for Phase 6.
+Returning a non-copy value requires ownership. Clone from shared input when the
+type is clone-safe, accept an `own` parameter and move from it, or provide an
+owner operation such as an `own self` method. A shared parameter cannot expose
+one of its non-copy fields as a return value.
 
-See [examples/basics/borrowed_returns.au](../examples/basics/borrowed_returns.au) and [examples/basics/borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au).
+The legacy-named
+[borrowed_returns.au](../examples/basics/borrowed_returns.au) and
+[borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au)
+examples now demonstrate ordinary owned copy results. Aurora has no
+borrow-source or return-label syntax. Any future loan or view design will be
+specified from scratch rather than inferred from today's `-> T`.
 
 ## Generic Functions
 
@@ -200,6 +210,6 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 
 ## Current Limits
 
-- borrowed return values still require an explicit source or borrow label such as ``, ``, or ``
-- borrowed-return calls currently require a copy result type
-- broader lifetime inference without an explicit source/label is still outside the bootstrap compiler
+- return values are always owned; first-class loan or view return values are
+  not part of Aurora 0.1
+- clone-based non-copy returns require the returned type to be clone-safe

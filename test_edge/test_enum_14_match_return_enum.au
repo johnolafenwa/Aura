@@ -4,7 +4,7 @@ enum Light:
     Green
 
 def next_light(l: Light) -> Light:
-    match l:
+    match own l:
         case Light.Red:
             return Light.Green
         case Light.Green:
@@ -13,7 +13,7 @@ def next_light(l: Light) -> Light:
             return Light.Red
 
 def light_name(l: Light) -> String:
-    match l:
+    match own l:
         case Light.Red:
             return "red"
         case Light.Yellow:

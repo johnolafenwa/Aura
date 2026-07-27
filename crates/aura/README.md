@@ -151,6 +151,7 @@ aura deps update util
   - a file declaring none keeps the file-level model and reports one result for the path
 - `aura lsp`
   - run the persistent JSON-lines compiler service for editor tooling
+  - every request and response carries compiler-owned semantic-interface version `2`; an editor transport from another semantic schema is rejected instead of receiving incompatible analysis
 - `aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]`
   - `mir` executes the lowered MIR and is the default
   - `direct` builds a native binary and runs it, reporting build or launch failures rather than degrading
@@ -158,7 +159,7 @@ aura deps update util
   - successful native builds are cached by content under `AURORA_CACHE_DIR`, defaulting to `~/.cache/aurora/native`; every hit verifies the entry identity, artifact SHA-256, regular-file/execute state, size bound, and executable shape, then launches a private copy of those verified bytes without a shell fallback
   - malformed entries and executable-format/architecture failures are discarded and rebuilt; temporary-directory, process-resource, and other environmental launch failures preserve the verified entry and follow the selected backend's ordinary error/fallback policy
   - the cache directory is a trust boundary: use only a location private to the current OS account; on the maintained Unix hosts, Aurora rejects roots owned by another user or writable by group/other
-  - cache keys include the exact linked runtime archive and ordered native link arguments; inherited launch leases and owner-aware staging cleanup prevent interrupted-run cleanup from deleting a live native child
+  - cache keys independently include native cache format `v4`, semantic-interface schema `v2`, the exact linked runtime archive, and ordered native link arguments; inherited launch leases and owner-aware staging cleanup prevent interrupted-run cleanup from deleting a live native child
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`

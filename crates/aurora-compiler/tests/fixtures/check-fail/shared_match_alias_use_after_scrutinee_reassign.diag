@@ -1,0 +1,6 @@
+error[AU3002]: cannot use shared match binding `alias` after changing match scrutinee `slot`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/shared_match_alias_use_after_scrutinee_reassign.au:14:19
+   |
+14 |             print(alias.name)
+   |                   ^
+  = help: finish using `alias` before changing `slot`; use `match mut slot` to update its payload or `match own slot` to consume it

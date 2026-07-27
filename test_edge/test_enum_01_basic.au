@@ -8,7 +8,7 @@ enum Shape:
     Rectangle(int32)
 
 def describe_color(c: Color) -> String:
-    match c:
+    match own c:
         case Color.Red:
             return "red"
         case Color.Green:

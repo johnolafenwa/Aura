@@ -7,9 +7,9 @@ enum Inner:
     Y
 
 def describe(o: Outer, i: Inner) -> int32:
-    return match o:
+    return match own o:
         case Outer.A:
-            match i:
+            match own i:
                 case Inner.X: 1
                 case Inner.Y: 2
         case Outer.B: 3

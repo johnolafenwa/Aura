@@ -426,7 +426,7 @@ grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
 grep -Fq '`self: Type` is not a method receiver' architecture_docs/decisions/0005-method-receivers.md
 grep -Fq '`own self` for by-value consumption' docs/aurora_language_proposal.md
 grep -Fq '<code>own self</code> for by-value consumption' docs/aurora_language_proposal.html
-grep -Fq '`value: T` | Shared borrow when `T` is non-copy' docs/manual/functions.md
+grep -Fq '`value: T` | Shared access. An implementation may pass copy bits directly without changing the source contract.' docs/manual/functions.md
 grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
 grep -Fq 'caller-invisible temporary' docs/manual/functions.md
 grep -Fq 'declaration-stable' docs/manual/generics-and-traits.md
@@ -437,7 +437,7 @@ grep -Fq 'NOT explicitly define or inherit a trait method whose name is a builti
 grep -Fq 'builtin target members always retain builtin dispatch' docs/manual/generics-and-traits.md
 grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
-grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md
+grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
 grep -Fq 'corresponding `Vec` or `Map` indexed compound assignment' docs/manual/diagnostics.md
@@ -660,3 +660,4 @@ fi
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 scripts/test_capability_migrate.py
+python3 scripts/capability_migrate.py check

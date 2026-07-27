@@ -122,8 +122,9 @@ requirement and reject an unsafe concrete specialization with `AU3007`.
 
 ## Passing Values To Functions
 
-Bare function parameters are by value for copy types and shared borrows for
-non-copy types. To transfer a move value to a function, write `own`:
+Bare function parameters grant logical shared access for every type. An
+implementation may pass copy bits directly, but that does not change the
+source-level contract. To transfer a move value to a function, write `own`:
 
 ```python
 class Document:
@@ -140,7 +141,7 @@ print(doc.pages)       # COMPILE ERROR: use of moved value `doc`
 
 The explicit `own` parameter took ownership of `doc`. After the call, `doc` is no longer valid in the calling scope. If the declaration were simply `doc: Document`, it would borrow and the caller could keep using it.
 
-For copy types, passing by value just copies:
+For copy types, shared access can be implemented by passing copied bits:
 
 ```python
 def double(x: int32) -> int32:
@@ -160,7 +161,7 @@ Aurora has two kinds of borrows:
 - `T` -- shared, read-only access
 - `mut T` -- exclusive, mutable access
 
-### Explicit shared borrows with ``
+### Shared access with a bare type
 
 A shared borrow lets a function read a value without consuming it:
 
@@ -176,11 +177,9 @@ print(read(counter))       # 41
 print(counter.value)       # 41 -- counter still belongs to us
 ```
 
-The `` keyword makes the shared contract explicit: this function is just
-looking, not taking. A bare non-copy parameter such as `counter: Counter` has
-the same shared-borrow behavior; the explicit spelling is useful when you want
-that intent to stand out. After the call returns, the borrow ends and the
-caller still owns the value.
+The bare `counter: Counter` declaration is the shared contract: this function
+is looking, not taking. After the call returns, the borrow ends and the caller
+still owns the value.
 
 You can have multiple shared borrows active at the same time because none of them can modify the value:
 
@@ -193,7 +192,7 @@ c2 = Counter(value=20)
 print(sum_values(c1, c2))   # 30 -- both still valid
 ```
 
-### Mutable borrows with `mut `
+### Mutable borrows with `mut T`
 
 A mutable borrow lets a function modify the value in place:
 
@@ -219,7 +218,8 @@ error: argument for parameter `counter` in function `bump` must be a mutable pla
 
 ### The exclusivity rule
 
-You cannot have a `mut ` and any other borrow of the same value at the same time. This prevents data races and aliasing bugs:
+You cannot have mutable access and another overlapping access to the same
+value at the same time. This prevents data races and aliasing bugs:
 
 ```python
 def bad(a: mut Counter, b: Counter):
@@ -247,9 +247,8 @@ class Account:
         return f"Balance: {self.balance}"
 ```
 
-Bare `self` is a shared borrow. The method can read fields but cannot modify
-them, and the caller retains ownership. `self` is accepted as an
-explicit synonym when spelling out the shared contract helps readability.
+Bare `self` is shared access. The method can read fields but cannot modify
+them, and the caller retains ownership.
 
 ```python
 account = Account(balance=100.0)
@@ -327,13 +326,12 @@ c = Counter.zero()
 | Receiver | When to use | Example |
 |----------|-------------|---------|
 | `self` | Read-only shared access, the default | getters, display, serialization |
-| `self` | Explicit synonym for shared `self` | emphasizing a shared contract |
 | `mut self` | Modify the instance in place | setters, increment, append |
 | `own self` | Consume the instance to extract data | `into_*` conversions, one-shot use |
 | no receiver | Factory methods, utilities that don't need an instance | `Counter.zero()` |
 
 If you are not sure, start with bare `self`. Add `own` only when the method
-must consume the instance, or `mut ` when it must mutate in place.
+must consume the instance, or `mut` when it must mutate in place.
 
 ## Field Access And Move Semantics
 
@@ -455,9 +453,9 @@ for x in own xs:
 # another use of xs would now be an error
 ```
 
-### Explicit shared iteration with ``
+### Bare shared iteration
 
-Bare iteration is already shared; `for ... in ` makes that contract explicit:
+Bare iteration is the shared form:
 
 ```python
 mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
@@ -469,11 +467,9 @@ for name in names:   # can iterate again
     print(name)
 ```
 
-The `` keyword tells Aurora to iterate over borrowed references. The collection stays owned by the caller.
-
 For copy element types, the loop variable receives a copy of each element. For non-copy element types, the loop variable is a temporary borrow.
 
-### Mutable borrow iteration with `mut `
+### Mutable borrow iteration with `mut`
 
 To modify elements during iteration, use `for ... in mut`:
 
@@ -501,14 +497,15 @@ This requires the collection binding to be `mut`.
 |------|--------|----------|
 | `for x in collection` | Shared borrow, collection stays valid | Ordinary read-only iteration |
 | `for x in own collection` | Consumes the collection | You are done with the collection after the loop |
-| `for x in collection` | Explicit shared borrow | You want the borrow visible in source |
 | `for x in mut collection` | Mutable borrow, can modify elements | You want to update elements in place |
 
-**Default recommendation:** Use bare `for x in collection` for reads, `own` to consume, and `mut ` to update.
+**Default recommendation:** Use bare `for x in collection` for reads, `own` to
+consume, and `mut` to update.
 
 ## Borrowing In Match
 
-Pattern matching follows the same ownership rules. By default, `match` takes ownership of the value:
+Pattern matching follows the same ownership rules. Bare `match` shares the
+value, so the caller keeps ownership:
 
 ```python
 result: Result[String, String] = Result.Ok("success")
@@ -517,19 +514,19 @@ match result:
         print(msg)
     case Err(e):
         print(e)
-print(result)          # COMPILE ERROR if result is non-copy: already moved
+print(result)          # still valid
 ```
 
-To match without consuming the value, use `match `:
+To consume the value and receive owned payloads, use `match own`:
 
 ```python
 result: Result[String, String] = Result.Ok("success")
-match result:
+match own result:
     case Ok(msg):
-        print(msg)     # msg is a borrowed reference
+        print(msg)     # msg is owned
     case Err(e):
         print(e)
-# result is still valid here
+# result is moved
 ```
 
 To match and mutate the payload, use `match mut`:
@@ -598,7 +595,7 @@ def archive(doc: Document):
     print(doc.title)
 ```
 
-Writing `doc: Document` is an equivalent explicit shared spelling.
+The bare `doc: Document` declaration is the shared spelling.
 
 **Fix 2 -- keep the owned parameter and clone before passing:**
 ```python
@@ -672,7 +669,7 @@ Here is how to translate your Python intuition:
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
 | `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
-| `def f(x): ...` reads x | `def f(x: T): ...` for non-copy `T`, or explicitly `def f(x: T): ...` |
+| `def f(x): ...` reads x | `def f(x: T): ...` for shared access |
 | `def f(x): x.mutate()` | `def f(x: mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
 | `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
@@ -686,10 +683,12 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, `random.Rng`, classes) transfer ownership.
 3. Use `.clone()` when you need an explicit independent copy and the move type
    supports clone; `random.Rng` and values containing it do not.
-4. Bare non-copy parameters are shared borrows. Use `T` to make that
-   read-only contract explicit, and `mut T` to lend mutable access.
-5. `mut ` is exclusive -- no other borrows of the same value can exist at the same time.
-6. Method receivers follow the same rules: `self` (or `self`) reads, `mut self` modifies, and `own self` consumes.
+4. Bare parameters grant logical shared access for every type. Use `mut T` to
+   lend mutable access and `own T` to transfer ownership.
+5. `mut` access is exclusive -- no other overlapping access can exist at the
+   same time.
+6. Method receivers follow the same rules: `self` reads, `mut self` modifies,
+   and `own self` consumes.
 7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in mut collection` to modify elements.
 8. Use `match value` to pattern-match without consuming.
 9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.

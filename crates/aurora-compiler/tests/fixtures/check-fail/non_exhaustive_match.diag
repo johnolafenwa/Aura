@@ -1,5 +1,5 @@
 error[AU2999]: non-exhaustive match over `TrafficLight`: missing `Green`
  --> crates/aurora-compiler/tests/fixtures/check-fail/non_exhaustive_match.au:7:5
   |
-7 |     match light:
+7 |     match own light:
   |     ^

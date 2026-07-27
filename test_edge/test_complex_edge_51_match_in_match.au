@@ -11,13 +11,13 @@ enum Color:
 def classify(shape: Shape, color: Color) -> String:
     match own shape:
         case Shape.Circle(r):
-            match color:
+            match own color:
                 case Color.Red:
                     return f"red circle r={r}"
                 case Color.Blue:
                     return f"blue circle r={r}"
         case Shape.Square(s):
-            match color:
+            match own color:
                 case Color.Red:
                     return f"red square s={s}"
                 case Color.Blue:

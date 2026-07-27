@@ -27,6 +27,7 @@ const {
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
+  setCompilerSchemaMismatchHandler,
   setWorkspaceRoots
 } = require("./compiler_bridge");
 const { createDocumentStateCache } = require("./document_state");
@@ -50,6 +51,10 @@ const documentStateCache = createDocumentStateCache(
   }
 );
 const validationTimers = new Map();
+
+setCompilerSchemaMismatchHandler(() => {
+  documentStateCache.invalidateAll();
+});
 
 connection.onInitialize((params) => {
   setWorkspaceRoots(extractWorkspaceRoots(params));

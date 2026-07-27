@@ -185,7 +185,7 @@ tuple such as `(String, int64)`.
 For collection iteration, tuple leaves inherit the ownership provenance of the
 yielded element:
 
-- bare or explicit shared iteration retains the collection and gives shared
+- bare shared iteration retains the collection and gives shared
   leaf provenance for non-copy tuple elements
 - `own` iteration consumes the collection and gives owned leaves
 - bare Queue iteration receives an owned tuple item and gives owned leaves
@@ -194,8 +194,8 @@ Mutable-borrow iteration with a tuple target is rejected. Aurora does not
 reconstruct and write a recursively unpacked tuple back into a collection
 element.
 
-By-value matching consumes a non-copy tuple scrutinee and gives owned leaf
-bindings. `match ` retains the tuple and gives shared leaf provenance.
+`match own` consumes a non-copy tuple scrutinee and gives owned leaf bindings.
+Bare `match` retains the tuple and gives shared leaf provenance.
 `match mut` with a tuple pattern is rejected; mutable tuple-pattern
 writeback is outside this surface.
 
@@ -208,9 +208,9 @@ tuple operations, including non-constant or invalid indexing and mutable tuple
 writeback forms, are rejected at check time with a diagnostic that identifies
 the restriction and the supported alternative.
 
-Using a non-copy tuple after whole-source unpacking or by-value matching is
+Using a non-copy tuple after whole-source unpacking or `match own` is
 `AU3001` and points to the move. Attempting to move an element through shared
-unpacking or `match ` is `AU3002`.
+unpacking or bare `match` is `AU3002`.
 
 ## Backend Support
 

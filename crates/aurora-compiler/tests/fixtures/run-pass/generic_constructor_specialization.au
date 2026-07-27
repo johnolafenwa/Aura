@@ -7,7 +7,7 @@ def main() -> int32:
     sent = jobs.put(box.value)
     jobs.close()
 
-    match sent:
+    match own sent:
         case Ok(_):
             pass
         case Err(_):

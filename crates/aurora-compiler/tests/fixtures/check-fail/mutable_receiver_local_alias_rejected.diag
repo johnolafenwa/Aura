@@ -1,0 +1,7 @@
+error[AU3002]: cannot create local alias `alias` from mutable access to `self`; local mutable aliases do not write through to their source
+ --> crates/aurora-compiler/tests/fixtures/check-fail/mutable_receiver_local_alias_rejected.au:5:17
+  |
+5 |         alias = self
+  |                 ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/mutable_receiver_local_alias_rejected.au:4:5: mutable access to `self` begins here
+  = help: mutate `self` directly, or pass it to another `mut` parameter

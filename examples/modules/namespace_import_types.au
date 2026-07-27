@@ -7,7 +7,7 @@ def main() -> int32:
     status = pkg.types.Status.Ready
     print(status == pkg.types.Status.Ready)
 
-    match status:
+    match own status:
         case pkg.types.Status.Ready:
             print(1)
         case pkg.types.Status.Busy:

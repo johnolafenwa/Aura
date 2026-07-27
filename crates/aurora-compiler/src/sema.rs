@@ -3557,8 +3557,11 @@ struct LocalBinding {
     passing: ReceiverKind,
     borrow_origin: Option<String>,
     borrowed_at: Option<crate::diag::Span>,
-    match_borrow_mut_place: Option<PlacePath>,
-    stale_match_borrow_mut_place: Option<PlacePath>,
+    /// The source place selected by a shared or mutable match. Pattern
+    /// bindings and their scoped shared aliases retain this provenance so a
+    /// later overlapping source change makes a subsequent use stale.
+    match_borrow_place: Option<PlacePath>,
+    stale_match_borrow_place: Option<PlacePath>,
     /// Set on a payload bound by a bare (shared) `match` over a named place.
     /// ADR-0022 Q2 requires moving such a payload out to name `match own` as
     /// the replacement instead of the generic borrowed-move wording.
@@ -3567,6 +3570,10 @@ struct LocalBinding {
     moved_at: Option<crate::diag::Span>,
     moved_fields: BTreeMap<ProjectionPath, crate::diag::Span>,
     frozen_places: BTreeMap<PlacePath, crate::diag::Span>,
+    /// Whole-arm logical shared access for a bare match on a copy scrutinee.
+    /// Copy payload bindings are values, but ADR-0022 still keeps the selected
+    /// scrutinee shared until its arm completes.
+    shared_match_places: BTreeMap<PlacePath, crate::diag::Span>,
 }
 
 #[derive(Clone)]
@@ -3579,6 +3586,8 @@ struct ExprResultEntry {
 struct BorrowSourceInfo {
     origin: String,
     passing: ReceiverKind,
+    match_borrow_place: Option<PlacePath>,
+    shared_match_scrutinee: Option<String>,
 }
 
 #[derive(Clone)]
@@ -3687,7 +3696,7 @@ struct FunctionChecker<'a> {
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
-    active_match_borrow_mut_places: Rc<RefCell<Vec<PlacePath>>>,
+    active_match_borrow_places: Rc<RefCell<Vec<PlacePath>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
 }
@@ -3776,6 +3785,36 @@ impl<'a> FunctionChecker<'a> {
             ),
             RngCloneSafety::Unknown => format!(
                 "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership"
+            ),
+        }
+    }
+
+    /// Builds the `AU3006` message for a rejected non-copy indexed compound
+    /// assignment without recommending a clone path that the selected type
+    /// cannot use.
+    fn indexed_compound_assignment_guidance(
+        &self,
+        container: &str,
+        selector: &str,
+        ty: &Type,
+    ) -> String {
+        let writeback = if container == "map" {
+            "set(key, value)"
+        } else {
+            "insert(index, value)"
+        };
+        match self.rng_clone_safety(ty) {
+            RngCloneSafety::Safe if container == "map" => format!(
+                "cannot implicitly copy `{ty}` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`"
+            ),
+            RngCloneSafety::Safe => format!(
+                "cannot implicitly copy `{ty}` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`"
+            ),
+            RngCloneSafety::ContainsRng => format!(
+                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because `{ty}` contains non-cloneable `random.Rng` state, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+            ),
+            RngCloneSafety::Unknown => format!(
+                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
             ),
         }
     }
@@ -4002,6 +4041,153 @@ impl<'a> FunctionChecker<'a> {
         )
     }
 
+    fn apply_builtin_function_argument_passing(
+        &self,
+        builtin: BuiltinFunction,
+        index: usize,
+        argument: &Argument,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let passing = builtin
+            .argument_passing(index)
+            .expect("type-checked builtin argument must have passing metadata");
+        self.apply_operator_operand_passing(
+            &argument.value,
+            passing,
+            &format!("builtin function `{}` argument", builtin.name()),
+            locals,
+        )
+    }
+
+    fn reject_builtin_argument_sibling_overlap(
+        &self,
+        args: &[Argument],
+        ordered_args: &[Option<&Argument>],
+        locals: &HashMap<String, LocalBinding>,
+        passing_at: impl Fn(usize) -> Option<ReceiverKind>,
+        name_at: impl Fn(usize) -> Option<&'static str>,
+    ) -> Result<()> {
+        let mut retained = Vec::new();
+        for source_argument in args {
+            let Some(index) = ordered_args.iter().position(|candidate| {
+                candidate.is_some_and(|candidate| std::ptr::eq(candidate, source_argument))
+            }) else {
+                continue;
+            };
+            let Some(passing) = passing_at(index) else {
+                continue;
+            };
+            let label = name_at(index).unwrap_or("argument");
+
+            let mut current_accesses = Vec::new();
+            self.collect_expr_borrowed_places(
+                &source_argument.value,
+                locals,
+                &mut current_accesses,
+            )?;
+            self.collect_expr_consumed_places(
+                &source_argument.value,
+                locals,
+                &mut current_accesses,
+            )?;
+            self.collect_expr_place_reads(
+                &source_argument.value,
+                locals,
+                "argument read",
+                &mut current_accesses,
+            );
+
+            let direct_access = if let Some(path) = self.borrow_call_place(&source_argument.value) {
+                let retained_by_call = passing != ReceiverKind::Value
+                    || self
+                        .place_path_type(&path, locals, source_argument.span)?
+                        .is_some_and(|ty| !self.is_copy_type(&ty));
+                retained_by_call.then_some(BorrowedCallPlace {
+                    path,
+                    passing,
+                    param_name: format!("parameter `{label}`"),
+                    origin_span: source_argument.span,
+                })
+            } else {
+                None
+            };
+            if let Some(direct) = &direct_access {
+                current_accesses.retain(|access| {
+                    access.path != direct.path || access.origin_span != direct.origin_span
+                });
+                current_accesses.push(direct.clone());
+            }
+
+            self.reject_retained_access_overlap(&retained, &current_accesses)?;
+            if let Some(direct) = direct_access {
+                retained.push(direct);
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_builtin_function_argument_sibling_overlap(
+        &self,
+        builtin: BuiltinFunction,
+        args: &[Argument],
+        ordered_args: &[Option<&Argument>],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        self.reject_builtin_argument_sibling_overlap(
+            args,
+            ordered_args,
+            locals,
+            |index| builtin.argument_passing(index),
+            |index| builtin.argument_name(index),
+        )
+    }
+
+    fn reject_builtin_member_argument_sibling_overlap(
+        &self,
+        member: BuiltinMember,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        if args.len() < 2 {
+            return Ok(());
+        }
+        // TaskGroup start calls bind forwarded arguments against the selected
+        // target function below. The builtin's variadic shape cannot bind
+        // those target-specific names, and its only fixed input is a callable
+        // rather than a mutable value place.
+        if matches!(
+            member,
+            BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartSoon
+        ) {
+            return Ok(());
+        }
+        let ordered_args = member.bind_args(args, span)?;
+        self.reject_builtin_argument_sibling_overlap(
+            args,
+            &ordered_args,
+            locals,
+            |index| member.argument_passing(index),
+            |index| member.argument_name(index),
+        )
+    }
+
+    fn reject_builtin_associated_argument_sibling_overlap(
+        &self,
+        associated: BuiltinAssociatedFunction,
+        args: &[Argument],
+        ordered_args: &[Option<&Argument>],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        self.reject_builtin_argument_sibling_overlap(
+            args,
+            ordered_args,
+            locals,
+            |index| associated.argument_passing(index),
+            |index| associated.argument_name(index),
+        )
+    }
+
     fn apply_operator_operand_passing(
         &self,
         expr: &Expr,
@@ -4010,17 +4196,19 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
         match passing {
-            ReceiverKind::Value => self.consume_value_expr(expr, locals),
+            ReceiverKind::Value => {
+                if let Some(place) = self.borrow_call_place(expr) {
+                    self.ensure_place_not_shared_by_match_for_move(&place, expr.span, locals)?;
+                }
+                self.consume_value_expr(expr, locals)
+            }
             ReceiverKind::Borrow => Ok(()),
             ReceiverKind::BorrowMut => {
                 if !self.is_mutable_place(expr, locals)? {
                     return Err(Diagnostic::coded_at(
                         "AU3002",
                         expr.span,
-                        format!(
-                            "{} is declared `borrow mut` and requires a mutable place",
-                            label
-                        ),
+                        format!("{} is declared `mut` and requires a mutable place", label),
                     ));
                 }
                 if let Some(place) = self.borrow_call_place(expr) {
@@ -4060,13 +4248,14 @@ impl<'a> FunctionChecker<'a> {
                     passing: ReceiverKind::Value,
                     borrow_origin: None,
                     borrowed_at: None,
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -4103,7 +4292,7 @@ impl<'a> FunctionChecker<'a> {
             type_params: BTreeMap::new(),
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
-            active_match_borrow_mut_places: Rc::new(RefCell::new(Vec::new())),
+            active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
         }
@@ -4127,7 +4316,7 @@ impl<'a> FunctionChecker<'a> {
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
-            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
         }
@@ -4155,7 +4344,7 @@ impl<'a> FunctionChecker<'a> {
             type_params,
             type_param_bounds,
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
-            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
         }
@@ -4179,7 +4368,7 @@ impl<'a> FunctionChecker<'a> {
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
-            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
         }
@@ -4203,7 +4392,7 @@ impl<'a> FunctionChecker<'a> {
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
-            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
+            active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: sink,
             expr_result_entries: self.expr_result_entries.clone(),
         }
@@ -4365,13 +4554,16 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        self.ensure_place_not_frozen_for_move(&PlacePath::root(name.to_string()), span, locals)?;
         let binding = locals
-            .get_mut(name)
+            .get(name)
             .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
         if self.is_copy_type(&binding.ty) {
             return Ok(());
         }
+        self.ensure_place_not_frozen_for_move(&PlacePath::root(name.to_string()), span, locals)?;
+        let binding = locals
+            .get_mut(name)
+            .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
         let clone_supported = self.type_supports_builtin_clone(&binding.ty);
         if binding.passing != ReceiverKind::Value {
             if let Some(ty) = self.implicit_borrowed_params.get(name) {
@@ -4480,6 +4672,7 @@ impl<'a> FunctionChecker<'a> {
         }
         binding.moved = true;
         binding.moved_at = Some(span);
+        self.invalidate_match_borrow_bindings_for_place(&PlacePath::root(name.to_string()), locals);
         Ok(())
     }
 
@@ -4631,8 +4824,11 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
-                binding.moved_fields.insert(path.projections, expr.span);
+                binding
+                    .moved_fields
+                    .insert(path.projections.clone(), expr.span);
             }
+            self.invalidate_match_borrow_bindings_for_place(&path, locals);
         }
         Ok(())
     }
@@ -4714,10 +4910,10 @@ impl<'a> FunctionChecker<'a> {
                             .map(|(path, span)| (path.clone(), *span))
                     })
                     .collect();
-                binding.stale_match_borrow_mut_place = branch_states.iter().find_map(|state| {
+                binding.stale_match_borrow_place = branch_states.iter().find_map(|state| {
                     state
                         .get(&name)
-                        .and_then(|binding| binding.stale_match_borrow_mut_place.clone())
+                        .and_then(|binding| binding.stale_match_borrow_place.clone())
                 });
             }
         }
@@ -4741,7 +4937,19 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         binding: &LocalBinding,
     ) -> Result<()> {
-        if let Some(place) = &binding.stale_match_borrow_mut_place {
+        if let Some(place) = &binding.stale_match_borrow_place {
+            if binding.shared_match_scrutinee.is_some() {
+                return Err(Diagnostic::coded_at(
+                    "AU3002",
+                    span,
+                    format!(
+                        "cannot use shared match binding `{name}` after changing match scrutinee `{place}`"
+                    ),
+                )
+                .with_help(format!(
+                    "finish using `{name}` before changing `{place}`; use `match mut {place}` to update its payload or `match own {place}` to consume it"
+                )));
+            }
             return Err(Diagnostic::at(
                 span,
                 format!(
@@ -4753,30 +4961,30 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn invalidate_match_borrow_mut_bindings_for_place(
+    fn invalidate_match_borrow_bindings_for_place(
         &self,
         place: &PlacePath,
         locals: &mut HashMap<String, LocalBinding>,
     ) {
         for binding in locals.values_mut() {
             if binding
-                .match_borrow_mut_place
+                .match_borrow_place
                 .as_ref()
                 .is_some_and(|binding_place| binding_place.overlaps(place))
             {
-                binding.stale_match_borrow_mut_place = binding.match_borrow_mut_place.clone();
+                binding.stale_match_borrow_place = binding.match_borrow_place.clone();
             }
         }
     }
 
-    fn invalidate_match_borrow_mut_bindings_for_borrowed_places(
+    fn invalidate_match_borrow_bindings_for_borrowed_places(
         &self,
         places: &[BorrowedCallPlace],
         locals: &mut HashMap<String, LocalBinding>,
     ) {
         for place in places {
             if place.passing == ReceiverKind::BorrowMut {
-                self.invalidate_match_borrow_mut_bindings_for_place(&place.path, locals);
+                self.invalidate_match_borrow_bindings_for_place(&place.path, locals);
             }
         }
     }
@@ -4956,13 +5164,14 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -4982,13 +5191,14 @@ impl<'a> FunctionChecker<'a> {
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5054,13 +5264,14 @@ impl<'a> FunctionChecker<'a> {
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5152,13 +5363,14 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5178,13 +5390,14 @@ impl<'a> FunctionChecker<'a> {
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5305,13 +5518,14 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5331,13 +5545,14 @@ impl<'a> FunctionChecker<'a> {
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
                     shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
         }
@@ -5536,13 +5751,14 @@ impl<'a> FunctionChecker<'a> {
                         passing: leaf_passing,
                         borrow_origin: None,
                         borrowed_at: (leaf_passing != ReceiverKind::Value).then_some(*span),
-                        match_borrow_mut_place: None,
-                        stale_match_borrow_mut_place: None,
+                        match_borrow_place: None,
+                        stale_match_borrow_place: None,
                         shared_match_scrutinee: None,
                         moved: false,
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
+                        shared_match_places: BTreeMap::new(),
                     },
                 );
                 Ok(())
@@ -5790,6 +6006,15 @@ impl<'a> FunctionChecker<'a> {
                         continue;
                     }
                     let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
+                    if matches!(&iterable_ty, Type::Named(name, _) if name == "Range")
+                        && for_stmt.borrow_mode.is_some()
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU3004",
+                            for_stmt.span,
+                            "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`",
+                        ));
+                    }
                     if matches!(&iterable_ty, Type::Named(name, args) if name == "Queue" && args.len() == 1)
                         && for_stmt.borrow_mode.is_some()
                     {
@@ -6025,13 +6250,14 @@ impl<'a> FunctionChecker<'a> {
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrowed_at: None,
-                match_borrow_mut_place: None,
-                stale_match_borrow_mut_place: None,
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
                 shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
             },
         );
         self.check_block(
@@ -6092,10 +6318,7 @@ impl<'a> FunctionChecker<'a> {
                     return Err(Diagnostic::coded_at(
                         "AU3006",
                         assign.span,
-                        format!(
-                            "cannot implicitly copy `{}` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, or `remove(index)` to transfer ownership and assign the result explicitly",
-                            target_ty
-                        ),
+                        self.indexed_compound_assignment_guidance("vector", "index", &target_ty),
                     ));
                 }
                 target_ty
@@ -6111,10 +6334,7 @@ impl<'a> FunctionChecker<'a> {
                     return Err(Diagnostic::coded_at(
                         "AU3006",
                         assign.span,
-                        format!(
-                            "cannot implicitly copy `{}` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership and assign the result explicitly",
-                            value_ty
-                        ),
+                        self.indexed_compound_assignment_guidance("map", "key", value_ty),
                     ));
                 }
                 value_ty.clone()
@@ -6331,7 +6551,7 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(binding) = locals.get_mut(&path.root) {
                     Self::clear_moved_field_path(binding, &path.projections);
                 }
-                self.invalidate_match_borrow_mut_bindings_for_place(&path, locals);
+                self.invalidate_match_borrow_bindings_for_place(&path, locals);
             }
             return Ok(());
         }
@@ -6506,7 +6726,7 @@ impl<'a> FunctionChecker<'a> {
                 existing.moved_at = None;
                 existing.moved_fields.clear();
             }
-            self.invalidate_match_borrow_mut_bindings_for_place(
+            self.invalidate_match_borrow_bindings_for_place(
                 &PlacePath::root(binding_name.clone()),
                 locals,
             );
@@ -6547,16 +6767,47 @@ impl<'a> FunctionChecker<'a> {
                         passing: ReceiverKind::Value,
                         borrow_origin: None,
                         borrowed_at: None,
-                        match_borrow_mut_place: None,
-                        stale_match_borrow_mut_place: None,
+                        match_borrow_place: None,
+                        stale_match_borrow_place: None,
                         shared_match_scrutinee: None,
                         moved: false,
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
+                        shared_match_places: BTreeMap::new(),
                     },
                 );
                 return Ok(());
+            }
+            let rendered_source = {
+                let rendered = self.render_place_expr(&assign.value);
+                if rendered == "<place>" {
+                    borrowed.origin.clone()
+                } else {
+                    rendered
+                }
+            };
+            if borrowed.passing == ReceiverKind::BorrowMut {
+                let mut diagnostic = Diagnostic::coded_at(
+                    "AU3002",
+                    assign.value.span,
+                    format!(
+                        "cannot create local alias `{binding_name}` from mutable access to `{rendered_source}`; local mutable aliases do not write through to their source"
+                    ),
+                )
+                .with_help(format!(
+                    "mutate `{rendered_source}` directly, or pass it to another `mut` parameter"
+                ));
+                if let Some(origin) = borrow_info_locals
+                    .get(&borrowed.origin)
+                    .and_then(|binding| binding.borrowed_at)
+                {
+                    diagnostic = diagnostic.with_secondary(
+                        origin,
+                        format!("mutable access to `{}` begins here", borrowed.origin),
+                    );
+                }
+                return Err(diagnostic);
             }
             if borrowed.passing == ReceiverKind::Borrow && assign.mutable {
                 return Err(Diagnostic::at(
@@ -6574,13 +6825,14 @@ impl<'a> FunctionChecker<'a> {
                     passing: borrowed.passing,
                     borrow_origin: Some(borrowed.origin),
                     borrowed_at: Some(assign.value.span),
-                    match_borrow_mut_place: None,
-                    stale_match_borrow_mut_place: None,
-                    shared_match_scrutinee: None,
+                    match_borrow_place: borrowed.match_borrow_place,
+                    stale_match_borrow_place: None,
+                    shared_match_scrutinee: borrowed.shared_match_scrutinee,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
                 },
             );
             return Ok(());
@@ -6597,13 +6849,14 @@ impl<'a> FunctionChecker<'a> {
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrowed_at: None,
-                match_borrow_mut_place: None,
-                stale_match_borrow_mut_place: None,
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
                 shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
             },
         );
         Ok(())
@@ -6872,7 +7125,7 @@ impl<'a> FunctionChecker<'a> {
             binding.moved = false;
             binding.moved_at = None;
             binding.moved_fields.clear();
-            binding.stale_match_borrow_mut_place = None;
+            binding.stale_match_borrow_place = None;
         }
         let saved_entries = std::mem::take(&mut *self.expr_result_entries.borrow_mut());
         let result = self.type_of_expr_hint(expr, &mut snapshot, expected);
@@ -9285,6 +9538,12 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         let ordered_args = constructor.bind_args(args, span)?;
+                        self.reject_builtin_associated_argument_sibling_overlap(
+                            constructor,
+                            args,
+                            &ordered_args,
+                            locals,
+                        )?;
                         match constructor {
                             BuiltinAssociatedFunction::DurationMilliseconds
                             | BuiltinAssociatedFunction::DurationSeconds
@@ -9351,6 +9610,12 @@ impl<'a> FunctionChecker<'a> {
                     unreachable!("builtin lookup is stable during call checking");
                 };
                 let ordered_args = builtin.bind_args(args, span)?;
+                self.reject_builtin_function_argument_sibling_overlap(
+                    builtin,
+                    args,
+                    &ordered_args,
+                    locals,
+                )?;
                 match builtin {
                     BuiltinFunction::Print => {
                         let value_arg = required_ordered_arg(
@@ -9363,7 +9628,10 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Unit)
                     }
                     BuiltinFunction::Range => {
-                        for argument in ordered_args.into_iter().flatten() {
+                        for (index, argument) in ordered_args.into_iter().enumerate() {
+                            let Some(argument) = argument else {
+                                continue;
+                            };
                             let actual = self.type_of_expr_hint(
                                 &argument.value,
                                 locals,
@@ -9378,6 +9646,9 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
+                            self.apply_builtin_function_argument_passing(
+                                builtin, index, argument, locals,
+                            )?;
                         }
                         Ok(Type::named("Range"))
                     }
@@ -9556,6 +9827,7 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        self.apply_builtin_function_argument_passing(builtin, 0, left_arg, locals)?;
                         let right_arg = required_ordered_arg(
                             &ordered_args,
                             1,
@@ -9578,6 +9850,9 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        self.apply_builtin_function_argument_passing(
+                            builtin, 1, right_arg, locals,
+                        )?;
                         Ok(left_ty)
                     }
                     BuiltinFunction::Sqrt => {
@@ -9972,6 +10247,12 @@ impl<'a> FunctionChecker<'a> {
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 if let Type::Named(receiver_name, _) = &receiver_ty {
                     if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                        self.reject_builtin_member_argument_sibling_overlap(
+                            builtin_member,
+                            args,
+                            locals,
+                            span,
+                        )?;
                         self.reject_builtin_receiver_argument_overlap(
                             builtin_member,
                             object,
@@ -10103,6 +10384,12 @@ impl<'a> FunctionChecker<'a> {
                                                 ),
                                             ));
                                         }
+                                        self.apply_builtin_argument_passing(
+                                            builtin_member,
+                                            index,
+                                            argument,
+                                            locals,
+                                        )?;
                                     }
                                     Ok(Type::named("int64"))
                                 }
@@ -10221,6 +10508,12 @@ impl<'a> FunctionChecker<'a> {
                                         index_arg.span,
                                         locals,
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        index_arg,
+                                        locals,
+                                    )?;
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
                                         1,
@@ -10281,6 +10574,12 @@ impl<'a> FunctionChecker<'a> {
                                     self.check_vec_index_type(
                                         &first_arg.value,
                                         first_arg.span,
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        first_arg,
                                         locals,
                                     )?;
                                     let second_arg = self.bound_argument(
@@ -10360,6 +10659,12 @@ impl<'a> FunctionChecker<'a> {
                                     self.check_vec_index_type(
                                         &index_arg.value,
                                         index_arg.span,
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        index_arg,
                                         locals,
                                     )?;
                                     let value_arg = self.bound_argument(
@@ -11325,6 +11630,12 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "read_bytes",
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
+                                    )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -11691,6 +12002,12 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "read_bytes",
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
+                                    )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -11720,6 +12037,12 @@ impl<'a> FunctionChecker<'a> {
                                         &Type::named("int32"),
                                         locals,
                                         "read_exact",
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
                                     )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
@@ -11910,6 +12233,12 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "recv",
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
+                                    )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -11939,6 +12268,12 @@ impl<'a> FunctionChecker<'a> {
                                         &Type::named("int32"),
                                         locals,
                                         "recv_from",
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
                                     )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
@@ -12057,6 +12392,12 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "respond_text",
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        status_arg,
+                                        locals,
+                                    )?;
                                     let text_arg = self.bound_argument(
                                         &ordered_args,
                                         1,
@@ -12110,6 +12451,12 @@ impl<'a> FunctionChecker<'a> {
                                         &Type::named("int32"),
                                         locals,
                                         "respond_bytes",
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        status_arg,
+                                        locals,
                                     )?;
                                     let bytes_arg = self.bound_argument(
                                         &ordered_args,
@@ -12369,6 +12716,12 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                         "read_exact",
                                     )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
+                                    )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
                                         1,
@@ -12478,6 +12831,12 @@ impl<'a> FunctionChecker<'a> {
                                         &Type::named("int32"),
                                         locals,
                                         "read_exact",
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
                                     )?;
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
@@ -12732,6 +13091,9 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<BlockFlow> {
         let shared_scrutinee =
             self.shared_match_scrutinee_name(&match_stmt.scrutinee, match_stmt.capability);
+        let shared_match_place = (match_stmt.capability == ReceiverKind::Borrow)
+            .then(|| self.shared_match_place(&match_stmt.scrutinee))
+            .flatten();
         let active_match_borrow = if match_stmt.capability == ReceiverKind::BorrowMut {
             self.begin_match_borrow_mut(&match_stmt.scrutinee, match_stmt.span, locals)?
         } else {
@@ -12739,8 +13101,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
-            if match_stmt.capability == ReceiverKind::Value && !self.is_copy_type(&scrutinee_ty) {
-                self.consume_match_scrutinee_expr(&match_stmt.scrutinee, locals)?;
+            if match_stmt.capability == ReceiverKind::Value {
+                if self.is_copy_type(&scrutinee_ty) {
+                    if let Some(place) = self.borrow_call_place(&match_stmt.scrutinee) {
+                        self.ensure_place_not_shared_by_match_for_move(
+                            &place,
+                            match_stmt.scrutinee.span,
+                            locals,
+                        )?;
+                    }
+                } else {
+                    self.consume_match_scrutinee_expr(&match_stmt.scrutinee, locals)?;
+                }
             }
 
             if match_stmt.arms.is_empty() {
@@ -12764,6 +13136,11 @@ impl<'a> FunctionChecker<'a> {
 
                 for (index, arm) in match_stmt.arms.iter().enumerate() {
                     let mut arm_locals = locals.clone();
+                    if self.is_copy_type(&scrutinee_ty) {
+                        if let Some(place) = shared_match_place.as_ref() {
+                            self.retain_shared_match_place(place, match_stmt.span, &mut arm_locals);
+                        }
+                    }
                     match &arm.pattern {
                         Pattern::Wildcard(span) => {
                             if wildcard_span.is_some() {
@@ -12903,7 +13280,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 match_stmt.capability,
-                                active_match_borrow.as_ref(),
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
                                 shared_scrutinee.as_deref(),
                             )?;
                         }
@@ -13005,6 +13382,11 @@ impl<'a> FunctionChecker<'a> {
 
             for (index, arm) in match_stmt.arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
+                if self.is_copy_type(&scrutinee_ty) {
+                    if let Some(place) = shared_match_place.as_ref() {
+                        self.retain_shared_match_place(place, match_stmt.span, &mut arm_locals);
+                    }
+                }
                 match &arm.pattern {
                     Pattern::Wildcard(span) => {
                         if wildcard_span.is_some() {
@@ -13064,7 +13446,7 @@ impl<'a> FunctionChecker<'a> {
                             &scrutinee_ty,
                             &mut arm_locals,
                             match_stmt.capability,
-                            active_match_borrow.as_ref(),
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
                             shared_scrutinee.as_deref(),
                         )?;
                     }
@@ -13168,13 +13550,39 @@ impl<'a> FunctionChecker<'a> {
         .then(|| self.render_place_expr(expr))
     }
 
+    /// Returns a conservative source place for a bare shared match. Field
+    /// projections retain their precision; indexed scrutinees retain the
+    /// collection root because Aurora does not yet model index identity.
+    fn shared_match_place(&self, expr: &Expr) -> Option<PlacePath> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some(PlacePath::root(name.clone())),
+            ExprKind::Group(inner) => self.shared_match_place(inner),
+            ExprKind::Member { object, field } => {
+                Some(self.shared_match_place(object)?.with_field(field.clone()))
+            }
+            ExprKind::Index { object, .. } => self.shared_match_place(object),
+            _ => None,
+        }
+    }
+
+    fn retain_shared_match_place(
+        &self,
+        place: &PlacePath,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        if let Some(binding) = locals.get_mut(&place.root) {
+            binding.shared_match_places.insert(place.clone(), span);
+        }
+    }
+
     fn bind_pattern_locals(
         &self,
         pattern: &Pattern,
         expected_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
         borrow_mode: ReceiverKind,
-        match_borrow_mut_place: Option<&PlacePath>,
+        match_borrow_place: Option<&PlacePath>,
         shared_match_scrutinee: Option<&str>,
     ) -> Result<()> {
         match pattern {
@@ -13208,8 +13616,11 @@ impl<'a> FunctionChecker<'a> {
                         passing,
                         borrow_origin: None,
                         borrowed_at: (borrow_mode != ReceiverKind::Value).then_some(binding.span),
-                        match_borrow_mut_place: match_borrow_mut_place.cloned(),
-                        stale_match_borrow_mut_place: None,
+                        match_borrow_place: (borrow_mode == ReceiverKind::BorrowMut
+                            || passing != ReceiverKind::Value)
+                            .then(|| match_borrow_place.cloned())
+                            .flatten(),
+                        stale_match_borrow_place: None,
                         shared_match_scrutinee: (passing == ReceiverKind::Borrow)
                             .then(|| shared_match_scrutinee.map(str::to_string))
                             .flatten(),
@@ -13217,6 +13628,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
+                        shared_match_places: BTreeMap::new(),
                     },
                 );
                 Ok(())
@@ -13254,7 +13666,7 @@ impl<'a> FunctionChecker<'a> {
                         element_ty,
                         locals,
                         borrow_mode,
-                        match_borrow_mut_place,
+                        match_borrow_place,
                         shared_match_scrutinee,
                     )?;
                 }
@@ -13339,7 +13751,7 @@ impl<'a> FunctionChecker<'a> {
                         payload_ty,
                         locals,
                         borrow_mode,
-                        match_borrow_mut_place,
+                        match_borrow_place,
                         shared_match_scrutinee,
                     )?;
                 }
@@ -13385,6 +13797,9 @@ impl<'a> FunctionChecker<'a> {
             span,
         } = parts;
         let shared_scrutinee = self.shared_match_scrutinee_name(scrutinee, borrow_mode);
+        let shared_match_place = (borrow_mode == ReceiverKind::Borrow)
+            .then(|| self.shared_match_place(scrutinee))
+            .flatten();
         let active_match_borrow = if borrow_mode == ReceiverKind::BorrowMut {
             self.begin_match_borrow_mut(scrutinee, span, locals)?
         } else {
@@ -13392,8 +13807,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
-            if borrow_mode == ReceiverKind::Value && !self.is_copy_type(&scrutinee_ty) {
-                self.consume_match_scrutinee_expr(scrutinee, locals)?;
+            if borrow_mode == ReceiverKind::Value {
+                if self.is_copy_type(&scrutinee_ty) {
+                    if let Some(place) = self.borrow_call_place(scrutinee) {
+                        self.ensure_place_not_shared_by_match_for_move(
+                            &place,
+                            scrutinee.span,
+                            locals,
+                        )?;
+                    }
+                } else {
+                    self.consume_match_scrutinee_expr(scrutinee, locals)?;
+                }
             }
             if arms.is_empty() {
                 return Err(Diagnostic::at(
@@ -13417,6 +13842,11 @@ impl<'a> FunctionChecker<'a> {
 
                 for (index, arm) in arms.iter().enumerate() {
                     let mut arm_locals = locals.clone();
+                    if self.is_copy_type(&scrutinee_ty) {
+                        if let Some(place) = shared_match_place.as_ref() {
+                            self.retain_shared_match_place(place, span, &mut arm_locals);
+                        }
+                    }
                     match &arm.pattern {
                         Pattern::Wildcard(wildcard_span) => {
                             if wildcard_seen {
@@ -13546,7 +13976,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 borrow_mode,
-                                active_match_borrow.as_ref(),
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
                                 shared_scrutinee.as_deref(),
                             )?;
                         }
@@ -13644,6 +14074,11 @@ impl<'a> FunctionChecker<'a> {
 
             for (index, arm) in arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
+                if self.is_copy_type(&scrutinee_ty) {
+                    if let Some(place) = shared_match_place.as_ref() {
+                        self.retain_shared_match_place(place, span, &mut arm_locals);
+                    }
+                }
                 match &arm.pattern {
                     Pattern::Wildcard(wildcard_span) => {
                         if wildcard_seen {
@@ -13697,7 +14132,7 @@ impl<'a> FunctionChecker<'a> {
                             &scrutinee_ty,
                             &mut arm_locals,
                             borrow_mode,
-                            active_match_borrow.as_ref(),
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
                             shared_scrutinee.as_deref(),
                         )?;
                     }
@@ -14129,6 +14564,8 @@ impl<'a> FunctionChecker<'a> {
                         .clone()
                         .unwrap_or_else(|| name.clone()),
                     passing: binding.passing,
+                    match_borrow_place: binding.match_borrow_place.clone(),
+                    shared_match_scrutinee: binding.shared_match_scrutinee.clone(),
                 })
             })),
             ExprKind::Group(inner)
@@ -15007,6 +15444,9 @@ impl<'a> FunctionChecker<'a> {
         }
 
         if receiver_kind == ReceiverKind::Value {
+            if let Some(place) = self.borrow_call_place(object) {
+                self.ensure_place_not_shared_by_match_for_move(&place, object.span, locals)?;
+            }
             self.consume_value_expr(object, locals)?;
             return Ok(Vec::new());
         }
@@ -15201,12 +15641,38 @@ impl<'a> FunctionChecker<'a> {
             .map(|(frozen, origin)| (frozen.clone(), *origin))
     }
 
+    fn find_shared_match_place_conflict(
+        &self,
+        place: &PlacePath,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<(PlacePath, crate::diag::Span)> {
+        let binding = locals.get(&place.root)?;
+        binding
+            .shared_match_places
+            .iter()
+            .find(|(shared, _)| shared.overlaps(place))
+            .map(|(shared, origin)| (shared.clone(), *origin))
+    }
+
     fn ensure_place_not_frozen(
         &self,
         place: &PlacePath,
         span: crate::diag::Span,
         locals: &HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        if let Some((shared, origin)) = self.find_shared_match_place_conflict(place, locals) {
+            return Err(Diagnostic::coded_at(
+                "AU3002",
+                span,
+                format!(
+                    "cannot mutate `{place}` while `{shared}` remains shared by a bare match"
+                ),
+            )
+            .with_secondary(origin, format!("bare `match {shared}` starts here"))
+            .with_help(format!(
+                "finish the selected match arm before mutating `{shared}`, or use `match mut {shared}` when the arm must update it"
+            )));
+        }
         if let Some((frozen, origin)) = self.find_frozen_place_conflict(place, locals) {
             return Err(
                 Diagnostic::at(
@@ -15235,6 +15701,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.ensure_place_not_shared_by_match_for_move(place, span, locals)?;
         if let Some((frozen, origin)) = self.find_frozen_place_conflict(place, locals) {
             return Err(
                 Diagnostic::at(
@@ -15253,6 +15720,28 @@ impl<'a> FunctionChecker<'a> {
                     place.root
                 )),
             );
+        }
+        Ok(())
+    }
+
+    fn ensure_place_not_shared_by_match_for_move(
+        &self,
+        place: &PlacePath,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some((shared, origin)) = self.find_shared_match_place_conflict(place, locals) {
+            return Err(Diagnostic::coded_at(
+                "AU3002",
+                span,
+                format!(
+                    "cannot consume `{place}` while `{shared}` remains shared by a bare match"
+                ),
+            )
+            .with_secondary(origin, format!("bare `match {shared}` starts here"))
+            .with_help(format!(
+                "finish the selected match arm before consuming `{shared}`, or use `match own {shared}` when the match should consume it"
+            )));
         }
         Ok(())
     }
@@ -15279,21 +15768,22 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         if let Some(active) = self
-            .active_match_borrow_mut_places
+            .active_match_borrow_places
             .borrow()
             .iter()
             .find(|active| active.overlaps(&place))
             .cloned()
         {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 span,
                 format!(
-                    "cannot start `match borrow mut` on `{}` while `{}` is already mutably borrowed by an enclosing match",
+                    "cannot start `match mut` on `{}` while an enclosing match already has mutable access to `{}`",
                     place, active
                 ),
             ));
         }
-        self.active_match_borrow_mut_places
+        self.active_match_borrow_places
             .borrow_mut()
             .push(place.clone());
         Ok(Some(place))
@@ -15303,7 +15793,7 @@ impl<'a> FunctionChecker<'a> {
         if active_place.is_none() {
             return;
         }
-        self.active_match_borrow_mut_places.borrow_mut().pop();
+        self.active_match_borrow_places.borrow_mut().pop();
     }
 
     fn render_variant_pattern_shape(&self, variant_name: &str, payload_tys: &[Type]) -> String {
@@ -16054,6 +16544,7 @@ impl<'a> FunctionChecker<'a> {
                 let binding = locals
                     .get(name)
                     .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
+                self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                 if binding.moved {
                     return Err(self.moved_value_diagnostic(name, expr.span, binding));
                 }
@@ -17006,7 +17497,15 @@ impl<'a> FunctionChecker<'a> {
             if let Some(argument) = argument {
                 match param_passing {
                     ReceiverKind::Value => {
-                        if !self.is_copy_type(&expected) {
+                        if self.is_copy_type(&expected) {
+                            if let Some(place) = self.borrow_call_place(&argument.value) {
+                                self.ensure_place_not_shared_by_match_for_move(
+                                    &place,
+                                    argument.span,
+                                    locals,
+                                )?;
+                            }
+                        } else {
                             if let Some(place) = self.borrow_call_place(&argument.value) {
                                 self.reject_overlapping_borrow(
                                     &borrowed_places,
@@ -17092,7 +17591,7 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
-        self.invalidate_match_borrow_mut_bindings_for_borrowed_places(&borrowed_places, locals);
+        self.invalidate_match_borrow_bindings_for_borrowed_places(&borrowed_places, locals);
 
         Ok(resolved_return_type)
     }
@@ -17415,10 +17914,11 @@ impl<'a> FunctionChecker<'a> {
             .zip(param_passings)
             .find_map(|(param, passing)| (*passing == ReceiverKind::BorrowMut).then_some(param))
         {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 span,
                 format!(
-                    "task starting does not support `borrow mut` parameter `{}` on function `{}`; child tasks cannot write back through the starting call frame",
+                    "task starting does not support mutable parameter `{}` on function `{}`; child tasks cannot write back through the starting call frame",
                     param.name, function_name
                 ),
             ));

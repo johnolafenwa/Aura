@@ -79,7 +79,7 @@ Aurora's parser covers a large surface:
 - `if`, `match`, `for`, `while`, `with`
 - expression-form `match`, including binding, argument, and nested block positions
 - calls, named arguments, member access, indexing, specialization, casts
-- default, `own`, ``, and `mut ` parameters, plus borrowed returns
+- bare, `own`, and `mut` parameters plus owned return annotations
 - patterns for `match`
 - f-string interpolation parsing
 

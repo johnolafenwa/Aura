@@ -22,7 +22,7 @@ def main() -> int32:
             values[1]
     }
     print(
-        match lookup["sum"]:
+        match own lookup["sum"]:
             case 3: "ok"
             case _: "bad"
     )

@@ -4,13 +4,13 @@ def main() -> int32:
     send_two = jobs.put(2)
     jobs.close()
 
-    match send_one:
+    match own send_one:
         case Ok(_):
             pass
         case Err(_):
             print("send failed")
 
-    match send_two:
+    match own send_two:
         case Ok(_):
             pass
         case Err(_):

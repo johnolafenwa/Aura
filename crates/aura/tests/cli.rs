@@ -578,12 +578,14 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
     let input = [
         serde_json::json!({
             "id": 1,
+            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "method": "analyze",
             "path": "/virtual/main.au",
             "source": "def main() -> int32:\n    return 0\n"
         }),
         serde_json::json!({
             "id": 2,
+            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "method": "complete",
             "path": "/virtual/main.au",
             "source": "def main() -> int32:\n    value: String = \"hi\"\n    value.\n    return 0\n",
@@ -618,8 +620,16 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
         .collect::<Vec<_>>();
     assert_eq!(responses.len(), 2);
     assert_eq!(responses[0]["id"], 1);
+    assert_eq!(
+        responses[0]["semantic_interface_version"],
+        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+    );
     assert!(responses[0]["result"]["diagnostics"].is_array());
     assert_eq!(responses[1]["id"], 2);
+    assert_eq!(
+        responses[1]["semantic_interface_version"],
+        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+    );
     assert!(responses[1]["result"]
         .as_array()
         .expect("completion result should be an array")
@@ -718,6 +728,67 @@ fn new_fmt_and_test_commands_cover_the_project_workflow() {
     assert!(
         !recreate.status.success(),
         "aura new must not overwrite a project"
+    );
+}
+
+#[test]
+fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
+    let temp = TempDir::new("aurora-capability-format");
+    let source_path = temp.path().join("capabilities.au");
+    fs::write(
+        &source_path,
+        concat!(
+            "class Box:\r\n",
+            "    value: String   \r\n",
+            "    def read(self) -> String:\r\n",
+            "        return self.value.clone()\r\n",
+            "    def replace(mut self, value: own String):\r\n",
+            "        self.value = value\r\n",
+            "\r\n",
+            "def inspect(value: String):\r\n",
+            "    print(value)\r\n",
+            "\r\n",
+            "def main():\r\n",
+            "    mut boxes = [Box(value=\"one\")]\r\n",
+            "    for box in mut boxes:\r\n",
+            "        box.replace(\"changed\")\r\n",
+            "    match own boxes:\r\n",
+            "        case _:\r\n",
+            "            pass\t\r\n",
+        ),
+    )
+    .expect("capability source should write");
+
+    let first = Command::new(aura_bin())
+        .args(["fmt"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to format ADR-0022 capability syntax");
+    assert!(
+        first.status.success(),
+        "capability syntax should format successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let once = fs::read_to_string(&source_path).expect("formatted source should read");
+    assert!(once.contains("def replace(mut self, value: own String):"));
+    assert!(once.contains("for box in mut boxes:"));
+    assert!(once.contains("match own boxes:"));
+    assert!(!once.contains('\r'));
+    assert!(!once.lines().any(|line| line.ends_with([' ', '\t'])));
+
+    let check = Command::new(aura_bin())
+        .args(["fmt", "--check"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to check formatted ADR-0022 capability syntax");
+    assert!(
+        check.status.success(),
+        "a second formatter pass must be idempotent, stderr was:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&source_path).expect("idempotent source should read"),
+        once
     );
 }
 
@@ -7709,6 +7780,49 @@ fn check_and_direct_backend_reject_queue_iteration_modifiers() {
         assert!(
             String::from_utf8_lossy(&direct.stderr).contains(expected),
             "unexpected forced-direct Queue `{name}` diagnostic:\n{}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+    }
+}
+
+#[test]
+fn check_and_direct_backend_reject_range_iteration_modifiers() {
+    let expected = "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+
+    for (name, modifier) in [("own", "own "), ("mut", "mut ")] {
+        let source = format!(
+            "def main() -> int32:\n    for item in {modifier}range(0, 3):\n        print(item)\n    return 0\n"
+        );
+        let (temp, source_path) = write_temp_source(&format!("aurora-d6-range-{name}"), &source);
+
+        let checked = Command::new(aura_bin())
+            .arg("check")
+            .arg(&source_path)
+            .output()
+            .expect("failed to check a Range iteration modifier");
+        assert!(
+            !checked.status.success(),
+            "Range iteration modifier `{name}` should fail"
+        );
+        assert!(
+            String::from_utf8_lossy(&checked.stderr).contains(expected),
+            "unexpected Range `{name}` diagnostic:\n{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+
+        let direct = Command::new(aura_bin())
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(temp.path().join("out"))
+            .arg(&source_path)
+            .output()
+            .expect("failed to run forced-direct Range modifier check");
+        assert!(
+            !direct.status.success(),
+            "forced direct should reject Range iteration modifier `{name}`"
+        );
+        assert!(
+            String::from_utf8_lossy(&direct.stderr).contains(expected),
+            "unexpected forced-direct Range `{name}` diagnostic:\n{}",
             String::from_utf8_lossy(&direct.stderr)
         );
     }

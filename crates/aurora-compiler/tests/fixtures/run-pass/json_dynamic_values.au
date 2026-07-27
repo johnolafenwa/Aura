@@ -1,7 +1,7 @@
 import json
 
 def kind(value: own json.Value) -> String:
-    match value:
+    match own value:
         case json.Value.Null:
             return "null"
         case json.Value.Bool(_):

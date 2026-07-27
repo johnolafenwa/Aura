@@ -5,7 +5,7 @@ enum Command:
     Stop
 
 def process(c: Command) -> int32:
-    match c:
+    match own c:
         case Command.Stop:
             return 0
         case _:

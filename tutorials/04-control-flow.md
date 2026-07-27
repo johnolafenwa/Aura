@@ -206,7 +206,7 @@ to update vector elements.
 
 See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
-Sets support default shared, explicit ``, and `own` iteration:
+Sets support bare shared and `own` iteration:
 
 ```python
 seen = {1, 2, 3}
@@ -237,8 +237,8 @@ for host, port in zip(hosts, ports):
 Both are `for` loop forms rather than values you can store, so writing
 `pairs = enumerate(hosts)` is rejected with guidance to use the loop spelling.
 Both read their operands by position, so each one must be a `Vec[T]` or a
-`Set[T]`, and both iterate over the bare-loop borrow default: no `own`,
-``, or `mut ` modifier, the operands stay borrowed for the whole
+`Set[T]`, and both iterate over the bare-loop shared default: no `own` or
+`mut` modifier, the operands stay borrowed for the whole
 loop, and a non-copy element binding cannot be moved out.
 
 If you define your own `enumerate` or `zip` function, yours wins.
@@ -250,8 +250,8 @@ See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumer
 The current compiler supports `for` over:
 
 - `range(stop)` and `range(start, stop)` with named-argument forms
-- default/``/`own` `Vec[T]`, plus `mut Vec[T]`
-- default/``/`own` `Set[T]`
+- bare/`own` `Vec[T]`, plus `mut Vec[T]`
+- bare/`own` `Set[T]`
 - `Queue[T]` (iterates until the queue closes)
 
 It also supports the `enumerate(seq)` and `zip(first, second)` loop forms over
@@ -265,5 +265,5 @@ Not yet supported:
 - custom step values for `range`
 
 Queue iteration is different: it receives each item already owned, and the
-Queue handle is copyable. The explicit `own`, ``, and `mut ` forms
-are rejected for Queue; use `for item in queue:`.
+Queue handle is copyable. The explicit `own` and `mut` forms are rejected for
+Queue; use `for item in queue:`.

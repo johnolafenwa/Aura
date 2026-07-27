@@ -1203,6 +1203,20 @@ impl Parser {
 
     fn parse_type_inner(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
+        let capability = match self.current_kind() {
+            TokenKind::KwMut => Some("mut"),
+            TokenKind::KwOwn => Some("own"),
+            _ => None,
+        };
+        if let Some(capability) = capability {
+            return Err(parse_error(
+                span,
+                format!(
+                    "`{capability}` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)"
+                ),
+            ));
+        }
+
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
         let mut ty = if self.eat_simple(&TokenKind::LParen).is_some() {
             if indirect {
@@ -1695,28 +1709,29 @@ impl Parser {
     }
 
     fn next_starts_numeric_cast_type(&self) -> bool {
-        matches!(
-            self.peek_kind(1),
-            Some(TokenKind::Identifier(name))
-                if matches!(
-                    name.as_str(),
-                    "int"
-                        | "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "int128"
-                        | "intsize"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "uint128"
-                        | "uintsize"
-                        | "float32"
-                        | "float64"
-                )
-        )
+        matches!(self.peek_kind(1), Some(TokenKind::KwMut | TokenKind::KwOwn))
+            || matches!(
+                self.peek_kind(1),
+                Some(TokenKind::Identifier(name))
+                    if matches!(
+                        name.as_str(),
+                        "int"
+                            | "int8"
+                            | "int16"
+                            | "int32"
+                            | "int64"
+                            | "int128"
+                            | "intsize"
+                            | "uint8"
+                            | "uint16"
+                            | "uint32"
+                            | "uint64"
+                            | "uint128"
+                            | "uintsize"
+                            | "float32"
+                            | "float64"
+                    )
+            )
     }
 
     fn parse_primary(&mut self) -> Result<Expr> {
@@ -1886,6 +1901,14 @@ impl Parser {
             TokenKind::KwBorrow => Err(parse_error(
                 token.span,
                 "call arguments cannot start with `borrow`; pass the value directly",
+            )),
+            TokenKind::KwMut => Err(parse_error(
+                token.span,
+                "`mut` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)",
+            )),
+            TokenKind::KwOwn => Err(parse_error(
+                token.span,
+                "`own` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)",
             )),
             other => Err(parse_error(
                 token.span,

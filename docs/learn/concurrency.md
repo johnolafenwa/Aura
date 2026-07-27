@@ -81,8 +81,8 @@ with group = TaskGroup():
 ```
 
 Copy types (numbers, `bool`, `Duration`, queue handles, task handles) pass
-through unchanged. Bare/default and explicit shared parameters borrow the
-task-owned capture, `own` parameters consume it, and `mut ` targets are
+through unchanged. Bare shared parameters borrow the task-owned capture,
+`own` parameters consume it, and `mut` targets are
 rejected because detached capture has no caller-visible writeback.
 
 ## `Queue[T]`: Typed Channels
@@ -107,8 +107,8 @@ with group = TaskGroup():
 Two things are happening in that `for` loop. The consumer receives each value
 already owned until one of three things is true: the queue is closed,
 cancellation interrupts the loop, or every producer in the surrounding task
-group has completed. Queue is not a place traversal, so explicit `own`,
-``, and `mut ` loop modifiers are rejected. The last case means the
+group has completed. Queue is not a place traversal, so explicit `own` and
+`mut` loop modifiers are rejected. The last case means the
 program can often rely on normal exit to drain the queue; explicitly calling
 `close()` is still the clearest signal.
 

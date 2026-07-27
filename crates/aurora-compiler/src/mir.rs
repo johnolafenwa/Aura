@@ -1537,15 +1537,34 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
-        if let (AssignTarget::Name(name), Some(annotation)) = (&assign.target, &assign.annotation) {
-            let annotation_type = self.lower_type_ref_with_provenance(annotation);
-            let target = self.render_local_name(name);
-            self.local_types.entry(target).or_insert(annotation_type);
-        } else if let AssignTarget::Name(name) = &assign.target {
-            if let Some(inferred) = self.infer_expr_type(&assign.value) {
-                let target = self.render_local_name(name);
-                self.local_types.entry(target).or_insert(inferred);
+        let named_target_type = match (&assign.target, &assign.annotation) {
+            (AssignTarget::Name(name), Some(annotation)) => {
+                Some((name, self.lower_type_ref_with_provenance(annotation)))
             }
+            (AssignTarget::Name(name), None) => {
+                self.infer_expr_type(&assign.value).map(|ty| (name, ty))
+            }
+            _ => None,
+        };
+        if let Some((name, ty)) = named_target_type {
+            // A mutable binding declared inside a scoped construct is a new
+            // source binding, even when a sibling scope uses the same source
+            // spelling. Give it its own MIR place so direct lowering cannot
+            // collapse heterogeneous arm locals into one typed slot.
+            if assign.mutable
+                && self
+                    .scoped_names
+                    .last()
+                    .is_some_and(|scope| !scope.contains_key(name))
+            {
+                let slot = self.new_typed_temp(ty.clone());
+                self.scoped_names
+                    .last_mut()
+                    .expect("checked scoped local declaration")
+                    .insert(name.clone(), slot);
+            }
+            let target = self.render_local_name(name);
+            self.local_types.entry(target).or_insert(ty);
         }
 
         if let AssignTarget::Index { object, index } = &assign.target {

@@ -189,16 +189,16 @@ An implementation may define only methods belonging to the trait. It must provid
 
 For an explicitly implemented method, conformance compares:
 
-- receiver presence and passing mode (shared `self`/`self`, consuming `own self`, `mut self`, or none)
+- receiver presence and passing mode (shared `self`, consuming `own self`,
+  `mut self`, or none)
 - ordinary parameter count and substituted types
 - each ordinary parameter's resolved owned/shared-borrow/mutable-borrow mode
-- return type and owned/shared-borrow/mutable-borrow mode
-- the semantic source slot of a borrowed return
+- owned return type
 - the trait method's substituted clone-safety obligations
 
-Ordinary parameter names and borrow-label spellings may differ between the trait and implementation when they identify the same parameter position. Changing which parameter supplies a borrowed result is a signature mismatch.
-
-Aurora 0.1 retains these borrowed-return conformance rules even though only copy-valued borrowed-return calls are executable. Calls producing non-copy borrowed results are rejected before backend lowering.
+Ordinary parameter names may differ between the trait and implementation when
+their positions and types still match. Return-source labels and return
+capabilities are not part of an Aurora signature.
 
 Implementation methods cannot add default ordinary arguments. Extra methods, missing required methods, receiver mismatches, and signature mismatches are rejected before body execution.
 
@@ -350,8 +350,8 @@ the conversion is accepted.
 - trait and implementation method defaults for ordinary parameters are not supported
 - generic user classes cannot currently serve as `with` resources
 - generic task targets are permitted when their callable type arguments can be
-  resolved; default/shared and `own` targets use task-owned captures, while
-  `mut ` targets are rejected
+  resolved; bare shared and `own` targets use task-owned captures, while `mut`
+  targets are rejected
 - equal-specificity overlapping implementations remain an error at the use site
 - clone-safety obligations are inferred rather than written, and an explicit
   implementation cannot strengthen the contract inferred by its trait method
@@ -373,8 +373,8 @@ Generic arguments are invariant and have exact arity. Inference is local and
 contextual, must resolve every declared parameter, and must satisfy every
 substituted bound. Trait satisfaction is nominal through a visible applicable
 `impl`, never structural. Implementations must conform after substituting
-receiver mode, parameter modes and types, return mode and type, borrowed-return
-source, clone-safety obligations, and supertrait requirements. Dispatch selects one unique
+receiver mode, parameter modes and types, owned return type, clone-safety
+obligations, and supertrait requirements. Dispatch selects one unique
 greatest-specificity applicable implementation; equal-best matches are
 rejected. `Self` denotes the enclosing/implementing concrete specialization
 only in its supported declaration contexts.
@@ -414,8 +414,8 @@ arguments in trait methods. `AU2006` reports builtin method collisions.
 `AU2999` covers duplicate/invalid implementations, method-conformance or
 supertrait failure, unsupported implementation targets, and remaining
 generic/trait rejections. `AU3001` reports use after an owned generic or
-receiver move. `AU3002` reports borrow conflicts, storing through a
-default-borrowed generic parameter, or contained non-copy borrowed returns.
+receiver move. `AU3002` reports borrow conflicts or storing through a bare
+shared generic parameter.
 `AU3003` reports a mutable receiver call through an immutable place, and
 `AU3004` reports an invalid ownership mode. `AU3007` reports an unsafe concrete
 clone specialization, an unprovable concrete requirement, or an implementation
@@ -444,8 +444,8 @@ constants, higher-kinded parameters, default type arguments, `where` clauses,
 specialization annotations, general subtyping, or separate orphan-rule
 restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.
 Equal-specificity overlaps remain errors, ordinary trait/impl parameters cannot
-add defaults, generic user classes cannot be `with` resources, and calls
-producing non-copy borrowed results are contained. Inference and dispatch are
+add defaults, and generic user classes cannot be `with` resources. Inference
+and dispatch are
 defined by the rules above rather than source order or backend implementation
 choice.
 
@@ -455,7 +455,8 @@ Invariant generics, local/contextual inference, explicit specialization,
 nominal traits and bounds, supertraits, default methods, generic and specialized
 implementations, unique-most-specific dispatch, operator traits, `Self`, and
 `From`-based `try` conversion plus inferred clone-safety contracts are implemented for the post-Phase 1.5 surface.
-Live non-copy borrowed results are reserved for the Phase 6 alias work. Trait
+Return values are owned; any future loan or view feature requires a new design.
+Trait
 objects, dynamic dispatch, associated types, higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.
 

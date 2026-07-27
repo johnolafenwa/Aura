@@ -333,5 +333,5 @@ The runtime is intentionally simple:
 - queue waits, task waits, `sleep(...)`, socket waits, and HTTP waits all use the shared runtime scheduler
 - cancellation is still cooperative rather than preemptive
 - tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
-- task arguments are owned captures; default/shared and `own` target
-  parameters are supported, while `mut ` target parameters are rejected
+- task arguments are owned captures; bare shared and `own` target parameters
+  are supported, while `mut` target parameters are rejected

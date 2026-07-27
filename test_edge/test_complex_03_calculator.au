@@ -13,7 +13,7 @@ copy class Expr:
     right: int32
 
 def eval_op(op: Op, a: int32, b: int32) -> Result[int32, String]:
-    match op:
+    match own op:
         case Op.Add:
             return Result.Ok(a + b)
         case Op.Sub:

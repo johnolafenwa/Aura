@@ -1,8 +1,8 @@
 # Task Board
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
-## Batch 3 of 6 (active)
+## Batch 3 of 6 (complete)
 
 - Authorized target: close B3.0-a through B3.0-e in separate test-first
   commits, then perform the ratified ADR-0022 capability-syntax migration,
@@ -18,19 +18,26 @@ Last updated: 2026-07-26
   completed B3.0-a commit `6afe47c`, and completed B3.0-b commit `fc22696` are
   isolated. B3.0-c is exact-tree green and isolated in `e05c5e6`; B3.0-d and
   B3.0-e are both exact-tree green and committed in isolation. B3.0 is closed,
-  and the ADR-0022 capability-syntax migration landed across §1-§7. Batch 3 is
-  at its checkpoint; see `work/2026-07-27-batch3-checkpoint.md`. Phase 5 has
-  not been started and nothing is pushed.
+  and the first ADR-0022 capability-syntax migration landed across §1-§7.
+  A line-by-line audit after checkpoint commit `91e0d5f` found binding
+  ADR-0022 gaps; the corrective pass closed them and a fresh exact-tree
+  `npm run ci` is green. Batch 3 implementation and verification are complete
+  at the requested checkpoint; see `work/2026-07-27-batch3-checkpoint.md`.
+  Post-gate coverage cleanup leaves `target/` at 6.8 GiB with 193 GiB free.
+  The corrective tree is ready to commit. Phase 5 has not been started and
+  nothing is pushed.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
   ADR-0029 is Accepted with the B3.0-b function-wide per-loop binding-slot
   isolation amendment. ADR-0031 remains Accepted. Acceptance does not by itself
   claim implementation or gate completion.
-- ADR-0022 is ratified by the Batch 3 brief. Its status flip, ten binding
-  answers, ADR-0009 supersession, cross-ADR amendments, semantic-interface
-  cache bump, source inventory, migrator, implementation, and maintained-source
-  flip belong to the coordinated migration after B3.0 closes.
+- ADR-0022 is Accepted with all ten binding answers and the Range ruling.
+  ADR-0009 is superseded in part; ADR-0005, ADR-0006, ADR-0013, ADR-0016,
+  and ADR-0017 are amended. The first coordinated source flip and cache-v4
+  invalidation are committed. The corrective worktree adds independent
+  semantic-interface schema version 2, a complete manifest-v2 preservation
+  ledger, strict builtin inventory, and the missed binding semantics.
 - B3.0-a implementation: cached native entries now atomically publish a
   platform-native `program`, its `program.sha256`, and a key-bound unique
   `entry-id`; every hit uses bounded no-follow reads and verifies identity,
@@ -99,7 +106,7 @@ Last updated: 2026-07-26
   tests, both coverage gates, reference integrity, docs, audits, Clippy, and
   hygiene. Post-gate `target/` size is 19 GiB with 149 GiB free, below both
   cleanup thresholds.
-- Current ticket: B3.0-d length-surface unification. `String.len()`,
+- B3.0-d disposition: complete. `String.len()`,
   `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` must return
   `int64` consistently with builtin `len(...)`, with compatibility narrowing,
   LSP, examples, tutorials, reference, and resource-cap wording updated in the
@@ -125,6 +132,38 @@ Last updated: 2026-07-26
   73 language-server tests, 13 extension tests, coverage at 96.12/96.85/94.32
   against the frozen 96.07/96.81/94.29 floors, reference integrity, the docs
   build, both audits, Clippy with warnings denied, and hygiene.
+- Batch 3 corrective disposition: complete and exact-tree gate green. The
+  Range modifier ruling, capability-position diagnostics, retained
+  shared-match places, mutable-source alias rejection, borrowed-return
+  containment docs, semantic-interface schema version 2, retired-syntax gate,
+  manifest-v2 preservation ledger, strict builtin inventory, and release notes
+  are integrated.
+- Migration accounting: 1,260 semantic occurrences and 832 findings are
+  recorded with zero unresolved. All 773 pre-flip bare matches were reviewed:
+  416 of 417 place matches became `match own` and one fixture was deleted;
+  among 356 temporary matches, 22 became `match own` and 334 stayed bare.
+  All 468 bare copy parameters were reviewed: 466 remain bare shared, 2 were
+  deleted, and none required `own`. Of 19 borrowed returns, 11 copy returns
+  became ordinary owned returns; 8 non-copy/unresolved redesign findings were
+  resolved through 6 maintained-fixture redesigns and 2 obsolete deletions.
+  The final manifest spans 683 files and all 59 migrator tests pass.
+- Strict inventory status: zero rendered-signature/metadata mismatches, zero
+  missing sibling-retention applications, zero missing rendered builtin
+  variants, zero missing structured call shapes, and zero unlinked signatures.
+  The retired-syntax gate has no active finding outside the four exact
+  retirement fixtures.
+- Final verification: one fresh `npm run ci` passes after exposing and fixing
+  a TaskGroup named-argument forwarding regression. It includes 23 Aura unit
+  tests, 268 CLI tests, 928 compiler tests, the 732.74-second forced
+  MIR/direct parity matrix, 79/79 LSP tests, 13/13 extension tests, reference,
+  docs, audits, warning-denied Clippy, hygiene, compiler coverage, and 100% LSP
+  coverage. Compiler coverage is 64,645/67,244 lines (96.134971%),
+  4,200/4,335 functions (96.885813%), and 94,962/100,649 regions
+  (94.349671%); final floors are `96.13/96.89/94.35`. No synthetic coverage
+  test, exclusion, or coverage-only branch was added.
+- Remaining mechanical closeout: post-gate disposable-artifact cleanup and
+  the corrective commit. The initial `cargo clean` removed 56.0 GiB and raised
+  free space to 199 GiB. Phase 5 remains unstarted.
 
 ## Batch 2 Checkpoint (complete)
 

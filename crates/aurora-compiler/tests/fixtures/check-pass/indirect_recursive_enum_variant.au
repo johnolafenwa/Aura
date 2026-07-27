@@ -4,7 +4,7 @@ enum List:
 
 def main() -> int32:
     list = List.Cons(tail=List.Nil)
-    match list:
+    match own list:
         case List.Nil:
             print(0)
         case List.Cons(_):

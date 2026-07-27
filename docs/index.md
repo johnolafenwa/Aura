@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: Ownership You Can Read
-    details: Every value has an owner. Bare non-copy parameters borrow; explicit own parameters transfer ownership. The compiler tracks this at every call boundary, and the runtime honours it without a garbage collector.
+    details: Every value has an owner. Bare parameters grant shared access; explicit own parameters transfer ownership. The compiler tracks this at every call boundary, and the runtime honours it without a garbage collector.
   - title: Concurrency With A Scope
     details: Child work lives inside a TaskGroup. Leaving the scope waits for the children. Queues carry values between tasks. Cancellation is a signal the scope observes, not an exception that lands anywhere.
   - title: APIs That Tell The Truth
@@ -31,7 +31,7 @@ Aurora is a compiled language for programs that manage resources on purpose: fil
 
 Three commitments shape every page of this book:
 
-1. **Values have owners.** Move types — strings, collections, stateful random generators, class instances, task groups, file handles, sockets — transfer ownership in explicit `own` positions. Bare non-copy parameters borrow; borrow forms can also make read or mutation access explicit.
+1. **Values have owners.** Move types — strings, collections, stateful random generators, class instances, task groups, file handles, sockets — transfer ownership in explicit `own` positions. Bare parameters grant shared access, while `mut` grants exclusive mutable access.
 2. **Failure has a type.** Operations that a caller might handle return `Result`, `Option`, or a small set of outcome enums. Control flow over failure is visible in the program, not buried in hidden exception paths.
 3. **Concurrency has a scope.** A `TaskGroup` owns its child tasks. The block that created the group is the block that waits for them, cancels them, and accounts for their results.
 

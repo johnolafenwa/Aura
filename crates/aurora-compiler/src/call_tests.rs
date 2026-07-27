@@ -367,6 +367,12 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
         constructor
             .bind_args(&named, Span::new(1, 1))
             .expect("Duration constructors accept value=...");
+        assert_eq!(
+            constructor.argument_passing(0),
+            Some(ReceiverKind::Borrow),
+            "a bare Duration constructor value is a logical shared borrow"
+        );
+        assert_eq!(constructor.argument_name(0), Some("value"));
 
         let missing = constructor.bind_args(&[], Span::new(2, 3)).unwrap_err();
         assert!(missing
@@ -423,6 +429,28 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
 }
 
 #[test]
+fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
+    for (builtin, positions) in [
+        (BuiltinFunction::Range, &[0, 1][..]),
+        (BuiltinFunction::Min, &[0, 1][..]),
+        (BuiltinFunction::Max, &[0, 1][..]),
+    ] {
+        for &position in positions {
+            assert_eq!(
+                builtin.argument_passing(position),
+                Some(ReceiverKind::Borrow),
+                "{} argument {position} must retain bare shared metadata",
+                builtin.name()
+            );
+        }
+    }
+    assert_eq!(BuiltinFunction::Range.argument_name(0), Some("start"));
+    assert_eq!(BuiltinFunction::Range.argument_name(1), Some("stop"));
+    assert_eq!(BuiltinFunction::Min.argument_name(0), Some("left"));
+    assert_eq!(BuiltinFunction::Max.argument_name(1), Some("right"));
+}
+
+#[test]
 fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
     let constructor = BuiltinClassConstructor::resolve("random", "Rng")
         .expect("random.Rng should have host constructor metadata");
@@ -430,6 +458,13 @@ fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
     assert_eq!(constructor.name(), "Rng");
     assert_eq!(constructor.detail(), "Rng(seed: int64) -> random.Rng");
     assert!(constructor.docs().contains("deterministic"));
+    assert_eq!(
+        constructor.argument_passing(0),
+        Some(ReceiverKind::Borrow),
+        "the bare copy seed must retain shared source semantics"
+    );
+    assert_eq!(constructor.argument_name(0), Some("seed"));
+    assert_eq!(constructor.argument_passing(1), None);
     assert_eq!(BuiltinClassConstructor::resolve("random", "Missing"), None);
 
     let named_seed = [dummy_arg(Some("seed"))];

@@ -156,6 +156,43 @@ fn object_referenced_symbol_occurrences(bytes: &[u8], needle: &str) -> usize {
 }
 
 #[test]
+fn heterogeneous_match_arm_mutable_locals_keep_distinct_direct_slots() {
+    let source =
+        include_str!("../tests/fixtures/run-pass/match_arm_local_binding_slot_isolation.au");
+    let module = lower_source_to_mir(source)
+        .expect("heterogeneous sibling match-arm locals should lower to MIR");
+    let mir_output =
+        crate::run_mir(&module).expect("the MIR backend should execute both match arms");
+    assert_eq!(mir_output.stdout, "Ada\n42\n");
+
+    emit_host_object(&module)
+        .expect("the direct backend should preserve each arm-local binding's own type");
+
+    let describe = module
+        .functions
+        .iter()
+        .find(|function| function.name == "describe")
+        .expect("describe should lower");
+    let arm_local_types = describe
+        .local_types
+        .iter()
+        .filter(|local| local.name.starts_with("%t"))
+        .filter_map(|local| match &local.ty {
+            Type::Named(name, _) if matches!(name.as_str(), "Person" | "Score") => {
+                Some((local.name.as_str(), name.as_str()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(arm_local_types.iter().any(|(_, ty)| *ty == "Person"));
+    assert!(arm_local_types.iter().any(|(_, ty)| *ty == "Score"));
+    assert!(
+        arm_local_types.iter().all(|(slot, _)| *slot != "item"),
+        "arm-local source names must be rewritten to typed MIR slots"
+    );
+}
+
+#[test]
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
     let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
     let module = |instructions, local_types| crate::mir::MirModule {

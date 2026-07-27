@@ -82,7 +82,9 @@ print(render_title(title))
 print(title)
 ```
 
-The call site does not write ``; Aurora reads the borrow form from the function signature. The caller keeps ownership, and the helper cannot move a non-copy value out of the borrowed view.
+The call site writes no capability prefix; Aurora reads the bare shared form
+from the function signature. The caller keeps ownership, and the helper cannot
+move a non-copy value out through that shared access.
 
 Classes make the benefit obvious:
 
@@ -117,8 +119,13 @@ print(jobs.len())
 
 Two rules apply to mutable borrows:
 
-1. The caller's binding must itself be mutable. You cannot take `mut ` from an immutable binding or a temporary value.
-2. A mutable borrow is **exclusive**. If one argument to a call takes `mut `, no other argument in that call may borrow the same value. This is not a stylistic preference; overlapping mutable aliases would make the order of effects unclear, and Aurora rejects them at the call boundary rather than relying on the callee to behave well.
+1. The caller's binding must itself be mutable. You cannot take `mut` access
+   from an immutable binding or a temporary value.
+2. Mutable access is **exclusive**. If one argument to a call takes `mut`, no
+   other argument in that call may borrow the same value. This is not a
+   stylistic preference; overlapping mutable aliases would make the order of
+   effects unclear, and Aurora rejects them at the call boundary rather than
+   relying on the callee to behave well.
 
 ## Methods And `self`
 
@@ -229,8 +236,8 @@ with group = TaskGroup():
 
 `TaskGroup` itself is a resource. Normal practice is to keep it scoped with `with`, so that leaving the block waits for the children and accounts for their results.
 
-Default-mode and explicit shared target parameters borrow their task-owned
-capture; `own` targets consume it. `mut ` targets are rejected because
+Bare shared target parameters borrow their task-owned capture; `own` targets
+consume it. `mut` targets are rejected because
 mutation of detached capture storage would have no caller-visible writeback.
 
 ## Resources And Cleanup
@@ -251,8 +258,8 @@ When the block exits, Aurora runs the resource's cleanup path. Cleanup fires on 
 
 When a program starts to feel tangled, run down this list:
 
-- Write `own T` when the function consumes the argument; a bare non-copy
-  parameter borrows by default.
+- Write `own T` when the function consumes the argument; a bare parameter
+  grants shared access.
 - Pass `T` when the function only needs to inspect.
 - Pass `mut T` when the function should update a caller-owned value.
 - Clone as locally as possible when two owners are genuinely needed and the

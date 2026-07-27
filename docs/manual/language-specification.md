@@ -11,7 +11,7 @@ The specification covers:
 - UTF-8 `.au` source text, tokens, indentation, and the complete accepted grammar
 - declarations, statements, expressions, patterns, names, scopes, and visibility
 - types, inference, generics, traits, calls, and operator resolution
-- moves, copies, borrows, mutable places, resources, and borrowed returns
+- moves, copies, borrows, mutable places, resources, and owned returns
 - module loading, packages, entry modules, top-level execution, and `main`
 - evaluation order, control flow, runtime failures, cleanup, tasks, cancellation, and backend equivalence
 - maintained builtin functions, enums, modules, resources, and CLI/editor contracts

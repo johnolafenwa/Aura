@@ -50,10 +50,9 @@ shared and exclusive access safe. The compiler would still track shared access,
 exclusive mutable access, moves, temporary lifetimes, and declaration-stable
 calling conventions internally.
 
-This document is a future implementation design. It does not change the current
-language. Until this proposal is separately ratified and implemented,
-ADR-0005, ADR-0006, the language reference, and the compiler remain
-authoritative.
+This decision is ratified and implemented. The compiler, language reference,
+and the amended ownership ADRs listed above are the authoritative expression
+of the resulting language surface.
 
 ## Motivation
 
@@ -249,12 +248,13 @@ new one from the shorter spelling:
 - a temporary selected for bare iteration lives through the complete loop; a
   selected place cannot be retargeted by rebinding its source inside the body
 
-Range keeps its Aurora 0.1 compatibility rule: bare, `mut`, and `own` range
-iteration are all accepted, all yield the same copy `int32` values, and the
-modifier has no semantic effect. Removing that historical behavior is a
-separate decision. A future iterable type must explicitly declare whether it
-is place traversal, value iteration, or a receive-like operation; the checker
-must not silently guess from whether the expression is a place.
+Range iteration accepts only the bare form. It yields independent copy `int32`
+values, so `mut` has no place through which to write back and `own` has nothing
+to transfer. Both explicit modifiers are therefore rejected with `AU3004` and
+a teaching diagnostic that explains the value-iteration model and suggests
+`for item in range(...):`. A future iterable type must explicitly declare
+whether it is place traversal, value iteration, or a receive-like operation;
+the checker must not silently guess from whether the expression is a place.
 
 Queue iteration keeps its existing carve-out. It is a receive operation rather
 than place traversal, so only this form is valid:
@@ -691,8 +691,8 @@ At minimum, tests must cover:
 - shared/mutable/owned Vec iteration, shared/owned Set iteration, exact mutable
   Set rejection, and temporary lifetime plus one-time source selection
 - bare Queue receive ownership and exact rejection of `mut` and `own`
-- bare, `mut`, and `own` Range forms all retaining their no-effect Aurora 0.1
-  behavior
+- bare Range iteration yielding copy `int32` values plus exact `AU3004`
+  rejection and bare-form guidance for both `mut` and `own`
 - statement and expression forms of every ratified match mode, with one-time
   evaluation, temporary lifetime, copy scrutinees, payload move restrictions,
   mutable place rejection, reconstruction, stale-binding invalidation, nested

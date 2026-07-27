@@ -1,0 +1,5 @@
+error[AU3004]: Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/range_mut_iteration_rejected.au:2:5
+  |
+2 |     for value in mut range(0, 3):
+  |     ^

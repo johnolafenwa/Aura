@@ -5,7 +5,7 @@ enum State:
     Stopped
 
 def transition(s: State) -> State:
-    match s:
+    match own s:
         case State.Running:
             return State.Paused
         case State.Paused:
@@ -14,7 +14,7 @@ def transition(s: State) -> State:
             return State.Running
 
 def name(s: State) -> String:
-    match s:
+    match own s:
         case State.Running:
             return "running"
         case State.Paused:

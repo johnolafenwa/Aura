@@ -4,7 +4,7 @@ enum Color:
     Blue
 
 def color_code(c: Color) -> int32:
-    match c:
+    match own c:
         case Color.Red:
             return 1
         case Color.Green:
