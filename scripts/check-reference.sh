@@ -186,7 +186,7 @@ grep -Fxq 'one=1' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_z
 grep -Fxq 'two=2' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
 grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aurora-compiler/src/mir_tests.rs
 grep -Fq 'for label, value in jobs:' crates/aurora-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
-grep -Fq 'def update_first(values: borrow mut Vec[int64]) -> int64:' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
+grep -Fq 'def update_first(values: mut Vec[int64]) -> int64:' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
 test "$(grep -Fxc '24' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
@@ -421,7 +421,7 @@ if rg -U -n -i 'maximum (representable )?(Vec|collection) (length|size)|(?:maxim
 fi
 grep -Fq 'mut borrow own indirect' docs/manual/lexical-structure.md
 grep -Fq '| "own", "self"' docs/manual/grammar.md
-grep -Fq 'Bare `self` and `borrow self` are the two spellings of a shared receiver' docs/manual/grammar.md
+grep -Fq 'Bare `self` is the shared receiver, `mut self` is mutable, and `own self` is consuming' docs/manual/grammar.md
 grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
 grep -Fq '`self: Type` is not a method receiver' architecture_docs/decisions/0005-method-receivers.md
 grep -Fq '`own self` for by-value consumption' docs/aurora_language_proposal.md

@@ -52,7 +52,7 @@ There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-d
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut own indirect public
+class enum def trait impl import from mut borrow own indirect public
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```

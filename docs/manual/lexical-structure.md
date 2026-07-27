@@ -33,12 +33,12 @@ An identifier spelling can still be rejected by static checking. Builtin types a
 The lexer recognizes these words specially:
 
 ```text
-class enum def trait impl import from mut own indirect public
+class enum def trait impl import from mut borrow own indirect public
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
 
-`true` and `false` produce boolean-literal tokens. The other words introduce declarations, control flow, ownership forms, imports, or operators and cannot normally be used as ordinary identifiers. `own` is reserved everywhere; it marks consuming ordinary parameters and collection loops as well as the consuming receiver spelling `own self`.
+`true` and `false` produce boolean-literal tokens. The other words introduce declarations, control flow, ownership forms, imports, or operators and cannot normally be used as ordinary identifiers. `own` is reserved everywhere; it marks consuming ordinary parameters, collection loops, and matches, as well as the consuming receiver spelling `own self`. `mut` marks mutable parameters, loops, matches, and the receiver spelling `mut self`, and also introduces a mutable local binding. `borrow` is a **reserved retired keyword**: it lexes, but every position that once accepted it now reports the exact replacement to write, such as ``` `borrow mut T` was removed; write `mut T` ```. It is reserved for one announced compatibility window; releasing it as an ordinary identifier is a future decision.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 
