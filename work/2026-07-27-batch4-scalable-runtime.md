@@ -253,11 +253,16 @@ before-reactor baseline is recorded in
   23.377% faster than the accepted Phase 5.2 baseline and safely below its
   22.355170 ms two-percent ceiling. Exact report provenance and SHA-256 are in
   `work/2026-07-27-phase5-runtime-benchmarks.md`.
+- Exact full `npm run ci` is green on the committed Phase 5.3 tree: 277 CLI
+  tests, 979 compiler library tests, the complete forced MIR/direct parity
+  matrix in 547.42 seconds, 80 LSP tests, 13 extension tests, compiler and LSP
+  coverage, executable reference integrity, all 683 migration manifests, docs,
+  npm and cargo audits, warning-denied Clippy, and hygiene. Cargo audit retains
+  only the repository's allowed `rustls-pemfile` unmaintained warning.
 
 ## Follow-up
 
-Run exact full CI on the committed Phase 5.3 tree, then begin the stack-diet
-stage with protocol service offload, guarded smaller task stacks, a
-collision-free per-task override, and measured incremental memory per parked
-task. Coverage floors remain frozen until the one-time Batch 4 sign-off
+Begin the stack-diet stage with protocol service offload, guarded smaller task
+stacks, a collision-free per-task override, and measured incremental memory per
+parked task. Coverage floors remain frozen until the one-time Batch 4 sign-off
 re-ratchet.

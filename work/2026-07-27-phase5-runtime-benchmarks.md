@@ -278,4 +278,8 @@ report path: `/tmp/aurora-phase53-after-safepoints.json`. SHA-256:
 
 Every process completed naturally with the exact protocol marker, zero status,
 empty standard error, and no sampling error. All five contractual gates pass.
-No Phase 5 benchmark escape hatch is needed for the safepoint stage.
+No Phase 5 benchmark escape hatch is needed for the safepoint stage. The
+subsequent exact full `npm run ci` gate is green: 277 CLI tests, 979 compiler
+library tests, the full forced-backend parity matrix, 80 LSP tests, 13
+extension tests, compiler and LSP coverage, reference integrity, docs, audits,
+warning-denied Clippy, and hygiene.
