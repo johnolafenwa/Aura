@@ -24,6 +24,33 @@ SPEC.loader.exec_module(bench)
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_phase_lines_are_exact_and_phase_specific(self) -> None:
+        self.assertEqual(
+            bench.parse_phase_line(
+                b"BASELINE sleepers 10000\n",
+                phase="BASELINE",
+                benchmark="sleepers",
+                expected_fields=("10000",),
+            ),
+            ("10000",),
+        )
+        self.assertEqual(
+            bench.parse_phase_line(
+                b"READY sleepers 10000\n",
+                phase="READY",
+                benchmark="sleepers",
+                expected_fields=("10000",),
+            ),
+            ("10000",),
+        )
+        with self.assertRaisesRegex(bench.BenchmarkError, "unexpected BASELINE"):
+            bench.parse_phase_line(
+                b"READY sleepers 10000\n",
+                phase="BASELINE",
+                benchmark="sleepers",
+                expected_fields=("10000",),
+            )
+
     def test_ready_line_is_exact_and_bounded(self) -> None:
         self.assertEqual(
             bench.parse_ready_line(
@@ -107,6 +134,39 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
             bench.parse_timer_samples(output, expected_count=1)
 
+    def test_massive_protocol_requires_all_timer_samples_and_exact_done(self) -> None:
+        ready = bench.parse_massive_ready_line(
+            b"READY massive 100000 1000 10 500 507\n",
+            expected_sleepers=100000,
+            expected_timer_count=1000,
+            expected_duration_ms=10,
+        )
+        self.assertEqual(ready["sleepers"], 100000)
+        self.assertEqual(ready["timer_count"], 1000)
+        self.assertEqual(ready["arm_span_ms"], 7.0)
+
+        output = io.BytesIO(
+            b"SAMPLE massive_timer 1 0.20\n"
+            b"SAMPLE massive_timer 0 0.10\n"
+            b"DONE massive 100000 2\n"
+        )
+        samples = bench.parse_massive_samples(
+            output, expected_sleepers=100000, expected_timer_count=2
+        )
+        self.assertEqual(
+            [sample["overshoot_ms"] for sample in samples], [0.10, 0.20]
+        )
+
+        duplicate = io.BytesIO(
+            b"SAMPLE massive_timer 0 0.1\n"
+            b"SAMPLE massive_timer 0 0.2\n"
+            b"DONE massive 100000 2\n"
+        )
+        with self.assertRaisesRegex(bench.BenchmarkError, "duplicate"):
+            bench.parse_massive_samples(
+                duplicate, expected_sleepers=100000, expected_timer_count=2
+            )
+
     def test_starvation_protocol_is_exact_and_bounded(self) -> None:
         self.assertEqual(
             bench.parse_starvation_output(
@@ -181,6 +241,62 @@ class StatisticsTests(unittest.TestCase):
             bench.starvation_gate_summary([{"elapsed_ms": 51}])["passed"]
         )
 
+    def test_massive_gate_is_joint_rss_timer_and_overlap_evidence(self) -> None:
+        passing_runs = [
+            {
+                "peak_rss_bytes": 1024,
+                "incremental_peak_rss_bytes": 1024,
+                "arm_span_ms": 3.0,
+                "arm_span_valid": True,
+                "summary": {"p99_ms": 4.0},
+            },
+            {
+                "peak_rss_bytes": 2048,
+                "incremental_peak_rss_bytes": 2048,
+                "arm_span_ms": 5.0,
+                "arm_span_valid": True,
+                "summary": {"p99_ms": 5.0},
+            },
+        ]
+        gate = bench.massive_gate_summary(passing_runs)
+        self.assertEqual(gate["observed_peak_rss_bytes"], 2048)
+        self.assertEqual(gate["observed_incremental_peak_rss_bytes"], 2048)
+        self.assertEqual(gate["observed_timer_p99_ms"], 5.0)
+        self.assertTrue(gate["passed"])
+
+        over_rss = [dict(passing_runs[0])]
+        over_rss[0]["peak_rss_bytes"] = (
+            bench.MASSIVE_RSS_LIMIT_BYTES + 1
+        )
+        self.assertFalse(bench.massive_gate_summary(over_rss)["passed"])
+
+        invalid_overlap = [dict(passing_runs[0], arm_span_valid=False)]
+        self.assertFalse(
+            bench.massive_gate_summary(invalid_overlap)["passed"]
+        )
+
+    def test_sleepers_gate_uses_whole_process_peak_but_reports_incremental(self) -> None:
+        runs = [
+            {
+                "peak_rss_bytes": bench.SLEEPER_RSS_LIMIT_BYTES + 1,
+                "incremental_peak_rss_bytes": 1024,
+            }
+        ]
+        gate = bench.rss_gate_summary(
+            runs,
+            limit_bytes=bench.SLEEPER_RSS_LIMIT_BYTES,
+        )
+        self.assertEqual(
+            gate["observed_peak_rss_bytes"],
+            bench.SLEEPER_RSS_LIMIT_BYTES + 1,
+        )
+        self.assertEqual(gate["observed_incremental_peak_rss_bytes"], 1024)
+        self.assertFalse(gate["passed"])
+
+    def test_massive_ready_and_cleanup_timeouts_are_both_300_seconds(self) -> None:
+        self.assertEqual(bench.MASSIVE_READY_TIMEOUT_SECONDS, 300.0)
+        self.assertEqual(bench.MASSIVE_COMPLETION_TIMEOUT_SECONDS, 300.0)
+
 
 class ProcessUnitTests(unittest.TestCase):
     def test_rss_units_are_normalized_to_bytes(self) -> None:
@@ -221,6 +337,18 @@ class ProcessUnitTests(unittest.TestCase):
         run.assert_not_called()
         self.assertEqual(monitor.samples, [])
         self.assertFalse(monitor.is_alive)
+
+    def test_sampling_errors_invalidate_benchmark_evidence(self) -> None:
+        monitor = mock.Mock()
+        monitor.sampling_error = "proc_pid_rusage failed"
+        monitor.samples = [{"rss_bytes": 1}]
+        with self.assertRaisesRegex(bench.BenchmarkError, "sampling failed"):
+            bench.require_monitor_evidence(monitor, "massive")
+
+        monitor.sampling_error = None
+        monitor.samples = []
+        with self.assertRaisesRegex(bench.BenchmarkError, "no process samples"):
+            bench.require_monitor_evidence(monitor, "massive")
 
 
 class ValidationAndExecutionTests(unittest.TestCase):
@@ -271,6 +399,41 @@ class ValidationAndExecutionTests(unittest.TestCase):
                     ),
                     root=root,
                 )
+
+    def test_aura_qualification_requires_checkout_release_binary_and_fresh_build(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "target/release/aura"
+            expected.parent.mkdir(parents=True)
+            self.make_executable(expected.parent, "aura", 'printf "aura\\n"\n')
+            outside = self.make_executable(root, "aura", 'printf "aura\\n"\n')
+
+            with self.assertRaisesRegex(bench.BenchmarkError, "target/release"):
+                bench.qualify_aura_binary(outside, root=root)
+
+            completed = mock.Mock(returncode=0, stdout=b"", stderr=b"")
+            with mock.patch.object(
+                bench.subprocess, "run", return_value=completed
+            ) as run:
+                record = bench.qualify_aura_binary(expected, root=root)
+            self.assertEqual(record["path"], str(expected.resolve()))
+            self.assertTrue(record["fresh_cargo_build"])
+            command = run.call_args.args[0]
+            self.assertEqual(
+                command,
+                [
+                    "cargo",
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "aura",
+                    "--target-dir",
+                    str((root / "target").resolve()),
+                ],
+            )
 
     def test_cli_validation_rejects_nonpositive_counts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -324,11 +487,34 @@ class ValidationAndExecutionTests(unittest.TestCase):
             with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
                 bench.run_starvation(invalid)
 
+    def test_massive_run_records_incremental_rss_and_timer_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = self.make_executable(
+                Path(directory),
+                "massive",
+                'printf "BASELINE massive 2 2 10\\n"\n'
+                "sleep 0.02\n"
+                'printf "READY massive 2 2 10 100 101\\n"\n'
+                "sleep 0.02\n"
+                'printf "SAMPLE massive_timer 1 0.2\\n"\n'
+                'printf "SAMPLE massive_timer 0 0.1\\n"\n'
+                'printf "DONE massive 2 2\\n"\n',
+            )
+            with mock.patch.object(bench, "MASSIVE_SLEEPER_COUNT", 2):
+                with mock.patch.object(bench, "MASSIVE_TIMER_COUNT", 2):
+                    result = bench.run_massive(binary)
+        self.assertEqual(result["ready_observation"]["sleepers"], 2)
+        self.assertEqual(result["ready_observation"]["timer_count"], 2)
+        self.assertEqual(result["summary"]["p99_ms"], 0.2)
+        self.assertGreaterEqual(result["incremental_peak_rss_bytes"], 0)
+        self.assertEqual(result["returncode"], 0)
+
     def test_sleepers_waits_for_exact_natural_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             binary = self.make_executable(
                 Path(directory),
                 "sleepers",
+                'printf "BASELINE sleepers 10000\\n"\n'
                 'printf "READY sleepers 10000\\n"\n'
                 "sleep 0.05\n"
                 'printf "DONE sleepers 10000\\n"\n',
@@ -338,12 +524,14 @@ class ValidationAndExecutionTests(unittest.TestCase):
         self.assertEqual(result["completion"]["stdout"], "DONE sleepers 10000\n")
         self.assertEqual(result["completion"]["stderr"], "")
         self.assertGreaterEqual(result["ready_to_done_s"], 0.01)
+        self.assertGreaterEqual(result["incremental_peak_rss_bytes"], 0)
 
     def test_sleepers_rejects_done_before_required_stable_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             binary = self.make_executable(
                 Path(directory),
                 "sleepers",
+                'printf "BASELINE sleepers 10000\\n"\n'
                 'printf "READY sleepers 10000\\n"\n'
                 "sleep 0.01\n"
                 'printf "DONE sleepers 10000\\n"\n',
@@ -377,6 +565,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
                 binary = self.make_executable(
                     root,
                     "sleepers-" + str(index),
+                    'printf "BASELINE sleepers 10000\\n"\n'
                     'printf "READY sleepers 10000\\n"\n'
                     "sleep 0.01\n"
                     + tail,
@@ -433,6 +622,33 @@ class ValidationAndExecutionTests(unittest.TestCase):
             ],
         )
 
+    def test_contractual_status_requires_clean_mac14_9_evidence(self) -> None:
+        clean_repository = {"dirty_files": []}
+        dirty_repository = {"dirty_files": [" M crates/runtime.rs"]}
+        baseline_host = {"hardware_model": "Mac14,9"}
+        other_host = {"hardware_model": "Mac15,6"}
+
+        self.assertTrue(
+            bench.benchmark_is_contractual(
+                False,
+                ([], []),
+                host=baseline_host,
+                repository=clean_repository,
+            )
+        )
+        self.assertEqual(
+            bench.benchmark_noncontractual_reasons(
+                False,
+                ([], []),
+                host=other_host,
+                repository=dirty_repository,
+            ),
+            [
+                "host hardware model is not the contractual Mac14,9 baseline",
+                "repository worktree was dirty",
+            ],
+        )
+
     def test_execute_rechecks_process_inventory_after_workload_builds(self) -> None:
         competitor = bench.ProcessRow(
             10, "cargo", "cargo test", Path("/repo")
@@ -449,25 +665,32 @@ class ValidationAndExecutionTests(unittest.TestCase):
         )
         with mock.patch.object(bench, "validate_options"):
             with mock.patch.object(
-                bench, "find_competing_processes", side_effect=[[], [competitor]]
+                bench, "qualify_aura_binary", return_value={}
             ):
                 with mock.patch.object(
-                    bench, "hardware_record", return_value={}
+                    bench,
+                    "find_competing_processes",
+                    side_effect=[[], [competitor]],
                 ):
                     with mock.patch.object(
-                        bench, "repository_record", return_value={}
+                        bench, "hardware_record", return_value={}
                     ):
                         with mock.patch.object(
-                            bench, "build_workloads", return_value=({}, [])
+                            bench, "repository_record", return_value={}
                         ):
                             with mock.patch.object(
-                                bench, "compiler_runtime_inputs", return_value={}
+                                bench, "build_workloads", return_value=({}, [])
                             ):
-                                with self.assertRaisesRegex(
-                                    bench.BenchmarkError,
-                                    "immediately before timing",
+                                with mock.patch.object(
+                                    bench,
+                                    "compiler_runtime_inputs",
+                                    return_value={},
                                 ):
-                                    bench.execute(options)
+                                    with self.assertRaisesRegex(
+                                        bench.BenchmarkError,
+                                        "immediately before timing",
+                                    ):
+                                        bench.execute(options)
 
 
 if __name__ == "__main__":

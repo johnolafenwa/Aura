@@ -12,6 +12,9 @@ mkdir -p target/scalable-runtime-benchmarks
   -o target/scalable-runtime-benchmarks/10k-sleepers \
   benchmarks/scalable_runtime/10k_sleepers.au
 ./target/release/aura build --backend direct \
+  -o target/scalable-runtime-benchmarks/100k-sleepers-1000-timers \
+  benchmarks/scalable_runtime/100k_sleepers_1000_timers.au
+./target/release/aura build --backend direct \
   -o target/scalable-runtime-benchmarks/1000-timers \
   benchmarks/scalable_runtime/1000_timers.au
 ./target/release/aura build --backend direct \
@@ -36,7 +39,14 @@ the sample invalid. The host runner waits for natural process completion and
 requires the exact `DONE` line, zero exit status, and empty standard error;
 nominal sleepers and idle runs are never terminated by the runner.
 
-`10k-sleepers` starts 10,000 child tasks. Each child reports that it reached
+`10k-sleepers` first emits and flushes a pre-spawn observation point:
+
+```text
+BASELINE sleepers 10000
+```
+
+The host records RSS at that point and starts its process monitor. The program
+then starts 10,000 child tasks. Each child reports that it reached
 its `sleep(1m)` path, and cooperative scheduling carries it through to that
 sleep boundary before another task runs. Only after all 10,000 reports have
 been received does the parent emit:
@@ -52,7 +62,40 @@ group, waits for structured cleanup, and emits:
 DONE sleepers 10000
 ```
 
-Measure peak RSS after `READY` and before `DONE`.
+The maintained report publishes two distinct measurements. The contractual
+512 MiB gate uses whole-process peak RSS exactly. Incremental peak RSS is the
+largest monitored RSS (or the synchronous `READY` observation, whichever is
+larger) minus the pre-spawn `BASELINE` RSS; that secondary value removes the
+executable and runtime's fixed cost when deriving a per-task memory estimate.
+
+`100k-sleepers-1000-timers` is the massive-concurrency qualification workload.
+It uses the same pre-spawn baseline:
+
+```text
+BASELINE massive 100000 1000 10
+```
+
+After 100,000 sleepers are parked, 1,000 independent 10 ms timers are armed.
+The readiness record includes their monotonic start bounds:
+
+```text
+READY massive 100000 1000 10 <min_start_ms> <max_start_ms>
+```
+
+The parent retains primitive overshoot observations until all timers finish,
+cancels and joins the sleepers, then emits exactly 1,000 indexed records and
+the completion line:
+
+```text
+SAMPLE massive_timer <observation_index> <overshoot_ms>
+DONE massive 100000 1000
+```
+
+The massive-concurrency gate is joint evidence: whole-process peak RSS must be
+at most 1.5 GiB, every timer arm span must be valid, and the worst valid-run
+p99 overshoot must be at most 5 ms. Incremental RSS remains in the report for
+per-task analysis, but does not replace the absolute Batch 4 gate. A
+memory-only pass does not qualify the claim.
 
 `1000-timers` first parks every worker on a release queue. The parent releases
 all workers, then waits until each has sent its monotonic start through the
@@ -124,9 +167,18 @@ the results. The runner checks for repository `cargo`, `rustc`, and `aura`
 processes both before building workloads and again immediately before timing.
 `--allow-competing-processes` preserves exploratory evidence but marks the
 report non-contractual, records the reason, and cannot produce an
-`all_gates_passed` result. The Batch 4 gates are:
+`all_gates_passed` result. Reports from a dirty checkout or hardware other
+than the calibrated Mac14,9 baseline are also explicitly non-contractual.
+The runner accepts only this checkout's `target/release/aura` and performs
+`cargo build --release --locked -p aura --target-dir target` before compiling
+the workloads. This makes the measured compiler/runtime input a fresh Cargo
+product of the recorded checkout instead of an unqualified binary copied from
+another revision.
+The Batch 4 gates are:
 
-- 10,000 sleepers at no more than 512 MiB peak RSS.
+- 10,000 sleepers at no more than 512 MiB whole-process peak RSS.
+- 100,000 sleepers plus 1,000 timers at no more than 1.5 GiB whole-process
+  peak RSS with valid overlap and p99 timer overshoot no more than 5 ms.
 - p99 timer overshoot at no more than 5 ms under the 1,000-timer load.
 - less than 2% process CPU during the idle workload's stable window.
 - a 10 ms sleeper beside the hot loop completes within 50 ms.
@@ -144,4 +196,5 @@ On Linux the runner samples `/proc`. On macOS it uses `proc_pid_rusage` from
 monitors never fall back to spawning `ps`, so process sampling cannot inject a
 high-frequency subprocess workload into timer measurements. The monitoring
 cadence is recorded in the JSON report, and every monitor is joined before the
-workload result is accepted.
+workload result is accepted. A monitor error or a run with no process samples
+invalidates the benchmark instead of producing partial evidence.

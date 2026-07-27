@@ -35,13 +35,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 READY_LINE_BYTES = 256
 READY_TIMEOUT_SECONDS = 20.0
+MASSIVE_READY_TIMEOUT_SECONDS = 300.0
 TIMER_TIMEOUT_SECONDS = 60.0
+MASSIVE_COMPLETION_TIMEOUT_SECONDS = 300.0
 STARVATION_TIMEOUT_SECONDS = 10.0
 NATURAL_COMPLETION_TIMEOUT_SECONDS = 40.0
 RSS_SAMPLE_INTERVAL_SECONDS = 0.05
 IDLE_SAMPLE_INTERVAL_SECONDS = 0.25
 TIMER_SAMPLE_INTERVAL_SECONDS = 0.05
 SLEEPER_RSS_LIMIT_BYTES = 512 * 1024 * 1024
+MASSIVE_RSS_LIMIT_BYTES = 1536 * 1024 * 1024
+MASSIVE_SLEEPER_COUNT = 100_000
+MASSIVE_TIMER_COUNT = 1_000
+MASSIVE_TIMER_DURATION_MS = 10
 TIMER_P99_LIMIT_MS = 5.0
 IDLE_CPU_LIMIT_PERCENT = 2.0
 TIMER_ARM_SPAN_LIMIT_MS = 10.0
@@ -51,6 +57,8 @@ EXPECTED_V6_STDOUT = b"10000000\n"
 
 WORKLOADS = {
     "sleepers": ROOT / "benchmarks/scalable_runtime/10k_sleepers.au",
+    "massive": ROOT
+    / "benchmarks/scalable_runtime/100k_sleepers_1000_timers.au",
     "timers": ROOT / "benchmarks/scalable_runtime/1000_timers.au",
     "idle": ROOT / "benchmarks/scalable_runtime/idle_10_tasks.au",
     "starvation": ROOT / "benchmarks/scalable_runtime/sleeper_vs_hot_loop.au",
@@ -149,16 +157,21 @@ def read_bounded_line(stream: BinaryIO, maximum_bytes: int) -> bytes:
     return line
 
 
-def parse_ready_line(
-    line: bytes, benchmark: str, expected_fields: Sequence[str]
+def parse_phase_line(
+    line: bytes,
+    phase: str,
+    benchmark: str,
+    expected_fields: Sequence[str],
 ) -> Tuple[str, ...]:
-    expected = "READY " + benchmark
+    expected = phase + " " + benchmark
     if expected_fields:
         expected += " " + " ".join(expected_fields)
     expected_bytes = (expected + "\n").encode("ascii")
     if line != expected_bytes:
         raise BenchmarkError(
-            "unexpected READY line for "
+            "unexpected "
+            + phase
+            + " line for "
             + benchmark
             + ": expected "
             + repr(expected_bytes)
@@ -166,6 +179,17 @@ def parse_ready_line(
             + repr(line)
         )
     return tuple(expected_fields)
+
+
+def parse_ready_line(
+    line: bytes, benchmark: str, expected_fields: Sequence[str]
+) -> Tuple[str, ...]:
+    return parse_phase_line(
+        line,
+        phase="READY",
+        benchmark=benchmark,
+        expected_fields=expected_fields,
+    )
 
 
 def parse_timer_ready_line(
@@ -210,6 +234,64 @@ def parse_timer_ready_line(
         )
     return {
         "count": count,
+        "duration_ms": duration_ms,
+        "min_start_ms": min_start_ms,
+        "max_start_ms": max_start_ms,
+        "arm_span_ms": max_start_ms - min_start_ms,
+    }
+
+
+def parse_massive_ready_line(
+    line: bytes,
+    expected_sleepers: int,
+    expected_timer_count: int,
+    expected_duration_ms: int,
+) -> Dict[str, float | int]:
+    fields = line.rstrip(b"\n").split(b" ")
+    if (
+        not line.endswith(b"\n")
+        or len(fields) != 7
+        or fields[:2] != [b"READY", b"massive"]
+    ):
+        raise BenchmarkError("unexpected massive READY line: " + repr(line))
+    try:
+        sleepers = int(fields[2].decode("ascii"))
+        timer_count = int(fields[3].decode("ascii"))
+        duration_ms = int(fields[4].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid massive READY integer field") from error
+    if sleepers != expected_sleepers:
+        raise BenchmarkError(
+            "unexpected massive sleeper count: expected "
+            + str(expected_sleepers)
+            + ", got "
+            + str(sleepers)
+        )
+    if timer_count != expected_timer_count:
+        raise BenchmarkError(
+            "unexpected massive timer count: expected "
+            + str(expected_timer_count)
+            + ", got "
+            + str(timer_count)
+        )
+    if duration_ms != expected_duration_ms:
+        raise BenchmarkError(
+            "unexpected massive timer duration: expected "
+            + str(expected_duration_ms)
+            + ", got "
+            + str(duration_ms)
+        )
+    min_start_ms = finite_float(fields[5], "massive timer min_start_ms")
+    max_start_ms = finite_float(fields[6], "massive timer max_start_ms")
+    if min_start_ms < 0.0 or max_start_ms < 0.0:
+        raise BenchmarkError("massive timer start observations must be nonnegative")
+    if max_start_ms < min_start_ms:
+        raise BenchmarkError(
+            "massive timer max_start_ms is before massive timer min_start_ms"
+        )
+    return {
+        "sleepers": sleepers,
+        "timer_count": timer_count,
         "duration_ms": duration_ms,
         "min_start_ms": min_start_ms,
         "max_start_ms": max_start_ms,
@@ -267,6 +349,18 @@ def read_process_ready(
     return line
 
 
+def read_process_phase(
+    process: subprocess.Popen,
+    phase: str,
+    benchmark: str,
+    expected_fields: Sequence[str],
+    timeout_seconds: float = READY_TIMEOUT_SECONDS,
+) -> bytes:
+    line = read_process_ready_line(process, benchmark, timeout_seconds)
+    parse_phase_line(line, phase, benchmark, expected_fields)
+    return line
+
+
 def finite_float(text: bytes, field: str) -> float:
     try:
         value = float(text.decode("ascii"))
@@ -317,6 +411,55 @@ def parse_timer_samples(
     return [by_index[index] for index in sorted(by_index)]
 
 
+def parse_massive_samples(
+    stream: BinaryIO,
+    expected_sleepers: int,
+    expected_timer_count: int,
+) -> List[Dict[str, float]]:
+    by_index: Dict[int, Dict[str, float]] = {}
+    while len(by_index) < expected_timer_count:
+        line = read_bounded_line(stream, MAX_PROTOCOL_LINE_BYTES)
+        fields = line.rstrip(b"\n").split(b" ")
+        if len(fields) != 4 or fields[:2] != [b"SAMPLE", b"massive_timer"]:
+            raise BenchmarkError("malformed massive timer sample line: " + repr(line))
+        try:
+            index = int(fields[2].decode("ascii"))
+        except (UnicodeDecodeError, ValueError) as error:
+            raise BenchmarkError("invalid massive timer sample index") from error
+        if not 0 <= index < expected_timer_count:
+            raise BenchmarkError(
+                "massive timer sample index is outside the expected range"
+            )
+        if index in by_index:
+            raise BenchmarkError("duplicate massive timer sample index " + str(index))
+        overshoot_ms = finite_float(fields[3], "massive timer overshoot_ms")
+        if overshoot_ms < 0.0:
+            raise BenchmarkError("massive timer overshoot_ms must be nonnegative")
+        by_index[index] = {
+            "index": index,
+            "overshoot_ms": overshoot_ms,
+        }
+
+    done = read_bounded_line(stream, MAX_PROTOCOL_LINE_BYTES)
+    expected_done = (
+        "DONE massive "
+        + str(expected_sleepers)
+        + " "
+        + str(expected_timer_count)
+        + "\n"
+    ).encode("ascii")
+    if done != expected_done:
+        raise BenchmarkError(
+            "unexpected massive DONE line: expected "
+            + repr(expected_done)
+            + ", got "
+            + repr(done)
+        )
+    if stream.read(1):
+        raise BenchmarkError("massive benchmark emitted trailing output")
+    return [by_index[index] for index in sorted(by_index)]
+
+
 def timer_gate_summary(
     runs: Sequence[Dict[str, object]]
 ) -> Dict[str, object]:
@@ -338,6 +481,61 @@ def timer_gate_summary(
         "worst_valid_run_p99_ms": (
             max(valid_p99_values) if valid_p99_values else None
         ),
+    }
+
+
+def massive_gate_summary(
+    runs: Sequence[Dict[str, object]]
+) -> Dict[str, object]:
+    if not runs:
+        raise BenchmarkError("massive benchmark has no repetitions")
+    rss_gate = rss_gate_summary(
+        runs,
+        limit_bytes=MASSIVE_RSS_LIMIT_BYTES,
+    )
+    timer_gate = timer_gate_summary(runs)
+    worst_valid_timer_p99 = timer_gate["worst_valid_run_p99_ms"]
+    all_arm_spans_valid = all(bool(run["arm_span_valid"]) for run in runs)
+    return {
+        "observed_peak_rss_bytes": rss_gate["observed_peak_rss_bytes"],
+        "observed_incremental_peak_rss_bytes": rss_gate[
+            "observed_incremental_peak_rss_bytes"
+        ],
+        "rss_limit_bytes": rss_gate["limit_bytes"],
+        "rss_measurement": rss_gate["measurement"],
+        "observed_timer_p99_ms": worst_valid_timer_p99,
+        "timer_p99_limit_ms": TIMER_P99_LIMIT_MS,
+        "observed_max_timer_arm_span_ms": max(
+            float(run["arm_span_ms"]) for run in runs
+        ),
+        "timer_arm_span_limit_ms": TIMER_ARM_SPAN_LIMIT_MS,
+        "invalid_overlap_runs": timer_gate["invalid_overlap_runs"],
+        "operator": "<=",
+        "passed": (
+            bool(rss_gate["passed"])
+            and worst_valid_timer_p99 is not None
+            and float(worst_valid_timer_p99) <= TIMER_P99_LIMIT_MS
+            and all_arm_spans_valid
+        ),
+    }
+
+
+def rss_gate_summary(
+    runs: Sequence[Dict[str, object]], *, limit_bytes: int
+) -> Dict[str, object]:
+    if not runs:
+        raise BenchmarkError("RSS benchmark has no repetitions")
+    observed_peak = max(int(run["peak_rss_bytes"]) for run in runs)
+    observed_incremental_peak = max(
+        int(run["incremental_peak_rss_bytes"]) for run in runs
+    )
+    return {
+        "observed_peak_rss_bytes": observed_peak,
+        "observed_incremental_peak_rss_bytes": observed_incremental_peak,
+        "limit_bytes": limit_bytes,
+        "measurement": "whole-process peak RSS",
+        "operator": "<=",
+        "passed": observed_peak <= limit_bytes,
     }
 
 
@@ -563,6 +761,10 @@ class ProcessMonitor:
                     self.pid,
                     allow_macos_ps_fallback=self.allow_macos_ps_fallback,
                 )
+            except ProcessLookupError:
+                # Natural process completion races the monitor's last sample.
+                # Completion status and protocol are validated by the caller.
+                return
             except (BenchmarkError, OSError) as error:
                 self.sampling_error = str(error)
                 return
@@ -605,6 +807,15 @@ class ProcessMonitor:
         if not self.samples:
             return None
         return int(max(sample["rss_bytes"] for sample in self.samples))
+
+
+def require_monitor_evidence(monitor: ProcessMonitor, benchmark: str) -> None:
+    if monitor.sampling_error is not None:
+        raise BenchmarkError(
+            benchmark + " process sampling failed: " + monitor.sampling_error
+        )
+    if not monitor.samples:
+        raise BenchmarkError(benchmark + " produced no process samples")
 
 
 def launch_binary(binary: pathlib.Path) -> subprocess.Popen:
@@ -677,9 +888,18 @@ def run_sleepers(binary: pathlib.Path, stable_seconds: float) -> Dict[str, objec
         allow_macos_ps_fallback=False,
     )
     try:
-        ready = read_process_ready(process, "sleepers", ("10000",))
-        started = time.perf_counter()
+        baseline = read_process_phase(
+            process, "BASELINE", "sleepers", ("10000",)
+        )
+        baseline_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
         monitor.start()
+        ready = read_process_ready(process, "sleepers", ("10000",))
+        ready_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
+        started = time.perf_counter()
         completion = collect_exact_completion(
             process, "sleepers", b"DONE sleepers 10000\n"
         )
@@ -696,12 +916,20 @@ def run_sleepers(binary: pathlib.Path, stable_seconds: float) -> Dict[str, objec
             process.kill()
             process.wait()
         monitor.stop()
+    require_monitor_evidence(monitor, "sleepers")
+    peak_rss_bytes = max(monitor.peak_rss_bytes, ready_stats.rss_bytes)
     return {
         "command": [str(binary)],
+        "baseline": baseline.decode("ascii"),
         "ready": ready.decode("ascii"),
+        "baseline_rss_bytes": baseline_stats.rss_bytes,
+        "ready_rss_bytes": ready_stats.rss_bytes,
         "required_stable_window_s": stable_seconds,
         "ready_to_done_s": ready_to_done,
-        "peak_rss_bytes": monitor.peak_rss_bytes,
+        "peak_rss_bytes": peak_rss_bytes,
+        "incremental_peak_rss_bytes": max(
+            0, peak_rss_bytes - baseline_stats.rss_bytes
+        ),
         "process_samples": monitor.samples,
         "sample_interval_s": monitor.sample_interval_seconds,
         "sampling_error": monitor.sampling_error,
@@ -731,6 +959,7 @@ def run_idle(binary: pathlib.Path, stable_seconds: float) -> Dict[str, object]:
             process.kill()
             process.wait()
         monitor.stop()
+    require_monitor_evidence(monitor, "idle")
     cpu_delta = max(0.0, finished_stats.cpu_seconds - started_stats.cpu_seconds)
     return {
         "command": [str(binary)],
@@ -771,6 +1000,7 @@ def run_timers(binary: pathlib.Path) -> Dict[str, object]:
             raise BenchmarkError("timer benchmark timed out") from error
     finally:
         monitor.stop()
+    require_monitor_evidence(monitor, "timers")
     if process.returncode != 0:
         raise BenchmarkError(
             "timer benchmark exited with status " + str(process.returncode)
@@ -796,6 +1026,97 @@ def run_timers(binary: pathlib.Path) -> Dict[str, object]:
         "process_samples": monitor.samples,
         "sample_interval_s": monitor.sample_interval_seconds,
         "sampling_error": monitor.sampling_error,
+    }
+
+
+def run_massive(binary: pathlib.Path) -> Dict[str, object]:
+    process = launch_binary(binary)
+    monitor = ProcessMonitor(
+        process.pid,
+        sample_interval_seconds=RSS_SAMPLE_INTERVAL_SECONDS,
+        allow_macos_ps_fallback=False,
+    )
+    try:
+        baseline = read_process_phase(
+            process,
+            "BASELINE",
+            "massive",
+            (
+                str(MASSIVE_SLEEPER_COUNT),
+                str(MASSIVE_TIMER_COUNT),
+                str(MASSIVE_TIMER_DURATION_MS),
+            ),
+        )
+        baseline_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
+        monitor.start()
+        ready = read_process_ready_line(
+            process,
+            "massive",
+            timeout_seconds=MASSIVE_READY_TIMEOUT_SECONDS,
+        )
+        ready_observation = parse_massive_ready_line(
+            ready,
+            expected_sleepers=MASSIVE_SLEEPER_COUNT,
+            expected_timer_count=MASSIVE_TIMER_COUNT,
+            expected_duration_ms=MASSIVE_TIMER_DURATION_MS,
+        )
+        ready_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
+        try:
+            stdout, stderr = process.communicate(
+                timeout=MASSIVE_COMPLETION_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.communicate(timeout=3.0)
+            raise BenchmarkError("massive benchmark timed out after READY") from error
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        monitor.stop()
+    require_monitor_evidence(monitor, "massive")
+    if process.returncode != 0:
+        raise BenchmarkError(
+            "massive benchmark exited with status " + str(process.returncode)
+        )
+    if stderr:
+        raise BenchmarkError(
+            "massive benchmark wrote unexpected stderr: "
+            + stderr.decode("utf-8", errors="replace")
+        )
+    samples = parse_massive_samples(
+        io.BytesIO(stdout),
+        expected_sleepers=MASSIVE_SLEEPER_COUNT,
+        expected_timer_count=MASSIVE_TIMER_COUNT,
+    )
+    peak_rss_bytes = max(monitor.peak_rss_bytes, ready_stats.rss_bytes)
+    incremental_peak_rss_bytes = max(
+        0, peak_rss_bytes - baseline_stats.rss_bytes
+    )
+    arm_span_ms = float(ready_observation["arm_span_ms"])
+    overshoots = [sample["overshoot_ms"] for sample in samples]
+    return {
+        "command": [str(binary)],
+        "baseline": baseline.decode("ascii"),
+        "ready": ready.decode("ascii"),
+        "ready_observation": ready_observation,
+        "baseline_rss_bytes": baseline_stats.rss_bytes,
+        "ready_rss_bytes": ready_stats.rss_bytes,
+        "peak_rss_bytes": peak_rss_bytes,
+        "incremental_peak_rss_bytes": incremental_peak_rss_bytes,
+        "arm_span_ms": arm_span_ms,
+        "arm_span_limit_ms": TIMER_ARM_SPAN_LIMIT_MS,
+        "arm_span_valid": arm_span_ms <= TIMER_ARM_SPAN_LIMIT_MS,
+        "samples": samples,
+        "summary": timer_summary(overshoots),
+        "process_samples": monitor.samples,
+        "sample_interval_s": monitor.sample_interval_seconds,
+        "sampling_error": monitor.sampling_error,
+        "returncode": process.returncode,
     }
 
 
@@ -1039,21 +1360,36 @@ def require_quiet_process_check(
 def benchmark_is_contractual(
     allow_competing_processes: bool,
     process_checks: Sequence[Sequence[ProcessRow]],
+    *,
+    host: Optional[Dict[str, object]] = None,
+    repository: Optional[Dict[str, object]] = None,
 ) -> bool:
     return not benchmark_noncontractual_reasons(
-        allow_competing_processes, process_checks
+        allow_competing_processes,
+        process_checks,
+        host=host,
+        repository=repository,
     )
 
 
 def benchmark_noncontractual_reasons(
     allow_competing_processes: bool,
     process_checks: Sequence[Sequence[ProcessRow]],
+    *,
+    host: Optional[Dict[str, object]] = None,
+    repository: Optional[Dict[str, object]] = None,
 ) -> List[str]:
     reasons = []
     if allow_competing_processes:
         reasons.append("the competing-process override was enabled")
     if any(process_checks):
         reasons.append("competing Aurora-repository processes were observed")
+    if host is not None and host.get("hardware_model") != "Mac14,9":
+        reasons.append(
+            "host hardware model is not the contractual Mac14,9 baseline"
+        )
+    if repository is not None and repository.get("dirty_files"):
+        reasons.append("repository worktree was dirty")
     return reasons
 
 
@@ -1081,6 +1417,55 @@ def validate_options(options: Options, root: pathlib.Path = ROOT) -> None:
         raise BenchmarkError("--json must be stored outside target/")
     if json_path.exists() and json_path.is_dir():
         raise BenchmarkError("--json must name a file, not a directory")
+
+
+def qualify_aura_binary(
+    aura: pathlib.Path, *, root: pathlib.Path = ROOT
+) -> Dict[str, object]:
+    expected = (root / "target/release/aura").resolve()
+    resolved = aura.resolve()
+    if resolved != expected:
+        raise BenchmarkError(
+            "--aura must name this checkout's target/release/aura so its "
+            "source identity can be qualified"
+        )
+    command = [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "aura",
+        "--target-dir",
+        str((root / "target").resolve()),
+    ]
+    result = subprocess.run(
+        command,
+        cwd=root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise BenchmarkError(
+            "failed to qualify Aura with a fresh checkout build:\n"
+            + result.stderr.decode("utf-8", errors="replace")
+        )
+    if not expected.is_file() or not os.access(str(expected), os.X_OK):
+        raise BenchmarkError(
+            "fresh cargo build did not create executable " + str(expected)
+        )
+    return {
+        "path": str(expected),
+        "sha256": sha256_file(expected),
+        "fresh_cargo_build": True,
+        "command": command,
+        "stdout": result.stdout.decode("utf-8", errors="strict"),
+        "stderr": result.stderr.decode("utf-8", errors="strict"),
+        "returncode": result.returncode,
+    }
 
 
 def aura_version(aura: pathlib.Path) -> str:
@@ -1298,20 +1683,28 @@ def execute(options: Options) -> Dict[str, object]:
         phase="before workload builds",
     )
 
+    aura_qualification = qualify_aura_binary(aura)
+    host = hardware_record()
+    repository = repository_record(ROOT)
     report: Dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "label": options.label,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runner_command": [sys.executable, str(pathlib.Path(__file__).resolve()), *sys.argv[1:]],
-        "host": hardware_record(),
-        "repository": repository_record(ROOT),
+        "host": host,
+        "repository": repository,
+        "aura_qualification": aura_qualification,
         "parameters": {
             "repeats": options.repeats,
             "timer_repeats": options.timer_repeats,
             "v6_repeats": options.v6_repeats,
             "idle_seconds": options.idle_seconds,
             "ready_timeout_seconds": READY_TIMEOUT_SECONDS,
+            "massive_ready_timeout_seconds": MASSIVE_READY_TIMEOUT_SECONDS,
             "timer_timeout_seconds": TIMER_TIMEOUT_SECONDS,
+            "massive_completion_timeout_seconds": (
+                MASSIVE_COMPLETION_TIMEOUT_SECONDS
+            ),
             "starvation_timeout_seconds": STARVATION_TIMEOUT_SECONDS,
             "natural_completion_timeout_seconds": NATURAL_COMPLETION_TIMEOUT_SECONDS,
             "timer_arm_span_limit_ms": TIMER_ARM_SPAN_LIMIT_MS,
@@ -1350,15 +1743,22 @@ def execute(options: Options) -> Dict[str, object]:
         report["contractual"] = benchmark_is_contractual(
             options.allow_competing_processes,
             (before_build_competitors, before_timing_competitors),
+            host=host,
+            repository=repository,
         )
         report["noncontractual_reasons"] = benchmark_noncontractual_reasons(
             options.allow_competing_processes,
             (before_build_competitors, before_timing_competitors),
+            host=host,
+            repository=repository,
         )
 
         sleepers = [
             run_sleepers(binaries["sleepers"], options.idle_seconds)
             for _ in range(options.repeats)
+        ]
+        massive = [
+            run_massive(binaries["massive"]) for _ in range(options.repeats)
         ]
         timers = [
             run_timers(binaries["timers"]) for _ in range(options.timer_repeats)
@@ -1374,7 +1774,12 @@ def execute(options: Options) -> Dict[str, object]:
             binaries["int32"], binaries["int64"], options.v6_repeats
         )
 
-    sleeper_peak = max(int(run["peak_rss_bytes"]) for run in sleepers)
+    sleeper_rss_gate = rss_gate_summary(
+        sleepers,
+        limit_bytes=SLEEPER_RSS_LIMIT_BYTES,
+    )
+    massive_timer_gate = timer_gate_summary(massive)
+    massive_gate = massive_gate_summary(massive)
     timer_overshoots = [
         float(sample["overshoot_ms"])
         for run in timers
@@ -1387,12 +1792,8 @@ def execute(options: Options) -> Dict[str, object]:
     all_arm_spans_valid = all(bool(run["arm_span_valid"]) for run in timers)
     starvation_gate = starvation_gate_summary(starvation)
     gates = {
-        "sleepers_peak_rss": {
-            "observed_bytes": sleeper_peak,
-            "limit_bytes": SLEEPER_RSS_LIMIT_BYTES,
-            "operator": "<=",
-            "passed": sleeper_peak <= SLEEPER_RSS_LIMIT_BYTES,
-        },
+        "sleepers_peak_rss": sleeper_rss_gate,
+        "massive_concurrency": massive_gate,
         "timer_p99_overshoot": {
             "observed_ms": worst_valid_timer_p99,
             "limit_ms": TIMER_P99_LIMIT_MS,
@@ -1421,6 +1822,10 @@ def execute(options: Options) -> Dict[str, object]:
     }
     report["benchmarks"] = {
         "sleepers": {"runs": sleepers},
+        "massive": {
+            "runs": massive,
+            "gate_summary": massive_timer_gate,
+        },
         "timers": {
             "runs": timers,
             "combined_summary": timers_summary,

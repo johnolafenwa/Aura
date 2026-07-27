@@ -1,0 +1,144 @@
+import io
+import sys
+
+
+def sleeper(ready: Queue[int32]):
+    ready.put(1)
+    sleep(1m)
+
+
+def timer(
+    index: int32,
+    prepared: Queue[int32],
+    release: Queue[int32],
+    armed: Queue[int64],
+    samples: Queue[int64]
+):
+    prepared.put(index)
+
+    match release.get():
+        case QueueReceive.Item(_):
+            start_ms: int64 = sys.monotonic_time_ms()
+            armed.put(start_ms)
+            sleep(10ms)
+
+            elapsed_ms: int64 = sys.monotonic_time_ms() - start_ms
+            mut overshoot_ms: int64 = elapsed_ms - 10
+            if overshoot_ms < 0:
+                overshoot_ms = 0
+
+            samples.put(overshoot_ms)
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
+            pass
+
+
+def main() -> int32:
+    print("BASELINE massive 100000 1000 10")
+    match io.flush():
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            return 1
+
+    sleeper_ready = Queue[int32]()
+    timer_prepared = Queue[int32]()
+    timer_release = Queue[int32]()
+    timer_armed = Queue[int64]()
+    timer_samples = Queue[int64]()
+    mut overshoots = Vec[int64]()
+
+    with TaskGroup() as group:
+        for _ in range(100000):
+            group.start_soon(sleeper, sleeper_ready)
+
+        mut parked: int32 = 0
+        while parked < 100000:
+            match sleeper_ready.get():
+                case QueueReceive.Item(_):
+                    parked += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        for index in range(1000):
+            group.start_soon(
+                timer,
+                index,
+                timer_prepared,
+                timer_release,
+                timer_armed,
+                timer_samples
+            )
+
+        mut prepared_count: int32 = 0
+        while prepared_count < 1000:
+            match timer_prepared.get():
+                case QueueReceive.Item(_):
+                    prepared_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        for token in range(1000):
+            timer_release.put(token)
+
+        mut armed_count: int32 = 0
+        mut min_start_ms: int64 = 0
+        mut max_start_ms: int64 = 0
+        while armed_count < 1000:
+            match timer_armed.get():
+                case QueueReceive.Item(start_ms):
+                    if armed_count == 0:
+                        min_start_ms = start_ms
+                        max_start_ms = start_ms
+                    elif start_ms < min_start_ms:
+                        min_start_ms = start_ms
+                    elif start_ms > max_start_ms:
+                        max_start_ms = start_ms
+                    armed_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        print(
+            f"READY massive 100000 1000 10 {min_start_ms} {max_start_ms}"
+        )
+        match io.flush():
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 1
+
+        mut sample_count: int32 = 0
+        while sample_count < 1000:
+            match timer_samples.get():
+                case QueueReceive.Item(overshoot_ms):
+                    overshoots.push(overshoot_ms)
+                    sample_count += 1
+                case QueueReceive.Closed:
+                    return 1
+                case QueueReceive.TimedOut:
+                    return 1
+                case QueueReceive.Cancelled:
+                    return 1
+
+        group.cancel()
+
+    for index, overshoot_ms in enumerate(overshoots):
+        print(f"SAMPLE massive_timer {index} {overshoot_ms}")
+
+    print("DONE massive 100000 1000")
+    return 0
