@@ -814,7 +814,7 @@ fn json_semantics_public_analysis_exposes_canonical_enum_identity_and_variant_pa
 import json
 
 def describe(value: own json.Value) -> String:
-    match value:
+    match own value:
         case json.Value.String(text):
             return text
         case json.Value.Object(entries):
@@ -934,14 +934,14 @@ enum Outer:
     Empty
 
 def take_string_value(value: own json.Value) -> String:
-    match value:
+    match own value:
         case json.Value.String(text):
             return text
         case _:
             return "not-string"
 
 def extract(value: own Outer) -> String:
-    return match value:
+    return match own value:
         case Outer.Wrapped(Inner.Text(json.Value.String(text))): text
         case Outer.Wrapped(Inner.Text(_)): "not-string"
         case Outer.Empty: "empty"

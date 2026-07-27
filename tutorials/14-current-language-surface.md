@@ -45,7 +45,7 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - `float32`, `float64`
 - `String`
-- `str` in borrowed type positions
+- `str` in shared type positions
 - `None`
 - `Duration`
 - `Range`
@@ -248,7 +248,7 @@ The current compiler supports these expression forms:
   once, and a false link short-circuits the rest
 - the compiler-known `for` iterable forms `enumerate(seq)`, yielding
   `(int64, element)`, and `zip(first, second)`, which stops at the shorter
-  sequence; both take `Vec[T]` or `Set[T]` operands over the bare-loop borrow
+  sequence; both take `Vec[T]` or `Set[T]` operands over the bare-loop shared
   default and are legal only as a `for` iterable
 - the builtin functions `len(value)`, which delegates to the value's `len()`
   member and produces `int64`, and `str(value)`, which produces the same

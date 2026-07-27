@@ -185,7 +185,7 @@ def main() -> int:
     stats = {
         "matches": 0,
         "bare_matches": 0,
-        "explicit_borrow_matches": 0,
+        "own_matches": 0,
         "explicit_borrow_mut_matches": 0,
         "bare_matches_place_scrutinee": 0,
         "bare_matches_temporary_scrutinee": 0,
@@ -229,14 +229,17 @@ def main() -> int:
         walk(tree, "Match", hits)
         for node in hits:
             stats["matches"] += 1
-            mode = node.get("borrow_mode")
-            if mode is None:
+            # The field was `borrow_mode: Option<ReceiverKind>` before the
+            # ADR-0022 flip and is `capability: ReceiverKind` after it, where
+            # a bare match is `Borrow` rather than absent.
+            mode = node.get("capability", node.get("borrow_mode"))
+            if mode is None or mode == "Borrow":
                 stats["bare_matches"] += 1
                 stats[f"bare_matches_{scrutinee_shape(node)}_scrutinee"] += 1
                 if arm_moves_payload(node):
                     stats["bare_matches_binding_payload"] += 1
-            elif mode == "Borrow":
-                stats["explicit_borrow_matches"] += 1
+            elif mode == "Value":
+                stats["own_matches"] += 1
             elif mode == "BorrowMut":
                 stats["explicit_borrow_mut_matches"] += 1
 

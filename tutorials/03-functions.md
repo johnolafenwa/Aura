@@ -82,7 +82,7 @@ Aurora rejects overlapping arguments when `mut ` is involved. A mutable borrow m
 
 ```python
 # This would be rejected:
-# bad(a: borrow mut Counter, b: borrow Counter) called with bad(c, c)
+# bad(a: mut Counter, b: Counter) called with bad(c, c)
 ```
 
 This rule prevents subtle bugs where a function reads from and writes to the same value through different parameters.

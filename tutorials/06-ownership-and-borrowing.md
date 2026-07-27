@@ -226,7 +226,7 @@ def bad(a: mut Counter, b: Counter):
     a.value += b.value
 
 mut c = Counter(value=1)
-bad(c, c)    # COMPILE ERROR: overlapping borrow
+bad(c, c)    # COMPILE ERROR: overlapping access
 ```
 
 **Why does this rule exist?** Imagine `bad` increments `a.value` while reading `b.value` -- but `a` and `b` are the same object. The final result would depend on the order of operations inside the function, creating a subtle bug. Aurora prevents this entirely.
@@ -538,7 +538,7 @@ To match and mutate the payload, use `match mut`:
 mut result: Result[String, String] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
-        # msg is borrow mut String -- can call mutating methods
+        # msg is mut String -- can call mutating methods
         pass
     case Err(e):
         pass
@@ -611,7 +611,7 @@ print(doc.title)       # doc still valid
 **Problem:**
 ```python
 def get_title(doc: Document) -> String:
-    return doc.title   # COMPILE ERROR: cannot move from borrow
+    return doc.title   # COMPILE ERROR: cannot move out of shared access
 ```
 
 **Fix -- clone the field:**

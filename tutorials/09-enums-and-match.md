@@ -121,7 +121,7 @@ Use `match mut` when you need to modify the matched value:
 mut result: Result[String, String] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
-        pass    # msg is borrow mut String
+        pass    # msg is mut String
     case Err(e):
         pass
 ```
