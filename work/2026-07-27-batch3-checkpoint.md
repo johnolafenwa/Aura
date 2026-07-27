@@ -307,6 +307,12 @@ its regression was pinned, and the full gate was restarted successfully.
 | `check:clippy` | pass with warnings denied |
 | `check:hygiene` | pass |
 
+Suite-count precision: the 928 compiler and 268 CLI totals above are the
+observed counts under the exact gate conditions: the debug profile and the
+single-threaded Rust test invocation (`cargo test -- --test-threads=1`). They
+are not profile-independent inventory totals; alternate invocations that
+report 927 compiler and 265 CLI tests do not contradict this checkpoint.
+
 ### Reference-integrity re-baseline
 
 The manifest is content-hashed and fails closed, so the Manual migration
@@ -345,6 +351,6 @@ dependency caches, and user files were preserved.
 ## Stop
 
 Batch 3's implementation and exact-tree verification are complete at the
-requested checkpoint. Post-gate cleanup is complete, and this checkpoint is
-ready for its corrective commit. Phase 5 has not been started, and nothing has
-been pushed.
+requested checkpoint. Post-gate cleanup is complete, and the corrective
+checkpoint is committed at `1c249ab`. Phase 5 was not started during Batch 3,
+and nothing has been pushed.

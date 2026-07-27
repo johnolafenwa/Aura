@@ -2,6 +2,30 @@
 
 Last updated: 2026-07-27
 
+## Batch 4 of 6 (active)
+
+- Authorized target: close B4.0-a through B4.0-d, then implement Phase 5's
+  scalable runtime in the ratified strict order: reactor, public
+  `yield_now()`, compiler safepoints, stack diet, scheduler soundness,
+  structural Transfer rules, pinned-worker multicore, typed select,
+  configurable blocking pool, and native structured frames. Stop at the Batch
+  4 checkpoint without beginning Phase 6.
+- Entry state: Batch 3 is accepted and committed at `1c249ab`. The Batch 4
+  worktree opened from that clean checkpoint with compiler coverage floors
+  frozen at `96.13/96.89/94.35`; see
+  `work/2026-07-27-batch4-scalable-runtime.md`.
+- Current stage: B4.0 is in progress. Cross-process native-cache locking and
+  truthful wait/rebuild status, capability diagnostic polish, and
+  gate-condition suite-count precision are the only open implementation
+  surface. Phase 5 proper has not started.
+- Benchmark host: Mac14,9 Apple M2 Pro, 10 logical CPUs, 16 GiB RAM, macOS
+  26.5.2 (25F84). Contractual measurements require the dedicated quiet-machine
+  protocol and per-stage before/after evidence.
+- Standing rules: behavior-focused coverage only; floors remain frozen through
+  the batch; one truncated re-ratchet at sign-off; contained semantic
+  gap-fills may proceed provisionally, but larger language/runtime questions
+  stop for review; reference and parity surfaces move with behavior.
+
 ## Batch 3 of 6 (complete)
 
 - Authorized target: close B3.0-a through B3.0-e in separate test-first
@@ -24,8 +48,7 @@ Last updated: 2026-07-27
   `npm run ci` is green. Batch 3 implementation and verification are complete
   at the requested checkpoint; see `work/2026-07-27-batch3-checkpoint.md`.
   Post-gate coverage cleanup leaves `target/` at 6.8 GiB with 193 GiB free.
-  The corrective tree is ready to commit. Phase 5 has not been started and
-  nothing is pushed.
+  The corrective tree is committed at `1c249ab`; nothing is pushed.
 - Batch 2 ADR disposition: ADR-0018, ADR-0019, ADR-0020, ADR-0021, ADR-0023,
   ADR-0024, ADR-0025, ADR-0027, and ADR-0028 are Accepted as implemented.
   ADR-0026 and ADR-0030 become Accepted with their required B3.0 amendments;
@@ -157,7 +180,10 @@ Last updated: 2026-07-27
   tests, 268 CLI tests, 928 compiler tests, the 732.74-second forced
   MIR/direct parity matrix, 79/79 LSP tests, 13/13 extension tests, reference,
   docs, audits, warning-denied Clippy, hygiene, compiler coverage, and 100% LSP
-  coverage. Compiler coverage is 64,645/67,244 lines (96.134971%),
+  coverage. The 928/268 suite counts are gate-condition observations from the
+  debug profile with Rust tests run single-threaded; alternate invocations can
+  report 927 compiler and 265 CLI tests. Compiler coverage is 64,645/67,244
+  lines (96.134971%),
   4,200/4,335 functions (96.885813%), and 94,962/100,649 regions
   (94.349671%); final floors are `96.13/96.89/94.35`. No synthetic coverage
   test, exclusion, or coverage-only branch was added.
