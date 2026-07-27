@@ -3780,9 +3780,12 @@ impl<'a> FunctionChecker<'a> {
             RngCloneSafety::Safe => format!(
                 "cannot implicitly copy `{ty}` out of a vector index; use `get(index)` for an explicit cloned read instead"
             ),
-            RngCloneSafety::ContainsRng => format!(
-                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because `{ty}` contains non-cloneable `random.Rng` state, so use `remove({selector})` to transfer ownership instead"
-            ),
+            RngCloneSafety::ContainsRng => {
+                let reason = Self::non_cloneable_rng_reason(ty);
+                format!(
+                    "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because {reason}, so use `remove({selector})` to transfer ownership instead"
+                )
+            }
             RngCloneSafety::Unknown => format!(
                 "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership"
             ),
@@ -3810,9 +3813,12 @@ impl<'a> FunctionChecker<'a> {
             RngCloneSafety::Safe => format!(
                 "cannot implicitly copy `{ty}` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`"
             ),
-            RngCloneSafety::ContainsRng => format!(
-                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because `{ty}` contains non-cloneable `random.Rng` state, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
-            ),
+            RngCloneSafety::ContainsRng => {
+                let reason = Self::non_cloneable_rng_reason(ty);
+                format!(
+                    "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because {reason}, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+                )
+            }
             RngCloneSafety::Unknown => format!(
                 "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
             ),
@@ -3827,6 +3833,14 @@ impl<'a> FunctionChecker<'a> {
             self.imported_modules,
             self.module_registry,
         )
+    }
+
+    fn non_cloneable_rng_reason(ty: &Type) -> String {
+        if matches!(ty, Type::Named(name, args) if name == "random.Rng" && args.is_empty()) {
+            format!("`{ty}` is directly non-cloneable")
+        } else {
+            format!("`{ty}` contains non-cloneable `random.Rng` state")
+        }
     }
 
     fn reject_rng_duplication(
@@ -4692,7 +4706,7 @@ impl<'a> FunctionChecker<'a> {
             diagnostic = diagnostic.with_secondary(origin, "value moved here");
             if self.type_supports_builtin_clone(&binding.ty) {
                 diagnostic = diagnostic.with_help(
-                    "pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
+                    "pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
                 );
                 let insertion = crate::diag::Span::new(
                     origin.line,
@@ -4701,7 +4715,7 @@ impl<'a> FunctionChecker<'a> {
                 diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
             } else {
                 diagnostic = diagnostic.with_help(
-                    "pass a shared borrow when ownership is not needed, or transfer this non-cloneable value only once",
+                    "pass shared access when ownership is not needed, or transfer this non-cloneable value only once",
                 );
             }
         }
@@ -6614,6 +6628,20 @@ impl<'a> FunctionChecker<'a> {
                 locals,
             )?;
             if !existing.assignable && !existing.mutable_place {
+                if existing.borrow_origin.is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU3003",
+                        assign.span,
+                        format!(
+                            "cannot rebind shared alias `{}`; shared aliases are non-assignable",
+                            binding_name
+                        ),
+                    )
+                    .with_help(format!(
+                        "use `{}` only for shared access; rebinding requires a separate `mut` value obtained through `own` input or a supported `.clone()`",
+                        binding_name
+                    )));
+                }
                 return Err(Diagnostic::coded_at(
                     "AU3003",
                     assign.span,
@@ -7399,7 +7427,7 @@ impl<'a> FunctionChecker<'a> {
                             diagnostic = diagnostic
                                 .with_secondary(origin, "field moved here")
                                 .with_help(
-                                    "borrow the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required",
+                                    "use shared access to the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required",
                                 );
                         }
                         return Err(diagnostic);
@@ -8193,7 +8221,7 @@ impl<'a> FunctionChecker<'a> {
                                 diagnostic = diagnostic
                                     .with_secondary(origin, "field moved here")
                                     .with_help(
-                                        "borrow the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required",
+                                        "use shared access to the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required",
                                     );
                             }
                             return Err(diagnostic);
@@ -15558,9 +15586,9 @@ impl<'a> FunctionChecker<'a> {
             let help = if current_passing == ReceiverKind::Value
                 || prior.passing == ReceiverKind::Value
             {
-                "pass non-overlapping places, or call `.clone()` before consuming a value that must remain borrowed"
+                "pass non-overlapping places, or call `.clone()` before consuming a value that must remain available through shared access"
             } else {
-                "pass non-overlapping places; shared borrows may overlap, but a mutable borrow must remain exclusive"
+                "pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive"
             };
             return Err(Diagnostic::at(span, detail)
                 .with_secondary(prior.origin_span, origin_label)

@@ -4,4 +4,4 @@ error[AU3002]: argument for parameter `source` in method `add_from` overlaps mut
 9 |     acc.add_from(source=acc)
   |                  ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_argument.au:9:5: mutable borrow for parameter `self` begins here
-  = help: pass non-overlapping places; shared borrows may overlap, but a mutable borrow must remain exclusive
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

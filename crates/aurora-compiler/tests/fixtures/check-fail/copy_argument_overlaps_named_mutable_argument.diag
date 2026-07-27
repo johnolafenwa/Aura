@@ -4,4 +4,4 @@ error[AU3002]: argument for parameter `second` in function `set` overlaps mutabl
 6 |     set(second=value, first=value)
   |         ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/copy_argument_overlaps_named_mutable_argument.au:6:29: mutable borrow for parameter `first` begins here
-  = help: pass non-overlapping places; shared borrows may overlap, but a mutable borrow must remain exclusive
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

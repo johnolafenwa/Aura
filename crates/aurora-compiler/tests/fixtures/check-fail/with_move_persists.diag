@@ -4,5 +4,5 @@ error[AU3001]: use of moved value `text`
 13 |     print(text)
    |           ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/with_move_persists.au:10:17: value moved here
-  = help: pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
   = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/with_move_persists.au:10:21-10:21 with `.clone()`

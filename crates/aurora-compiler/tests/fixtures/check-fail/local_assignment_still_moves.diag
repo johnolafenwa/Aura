@@ -4,5 +4,5 @@ error[AU3001]: use of moved value `first`
 5 |     print(first)
   |           ^
   = related crates/aurora-compiler/tests/fixtures/check-fail/local_assignment_still_moves.au:3:14: value moved here
-  = help: pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
   = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/local_assignment_still_moves.au:3:19-3:19 with `.clone()`

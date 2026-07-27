@@ -1,0 +1,6 @@
+class User:
+    name: String
+
+def replace(user: User):
+    alias = user
+    alias = User(name="Grace")

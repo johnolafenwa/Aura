@@ -35,8 +35,8 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
     let diagnostic = Diagnostic::coded_at("AU3001", Span::new(4, 11), "use of moved value `item`")
         .with_secondary(Span::new(2, 18), "value moved here")
         .with_note("non-copy values have one owner")
-        .with_help("pass a shared borrow or clone the value")
-        .with_edit(Span::new(2, 11), Span::new(2, 11), "borrow ");
+        .with_help("pass shared access or clone the value")
+        .with_edit(Span::new(2, 11), Span::new(2, 11), ".clone()");
 
     let report = diagnostic.structured("examples/move.au");
     assert_eq!(report.code, "AU3001");
@@ -48,8 +48,8 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
         Some("value moved here")
     );
     assert_eq!(report.notes, ["non-copy values have one owner"]);
-    assert_eq!(report.help, ["pass a shared borrow or clone the value"]);
-    assert_eq!(report.edits[0].replacement, "borrow ");
+    assert_eq!(report.help, ["pass shared access or clone the value"]);
+    assert_eq!(report.edits[0].replacement, ".clone()");
     assert_eq!(report.edits[0].applicability, "machine-applicable");
 
     let json = serde_json::to_value(diagnostic.structured("examples/move.au"))
@@ -58,7 +58,7 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
     assert_eq!(json["severity"], "error");
     assert_eq!(json["primary_span"]["start"]["line"], 4);
     assert_eq!(json["secondary_spans"][0]["label"], "value moved here");
-    assert_eq!(json["edits"][0]["replacement"], "borrow ");
+    assert_eq!(json["edits"][0]["replacement"], ".clone()");
 
     let rendered = diagnostic.render_with_source(
         "examples/move.au",
@@ -67,8 +67,8 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
     assert!(rendered.contains("[AU3001]"));
     assert!(rendered.contains("value moved here"));
     assert!(rendered.contains("note: non-copy values have one owner"));
-    assert!(rendered.contains("help: pass a shared borrow or clone the value"));
-    assert!(rendered.contains("fix: replace examples/move.au:2:11-2:11 with `borrow `"));
+    assert!(rendered.contains("help: pass shared access or clone the value"));
+    assert!(rendered.contains("fix: replace examples/move.au:2:11-2:11 with `.clone()`"));
 }
 
 #[test]

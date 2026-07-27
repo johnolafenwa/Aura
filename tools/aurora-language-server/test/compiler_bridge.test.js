@@ -1685,7 +1685,7 @@ test("compiler bridge propagates clone-safety-aware indexed read guidance", asyn
         ""
       ].join("\n"),
       message:
-        "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership instead"
+        "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership instead"
     },
     {
       name: "generic_map",

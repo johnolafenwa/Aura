@@ -1123,7 +1123,7 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "import random\n\ndef main():\n    mut generators = Vec[random.Rng]()\n    generators.push(random.Rng(seed=1))\n    chosen = generators[0]\n    print(chosen.next_float())\n",
-            "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership instead",
+            "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership instead",
         ),
         (
             "import random\n\nclass Holder:\n    generator: random.Rng\n\ndef main():\n    mut holders = Map[String, Holder]()\n    holders.set(\"a\", Holder(generator=random.Rng(seed=1)))\n    chosen = holders[\"a\"]\n    print(chosen.generator.next_float())\n",
@@ -1210,11 +1210,11 @@ fn indexed_compound_assignment_guidance_follows_the_element_clone_safety() {
         ),
         (
             "import random\n\ndef main():\n    mut values: Vec[random.Rng] = [random.Rng(seed=1)]\n    values[0] += random.Rng(seed=2)\n",
-            "cannot implicitly copy `random.Rng` out of a vector index for compound assignment; `get(index)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+            "cannot implicitly copy `random.Rng` out of a vector index for compound assignment; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
         ),
         (
             "import random\n\ndef main():\n    mut values: Map[String, random.Rng] = {\"one\": random.Rng(seed=1)}\n    values[\"one\"] += random.Rng(seed=2)\n",
-            "cannot implicitly copy `random.Rng` out of a map index for compound assignment; `get(key)` cannot clone it because `random.Rng` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+            "cannot implicitly copy `random.Rng` out of a map index for compound assignment; `get(key)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
         ),
         (
             "def update[T](values: mut Vec[T], rhs: T):\n    values[0] += rhs\n",
@@ -17970,6 +17970,126 @@ def snapshot(counter: mut int32):
 "#,
     )
     .expect("a copy-typed mutable source may still be copied into an independent local");
+}
+
+#[test]
+fn shared_local_alias_rebinding_has_capability_aware_guidance() {
+    let rejected = crate::check_source(
+        r#"
+class User:
+    name: String
+
+def replace(user: User):
+    alias = user
+    alias = User(name="Grace")
+"#,
+    )
+    .expect_err("shared local aliases must remain non-assignable");
+
+    assert_eq!(rejected.code, "AU3003");
+    assert_eq!(
+        rejected.message,
+        "cannot rebind shared alias `alias`; shared aliases are non-assignable"
+    );
+    assert_eq!(
+        rejected.help,
+        vec![
+            "use `alias` only for shared access; rebinding requires a separate `mut` value obtained through `own` input or a supported `.clone()`"
+        ]
+    );
+
+    crate::check_source(
+        r#"
+class User:
+    name: String
+
+def replace(user: own User):
+    mut replacement = user
+    replacement = User(name="Grace")
+"#,
+    )
+    .expect("an owned input can initialize a separate rebindable value");
+    crate::check_source(
+        r#"
+def replace(user: String):
+    mut replacement = user.clone()
+    replacement = "Grace"
+"#,
+    )
+    .expect("a supported clone can initialize a separate rebindable value");
+}
+
+#[test]
+fn ownership_help_uses_current_capability_language() {
+    let cases = [
+        (
+            r#"
+def consume(value: own String):
+    pass
+
+def main():
+    value = "hello"
+    consume(value)
+    print(value)
+"#,
+            "AU3001",
+            "pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
+        ),
+        (
+            r#"
+import random
+
+def consume(value: own random.Rng):
+    pass
+
+def main():
+    mut value = random.Rng(seed=1)
+    consume(value)
+    print(value)
+"#,
+            "AU3001",
+            "pass shared access when ownership is not needed, or transfer this non-cloneable value only once",
+        ),
+        (
+            r#"
+class Data:
+    value: int32
+
+def read_and_write(read: Data, write: mut Data):
+    write.value += read.value
+
+def main():
+    mut data = Data(value=1)
+    read_and_write(data, data)
+"#,
+            "AU3002",
+            "pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive",
+        ),
+        (
+            r#"
+class Pair:
+    first: String
+    second: String
+
+def main():
+    pair = Pair(first="a", second="b")
+    first = pair.first
+    print(pair.first)
+"#,
+            "AU3001",
+            "use shared access to the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required",
+        ),
+    ];
+
+    for (source, code, expected_help) in cases {
+        let rejected = crate::check_source(source).expect_err("ownership misuse must be rejected");
+        assert_eq!(rejected.code, code, "{source}");
+        assert_eq!(rejected.help, vec![expected_help], "{source}");
+        assert!(
+            !rejected.help.join(" ").contains("borrow"),
+            "help must use current capability language: {source}"
+        );
+    }
 }
 
 #[test]
