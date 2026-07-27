@@ -170,13 +170,10 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         params: vec![crate::ast::Param {
             name: "value".to_string(),
             mode: ParamMode::Default,
-            borrow_label: None,
             ty: type_ref("int32"),
             default: None,
             span: Span::new(1, 1),
         }],
-        return_passing: ReceiverKind::Value,
-        return_borrow_source: None,
         return_type: type_ref(return_type),
         body: Vec::new(),
         span: Span::new(1, 1),
@@ -223,11 +220,11 @@ fn d5_analysis_renders_canonical_receiver_modes_and_completes_own_keyword() {
     method.receiver = Some(ReceiverKind::BorrowMut);
     assert_eq!(
         format_function_detail(&method),
-        "render(borrow mut self, value: int32) -> bool"
+        "render(mut self, value: int32) -> bool"
     );
     assert_eq!(
         format_method_hover(&method),
-        "```aurora\nmethod render(borrow mut self, value: int32) -> bool\n```"
+        "```aurora\nmethod render(mut self, value: int32) -> bool\n```"
     );
 
     let completions = complete_source("def main():\n    pass\n", 0, 0, None)
@@ -270,7 +267,7 @@ fn random_analysis_exposes_single_rng_binding_and_stateful_members() {
     for (name, detail) in [
         ("next_int", "next_int(lo: int64, hi: int64) -> int64"),
         ("next_float", "next_float() -> float64"),
-        ("shuffle", "shuffle(values: borrow mut Vec[T]) -> None"),
+        ("shuffle", "shuffle(values: mut Vec[T]) -> None"),
     ] {
         let matches = members
             .iter()
@@ -340,7 +337,7 @@ fn user_defined_rng_completion_uses_only_its_declared_surface() {
 class Rng:
     value: int64
 
-    def next_int(borrow self) -> String:
+    def next_int(self) -> String:
         return "local"
 
 def main() -> int32:
@@ -1059,11 +1056,11 @@ fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
 fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds() {
     let source = [
         "trait Show:",
-        "    def show(borrow self) -> String",
+        "    def show(self) -> String",
         "",
         "class Label:",
         "    value: int32",
-        "    def collect(borrow self) -> int32:",
+        "    def collect(self) -> int32:",
         "        mut items: Vec[String] = [\"ready\"]",
         "        for item in items:",
         "            item.len()",
@@ -1071,7 +1068,7 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
         "        return 0",
         "",
         "def unwrap(value: own Option[String]) -> String:",
-        "    match value:",
+        "    match own value:",
         "        case Option.Some(text):",
         "            text.len()",
         "            return text",
@@ -1248,27 +1245,27 @@ fn analysis_recovery_replaces_the_multiline_statement_owning_a_dangling_member()
 fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
     let source = [
         "trait Show:",
-        "    def show(borrow self) -> String",
+        "    def show(self) -> String",
         "",
         "trait Named:",
-        "    def label(borrow self) -> String",
+        "    def label(self) -> String",
         "",
         "trait Mapper[T]:",
-        "    def map(borrow self) -> T",
+        "    def map(self) -> T",
         "",
         "class Box[T]:",
         "    value: T",
         "",
         "impl Show for int32:",
-        "    def show(borrow self) -> String:",
+        "    def show(self) -> String:",
         "        return f\"{self}\"",
         "",
         "impl[T: Show] Named for Box[T]:",
-        "    def label(borrow self) -> String:",
+        "    def label(self) -> String:",
         "        return self.value.show()",
         "",
         "impl Mapper[int32] for Box[int32]:",
-        "    def map(borrow self) -> int32:",
+        "    def map(self) -> int32:",
         "        return self.value",
     ]
     .join("\n");
@@ -1356,7 +1353,7 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
     let source = [
         "class Counter:",
         "    value: int32",
-        "    def bump(borrow mut self, step: int32) -> int32:",
+        "    def bump(mut self, step: int32) -> int32:",
         "        start = self.value",
         "        mut total = start",
         "        total = total + step",
@@ -1496,23 +1493,23 @@ fn completion_scope_walks_past_if_else_and_while_blocks() {
 fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_surfaces() {
     let source = [
         "trait Show:",
-        "    def show(borrow self) -> String",
+        "    def show(self) -> String",
         "",
         "trait Greeter:",
-        "    def greet(borrow self) -> String",
+        "    def greet(self) -> String",
         "",
         "class User:",
         "    label: String",
         "",
-        "    def greet(borrow self) -> String:",
+        "    def greet(self) -> String:",
         "        return self.label.clone()",
         "",
         "impl Show for User:",
-        "    def show(borrow self) -> String:",
+        "    def show(self) -> String:",
         "        return self.label.clone()",
         "",
         "impl Greeter for User:",
-        "    def greet(borrow self) -> String:",
+        "    def greet(self) -> String:",
         "        return self.label.clone()",
         "",
         "enum Status:",
@@ -1529,7 +1526,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     let mut program = checked_program(&source);
     let remote_source = [
         "trait RemoteTrait:",
-        "    def render(borrow self) -> String",
+        "    def render(self) -> String",
         "",
         "enum RemoteStatus:",
         "    Ready",
@@ -2256,7 +2253,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         builder.infer_expr_type(
             &expr(ExprKind::Match {
                 scrutinee: Box::new(expr(ExprKind::Name("numbers".to_string()))),
-                borrow_mode: None,
+                capability: ReceiverKind::Borrow,
                 arms: vec![crate::ast::MatchExprArm {
                     pattern: crate::ast::Pattern::Wildcard(Span::new(1, 1)),
                     value: expr(ExprKind::Int(4)),
@@ -2675,7 +2672,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         "import pkg",
         "",
         "trait Show:",
-        "    def show(borrow self) -> String",
+        "    def show(self) -> String",
         "",
         "enum Status:",
         "    Ready",
@@ -2691,7 +2688,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     let mut program = checked_program(&source);
     let remote_source = [
         "trait RemoteTrait:",
-        "    def show(borrow self) -> String",
+        "    def show(self) -> String",
         "",
         "enum RemoteStatus:",
         "    Ready",
@@ -2834,13 +2831,13 @@ fn completion_scope_tracks_nested_statement_bindings() {
         "class FileHandle:",
         "    name: String",
         "",
-        "    def close(borrow mut self):",
+        "    def close(mut self):",
         "        pass",
         "",
         "class Counter:",
         "    value: int32",
         "",
-        "    def inspect(borrow self) -> int32:",
+        "    def inspect(self) -> int32:",
         "        print(self.value)",
         "        return self.value",
         "",
@@ -2975,7 +2972,7 @@ fn compiler_analysis_reports_provenance_for_representative_ownership_paths() {
             true,
         ),
         (
-            "def main() -> int32:\n    mut values = [1]\n    for value in borrow values:\n        values.clear()\n    return 0\n",
+            "def main() -> int32:\n    mut values = [1]\n    for value in values:\n        values.clear()\n    return 0\n",
             "AU3002",
             "borrowed for iteration",
             false,
@@ -2987,7 +2984,7 @@ fn compiler_analysis_reports_provenance_for_representative_ownership_paths() {
             false,
         ),
         (
-            "class Data:\n    value: int32\n\ndef use(r: borrow Data, w: borrow mut Data):\n    pass\n\ndef main() -> int32:\n    mut data = Data(value=1)\n    use(data, data)\n    return 0\n",
+            "class Data:\n    value: int32\n\ndef use(r: Data, w: mut Data):\n    pass\n\ndef main() -> int32:\n    mut data = Data(value=1)\n    use(data, data)\n    return 0\n",
             "AU3002",
             "overlaps borrow",
             false,
@@ -3199,7 +3196,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
     .expect("failed to write math module");
     fs::write(
         &named_path,
-        "public trait Named:\n    def name(borrow self) -> String\n",
+        "public trait Named:\n    def name(self) -> String\n",
     )
     .expect("failed to write named module");
     fs::write(
@@ -3211,7 +3208,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
             "    public label: String",
             "",
             "impl Named for User:",
-            "    def name(borrow self) -> String:",
+            "    def name(self) -> String:",
             "        return self.label.clone()",
         ]
         .join("\n"),
@@ -3411,7 +3408,7 @@ fn analysis_records_variant_occurrences_inside_match_patterns() {
 fn analysis_records_recursive_tuple_match_bindings_and_body_uses() {
     let source = [
         "def inspect(pair: (int32, (bool, String))):",
-        "    match borrow pair:",
+        "    match pair:",
         "        case (left, (ready, text)):",
         "            print(left)",
         "            print(ready)",
@@ -3466,7 +3463,7 @@ fn analysis_records_enum_occurrences_nested_inside_tuple_patterns() {
         "    Waiting",
         "",
         "def inspect(entry: (Status, bool)):",
-        "    match borrow entry:",
+        "    match entry:",
         "        case (Status.Ready(code), true):",
         "            print(code)",
         "        case _:",
@@ -4143,8 +4140,6 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             params: vec![Type::named("int32")],
             param_passings: vec![ReceiverKind::Value],
             return_type: Type::Unit,
-            return_passing: ReceiverKind::Value,
-            return_borrow_source: None,
             rng_clone_safe_type_params: Default::default(),
         },
         type_param_bounds: Default::default(),
@@ -4247,7 +4242,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             kind: ExprKind::Name("status".to_string()),
             span: Span::new(6, 11),
         },
-        borrow_mode: None,
+        capability: ReceiverKind::Borrow,
         arms: vec![crate::ast::MatchArm {
             pattern: crate::ast::Pattern::Wildcard(Span::new(7, 9)),
             body: vec![crate::ast::Stmt::Pass(PassStmt {

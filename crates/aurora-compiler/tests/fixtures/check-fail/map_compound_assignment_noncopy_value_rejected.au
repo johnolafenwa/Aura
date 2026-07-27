@@ -1,11 +1,11 @@
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: own Rhs) -> Out
+    def add(self, rhs: own Rhs) -> Out
 
 class Box:
     value: int32
 
 impl Add[int32, Box] for Box:
-    def add(borrow self, rhs: own int32) -> Box:
+    def add(self, rhs: own int32) -> Box:
         return Box(value=self.value + rhs)
 
 def main():

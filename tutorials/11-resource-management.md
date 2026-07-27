@@ -19,7 +19,7 @@ def load_text(path: String) -> Result[String, io.Error]:
 The bound resource:
 
 - is available inside the block as a mutable local binding
-- always runs `close(borrow mut self)` when the block exits
+- always runs `close(mut self)` when the block exits
 - cleanup runs on normal fallthrough, on early `return`, and after `try` propagation
 
 See [examples/resources/with_resource.au](../examples/resources/with_resource.au).
@@ -31,7 +31,7 @@ In the current compiler, a `with` resource may be:
 - a user-defined class with:
 
 ```python
-def close(borrow mut self):
+def close(mut self):
 ```
 
 - a builtin `fs.File`
@@ -39,7 +39,7 @@ def close(borrow mut self):
 - a builtin `net.TcpListener`
 - a `TaskGroup`
 
-For user-defined classes, `close(...)` must take `borrow mut self`, no extra parameters, and return `None`.
+For user-defined classes, `close(...)` must take `mut self`, no extra parameters, and return `None`.
 
 ## `with ... as ...` For Task Groups
 
@@ -60,5 +60,5 @@ See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_
 ## Current Limits
 
 - builtin resources use the fixed file/TCP/task-group surface; there is no broader enter/exit protocol yet
-- user-defined resources still require `close(borrow mut self)` with no extra parameters
+- user-defined resources still require `close(mut self)` with no extra parameters
 - no borrowed resource bindings

@@ -1,13 +1,13 @@
 ## Goal
 
-Fix the remaining April 21 follow-up review findings around `match borrow mut` stale bindings through `borrow mut` calls, module-qualified builtin enum constructor typing, and the non-Unix TLS listener accept path without regressing the maintained compiler/runtime behavior.
+Fix the remaining April 21 follow-up review findings around `match mut` stale bindings through `mut ` calls, module-qualified builtin enum constructor typing, and the non-Unix TLS listener accept path without regressing the maintained compiler/runtime behavior.
 
 ## Work Completed
 
 - Added failing-first regressions for:
-  - stale `match borrow mut` pattern-binding use after a `borrow mut` helper rewrites the scrutinee
+  - stale `match mut` pattern-binding use after a `mut ` helper rewrites the scrutinee
   - module-qualified builtin `io.Error` constructor typing through both sema and CLI surfaces
-- Extended the checker so resolved `borrow mut` call sites invalidate overlapping `match borrow mut` pattern bindings after the call actually executes, instead of only invalidating on explicit assignment statements.
+- Extended the checker so resolved `mut ` call sites invalidate overlapping `match mut` pattern bindings after the call actually executes, instead of only invalidating on explicit assignment statements.
 - Kept constant short-circuit branches from polluting the live local state by stopping `false and ...` / `true or ...` right-hand side checker effects from merging back when the right side is statically unreachable.
 - Unified builtin module-type canonicalization so qualified builtin module enums like `io.Error` keep their qualified type identity across type lowering, member resolution, and qualified enum-constructor/member paths.
 - Reworked `TlsListenerValue::accept()` to use the shared pending-handshake backlog model on every platform, replacing the old non-Unix inline one-peer-at-a-time handshake path with the same queue-driven progression used on Unix.

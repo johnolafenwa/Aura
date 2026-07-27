@@ -1,7 +1,7 @@
 class Greeter:
     prefix: String
 
-    def say(borrow self, name: String) -> String:
+    def say(self, name: String) -> String:
         return self.prefix + name
 
     def named(prefix: own String) -> Greeter:

@@ -3,13 +3,13 @@
 class Wrapper:
     label: String
 
-def print_label(s: borrow String):
+def print_label(s: String):
     print(s)
 
 def main() -> int32:
     opt: Wrapper? = Option.Some(Wrapper(label="hello"))
 
-    match borrow opt:
+    match opt:
         case Some(w):
             # Can we pass w.label (borrowed String field) to a function?
             print_label(w.label)

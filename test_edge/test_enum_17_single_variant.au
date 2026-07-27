@@ -2,7 +2,7 @@ enum Singleton:
     Only(int32)
 
 def get(s: Singleton) -> int32:
-    match s:
+    match own s:
         case Singleton.Only(v):
             return v
 

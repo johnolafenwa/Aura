@@ -131,7 +131,7 @@ grep -Fq 'AU2007' tutorials/14-current-language-surface.md
 # B3.0-e: `AU3002` recovery help names the access that actually conflicts, so a
 # pure read or consumption is never told to move "the mutation".
 grep -Fq 'perform the consumption in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.diag
-grep -Fq 'perform the read in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_rejected.diag
+grep -Fq 'consumed values must be exclusive' crates/aurora-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_overlaps.diag
 grep -Fq 'perform the mutation in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/binary_left_borrow_rejects_later_mutation.diag
 test -s crates/aurora-compiler/tests/fixtures/check-pass/tuple_equality_contextual_literals.au
 test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au

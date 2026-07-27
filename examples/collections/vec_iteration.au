@@ -1,6 +1,6 @@
 def main() -> int32:
     mut names: Vec[String] = ["Ada", "Grace"]
-    for name in borrow names:
+    for name in names:
         print(name)
     print(names.len())
 

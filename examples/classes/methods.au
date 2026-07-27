@@ -4,7 +4,7 @@ class Counter:
     def read(self) -> int32:
         return self.value
 
-    def doubled(borrow self) -> int32:
+    def doubled(self) -> int32:
         return self.value + self.value
 
     def zero() -> Counter:

@@ -1,5 +1,8 @@
-error[AU3002]: call to operator trait `Add.add` produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:14:13
-   |
-14 |     alias = left + right
-   |             ^
+error[AU3002]: cannot move non-copy field `value` out of borrowed value `self`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:9:21
+  |
+9 |         return self.value
+  |                     ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:8:5: `self` is borrowed here
+  = help: take `self` as `own Label` when the field should be moved, or call `.clone()` on the field to return an independent value
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:9:26-9:26 with `.clone()`

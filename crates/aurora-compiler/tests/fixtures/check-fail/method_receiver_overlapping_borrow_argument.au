@@ -1,7 +1,7 @@
 class Acc:
     value: int32
 
-    def add_from(borrow mut self, source: borrow Acc):
+    def add_from(mut self, source: Acc):
         self.value += source.value
 
 def main() -> int32:

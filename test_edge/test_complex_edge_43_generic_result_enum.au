@@ -11,9 +11,9 @@ def fetch_data(success: bool) -> ApiResponse[int32]:
 
 def main() -> int32:
     r1 = fetch_data(success=true)
-    match r1:
+    match own r1:
         case ApiResponse.Data(result):
-            match result:
+            match own result:
                 case Result.Ok(v):
                     print(f"got: {v}")
                 case Result.Err(e):
@@ -22,9 +22,9 @@ def main() -> int32:
             print("empty")
 
     r2 = fetch_data(success=false)
-    match r2:
+    match own r2:
         case ApiResponse.Data(result):
-            match result:
+            match own result:
                 case Result.Ok(v):
                     print(f"got: {v}")
                 case Result.Err(e):

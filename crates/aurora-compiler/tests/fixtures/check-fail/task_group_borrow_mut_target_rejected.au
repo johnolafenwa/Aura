@@ -1,7 +1,7 @@
 class Counter:
     value: int64
 
-def mutate(counter: borrow mut Counter):
+def mutate(counter: mut Counter):
     counter.value += 1
 
 def main() -> int32:

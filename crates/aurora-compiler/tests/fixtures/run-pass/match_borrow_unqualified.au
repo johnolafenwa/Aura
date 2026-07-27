@@ -1,13 +1,13 @@
 def main() -> int32:
     result: Result[String, String] = Result.Ok("ok")
 
-    match borrow result:
+    match result:
         case Ok(value):
             print(value.clone())
         case Err(message):
             print(message)
 
-    match borrow result:
+    match result:
         case Ok(value):
             print(value.clone())
         case Err(message):

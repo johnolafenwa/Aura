@@ -1,5 +1,7 @@
-error[AU3002]: call to function `identity` produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_generic_noncopy_return_call.au:6:13
+error[AU3002]: parameter `value` is borrowed; declare it as `own T` to take ownership
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_generic_noncopy_return_call.au:2:12
   |
-6 |     alias = identity[String](value=text)
-  |             ^
+2 |     return value
+  |            ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_generic_noncopy_return_call.au:1:17: parameter `value` is borrowed here
+  = help: declare the parameter as `own T` when the function should consume this non-cloneable value

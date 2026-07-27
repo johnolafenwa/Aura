@@ -5,7 +5,7 @@ enum Response:
     Data(float64)
 
 def describe(r: own Response) -> String:
-    match r:
+    match own r:
         case Response.Success(code):
             print(code)
             return "success"

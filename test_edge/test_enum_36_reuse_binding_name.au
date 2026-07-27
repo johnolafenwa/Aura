@@ -3,7 +3,7 @@ enum Val:
     B(int32)
 
 def process(v: Val) -> int32:
-    match v:
+    match own v:
         case Val.A(x):
             return x + 1
         case Val.B(x):

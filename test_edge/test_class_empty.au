@@ -2,7 +2,7 @@ class Empty:
     pass
 
 class EmptyWithMethod:
-    def hello(borrow self) -> String:
+    def hello(self) -> String:
         return "hello"
 
     def create() -> EmptyWithMethod:

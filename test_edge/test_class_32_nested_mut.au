@@ -2,7 +2,7 @@
 class Inner:
     value: int32
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
 class Outer:

@@ -1,6 +1,6 @@
 # Test: Option[String] with various patterns
 
-def find(query: borrow str) -> Option[String]:
+def find(query: str) -> Option[String]:
     if query == "yes":
         return Option.Some(f"found: {query}")
     return Option.None
@@ -8,7 +8,7 @@ def find(query: borrow str) -> Option[String]:
 def main() -> int32:
     # Some case
     r1 = find("yes")
-    match r1:
+    match own r1:
         case Option.Some(v):
             print(v)
         case Option.None:
@@ -16,7 +16,7 @@ def main() -> int32:
 
     # None case
     r2 = find("no")
-    match r2:
+    match own r2:
         case Option.Some(v):
             print(v)
         case Option.None:
@@ -24,7 +24,7 @@ def main() -> int32:
 
     # Nested: Option in Option
     inner: Option[String] = Option.Some("inner_value")
-    match inner:
+    match own inner:
         case Option.Some(s):
             print(s)
         case Option.None:

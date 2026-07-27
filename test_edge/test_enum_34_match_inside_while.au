@@ -12,7 +12,7 @@ def main() -> int32:
     mut running = true
     while running:
         s = next_step(val)
-        match s:
+        match own s:
             case Step.Continue(v):
                 val = v
             case Step.Done(v):

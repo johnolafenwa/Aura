@@ -4,5 +4,5 @@ class Holder:
 
 def main():
     mut holder = Holder(values=[1, 2, 3], other=0)
-    for value in borrow holder.values:
+    for value in holder.values:
         holder.values.push(value)

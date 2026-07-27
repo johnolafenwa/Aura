@@ -1,18 +1,18 @@
 trait Base:
-    def base(borrow self) -> int32
+    def base(self) -> int32
 
 trait Derived: Base:
-    def derived(borrow self) -> int32
+    def derived(self) -> int32
 
 class Counter:
     value: int32
 
 impl Base for Counter:
-    def base(borrow self) -> int32:
+    def base(self) -> int32:
         return self.value
 
 impl Derived for Counter:
-    def derived(borrow self) -> int32:
+    def derived(self) -> int32:
         return self.value + 1
 
 def total[T: Derived](value: T) -> int32:

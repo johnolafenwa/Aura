@@ -13,7 +13,7 @@ def make_box[T](value: own T) -> Box[T]:
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 def main() -> int32:

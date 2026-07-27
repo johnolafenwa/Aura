@@ -4,6 +4,12 @@
 - Date: 2026-07-14
 - Reference gap: later sibling mutation while an earlier non-copy place remains selected
 
+> **Amended by ADR-0022 (2026-07-27).** The sequencing rules are unchanged,
+> but they now apply to copy-typed bare parameters too, because bare means
+> shared for every type. A copy argument that overlaps a consumed or mutable
+> argument in the same call is therefore rejected where the old copy-snapshot
+> rule allowed it.
+
 ## Context
 
 Left-to-right evaluation captures copy values without ambiguity. A non-copy

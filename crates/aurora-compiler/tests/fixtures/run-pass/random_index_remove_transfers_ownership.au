@@ -8,7 +8,7 @@ def main():
     # cloned, so `remove(index)` is the transfer that actually works.
     mut generators = Vec[random.Rng]()
     generators.push(random.Rng(seed=7))
-    match generators.remove(0):
+    match own generators.remove(0):
         case Option.Some(chosen):
             mut owned_generator = chosen
             print(owned_generator.next_int(lo=1, hi=10))
@@ -20,7 +20,7 @@ def main():
     # `random.Rng` state, and `remove(key)` transfers it out of the map.
     mut holders = Map[String, Holder]()
     holders.set("a", Holder(generator=random.Rng(seed=7)))
-    match holders.remove("a"):
+    match own holders.remove("a"):
         case Option.Some(chosen):
             mut owned_holder = chosen
             print(owned_holder.generator.next_int(lo=1, hi=10))

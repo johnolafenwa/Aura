@@ -12,14 +12,14 @@ def make_right[A, B](val: own B) -> Either[A, B]:
 
 def main() -> int32:
     e1: Either[int32, String] = make_left(val=42)
-    match e1.left:
+    match own e1.left:
         case Some(v):
             print(v)
         case None:
             print("none")
 
     e2: Either[int32, String] = make_right(val="hello")
-    match e2.right:
+    match own e2.right:
         case Some(v):
             print(v)
         case None:

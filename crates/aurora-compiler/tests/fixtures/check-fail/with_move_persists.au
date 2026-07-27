@@ -1,7 +1,7 @@
 class Resource:
     value: int32
 
-    def close(borrow mut self):
+    def close(mut self):
         pass
 
 def main() -> int32:

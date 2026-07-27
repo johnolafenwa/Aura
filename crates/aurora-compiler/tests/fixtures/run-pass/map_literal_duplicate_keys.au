@@ -1,4 +1,4 @@
-def bump(value: borrow mut int32) -> int32:
+def bump(value: mut int32) -> int32:
     value += 1
     return value
 

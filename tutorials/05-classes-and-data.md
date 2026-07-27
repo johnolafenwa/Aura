@@ -120,19 +120,19 @@ The current compiler accepts these receiver forms. For a full explanation of how
 
 - `self`
   - shared receiver and the default spelling; read-only access
-- `borrow self`
+- `self`
   - explicit synonym for shared `self`
 - `own self`
   - consuming receiver; takes ownership of a non-copy instance
-- `borrow mut self`
+- `mut self`
   - mutable receiver; exclusive access, can modify fields in place
 - no receiver
   - associated method; called on the class, not an instance
 
 A receiver must be first and is never typed explicitly. `self: Counter` is
 rejected because it looks like an instance receiver but would otherwise be an
-ordinary parameter; use `self`, `borrow self`, `own self`, or
-`borrow mut self`.
+ordinary parameter; use `self`, `self`, `own self`, or
+`mut self`.
 
 Example:
 
@@ -146,7 +146,7 @@ class Counter:
     def read(self) -> int32:
         return self.value
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
     def zero() -> Counter:
@@ -196,16 +196,16 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aurora now supports `borrow mut self` methods and member-target assignment.
+Aurora now supports `mut self` methods and member-target assignment.
 
 ```python
 class Counter:
     value: int32
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
-    def reset(borrow mut self):
+    def reset(mut self):
         self.value = 0
 ```
 

@@ -1,5 +1,8 @@
-error[AU3002]: borrowed return type is ambiguous; write an explicit borrow source such as `-> borrow[left] T`
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au:1:82
+error[AU3002]: parameter `left` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au:3:16
   |
-1 | def choose(left: borrow String, right: borrow String, pick_left: bool) -> borrow String:
-  |                                                                                  ^
+3 |         return left
+  |                ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au:1:12: parameter `left` is borrowed here
+  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au:3:20-3:20 with `.clone()`

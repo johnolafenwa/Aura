@@ -7,14 +7,14 @@ def main() -> int32:
     u2 = User(name="Bob", email=Option.None)
 
     print(u1.name)
-    match u1.email:
+    match own u1.email:
         case Some(e):
             print(e)
         case None:
             print("no email")
 
     print(u2.name)
-    match u2.email:
+    match own u2.email:
         case Some(e):
             print(e)
         case None:

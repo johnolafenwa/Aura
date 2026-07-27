@@ -2,10 +2,10 @@
 class Stack[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
-    def replace(borrow self, new_value: T) -> Stack[T]:
+    def replace(self, new_value: T) -> Stack[T]:
         return Stack(value=new_value)
 
 def main() -> int32:

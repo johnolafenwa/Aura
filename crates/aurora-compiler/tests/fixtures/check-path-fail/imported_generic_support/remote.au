@@ -1,11 +1,11 @@
 public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 public class NamedValue:
     public label: String
 
 impl Named for NamedValue:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 public class UnnamedValue:

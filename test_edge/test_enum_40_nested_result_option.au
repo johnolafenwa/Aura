@@ -9,7 +9,7 @@ def maybe_divide(a: int32, b: int32) -> Result[Option[int32], String]:
 def main() -> int32:
     match maybe_divide(10, 3):
         case Result.Ok(opt):
-            match opt:
+            match own opt:
                 case Option.Some(v):
                     print(v)
                 case Option.None:
@@ -19,7 +19,7 @@ def main() -> int32:
 
     match maybe_divide(10, 0):
         case Result.Ok(opt):
-            match opt:
+            match own opt:
                 case Option.Some(v):
                     print(v)
                 case Option.None:
@@ -29,7 +29,7 @@ def main() -> int32:
 
     match maybe_divide(1, 10):
         case Result.Ok(opt):
-            match opt:
+            match own opt:
                 case Option.Some(v):
                     print(v)
                 case Option.None:

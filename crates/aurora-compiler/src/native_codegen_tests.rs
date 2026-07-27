@@ -278,17 +278,17 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
 fn tuple_specialized_trait_dispatch_emits_structural_runtime_matchers() {
     let source = r#"
 trait Label:
-    def label(borrow self) -> String
+    def label(self) -> String
 
 class Envelope[T]:
     payload: T
 
 impl Label for Envelope[(int32, String)]:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "integer then string"
 
 impl Label for Envelope[(String, int32)]:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "string then integer"
 
 def describe[T: Label](value: T) -> String:
@@ -478,13 +478,13 @@ fn direct_user_defined_rng_does_not_reference_random_runtime_symbols() {
 class Rng:
     value: int64
 
-    def next_int(borrow self, lo: int64, hi: int64) -> int64:
+    def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(borrow self) -> String:
+    def next_float(self) -> String:
         return "local"
 
-    def shuffle(borrow self, value: int64) -> int64:
+    def shuffle(self, value: int64) -> int64:
         return value
 
 def main() -> int32:
@@ -789,7 +789,7 @@ fn ticket9_expected_uint64_operands_avoid_generic_literal_boxing() {
 class Holder:
     value: uint64
 
-    def echo(borrow self, value: uint64) -> uint64:
+    def echo(self, value: uint64) -> uint64:
         return value
 
 def take(value: uint64) -> uint64:
@@ -1125,14 +1125,14 @@ class Counter:
 
 class Resource:
     closed: bool = false
-    def close(borrow mut self):
+    def close(mut self):
         self.closed = true
 
-def bump(counter: borrow mut Counter, amount: int32 = 2) -> int32:
+def bump(counter: mut Counter, amount: int32 = 2) -> int32:
     counter.value += amount
     return counter.value
 
-def copy_into(source: borrow Counter, target: borrow mut Counter):
+def copy_into(source: Counter, target: mut Counter):
     target.value = source.value
 
 def worker(value: int32) -> int32:
@@ -1192,7 +1192,7 @@ fn direct_backend_emits_object_for_supported_cleanup_and_explicit_task_group_clo
     let source = r#"
 class Resource:
     closed: bool = false
-    def close(borrow mut self):
+    def close(mut self):
         self.closed = true
 
 def main() -> int32:
@@ -4809,7 +4809,7 @@ fn native_codegen_direct_error_paths_cover_missing_entry_wrapper_and_return_type
 class Counter:
     value: int32
 
-    def current(borrow self) -> int32:
+    def current(self) -> int32:
         return self.value
 
 def helper(value: int32) -> int32:
@@ -5667,10 +5667,10 @@ impl Named for int32:
 class Counter:
     value: int32
 
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.value
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
 def worker(value: int32) -> int32:
@@ -6025,10 +6025,10 @@ def main() -> int32:
 fn direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir() {
     let source = r#"
 trait Probe:
-    def probe(borrow self) -> int64
+    def probe(self) -> int64
 
 impl[T] Probe for Queue[T]:
-    def probe(borrow self) -> int64:
+    def probe(self) -> int64:
         return 99
 
 def main() -> int32:
@@ -10657,7 +10657,7 @@ fn native_codegen_constructor_tracks_receiver_and_writeback_types_for_methods_an
 class Counter:
     value: int32
 
-    def sync_into(borrow mut self, other: borrow mut Counter, amount: int32):
+    def sync_into(mut self, other: mut Counter, amount: int32):
         self.value += amount
         other.value = self.value
 

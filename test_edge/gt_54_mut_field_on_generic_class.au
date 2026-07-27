@@ -4,10 +4,10 @@
 class Counter[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
-    def set(borrow mut self, new_val: T):
+    def set(mut self, new_val: T):
         self.value = new_val
 
 def main() -> int32:

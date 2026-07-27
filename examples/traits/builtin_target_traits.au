@@ -1,15 +1,15 @@
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl Describe for Vec[int32]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"vec of {self.len()}"
 
 impl Describe for String:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"text of {self.len()}"
 
-def describe_through_bound[T: Describe](value: borrow T) -> String:
+def describe_through_bound[T: Describe](value: T) -> String:
     return value.describe()
 
 def main():

@@ -2,7 +2,7 @@ class Vec2:
     x: float64
     y: float64
 
-def dot(borrow a: Vec2, borrow b: Vec2) -> float64:
+def dot(a: Vec2, b: Vec2) -> float64:
     return a.x * b.x + a.y * b.y
 
 def main():

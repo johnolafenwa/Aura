@@ -2,10 +2,10 @@ public class Pair:
     public first: int32
     public second: int32
 
-    public def sum(borrow self) -> int32:
+    public def sum(self) -> int32:
         return self.first + self.second
 
-    public def max(borrow self) -> int32:
+    public def max(self) -> int32:
         if self.first > self.second:
             return self.first
         return self.second

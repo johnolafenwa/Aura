@@ -1,4 +1,4 @@
-def push_and_index(values: borrow mut Vec[int32]) -> int32:
+def push_and_index(values: mut Vec[int32]) -> int32:
     values.push(2)
     return 1
 

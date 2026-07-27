@@ -5,7 +5,7 @@ class Address:
     city: String
     zip: int32
 
-    def format(borrow self) -> String:
+    def format(self) -> String:
         return f"{self.city} {self.zip}"
 
 class Department:
@@ -13,7 +13,7 @@ class Department:
     floor: int32
     location: Address
 
-    def summary(borrow self) -> String:
+    def summary(self) -> String:
         return f"{self.name} on floor {self.floor} at {self.location.format()}"
 
 class Employee:
@@ -21,17 +21,17 @@ class Employee:
     id: int32
     department: Department
 
-    def full_info(borrow self) -> String:
+    def full_info(self) -> String:
         return f"Employee {self.name} (#{self.id}) in {self.department.summary()}"
 
-    def get_city(borrow self) -> String:
+    def get_city(self) -> String:
         return self.department.location.city.clone()
 
 class Company:
     name: String
     ceo: Employee
 
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"{self.name} led by {self.ceo.name}"
 
 def main() -> int32:

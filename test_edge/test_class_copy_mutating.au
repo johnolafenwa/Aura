@@ -2,7 +2,7 @@ copy class Point:
     x: int32
     y: int32
 
-    def translate(borrow mut self, dx: int32, dy: int32):
+    def translate(mut self, dx: int32, dy: int32):
         self.x += dx
         self.y += dy
 

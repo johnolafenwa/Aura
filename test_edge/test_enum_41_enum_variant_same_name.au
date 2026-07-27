@@ -5,12 +5,12 @@ enum Bar:
     Value(int32)
 
 def get_foo(f: Foo) -> int32:
-    match f:
+    match own f:
         case Foo.Value(v):
             return v
 
 def get_bar(b: Bar) -> int32:
-    match b:
+    match own b:
         case Bar.Value(v):
             return v
 

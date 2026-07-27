@@ -2,7 +2,7 @@
 class Stack:
     top: int32
 
-    def push(borrow mut self, val: int32) -> int32:
+    def push(mut self, val: int32) -> int32:
         old = self.top
         self.top = val
         return old

@@ -37,11 +37,11 @@ Today's working subset includes:
 - explicit type annotations and inferred bindings
 - mutable reassignment with `mut`
 - omitted `-> None` return types
-- ownership and borrowing with `borrow T` and `borrow mut T`
+- ownership and borrowing with `T` and `mut T`
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
 - builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
-- class methods with shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self`
+- class methods with shared `self`/`self`, consuming `own self`, and mutable `mut self`
 - arithmetic, comparisons, strings, booleans, and Duration literals, constructors, conversions, and checked operators
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`
 - `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`

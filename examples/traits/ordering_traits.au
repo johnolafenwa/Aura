@@ -1,23 +1,23 @@
 trait Ord[Rhs]:
-    def lt(borrow self, rhs: Rhs) -> bool
-    def le(borrow self, rhs: Rhs) -> bool
-    def gt(borrow self, rhs: Rhs) -> bool
-    def ge(borrow self, rhs: Rhs) -> bool
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
 
 class Score:
     value: int32
 
 impl Ord[Score] for Score:
-    def lt(borrow self, rhs: Score) -> bool:
+    def lt(self, rhs: Score) -> bool:
         return self.value < rhs.value
 
-    def le(borrow self, rhs: Score) -> bool:
+    def le(self, rhs: Score) -> bool:
         return self.value <= rhs.value
 
-    def gt(borrow self, rhs: Score) -> bool:
+    def gt(self, rhs: Score) -> bool:
         return self.value > rhs.value
 
-    def ge(borrow self, rhs: Score) -> bool:
+    def ge(self, rhs: Score) -> bool:
         return self.value >= rhs.value
 
 def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:

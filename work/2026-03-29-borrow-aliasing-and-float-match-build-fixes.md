@@ -8,11 +8,11 @@ native builds for `float64` returns from enum `match` arms with payload destruct
 ## Work Completed
 
 - Added checker regression fixtures for:
-  - two `borrow mut` parameters receiving the same mutable place
-  - overlapping `borrow` plus `borrow mut` parameters receiving the same place
+  - two `mut ` parameters receiving the same mutable place
+  - overlapping `` plus `mut ` parameters receiving the same place
 - Added checker regression fixtures for method calls where a borrowed receiver aliases another
-  borrowed argument, covering both `borrow mut self` + `borrow` and `borrow mut self` +
-  `borrow mut`.
+  borrowed argument, covering both `mut self` + `` and `mut self` +
+  `mut `.
 - Updated semantic checking so borrowed call arguments are tracked by place path during argument
   validation, and any overlap is rejected when a mutable borrow participates, including the
   implicit `self` receiver in method calls.
@@ -22,7 +22,7 @@ native builds for `float64` returns from enum `match` arms with payload destruct
   returns, which prevents unreachable synthetic `match_end` blocks from forcing invalid
   `None -> float64` coercions during direct native code generation.
 - Updated the maintained tutorials to state that overlapping borrowed call arguments are rejected
-  when a `borrow mut` parameter is involved.
+  when a `mut ` parameter is involved.
 
 ## Verification
 

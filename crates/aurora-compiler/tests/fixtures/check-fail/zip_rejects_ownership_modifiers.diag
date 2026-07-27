@@ -1,5 +1,5 @@
-error[AU3002]: `zip` iterates over the bare-loop borrow default; write `for ... in zip(...):` without an ownership modifier
+error[AU3002]: `zip` iterates over the bare-loop shared default; write `for ... in zip(...):` without an ownership modifier
  --> crates/aurora-compiler/tests/fixtures/check-fail/zip_rejects_ownership_modifiers.au:4:5
   |
-4 |     for first, second in borrow zip(left, right):
+4 |     for first, second in own zip(left, right):
   |     ^

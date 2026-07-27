@@ -190,7 +190,7 @@ the primary span identifies the invalid later operation and a labeled secondary
 span identifies the earlier move or borrow that made it invalid. Applicable
 guidance names the smallest explicit repair: change a parameter to `own`, clone
 at a deliberate ownership boundary, use the appropriate borrow loop form, add
-`mut`, or declare a mutating receiver as `borrow mut self`. When a repair is a
+`mut`, or declare a mutating receiver as `mut self`. When a repair is a
 local, unambiguous source replacement, the diagnostic also carries a
 machine-applicable edit.
 

@@ -1,1 +1,1 @@
-cannot mutate through shared receiver `self`; declare the receiver as `borrow mut self`
+cannot mutate through shared receiver `self`; declare the receiver as `mut self`

@@ -6,10 +6,10 @@ class Holder:
     text: String
     value: int32
 
-    def get_text_method(borrow self) -> String:
+    def get_text_method(self) -> String:
         return self.text
 
-def get_value_free(h: borrow Holder) -> int32:
+def get_value_free(h: Holder) -> int32:
     return h.value
 
 def main() -> int32:

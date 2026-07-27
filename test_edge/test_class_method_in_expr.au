@@ -1,10 +1,10 @@
 class Box:
     value: int32
 
-    def get(borrow self) -> int32:
+    def get(self) -> int32:
         return self.value
 
-    def doubled(borrow self) -> int32:
+    def doubled(self) -> int32:
         return self.get() * 2
 
 def main() -> int32:

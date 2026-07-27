@@ -31,7 +31,7 @@ class Point:
     x: float64
     y: float64
 
-def distance(point: borrow Point) -> float64:
+def distance(point: Point) -> float64:
     return sqrt((point.x * point.x) + (point.y * point.y))
 
 point = Point(x=3.0, y=4.0)

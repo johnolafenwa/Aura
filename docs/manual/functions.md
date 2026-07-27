@@ -48,7 +48,7 @@ grouping does not discard that context. Other contextual literal typing and
 the complete symmetric option-equality rule follow [Static
 Semantics](/manual/static-semantics#contextual-inference).
 
-Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `borrow self`, `own self`, or `borrow mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
+Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `self`, `own self`, or `mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
 
 A function is private to its defining module by default. Prefix the declaration with `public` to make it importable from another module:
 
@@ -67,22 +67,22 @@ The passing mode is part of the function signature:
 | --- | --- |
 | `value: T` | Shared borrow when `T` is non-copy; by value when `T` is copy. |
 | `value: own T` | Owned argument. A move value is consumed; a copy value is duplicated. |
-| `value: borrow T` | Explicit shared borrow. The caller retains ownership; the callee cannot move through the borrow. |
-| `value: borrow mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
+| `value: T` | Explicit shared borrow. The caller retains ownership; the callee cannot move through the borrow. |
+| `value: mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
 
 ```python
 def consume(name: own String):
     print(name)
 
-def length(text: borrow String) -> int64:
+def length(text: String) -> int64:
     return text.len()
 
-def push_name(names: borrow mut Vec[String], name: own String):
+def push_name(names: mut Vec[String], name: own String):
     names.push(name)
 ```
 
 The modifier is written in the declaration after the colon. Calls pass the
-expression directly; Aurora has no call-site `own` or `borrow` syntax:
+expression directly; Aurora has no call-site `own` or `` syntax:
 
 ```python
 mut names = Vec[String]()
@@ -131,7 +131,7 @@ not accept trailing commas in Aurora 0.1.
 
 ## Default Arguments
 
-A default is permitted on an ordinary default-mode, `own`, or shared-`borrow`
+A default is permitted on an ordinary default-mode, `own`, or shared-``
 parameter of a top-level function or class method:
 
 ```python
@@ -141,7 +141,7 @@ def greet(name: String = "world"):
 
 The complete rules are:
 
-- `borrow mut` parameters cannot have defaults, regardless of whether their
+- `mut ` parameters cannot have defaults, regardless of whether their
   types are copyable; the default would be a caller-invisible temporary, so
   every mutation would be a silent lost write. Require the caller to pass a
   value, or take the parameter as `own T` and return the result
@@ -200,7 +200,7 @@ def parse_total(left: String, right: String) -> Result[int32, String]:
 A return annotation can identify a borrow source in an API contract:
 
 ```python
-def identity(value: borrow[source] int32) -> borrow[source] int32:
+def identity(value: int32) -> int32:
     return value
 ```
 
@@ -208,8 +208,8 @@ The source in brackets is either the borrowed parameter name or its borrow label
 
 Eligible source rules are:
 
-- `-> borrow T` may derive from a shared- or mutable-borrowed parameter or receiver
-- `-> borrow mut T` may derive only from a mutable-borrowed parameter or receiver
+- `-> T` may derive from a shared- or mutable-borrowed parameter or receiver
+- `-> mut T` may derive only from a mutable-borrowed parameter or receiver
 - when exactly one eligible source exists, the source may be omitted and is inferred
 - when multiple eligible sources exist, the return annotation must select one by parameter name, `self`, or label
 - for non-copy declarations, the returned expression must actually derive from the selected source
@@ -218,7 +218,7 @@ Eligible source rules are:
 Labels are signature-level provenance names, not general lexical lifetime variables:
 
 ```python
-def choose(left: borrow[left_source] int32, right: borrow[right_source] int32) -> borrow[left_source] int32:
+def choose(left: int32, right: int32) -> int32:
     return left
 ```
 
@@ -236,7 +236,7 @@ def identity[T](value: own T) -> T:
 Bounds restrict substitutions:
 
 ```python
-def describe[T: Greeter](value: borrow T) -> String:
+def describe[T: Greeter](value: T) -> String:
     return value.greet()
 
 def use_both[T: First + Second](value: T) -> int32:
@@ -275,7 +275,7 @@ Task capture ownership is independent of the target function's call ABI. Each
 argument is first copied or moved into task-owned capture storage: `own` target
 parameters consume their capture, while default-mode and explicit shared
 parameters borrow from that storage for the duration of the child call.
-`borrow mut` targets are rejected because mutable access to detached capture
+`mut ` targets are rejected because mutable access to detached capture
 storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
 
 ## `main`
@@ -326,7 +326,7 @@ and `return` transfers its value after exited cleanups run.
 ## Ownership And Evaluation Order
 
 Copy arguments are copied. Default-mode and explicit shared non-copy parameters
-borrow for the call; `own` parameters consume their arguments; `borrow mut`
+borrow for the call; `own` parameters consume their arguments; `mut `
 requires one exclusive mutable place and writes through it. Borrowed default
 temporaries live through the call, owned defaults are consumed, and mutable
 borrow defaults are rejected as guaranteed lost writes. Task start first stores

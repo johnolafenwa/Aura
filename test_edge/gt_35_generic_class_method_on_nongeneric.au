@@ -4,7 +4,7 @@
 class Util:
     id: int32
 
-    def echo[T](borrow self, val: own T) -> T:
+    def echo[T](self, val: own T) -> T:
         return val
 
 def main() -> int32:

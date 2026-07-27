@@ -1,16 +1,16 @@
 class User:
     score: int32
 
-def score_ref(user: borrow User) -> borrow[user] int32:
+def score_ref(user: User) -> int32:
     return user.score
 
 class Holder:
     value: int32
 
-    def value_ref(borrow self) -> borrow[self] int32:
+    def value_ref(self) -> int32:
         return self.value
 
-def print_score(score: borrow int32):
+def print_score(score: int32):
     print(score)
 
 def main():

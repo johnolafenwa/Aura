@@ -3,7 +3,7 @@ class Point:
     x: float64
     y: float64
 
-def print_point(borrow p: Point):
+def print_point(p: Point):
     print(p.x)
     print(p.y)
 

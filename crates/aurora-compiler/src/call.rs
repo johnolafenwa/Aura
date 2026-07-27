@@ -1462,7 +1462,7 @@ impl BuiltinMember {
             Self::ProcessSupervisorClose => "close() -> None",
             Self::RngNextInt => "next_int(lo: int64, hi: int64) -> int64",
             Self::RngNextFloat => "next_float() -> float64",
-            Self::RngShuffle => "shuffle(values: borrow mut Vec[T]) -> None",
+            Self::RngShuffle => "shuffle(values: mut Vec[T]) -> None",
         }
     }
 

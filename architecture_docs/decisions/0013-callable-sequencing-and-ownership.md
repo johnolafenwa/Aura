@@ -4,6 +4,11 @@
 - Date: 2026-07-13
 - Roadmap decision: D13
 
+> **Amended by ADR-0022 (2026-07-27).** Amended, not superseded. Future
+> in-loan closure captures use the implicit bare shared capability; move-only
+> `FnOnce` captures and every non-copy task-crossing capture remain explicit
+> ownership transfers. The full capture design is settled in Batch 5.
+
 ## Decision
 
 Aurora adds capture-free function values first, move-only `FnOnce` closures

@@ -10,7 +10,7 @@ Turn externally reported Aurora regressions into maintained compiler/CLI coverag
   - generic trait dispatch on builtin types through generic bounds
   - generic functions calling other generic functions, including explicit specialization
   - non-consuming borrowed field reads in free functions
-  - `match borrow` over indirect borrowed fields
+  - `match ` over indirect borrowed fields
   - large negative literals that need `int64`/`int128`
   - float special-value rendering
   - long chained binary expressions

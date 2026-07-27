@@ -17,7 +17,7 @@ def print_first(values: Vec[int64]):
     print(values[0])
 
 def print_optional(value: Option[int64]):
-    match value:
+    match own value:
         case Option.Some(inner):
             print(inner)
         case Option.None:

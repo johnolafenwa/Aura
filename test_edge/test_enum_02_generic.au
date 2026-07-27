@@ -3,7 +3,7 @@ enum Container[T]:
     Value(T)
 
 def unwrap_or_default(c: Container[int32], default_val: int32) -> int32:
-    match c:
+    match own c:
         case Container.Empty:
             return default_val
         case Container.Value(v):

@@ -1,8 +1,8 @@
 trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 impl Show for int32:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "int"
 
 def display[T: Show](value: T):

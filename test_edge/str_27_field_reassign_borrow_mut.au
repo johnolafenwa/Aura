@@ -4,10 +4,10 @@ class Config:
     host: String
     port: int32
 
-    def set_host(borrow mut self, new_host: borrow str):
+    def set_host(mut self, new_host: str):
         self.host = new_host + ""
 
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"{self.host}:{self.port}"
 
 def main() -> int32:

@@ -2,13 +2,13 @@
 # This may or may not be supported
 
 trait Describable:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 class Wrapper[T]:
     value: T
 
 impl Describable for Wrapper:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "wrapper"
 
 def main() -> int32:

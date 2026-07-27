@@ -333,8 +333,7 @@ impl Parser {
         self.expect_simple(TokenKind::LParen)?;
         let (receiver, params) = self.parse_params(allow_receiver)?;
         self.expect_simple(TokenKind::RParen)?;
-        let (return_passing, return_borrow_source, return_type) =
-            self.parse_return_annotation(span)?;
+        let return_type = self.parse_return_annotation(span)?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         let body = self.parse_block()?;
@@ -346,8 +345,6 @@ impl Parser {
             type_param_bounds,
             receiver,
             params,
-            return_passing,
-            return_borrow_source,
             return_type,
             body,
             span,
@@ -448,8 +445,7 @@ impl Parser {
         self.expect_simple(TokenKind::LParen)?;
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
-        let (return_passing, return_borrow_source, return_type) =
-            self.parse_return_annotation(span)?;
+        let return_type = self.parse_return_annotation(span)?;
         let body = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.expect_newline()?;
             self.parse_block()?
@@ -464,39 +460,27 @@ impl Parser {
             type_param_bounds,
             receiver,
             params,
-            return_passing,
-            return_borrow_source,
             return_type,
             body,
             span,
         })
     }
 
-    fn parse_return_annotation(
-        &mut self,
-        span: Span,
-    ) -> Result<(ReceiverKind, Option<String>, TypeRef)> {
+    fn parse_return_annotation(&mut self, span: Span) -> Result<TypeRef> {
         if self.eat_simple(&TokenKind::Arrow).is_none() {
-            return Ok((
-                ReceiverKind::Value,
-                None,
-                TypeRef::named("None", Vec::new(), false, span),
+            return Ok(TypeRef::named("None", Vec::new(), false, span));
+        }
+
+        // ADR-0022 supersedes ADR-0009's borrowed-return syntax: labels are
+        // gone and every return is an ordinary owned return.
+        if self.at_simple(&TokenKind::KwBorrow) {
+            return Err(parse_error(
+                self.current_span(),
+                "borrowed returns were removed; return an owned value instead",
             ));
         }
 
-        let mut passing = ReceiverKind::Value;
-        let mut borrow_source = None;
-        if self.eat_simple(&TokenKind::KwBorrow).is_some() {
-            passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                ReceiverKind::BorrowMut
-            } else {
-                ReceiverKind::Borrow
-            };
-            borrow_source = self.parse_optional_borrow_label()?;
-        }
-
-        let return_type = self.parse_type()?;
-        Ok((passing, borrow_source, return_type))
+        self.parse_type()
     }
 
     fn parse_optional_type_params(&mut self, allow_bounds: bool) -> Result<ParsedTypeParams> {
@@ -544,11 +528,22 @@ impl Parser {
                     return Err(Diagnostic::coded_at(
                         "AU3004",
                         self.current_span(),
-                        "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate",
+                        "`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate",
                     ));
                 }
 
                 if self.at_borrow_receiver_start() {
+                    let span = self.current_span();
+                    self.bump();
+                    let message = if self.at_simple(&TokenKind::KwMut) {
+                        "`borrow mut self` was removed; write `mut self`"
+                    } else {
+                        "`borrow self` was removed; write `self` for a shared receiver"
+                    };
+                    return Err(parse_error(span, message));
+                }
+
+                if self.at_mut_receiver_start() {
                     if !params.is_empty() {
                         return Err(parse_error(
                             self.current_span(),
@@ -556,13 +551,8 @@ impl Parser {
                         ));
                     }
                     self.bump();
-                    let receiver_kind = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                        ReceiverKind::BorrowMut
-                    } else {
-                        ReceiverKind::Borrow
-                    };
                     self.expect_identifier()?;
-                    receiver = Some(receiver_kind);
+                    receiver = Some(ReceiverKind::BorrowMut);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
                         break;
                     }
@@ -605,7 +595,7 @@ impl Parser {
             if self.at_simple(&TokenKind::KwBorrow) {
                 return Err(parse_error(
                     self.current_span(),
-                    "ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`",
+                    "ordinary parameters are written as `name: Type`, `name: mut Type`, or `name: own Type`",
                 ));
             }
             if self.at_simple(&TokenKind::KwOwn) {
@@ -615,18 +605,21 @@ impl Parser {
                 ));
             }
             let mut mode = ParamMode::Default;
-            let mut borrow_label = None;
             let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::Colon)?;
             if self.eat_simple(&TokenKind::KwOwn).is_some() {
                 mode = ParamMode::Own;
-            } else if self.eat_simple(&TokenKind::KwBorrow).is_some() {
-                mode = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                    ParamMode::BorrowMut
+            } else if self.at_simple(&TokenKind::KwBorrow) {
+                let span = self.current_span();
+                self.bump();
+                let message = if self.at_simple(&TokenKind::KwMut) {
+                    "`borrow mut T` was removed; write `mut T`"
                 } else {
-                    ParamMode::Borrow
+                    "`borrow T` was removed; write `T` for shared access"
                 };
-                borrow_label = self.parse_optional_borrow_label()?;
+                return Err(parse_error(span, message));
+            } else if self.eat_simple(&TokenKind::KwMut).is_some() {
+                mode = ParamMode::BorrowMut;
             }
             let ty = self.parse_type()?;
             let default = if self.eat_simple(&TokenKind::Equal).is_some() {
@@ -637,7 +630,6 @@ impl Parser {
             params.push(Param {
                 name,
                 mode,
-                borrow_label,
                 ty,
                 default,
                 span,
@@ -649,15 +641,6 @@ impl Parser {
         }
 
         Ok((receiver, params))
-    }
-
-    fn parse_optional_borrow_label(&mut self) -> Result<Option<String>> {
-        if self.eat_simple(&TokenKind::LBracket).is_none() {
-            return Ok(None);
-        }
-        let label = self.expect_identifier()?;
-        self.expect_simple(TokenKind::RBracket)?;
-        Ok(Some(label))
     }
 
     fn at_borrow_receiver_start(&self) -> bool {
@@ -672,6 +655,18 @@ impl Parser {
         matches!(
             (self.peek_kind_at(index), self.peek_kind_at(index + 1)),
             (Some(TokenKind::Identifier(name)), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
+        )
+    }
+
+    fn at_mut_receiver_start(&self) -> bool {
+        matches!(
+            (
+                self.current_kind(),
+                self.peek_kind_at(self.index + 1),
+                self.peek_kind_at(self.index + 2),
+            ),
+            (TokenKind::KwMut, Some(TokenKind::Identifier(name)), next)
+                if name == "self" && !matches!(next, Some(TokenKind::Colon))
         )
     }
 
@@ -876,7 +871,7 @@ impl Parser {
 
     fn parse_match_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwMatch)?.span;
-        let borrow_mode = self.parse_optional_match_borrow_mode();
+        let capability = self.parse_match_capability()?;
         let scrutinee = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -895,7 +890,7 @@ impl Parser {
 
         Ok(Stmt::Match(MatchStmt {
             scrutinee,
-            borrow_mode,
+            capability,
             arms,
             span,
         }))
@@ -906,7 +901,7 @@ impl Parser {
         let target = self.parse_binding_target_sequence(false)?;
         self.reject_duplicate_binding_names(&target)?;
         self.expect_simple(TokenKind::KwIn)?;
-        let borrow_mode = self.parse_optional_for_mode();
+        let borrow_mode = self.parse_optional_for_mode()?;
         let iterable = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -1553,15 +1548,7 @@ impl Parser {
 
     fn parse_prefix_inner(&mut self) -> Result<Expr> {
         if let Some(token) = self.eat_simple(&TokenKind::KwMatch) {
-            let borrow_mode = if self.eat_simple(&TokenKind::KwBorrow).is_some() {
-                if self.eat_simple(&TokenKind::KwMut).is_some() {
-                    Some(ReceiverKind::BorrowMut)
-                } else {
-                    Some(ReceiverKind::Borrow)
-                }
-            } else {
-                None
-            };
+            let capability = self.parse_match_capability()?;
             let scrutinee = self.parse_expr()?;
             self.expect_simple(TokenKind::Colon)?;
             self.expect_newline()?;
@@ -1581,7 +1568,7 @@ impl Parser {
             return Ok(Expr {
                 kind: ExprKind::Match {
                     scrutinee: Box::new(scrutinee),
-                    borrow_mode,
+                    capability,
                     arms,
                 },
                 span: token.span,
@@ -2281,20 +2268,52 @@ impl Parser {
         idx
     }
 
-    fn parse_optional_for_mode(&mut self) -> Option<ReceiverKind> {
-        if self.eat_simple(&TokenKind::KwOwn).is_some() {
-            return Some(ReceiverKind::Value);
+    fn parse_optional_for_mode(&mut self) -> Result<Option<ReceiverKind>> {
+        if self.at_simple(&TokenKind::KwBorrow) {
+            return Err(self.retired_borrow_error("in", "in", "shared iteration"));
         }
-        self.parse_optional_match_borrow_mode()
+        if self.eat_simple(&TokenKind::KwOwn).is_some() {
+            return Ok(Some(ReceiverKind::Value));
+        }
+        if self.eat_simple(&TokenKind::KwMut).is_some() {
+            return Ok(Some(ReceiverKind::BorrowMut));
+        }
+        Ok(None)
     }
 
-    fn parse_optional_match_borrow_mode(&mut self) -> Option<ReceiverKind> {
-        self.eat_simple(&TokenKind::KwBorrow)?;
-        if self.eat_simple(&TokenKind::KwMut).is_some() {
-            Some(ReceiverKind::BorrowMut)
-        } else {
-            Some(ReceiverKind::Borrow)
+    fn parse_match_capability(&mut self) -> Result<ReceiverKind> {
+        if self.at_simple(&TokenKind::KwBorrow) {
+            return Err(self.retired_borrow_error("match", "match", "shared access"));
         }
+        if self.eat_simple(&TokenKind::KwOwn).is_some() {
+            return Ok(ReceiverKind::Value);
+        }
+        if self.eat_simple(&TokenKind::KwMut).is_some() {
+            return Ok(ReceiverKind::BorrowMut);
+        }
+        Ok(ReceiverKind::Borrow)
+    }
+
+    /// Builds the exact replacement diagnostic for a retired `borrow`
+    /// spelling in statement position.
+    ///
+    /// `borrow` stays reserved for one announced compatibility window and is
+    /// parsed only far enough to say what to write instead, so `prefix` is
+    /// consumed context (`match`, `in`) and `bare` is what the shared form
+    /// spells today.
+    fn retired_borrow_error(&mut self, prefix: &str, bare: &str, shared: &str) -> Diagnostic {
+        let span = self.current_span();
+        self.bump();
+        if self.eat_simple(&TokenKind::KwMut).is_some() {
+            return parse_error(
+                span,
+                format!("`{prefix} borrow mut` was removed; write `{bare} mut`"),
+            );
+        }
+        parse_error(
+            span,
+            format!("`{prefix} borrow` was removed; write `{bare}` for {shared}"),
+        )
     }
 
     fn starts_specialization_suffix(&self, expr: &Expr) -> bool {

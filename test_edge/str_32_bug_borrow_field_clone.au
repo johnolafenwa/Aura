@@ -5,7 +5,7 @@
 class Holder:
     text: String
 
-def clone_text(h: borrow Holder) -> String:
+def clone_text(h: Holder) -> String:
     return h.text.clone()
 
 def main() -> int32:

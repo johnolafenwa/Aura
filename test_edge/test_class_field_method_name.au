@@ -1,7 +1,7 @@
 class Item:
     name: String
 
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.name
 
 def main() -> int32:

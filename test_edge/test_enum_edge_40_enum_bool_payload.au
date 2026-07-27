@@ -4,7 +4,7 @@ enum Flag:
     Unset
 
 def is_true(f: Flag) -> bool:
-    match f:
+    match own f:
         case Flag.Set(v):
             return v
         case Flag.Unset:

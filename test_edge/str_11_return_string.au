@@ -1,7 +1,7 @@
-def make_greeting(name: borrow str) -> String:
+def make_greeting(name: str) -> String:
     return f"Hello, {name}!"
 
-def concat_three(a: borrow str, b: borrow str, c: borrow str) -> String:
+def concat_three(a: str, b: str, c: str) -> String:
     return a + b + c
 
 def empty_string() -> String:

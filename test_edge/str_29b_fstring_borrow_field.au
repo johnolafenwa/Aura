@@ -1,7 +1,7 @@
 class Holder:
     text: String
 
-def show(h: borrow Holder) -> String:
+def show(h: Holder) -> String:
     return f"{h.text}"
 
 def main() -> int32:

@@ -9,14 +9,14 @@ def make_inactive() -> Status:
     return Status.Inactive
 
 def status_id(s: Status) -> int32:
-    match s:
+    match own s:
         case Status.Active(id):
             return id
         case Status.Inactive:
             return -1
 
 def promote(s: Status) -> Status:
-    match s:
+    match own s:
         case Status.Active(id):
             return Status.Active(id + 100)
         case Status.Inactive:

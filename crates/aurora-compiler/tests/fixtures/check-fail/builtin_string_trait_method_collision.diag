@@ -1,6 +1,6 @@
 error[AU2006]: trait method `contains` collides with builtin method `String.contains`
  --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_string_trait_method_collision.au:5:5
   |
-5 |     def contains(borrow self, needle: String) -> bool:
+5 |     def contains(self, needle: String) -> bool:
   |     ^
   = help: rename the trait method; builtin methods cannot be shadowed by trait implementations

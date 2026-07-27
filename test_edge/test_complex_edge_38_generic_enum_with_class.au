@@ -17,21 +17,21 @@ def make_error[T]() -> Response[T]:
 
 def main() -> int32:
     r1: Response[int32] = make_response(data=42, tag=1)
-    match r1:
+    match own r1:
         case Response.Success(p):
             print(f"data={p.data} tag={p.tag}")
         case Response.Failure(msg):
             print(msg)
 
     r2: Response[String] = make_response(data="hello", tag=2)
-    match r2:
+    match own r2:
         case Response.Success(p):
             print(f"data={p.data} tag={p.tag}")
         case Response.Failure(msg):
             print(msg)
 
     r3: Response[int32] = make_error()
-    match r3:
+    match own r3:
         case Response.Success(p):
             print(p.data)
         case Response.Failure(msg):

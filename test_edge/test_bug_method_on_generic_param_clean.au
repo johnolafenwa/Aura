@@ -8,7 +8,7 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 # This WORKS - field access

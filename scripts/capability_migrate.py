@@ -188,10 +188,19 @@ def _annotate_consuming_matches(source: str) -> str:
 
 
 def migrate_aurora(source: str) -> str:
-    """Migrate one Aurora source text. Deterministic and idempotent."""
+    """Migrate one Aurora source text. Deterministic and idempotent.
+
+    The `own` annotation runs FIRST, against the original text. `match borrow
+    X` and `match borrow mut X` do not match the bare-match pattern, so they
+    are correctly skipped. Running the keyword rules first would collapse
+    `match borrow X` to `match X` and the annotator would then read an
+    explicitly shared match as bare and make it consuming — the exact opposite
+    of what the source said.
+    """
+    source = _annotate_consuming_matches(source)
     for pattern, replace in _RULES:
         source = _substitute(source, pattern, replace)
-    return _annotate_consuming_matches(source)
+    return source
 
 
 def migrate_markdown(source: str) -> str:

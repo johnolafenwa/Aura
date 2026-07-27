@@ -220,6 +220,39 @@ class MatchTests(unittest.TestCase):
         )
         self.assertNotIn("match own", migrate.migrate_aurora(original))
 
+    def test_explicitly_shared_match_never_gains_own(self) -> None:
+        # `match borrow X` was already shared. Collapsing it to `match X` and
+        # then annotating it `own` would silently make it consuming, which is
+        # the opposite of what the source said.
+        original = source(
+            """
+            def main():
+                match borrow holder:
+                    case Option.Some(value):
+                        print(value)
+                    case Option.None:
+                        pass
+            """
+        )
+        migrated = migrate.migrate_aurora(original)
+        self.assertIn("match holder:", migrated)
+        self.assertNotIn("match own", migrated)
+
+    def test_explicitly_mutable_match_never_gains_own(self) -> None:
+        original = source(
+            """
+            def main():
+                match borrow mut holder:
+                    case Option.Some(value):
+                        print(value)
+                    case Option.None:
+                        pass
+            """
+        )
+        migrated = migrate.migrate_aurora(original)
+        self.assertIn("match mut holder:", migrated)
+        self.assertNotIn("match own", migrated)
+
     def test_match_own_is_unchanged(self) -> None:
         self.assertEqual(
             migrate.migrate_aurora("match own value:\n"),

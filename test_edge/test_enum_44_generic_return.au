@@ -7,7 +7,7 @@ def make_nothing() -> Maybe[int32]:
 
 def main() -> int32:
     m = make_nothing()
-    match m:
+    match own m:
         case Maybe.Just(v):
             print(v)
         case Maybe.Nothing:

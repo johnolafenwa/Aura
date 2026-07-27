@@ -8,7 +8,7 @@ enum AppError:
 class Resource:
     label: String
 
-    def close(borrow mut self) -> None:
+    def close(mut self) -> None:
         print("closed " + self.label)
 
 impl From[int32] for AppError:

@@ -9,15 +9,15 @@ Verify Gemini's review against the current Aurora proposal and bring the maintai
 - Added failing compiler fixtures for:
   - `copy class`
   - `indirect Node?`
-  - `borrow str`
-  - `match borrow ...`
+  - `str`
+  - `match ...`
   - unqualified enum variants in match arms
   - `for` iteration over `Channel[T]`
   - f-strings
   - explicit generic constructor specialization such as `Box[int32](...)`
 - Implemented parser, AST, checker, interpreter, MIR, and MIR runtime support for the proposal features above.
 - Made `copy` contextual so `copy class Name:` works without breaking existing identifiers like `copy = text.clone()`.
-- Added `str -> String` aliasing in the implemented string-view path used by `borrow str` parameters.
+- Added `str -> String` aliasing in the implemented string-view path used by `str` parameters.
 - Added channel iteration through ordinary `for value in jobs:` loops.
 - Added borrowed `match` plus unqualified variant patterns such as `case Ok(value):`.
 - Added compiler acceptance for explicit constructor specialization like `Box[int32](...)` and `Channel[int32](capacity=4)`.

@@ -1,12 +1,12 @@
 # Test: concatenation with borrow str parameters
 
-def join(a: borrow str, b: borrow str, sep: borrow str) -> String:
+def join(a: str, b: str, sep: str) -> String:
     return a + sep + b
 
-def prefix(s: borrow str) -> String:
+def prefix(s: str) -> String:
     return "prefix_" + s
 
-def suffix(s: borrow str) -> String:
+def suffix(s: str) -> String:
     return s + "_suffix"
 
 def main() -> int32:

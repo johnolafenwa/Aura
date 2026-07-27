@@ -1,9 +1,9 @@
-def choose_positive(left: borrow[shared] int32, right: borrow[shared] int32) -> borrow[shared] int32:
+def choose_positive(left: int32, right: int32) -> int32:
     if left > 0:
         return left
     return right
 
-def identity(value: borrow[src] int32) -> borrow[src] int32:
+def identity(value: int32) -> int32:
     return value
 
 def main() -> int32:

@@ -8,13 +8,13 @@ A trait lists method signatures. Methods may omit a body or provide a default im
 
 ```python
 trait Greeter:
-    def greet(borrow self) -> String
+    def greet(self) -> String
 ```
 
 ```python
 trait Named:
-    def name(borrow self) -> String
-    def label(borrow self) -> String:
+    def name(self) -> String
+    def label(self) -> String:
         return "name=" + self.name()
 ```
 
@@ -29,24 +29,24 @@ Generic traits use the same `Name[T]` syntax as classes:
 
 ```python
 trait Mapper[T]:
-    def map(borrow self, value: own T) -> T
+    def map(self, value: own T) -> T
 ```
 
 Trait methods and impl methods may also use `Self` in parameter and return positions:
 
 ```python
 trait Combine:
-    def combine(borrow self, other: borrow Self) -> Self
+    def combine(self, other: Self) -> Self
 ```
 
 Traits may also inherit from other traits:
 
 ```python
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 trait Labelled: Named:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "name=" + self.name()
 ```
 
@@ -61,7 +61,7 @@ class User:
     name: String
 
 impl Greeter for User:
-    def greet(borrow self) -> String:
+    def greet(self) -> String:
         return "hello " + self.name
 ```
 
@@ -72,7 +72,7 @@ class Box[T]:
     value: T
 
 impl Greeter for Box[String]:
-    def greet(borrow self) -> String:
+    def greet(self) -> String:
         return self.value.clone()
 ```
 
@@ -80,7 +80,7 @@ Open generic impl headers work too:
 
 ```python
 impl[T] Showable for Box[T]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "box"
 ```
 
@@ -88,7 +88,7 @@ And generic traits can be implemented for generic classes:
 
 ```python
 impl Mapper[T] for Box[T]:
-    def map(borrow self, value: own T) -> T:
+    def map(self, value: own T) -> T:
         return value
 ```
 
@@ -99,7 +99,7 @@ Aurora infers a clone-safety obligation as part of that method's contract:
 
 ```python
 trait Duplicator[T]:
-    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+    def duplicate(self, values: Vec[T]) -> Vec[T]:
         return values.clone()
 ```
 
@@ -161,7 +161,7 @@ Specialized dispatch works across multiple implementing types in the same progra
 
 ```python
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 class Dog:
     name: String
@@ -170,11 +170,11 @@ class Cat:
     label: String
 
 impl Describe for Dog:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "dog"
 
 impl Describe for Cat:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "cat"
 
 def show[T: Describe](animal: T) -> None:
@@ -212,18 +212,18 @@ Aurora supports operator overloading through traits. When you implement the righ
 
 | Operator | Trait | Method |
 |----------|-------|--------|
-| `a + b` | `Add[Rhs, Out]` | `add(borrow self, rhs: Rhs) -> Out` |
-| `a - b` | `Sub[Rhs, Out]` | `sub(borrow self, rhs: Rhs) -> Out` |
-| `a * b` | `Mul[Rhs, Out]` | `mul(borrow self, rhs: Rhs) -> Out` |
-| `a / b` | `Div[Rhs, Out]` | `div(borrow self, rhs: Rhs) -> Out` |
-| `a // b` | `FloorDiv[Rhs, Out]` | `floor_div(borrow self, rhs: Rhs) -> Out` |
-| `a % b` | `Mod[Rhs, Out]` | `mod(borrow self, rhs: Rhs) -> Out` |
-| `a < b` | `Ord[Rhs]` | `lt(borrow self, rhs: Rhs) -> bool` |
-| `a <= b` | `Ord[Rhs]` | `le(borrow self, rhs: Rhs) -> bool` |
-| `a > b` | `Ord[Rhs]` | `gt(borrow self, rhs: Rhs) -> bool` |
-| `a >= b` | `Ord[Rhs]` | `ge(borrow self, rhs: Rhs) -> bool` |
-| `-a` | `Neg[Out]` | `neg(borrow self) -> Out` |
-| `not a` | `Not[Out]` | `not(borrow self) -> Out` |
+| `a + b` | `Add[Rhs, Out]` | `add(self, rhs: Rhs) -> Out` |
+| `a - b` | `Sub[Rhs, Out]` | `sub(self, rhs: Rhs) -> Out` |
+| `a * b` | `Mul[Rhs, Out]` | `mul(self, rhs: Rhs) -> Out` |
+| `a / b` | `Div[Rhs, Out]` | `div(self, rhs: Rhs) -> Out` |
+| `a // b` | `FloorDiv[Rhs, Out]` | `floor_div(self, rhs: Rhs) -> Out` |
+| `a % b` | `Mod[Rhs, Out]` | `mod(self, rhs: Rhs) -> Out` |
+| `a < b` | `Ord[Rhs]` | `lt(self, rhs: Rhs) -> bool` |
+| `a <= b` | `Ord[Rhs]` | `le(self, rhs: Rhs) -> bool` |
+| `a > b` | `Ord[Rhs]` | `gt(self, rhs: Rhs) -> bool` |
+| `a >= b` | `Ord[Rhs]` | `ge(self, rhs: Rhs) -> bool` |
+| `-a` | `Neg[Out]` | `neg(self) -> Out` |
+| `not a` | `Not[Out]` | `not(self) -> Out` |
 
 Builtin numeric floor division and `Duration // int64` take precedence. When
 neither rule applies, `//` and `//=` resolve through
@@ -239,11 +239,11 @@ class Point:
     y: int32
 
 impl Add[Point, Point] for Point:
-    def add(borrow self, rhs: Point) -> Point:
+    def add(self, rhs: Point) -> Point:
         return Point(x=self.x + rhs.x, y=self.y + rhs.y)
 
 impl Neg[Point] for Point:
-    def neg(borrow self) -> Point:
+    def neg(self) -> Point:
         return Point(x=0 - self.x, y=0 - self.y)
 ```
 
@@ -263,10 +263,10 @@ Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
 
 ```python
 trait Ord[Rhs]:
-    def lt(borrow self, rhs: Rhs) -> bool
-    def le(borrow self, rhs: Rhs) -> bool
-    def gt(borrow self, rhs: Rhs) -> bool
-    def ge(borrow self, rhs: Rhs) -> bool
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
 ```
 
 This lets you write generic ordered code such as:
@@ -286,14 +286,14 @@ A trait can also target a builtin type, not only your own classes and enums:
 
 ```aurora
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl Describe for Vec[int32]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"vec of {self.len()}"
 
 impl Describe for String:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"text of {self.len()}"
 ```
 

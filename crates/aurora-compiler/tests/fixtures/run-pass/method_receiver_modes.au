@@ -5,10 +5,10 @@ class Record:
     def label_copy(self) -> String:
         return self.label.clone()
 
-    def label_copy_explicit(borrow self) -> String:
+    def label_copy_explicit(self) -> String:
         return self.label.clone()
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.count += 1
 
     def into_label(own self) -> String:

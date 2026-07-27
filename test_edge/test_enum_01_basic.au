@@ -17,7 +17,7 @@ def describe_color(c: Color) -> String:
             return "blue"
 
 def describe_shape(s: Shape) -> String:
-    match s:
+    match own s:
         case Shape.Circle(radius):
             print(radius)
             return "circle"

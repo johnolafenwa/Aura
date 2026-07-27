@@ -34,7 +34,7 @@ def serve(listener: own net.HttpListener) -> Result[int32, io.Error]:
 
         return Result.Ok(total_requests)
 
-def request_with_retry(address: String, path: String, name: String, max_attempts: int32, initial_backoff: Duration, rng: borrow mut random.Rng) -> Result[int32, io.Error]:
+def request_with_retry(address: String, path: String, name: String, max_attempts: int32, initial_backoff: Duration, rng: mut random.Rng) -> Result[int32, io.Error]:
     mut attempt: int32 = 1
     mut backoff = initial_backoff
 
@@ -80,7 +80,7 @@ def run() -> Result[None, io.Error]:
         server = group.start(serve, listener)
         worker = group.start(work, address)
 
-        match worker.result(timeout=5s):
+        match own worker.result(timeout=5s):
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(message):
@@ -90,7 +90,7 @@ def run() -> Result[None, io.Error]:
             case TaskResult.Cancelled:
                 return Result.Err(io.Error.Other(message="worker cancelled"))
 
-        match server.result(timeout=5s):
+        match own server.result(timeout=5s):
             case TaskResult.Ready(result):
                 requests = try result
                 print(f"requests {requests}")

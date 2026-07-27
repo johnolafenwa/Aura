@@ -4,6 +4,12 @@
 - Date: 2026-07-13
 - Roadmap decision: D5
 
+> **Amended by ADR-0022 (2026-07-27).** The receiver spellings changed: the
+> shared receiver is bare `self` only (`borrow self` is retired), the mutable
+> receiver is `mut self` (was `borrow mut self`), and the consuming receiver
+> remains `own self`. The three receiver capabilities and their semantics are
+> unchanged; only the surface syntax moved.
+
 ## Decision
 
 Bare `self` is a shared borrow. `own self` is the consuming receiver and

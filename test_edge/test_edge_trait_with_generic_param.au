@@ -4,13 +4,13 @@ class Box[T]:
     value: T
 
 trait Boxable:
-    def into_box(borrow self) -> Box[int32]
+    def into_box(self) -> Box[int32]
 
 class Number:
     n: int32
 
 impl Boxable for Number:
-    def into_box(borrow self) -> Box[int32]:
+    def into_box(self) -> Box[int32]:
         return Box(value=self.n)
 
 def main() -> int32:

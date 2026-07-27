@@ -1,4 +1,4 @@
-def greet(name: borrow str) -> String:
+def greet(name: str) -> String:
     return "Hello, " + name
 
 def main() -> int32:

@@ -62,7 +62,7 @@ The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping
 Counting is a map from string to integer. The helper is deliberately small:
 
 ```python
-def increment(counts: borrow mut Map[String, int32], key: own String):
+def increment(counts: mut Map[String, int32], key: own String):
     current = match counts.get(key):
         case Option.Some(value):
             value

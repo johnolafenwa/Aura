@@ -1,11 +1,11 @@
 public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 
-    public def increment(borrow mut self):
+    public def increment(mut self):
         self.value += 1
 
-    def private_method(borrow self) -> int32:
+    def private_method(self) -> int32:
         return self.value * 2

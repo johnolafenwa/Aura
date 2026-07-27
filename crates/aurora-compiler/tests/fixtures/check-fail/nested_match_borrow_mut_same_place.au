@@ -4,9 +4,9 @@ enum Opt:
 
 def main() -> int32:
     mut x: Opt = Opt.Some([1, 2])
-    match borrow mut x:
+    match mut x:
         case Some(y):
-            match borrow mut x:
+            match mut x:
                 case Some(z):
                     z.push(500)
                 case None:

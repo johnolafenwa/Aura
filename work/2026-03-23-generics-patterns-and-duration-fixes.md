@@ -33,6 +33,6 @@ Address the latest review findings in the generic type system, trait dispatch, p
 
 ## Follow-up
 
-- free-function `borrow` parameters are still not implemented
+- free-function `` parameters are still not implemented
 - nested patterns and expression-form `match` are still outside the compiler
 - the backend is still a bootstrap MIR-artifact launcher rather than final standalone native codegen

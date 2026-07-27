@@ -3,10 +3,10 @@ import user_rng_origin_support.random
 class Rng:
     value: int64
 
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return f"entry:{self.value}"
 
-    def clone(borrow self) -> Rng:
+    def clone(self) -> Rng:
         return Rng(value=self.value)
 
 def main() -> int32:

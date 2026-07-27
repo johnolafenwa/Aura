@@ -1,6 +1,6 @@
 # Test: can we pass String arguments positionally (without named args)?
 
-def greet(name: borrow str) -> String:
+def greet(name: str) -> String:
     return f"Hi {name}"
 
 def consume(text: String):

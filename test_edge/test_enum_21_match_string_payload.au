@@ -4,7 +4,7 @@ enum Message:
     Empty
 
 def greet(m: own Message) -> String:
-    match m:
+    match own m:
         case Message.Hello(name):
             return name
         case Message.Goodbye(name):

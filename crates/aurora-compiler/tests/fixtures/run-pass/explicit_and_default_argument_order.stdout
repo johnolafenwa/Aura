@@ -7,12 +7,15 @@ class
 explicit-field-third
 explicit-field-first
 field-second
-snapshot
+evaluation order
+named-second
 2
-1
-class snapshot
 2
-1
+class order
+field-named-second
+field-named-first
+4
+5
 enum
 enum-second
 enum-first

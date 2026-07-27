@@ -104,7 +104,7 @@ class Counter:
     def get(self) -> int32:
         return self.value
 
-    def increment(borrow mut self):
+    def increment(mut self):
         self.value += 1
 
     def into_value(own self) -> int32:
@@ -119,9 +119,9 @@ The receiver, when present, is the first method parameter:
 | Receiver | Call contract |
 | --- | --- |
 | `self` | Shared receiver and the default spelling. It can read, but cannot mutate or move non-copy fields out. |
-| `borrow self` | Explicit synonym for the shared `self` receiver. |
+| `self` | Explicit synonym for the shared `self` receiver. |
 | `own self` | Consuming receiver. A non-copy instance is moved into the call. |
-| `borrow mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
+| `mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
 | none | Associated method. It is called through the type, not an instance. |
 
 ```python
@@ -145,7 +145,7 @@ counter.value = 10
 counter.increment()
 ```
 
-An owned local is mutable only when introduced with `mut`. Inside a `borrow mut self` method, `self` is a mutable place even though parameter bindings themselves are not reassigned. Inside shared `self` (whether written `self` or `borrow self`), mutation through `self` is rejected.
+An owned local is mutable only when introduced with `mut`. Inside a `mut self` method, `self` is a mutable place even though parameter bindings themselves are not reassigned. Inside shared `self` (whether written `self` or `self`), mutation through `self` is rejected.
 
 Moving one non-copy field from an owned class partially moves that value. Disjoint fields remain usable, but use of the complete class is rejected until the moved field is reinitialized. See [Ownership And Borrowing](/manual/ownership-and-borrowing#partial-moves-and-reinitialization).
 
@@ -178,11 +178,11 @@ Copy-valued APIs may declare a borrowed return tied to `self`; calls materialize
 class Counter:
     value: int32
 
-    def value_ref(self) -> borrow[self] int32:
+    def value_ref(self) -> int32:
         return self.value
 ```
 
-Aurora 0.1 rejects a corresponding non-copy call such as `-> borrow[self] String`; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
+Aurora 0.1 rejects a corresponding non-copy call such as `-> String`; return an owned clone when the value is clone-safe, consume an owner, or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
 
 ## `copy class`
 
@@ -218,11 +218,11 @@ A non-generic user class may be managed by `with` when it declares this exact in
 class Resource:
     name: String
 
-    def close(borrow mut self) -> None:
+    def close(mut self) -> None:
         print("closing " + self.name)
 ```
 
-The method must be named `close`, use `borrow mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aurora 0.1.
+The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aurora 0.1.
 
 ```python
 with resource = Resource(name="db"):
@@ -248,7 +248,7 @@ requires every non-defaulted accessible field, and rejects duplicate, unknown,
 inaccessible private, or excess arguments. Receiver mode controls legal field
 access. A `copy class` requires every field to be statically copyable, and
 every direct recursive layout cycle requires `indirect`. Cross-module
-visibility and the exact user-resource `close(borrow mut self) -> None` shape
+visibility and the exact user-resource `close(mut self) -> None` shape
 are checked before lowering.
 
 ## Runtime Semantics
@@ -272,7 +272,7 @@ cleanup rules in [Execution Model](/manual/execution-model).
 Every constructor field is an owned destination: copy arguments are copied and
 non-copy arguments move into the new value. Ordinary classes move; valid
 `copy class` values copy. Shared receivers read, `own self` consumes, and
-`borrow mut self` requires an exclusive mutable place. Moving an owned
+`mut self` requires an exclusive mutable place. Moving an owned
 non-copy field partially moves its class until that field is reinitialized;
 moving through a borrowed receiver is rejected. Aurora inserts no hidden clone
 at a constructor, field, receiver, or return boundary. Constructor side effects

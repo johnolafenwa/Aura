@@ -6,7 +6,7 @@ Bring the direct native backend up to the full currently implemented Aurora lang
 
 ## Work Completed
 
-- Added direct-backend support for free-function `borrow mut` writeback and mutating method receiver writeback through an ABI that appends mutable borrow values to native call results.
+- Added direct-backend support for free-function `mut ` writeback and mutating method receiver writeback through an ABI that appends mutable borrow values to native call results.
 - Added direct support for `range(...)` and MIR `ForRange`, including named builtin argument handling for `range(stop=...)` and `range(start=..., stop=...)`.
 - Added direct runtime helpers for native `Range` values and iteration state updates.
 - Fixed native runtime artifact resolution in the CLI build path so direct builds reliably link against the canonical Aurora static runtime library instead of stale hashed archives under `target/*/deps`.

@@ -12,13 +12,13 @@ def main() -> int32:
     r1: Result2[int32, String] = divide(10, 2)
     r2: Result2[int32, String] = divide(10, 0)
 
-    match r1:
+    match own r1:
         case Result2.Ok(v):
             print(v)
         case Result2.Err(e):
             print(e)
 
-    match r2:
+    match own r2:
         case Result2.Ok(v):
             print(v)
         case Result2.Err(e):

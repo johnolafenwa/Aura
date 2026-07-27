@@ -4,7 +4,7 @@ enum Expr:
     Add(int32)
 
 def eval_expr(e: Expr) -> int32:
-    match e:
+    match own e:
         case Expr.Lit(val):
             return val
         case Expr.Neg(val):

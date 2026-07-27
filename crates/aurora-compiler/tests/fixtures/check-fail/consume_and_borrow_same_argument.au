@@ -1,7 +1,7 @@
 class Holder:
     name: String
 
-def read_ref_take(href: borrow Holder, h: own Holder):
+def read_ref_take(href: Holder, h: own Holder):
     print(href.name)
     print(h.name)
 

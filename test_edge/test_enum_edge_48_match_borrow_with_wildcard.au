@@ -7,21 +7,21 @@ enum Status:
 def main() -> int32:
     s = Status.Active(42)
 
-    match borrow s:
+    match s:
         case Status.Active(v):
             print(v)
         case _:
             print("not active")
 
     # Use after borrow
-    match borrow s:
+    match s:
         case Status.Active(v):
             print(v)
         case _:
             print("not active")
 
     s2 = Status.Paused
-    match borrow s2:
+    match s2:
         case Status.Active(v):
             print(v)
         case _:

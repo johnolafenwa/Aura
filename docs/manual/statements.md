@@ -242,11 +242,11 @@ Maintained iterable forms include:
 | `for i in range(start, end):` | Yields `int32` values from `start` up to `end`, excluding `end`. |
 | `for value in vec:` | Retains the vector and yields shared-borrowed access for non-copy elements. |
 | `for value in own vec:` | Consumes the vector and yields owned elements. |
-| `for value in borrow vec:` | Explicit form of shared iteration. |
-| `for value in borrow mut vec:` | Retains a mutable vector and yields mutable-borrowed access; the iterable place must be mutable. |
+| `for value in vec:` | Explicit form of shared iteration. |
+| `for value in mut vec:` | Retains a mutable vector and yields mutable-borrowed access; the iterable place must be mutable. |
 | `for value in set:` | Retains the set and yields shared-borrowed access. |
 | `for value in own set:` | Consumes the set and yields owned elements. |
-| `for value in borrow set:` | Explicit form of shared iteration. |
+| `for value in set:` | Explicit form of shared iteration. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 | `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
@@ -254,12 +254,12 @@ Maintained iterable forms include:
 When an iterable yields tuples, bare/shared collection iteration gives
 non-copy tuple leaves shared provenance; `own` collection iteration gives
 owned leaves; and bare Queue iteration receives an owned item and gives owned
-leaves. `borrow mut` iteration with a tuple target is rejected because the
+leaves. `mut ` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
-`for value in borrow mut set:` is not supported in Aurora 0.1. Queue iteration
+`for value in mut set:` is not supported in Aurora 0.1. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
-queue handle is a copy value. Consequently `own`, `borrow`, and `borrow mut`
+queue handle is a copy value. Consequently `own`, ``, and `mut `
 are all rejected for Queue iteration; use the bare form. That form evaluates
 and copies the Queue handle once at loop entry without freezing the source
 binding. Rebinding the source in the body does not switch later receives.
@@ -333,8 +333,8 @@ Matches over enums and booleans must be exhaustive unless `_` covers the remaind
 
 `match value` may consume a non-copy scrutinee. This includes a non-copy tuple,
 which is consumed as one whole value and unpacked into owned pattern bindings.
-`match borrow value` retains ownership and exposes shared enum-payload or tuple
-leaf access. `match borrow mut value` permits enum-payload mutation and
+`match value` retains ownership and exposes shared enum-payload or tuple
+leaf access. `match mut value` permits enum-payload mutation and
 writeback, but a tuple pattern is rejected because recursive mutable tuple
 writeback is not part of the minimal surface. See
 [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
@@ -356,7 +356,7 @@ with TaskGroup() as group:
 
 The first form is `with name = expression:`. The second is `with expression as name:`. Each form evaluates and consumes the resource expression, creates a fresh mutable managed binding, and registers cleanup after resource creation succeeds.
 
-Supported builtin resources define their cleanup behavior. A user class can be used when it is non-generic and declares exactly `close(borrow mut self) -> None`. The managed value cannot be moved out in a way that prevents cleanup.
+Supported builtin resources define their cleanup behavior. A user class can be used when it is non-generic and declares exactly `close(mut self) -> None`. The managed value cannot be moved out in a way that prevents cleanup.
 
 The registered `close` operation runs exactly once when control leaves the body by:
 
@@ -489,7 +489,7 @@ every exited cleanup in reverse registration order.
 
 Bindings own, copy, or borrow their initializer according to type and context.
 `own` Vec/Set iteration consumes once into a loop-private source, bare or
-`borrow` collection iteration retains and freezes its selected place, and Queue
+`` collection iteration retains and freezes its selected place, and Queue
 iteration captures a copy handle once while receiving already-owned items.
 The one-time iterable selection is the accepted ADR-0017 rule; the ownership
 modes themselves remain those accepted in ADR-0006.

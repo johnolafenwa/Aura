@@ -2,17 +2,17 @@
 ## Expects: "circle" then 314
 
 trait Shape:
-    def name(borrow self) -> String
-    def area(borrow self) -> int32
+    def name(self) -> String
+    def area(self) -> int32
 
 class Circle:
     radius: int32
 
 impl Shape for Circle:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return "circle"
 
-    def area(borrow self) -> int32:
+    def area(self) -> int32:
         return self.radius * self.radius * 314 // 100
 
 def describe[T: Shape](s: T):

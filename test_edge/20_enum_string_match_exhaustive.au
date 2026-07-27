@@ -4,7 +4,7 @@ enum Shape:
     Named(String)
 
 def describe(s: own Shape) -> String:
-    match s:
+    match own s:
         case Shape.Circle(r):
             return "circle"
         case Shape.Rectangle(w):

@@ -1,11 +1,11 @@
 trait Add[Rhs, Out]:
-    def add(borrow mut self, rhs: borrow Rhs) -> Out
+    def add(mut self, rhs: Rhs) -> Out
 
 copy class Counter:
     value: int32
 
 impl Add[Counter, Counter] for Counter:
-    def add(borrow mut self, rhs: borrow Counter) -> Counter:
+    def add(mut self, rhs: Counter) -> Counter:
         self.value += rhs.value
         return self
 

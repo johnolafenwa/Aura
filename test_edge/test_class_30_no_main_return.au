@@ -2,7 +2,7 @@
 class Msg:
     text: String
 
-    def show(borrow self):
+    def show(self):
         print(self.text)
 
 def main():

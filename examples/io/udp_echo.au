@@ -26,9 +26,9 @@ def run() -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-        match server.result():
+        match own server.result():
             case TaskResult.Ready(result):
-                match result:
+                match own result:
                     case Result.Ok(text):
                         print(text)
                     case Result.Err(error):

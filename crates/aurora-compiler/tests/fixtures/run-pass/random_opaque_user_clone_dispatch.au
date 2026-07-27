@@ -1,14 +1,14 @@
 import random
 
 trait FreshClone:
-    def clone(borrow self) -> Holder
+    def clone(self) -> Holder
 
 class Holder:
     generator: random.Rng
     seed: int64
 
 impl FreshClone for Holder:
-    def clone(borrow self) -> Holder:
+    def clone(self) -> Holder:
         return Holder(random.Rng(self.seed), self.seed)
 
 def main() -> int32:

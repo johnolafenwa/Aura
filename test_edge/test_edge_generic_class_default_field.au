@@ -3,7 +3,7 @@ class Container[T]:
     value: T
     label: String = "default"
 
-    def get_label(borrow self) -> String:
+    def get_label(self) -> String:
         return self.label
 
 def main() -> int32:

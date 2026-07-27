@@ -1,5 +1,5 @@
 def main() -> int32:
     jobs = Queue[int64]()
-    for job in borrow jobs:
+    for job in mut jobs:
         print(job)
     return 0

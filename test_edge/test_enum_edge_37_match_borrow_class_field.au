@@ -11,7 +11,7 @@ def main() -> int32:
     s = Shape.Dot(Point(x=10, y=20))
 
     # Borrow and access class fields
-    match borrow s:
+    match s:
         case Shape.Dot(p):
             print(p.x)
             print(p.y)
@@ -19,7 +19,7 @@ def main() -> int32:
             print(len)
 
     # Use s again since we borrowed
-    match borrow s:
+    match s:
         case Shape.Dot(p):
             print(p.x + p.y)
         case Shape.Line(len):

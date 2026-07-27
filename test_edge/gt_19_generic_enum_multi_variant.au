@@ -8,7 +8,7 @@ enum Status[T]:
 
 def main() -> int32:
     s1: Status[int32] = Status.Ok(42)
-    match s1:
+    match own s1:
         case Status.Ok(val):
             print(val)
         case Status.Error(msg):
@@ -17,7 +17,7 @@ def main() -> int32:
             print("pending")
 
     s2: Status[int32] = Status.Error("oops")
-    match s2:
+    match own s2:
         case Status.Ok(val):
             print(val)
         case Status.Error(msg):
@@ -26,7 +26,7 @@ def main() -> int32:
             print("pending")
 
     s3: Status[int32] = Status.Pending
-    match s3:
+    match own s3:
         case Status.Ok(val):
             print(val)
         case Status.Error(msg):

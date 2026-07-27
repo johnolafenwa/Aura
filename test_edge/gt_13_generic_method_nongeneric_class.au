@@ -4,7 +4,7 @@
 class Converter:
     factor: int32
 
-    def passthrough[T](borrow self, value: own T) -> T:
+    def passthrough[T](self, value: own T) -> T:
         return value
 
 def main() -> int32:

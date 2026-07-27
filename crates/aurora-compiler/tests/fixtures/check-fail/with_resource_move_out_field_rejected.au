@@ -1,7 +1,7 @@
 class Handle:
     name: Vec[int32]
 
-    def close(borrow mut self):
+    def close(mut self):
         print(self.name.len())
 
 def mutate(s: own Vec[int32]) -> int32:

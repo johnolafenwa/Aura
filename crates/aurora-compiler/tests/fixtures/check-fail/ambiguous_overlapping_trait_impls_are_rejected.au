@@ -1,16 +1,16 @@
 trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 class Pair[A, B]:
     left: A
     right: B
 
 impl[T] Show for Pair[int32, T]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "left"
 
 impl[T] Show for Pair[T, int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "right"
 
 def main() -> int32:

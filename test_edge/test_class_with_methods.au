@@ -3,18 +3,18 @@ class Stack:
     values: String
     count: int32
 
-    def push(borrow mut self, item: int32):
+    def push(mut self, item: int32):
         self.count += 1
 
-    def pop(borrow mut self) -> int32:
+    def pop(mut self) -> int32:
         if self.count > 0:
             self.count -= 1
         return self.count
 
-    def size(borrow self) -> int32:
+    def size(self) -> int32:
         return self.count
 
-    def is_empty(borrow self) -> bool:
+    def is_empty(self) -> bool:
         return self.count == 0
 
 def main() -> int32:

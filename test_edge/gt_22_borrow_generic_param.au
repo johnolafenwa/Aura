@@ -4,10 +4,10 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
-def peek[T](b: borrow Box[T]) -> T:
+def peek[T](b: Box[T]) -> T:
     return b.get()
 
 def main() -> int32:

@@ -4,6 +4,13 @@
 - Date: 2026-07-14
 - Reference gap: timing and identity of a selected loop source
 
+> **Amended by ADR-0022 (2026-07-27).** The iteration capabilities keep their
+> semantics and change spelling: bare is shared, `for x in mut c:` is mutable
+> (was `borrow mut`), and `for x in own c:` consumes. The Queue carve-out keeps
+> its diagnostic, reworded for the new surface. Range iteration additionally
+> rejects `mut` and `own`, because a range yields copy values with nothing to
+> modify or transfer.
+
 ## Context
 
 ADR-0006 defines the ownership mode of place iteration and the receive-based

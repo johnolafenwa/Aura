@@ -4,12 +4,12 @@ enum Opt:
 
 def main() -> int32:
     mut x: Opt = Opt.Some(42)
-    match borrow mut x:
+    match mut x:
         case Some(y):
             x = Opt.None
         case None:
             print("none")
-    match borrow x:
+    match mut x:
         case Some(v):
             print("still some")
             print(v)

@@ -2,14 +2,14 @@
 # (related to the swap inference bug)
 
 trait Sized:
-    def size(borrow self) -> int32
+    def size(self) -> int32
 
 class Container[T]:
     item: T
     count: int32
 
 impl Sized for Container[int32]:
-    def size(borrow self) -> int32:
+    def size(self) -> int32:
         return self.count
 
 # Call trait method on generic param

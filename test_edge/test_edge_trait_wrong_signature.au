@@ -1,13 +1,13 @@
 # Test: implementing a trait but with wrong return type (should error)
 
 trait Returner:
-    def get_value(borrow self) -> int32
+    def get_value(self) -> int32
 
 class BadImpl:
     value: String
 
 impl Returner for BadImpl:
-    def get_value(borrow self) -> String:
+    def get_value(self) -> String:
         return self.value
 
 def main() -> int32:

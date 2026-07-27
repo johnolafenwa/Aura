@@ -60,7 +60,7 @@ with group = TaskGroup():
 `start` and `start_soon` accept named functions and associated methods without
 `self`. Every argument is copied or moved into task-owned capture storage. A
 default-mode non-copy or explicit shared target parameter borrows from that
-storage for the child call; an `own` parameter consumes it. `borrow mut`
+storage for the child call; an `own` parameter consumes it. `mut `
 targets are rejected because detached mutable capture has no caller-visible
 writeback.
 
@@ -140,8 +140,8 @@ for value in jobs:
 
 Queue iteration receives values: every `Item(value)` arrives already owned by
 the loop binding. The Queue handle is a copy value, so ownership modifiers
-have nothing to modify. `for value in own jobs`, `for value in borrow jobs`,
-and `for value in borrow mut jobs` are all rejected; use the bare form above.
+have nothing to modify. `for value in own jobs`, `for value in jobs`,
+and `for value in mut jobs` are all rejected; use the bare form above.
 The bare form evaluates and copies the Queue handle once at loop entry. It does
 not freeze the source binding: rebinding `jobs` in the body is permitted, but
 later receives continue through the captured handle rather than switching to
@@ -223,7 +223,7 @@ resource. Queue sends, fallback values, task captures, and returned outcome
 payloads use the exact owned positions shown in the API tables above. Task
 targets are named functions or associated methods without `self`; generic
 targets must infer all type arguments. Default/shared and `own` target
-parameters are supported, while `borrow mut` targets are rejected. Queue
+parameters are supported, while `mut ` targets are rejected. Queue
 iteration yields `T` by ownership transfer and rejects all explicit ownership
 modifiers. Timeout and capacity expressions must have the documented exact
 types. Task-result and multi-task observations infer clone-safety obligations
@@ -268,7 +268,7 @@ inherited trait method that collides with a builtin `Queue[T]`, `Task[T]`, or
 `TaskGroup` member. `AU2999` covers unsupported targets, removed method aliases,
 method-reference misuse, and remaining static concurrency rejections. `AU3001`
 reports use after a value moves into task or queue storage. `AU3002` reports
-invalid borrowed capture/storage use and the rejected `borrow mut` task-target
+invalid borrowed capture/storage use and the rejected `mut ` task-target
 boundary. `AU3003` reports a mutating call through an immutable place, and
 `AU3004` reports each forbidden Queue-iteration ownership modifier. `AU3007`
 reports a task-result or multi-task observation whose produced value contains

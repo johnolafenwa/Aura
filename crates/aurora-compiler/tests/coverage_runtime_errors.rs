@@ -97,7 +97,7 @@ fn runtime_errors_unwind_with_resource_cleanups() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closed " + self.name)
 
 def main() -> int32:

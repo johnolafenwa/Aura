@@ -10,7 +10,7 @@ Validate Claude's Round 7 report, fix confirmed defects across the supported Aur
 - Made direct recursion-limit failures use source-rendered diagnostics with the Aurora function name instead of backend-specific wording.
 - Closed the queue-iteration clean-return wakeup case by tracking task-group completion wake flags and treating an empty queue as closed once all registered producers finish cleanly.
 - Accepted `{}` for an annotated `Set[T]` target and preserved the Set element type through MIR lowering.
-- Improved the borrowed-`self` match diagnostic to suggest `match borrow self.field:`.
+- Improved the borrowed-`self` match diagnostic to suggest `match self.field:`.
 - Added streamed stdout support for `aura run` so printed output reaches the process pipe before external termination.
 - Added raw `process.Completed.stdout_bytes()` and `stderr_bytes()` across sema, MIR runtime, native runtime/codegen, compiler analysis, LSP fallback metadata, tests, examples, and tutorials.
 

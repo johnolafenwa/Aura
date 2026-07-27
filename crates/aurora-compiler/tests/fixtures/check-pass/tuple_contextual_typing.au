@@ -3,7 +3,7 @@ def make_record() -> ((Option[int32], int32), (String,)):
 
 def inspect(record: own ((Option[int32], int32), (String,))):
     (maybe, count), (label,) = record
-    match borrow (label, count):
+    match (label, count):
         case (name, value):
             pass
 

@@ -3,7 +3,7 @@ def parse_positive(s: String) -> Result[int32, String]:
 
 def main() -> int32:
     r = parse_positive("hello")
-    match r:
+    match own r:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

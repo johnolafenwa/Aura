@@ -1,5 +1,5 @@
 class Consumer:
-    def consume(borrow self, values: own Vec[int32], label: String = "default") -> int32:
+    def consume(self, values: own Vec[int32], label: String = "default") -> int32:
         return 0
 
 class Holder:

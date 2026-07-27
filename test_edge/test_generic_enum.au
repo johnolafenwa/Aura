@@ -10,7 +10,7 @@ enum Either[L, R]:
     Right(R)
 
 def describe_either(value: own Either[int32, String]):
-    match value:
+    match own value:
         case Either.Left(n):
             print(n)
         case Either.Right(s):
@@ -19,7 +19,7 @@ def describe_either(value: own Either[int32, String]):
 def main() -> int32:
     # Maybe with int32 - Just variant
     m1: Maybe[int32] = Maybe.Just(42)
-    match m1:
+    match own m1:
         case Maybe.Just(v):
             print(v)
         case Maybe.Nothing:
@@ -27,7 +27,7 @@ def main() -> int32:
 
     # Maybe with String
     m3: Maybe[String] = Maybe.Just("found")
-    match m3:
+    match own m3:
         case Maybe.Just(v):
             print(v)
         case Maybe.Nothing:

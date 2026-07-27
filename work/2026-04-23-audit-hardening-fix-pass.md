@@ -6,7 +6,7 @@ Fix the April 23 review findings and make the currently supported Aurora API mor
 
 ## Work Completed
 
-- Rejected moves of non-copy fields through `borrow self`, aligned existing fixtures/examples/tutorial snippets with explicit cloning or owned receivers, and added check-fail coverage for the regression.
+- Rejected moves of non-copy fields through `self`, aligned existing fixtures/examples/tutorial snippets with explicit cloning or owned receivers, and added check-fail coverage for the regression.
 - Validated `main` return types so only unit/implicit `None` and `int32` are accepted, with diagnostics for unsupported return surfaces.
 - Ensured MIR `with` cleanups run when instructions or terminators raise runtime errors.
 - Prevented duplicate supervisor names from spawning unmanaged children, including a Unix process-group regression.

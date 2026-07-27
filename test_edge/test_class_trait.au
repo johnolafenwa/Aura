@@ -1,22 +1,22 @@
 trait Printable:
-    def to_string(borrow self) -> String
+    def to_string(self) -> String
 
 class Dog:
     name: String
     breed: String
 
 impl Printable for Dog:
-    def to_string(borrow self) -> String:
+    def to_string(self) -> String:
         return self.name + " (" + self.breed + ")"
 
 class Cat:
     name: String
 
 impl Printable for Cat:
-    def to_string(borrow self) -> String:
+    def to_string(self) -> String:
         return "Cat: " + self.name
 
-def show[T: Printable](item: borrow T):
+def show[T: Printable](item: T):
     print(item.to_string())
 
 def main() -> int32:

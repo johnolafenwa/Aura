@@ -1,4 +1,4 @@
-def replace_and_return(value: borrow mut String) -> String:
+def replace_and_return(value: mut String) -> String:
     value = "B"
     return "A"
 

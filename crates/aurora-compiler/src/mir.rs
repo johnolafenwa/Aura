@@ -1004,9 +1004,14 @@ struct TaskStartTarget {
     display_name: String,
 }
 
+#[derive(Clone)]
 struct MatchWritebackState {
     root: String,
     skip_place: String,
+    /// How to rebuild the scrutinee from the arm's bindings. ADR-0022 Q3
+    /// requires this on every exit path, not just normal arm fall-through, so
+    /// `return`, `break`, and `continue` need it too.
+    writeback: Option<PatternWriteback>,
 }
 
 struct LoopLabels {
@@ -1419,6 +1424,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     Operand::Unit
                 };
+                self.emit_active_match_writebacks();
                 if let Some(redirect) = self.return_redirects.last() {
                     let return_place = redirect.return_place.clone();
                     let cleanup_depth = redirect.cleanup_depth;
@@ -1487,6 +1493,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Break(_) => {
+                self.emit_active_match_writebacks();
                 let loop_labels = self.loop_stack.last().expect("checked loop context");
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let break_label = loop_labels.break_label.clone();
@@ -1495,6 +1502,7 @@ impl<'a> Lowerer<'a> {
                 false
             }
             Stmt::Continue(_) => {
+                self.emit_active_match_writebacks();
                 let loop_labels = self.loop_stack.last().expect("checked loop context");
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let continue_label = loop_labels.continue_label.clone();
@@ -2011,7 +2019,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_match(&mut self, match_stmt: &MatchStmt) {
         let scrutinee_ty = self.infer_expr_type(&match_stmt.scrutinee);
-        let consumes_scrutinee = match_stmt.borrow_mode.is_none()
+        let consumes_scrutinee = match_stmt.capability == ReceiverKind::Value
             && scrutinee_ty
                 .as_ref()
                 .is_some_and(|ty| !type_is_copy_in_program(ty, self.program));
@@ -2030,7 +2038,7 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr(&match_stmt.scrutinee)
         };
-        let writeback_root = if match_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+        let writeback_root = if match_stmt.capability == ReceiverKind::BorrowMut {
             self.render_place_expr_option(&match_stmt.scrutinee)
         } else {
             None
@@ -2071,6 +2079,7 @@ impl<'a> Lowerer<'a> {
                 self.match_writeback_stack.push(MatchWritebackState {
                     root: writeback_place.clone(),
                     skip_place: skip_place.clone(),
+                    writeback: pattern_writeback.clone(),
                 });
                 self.emit(Instruction::Assign {
                     target: skip_place,
@@ -3313,6 +3322,12 @@ impl<'a> Lowerer<'a> {
             ExprKind::Try(inner) => {
                 let expected = self.infer_expr_type(inner);
                 let value = self.lower_expr_for_owned_value(inner, expected.as_ref());
+                // ADR-0022 Q3 counts error propagation as an exit path. `try`
+                // returns from inside an rvalue rather than through a
+                // terminator, so the writeback is applied before it. Applying
+                // it early is safe: a successful `try` falls through to the
+                // arm's own writeback, which stores the same or a newer value.
+                self.emit_active_match_writebacks();
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -3530,9 +3545,9 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Match {
                 scrutinee,
-                borrow_mode,
+                capability,
                 arms,
-            } => self.lower_match_expr(expr, scrutinee, *borrow_mode, arms),
+            } => self.lower_match_expr(expr, scrutinee, *capability, arms),
             ExprKind::Membership {
                 value,
                 container,
@@ -3937,11 +3952,11 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         scrutinee_expr: &Expr,
-        borrow_mode: Option<ReceiverKind>,
+        borrow_mode: ReceiverKind,
         arms: &[crate::ast::MatchExprArm],
     ) -> Operand {
         let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
-        let consumes_scrutinee = borrow_mode.is_none()
+        let consumes_scrutinee = borrow_mode == ReceiverKind::Value
             && scrutinee_ty
                 .as_ref()
                 .is_some_and(|ty| !type_is_copy_in_program(ty, self.program));
@@ -3959,7 +3974,7 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr(scrutinee_expr)
         };
-        let writeback_root = if borrow_mode == Some(ReceiverKind::BorrowMut) {
+        let writeback_root = if borrow_mode == ReceiverKind::BorrowMut {
             self.render_place_expr_option(scrutinee_expr)
         } else {
             None
@@ -4001,6 +4016,7 @@ impl<'a> Lowerer<'a> {
                 self.match_writeback_stack.push(MatchWritebackState {
                     root: writeback_place.clone(),
                     skip_place: skip_place.clone(),
+                    writeback: pattern_writeback.clone(),
                 });
                 self.emit(Instruction::Assign {
                     target: skip_place,
@@ -6990,6 +7006,37 @@ impl<'a> Lowerer<'a> {
             Operand::Bool(_) => Some(Type::named("bool")),
             Operand::String(_) => Some(Type::named("String")),
             Operand::Unit => Some(Type::Unit),
+        }
+    }
+
+    /// Applies every active mutable-match writeback before control leaves the
+    /// arm early.
+    ///
+    /// ADR-0022 Q3 makes writeback unconditional across exit kinds: a `return`,
+    /// `break`, or `continue` inside `match mut` must reconstruct and store the
+    /// scrutinee exactly as a normal arm exit does. Without this the mutation
+    /// is silently lost, which is the one outcome the ADR forbids.
+    fn emit_active_match_writebacks(&mut self) {
+        for index in (0..self.match_writeback_stack.len()).rev() {
+            let state = self.match_writeback_stack[index].clone();
+            let Some(writeback) = state.writeback.clone() else {
+                continue;
+            };
+            let apply_block = self.new_block("match_writeback_exit_apply");
+            let resume_block = self.new_block("match_writeback_exit_resume");
+            self.terminate(Terminator::Branch {
+                condition: Operand::Place(state.skip_place.clone()),
+                then_label: self.label(resume_block),
+                else_label: self.label(apply_block),
+            });
+            self.switch_to(apply_block);
+            let updated = self.materialize_pattern_writeback(&writeback);
+            self.emit(Instruction::Assign {
+                target: state.root.clone(),
+                value: Rvalue::Use(updated),
+            });
+            self.terminate(Terminator::Goto(self.label(resume_block)));
+            self.switch_to(resume_block);
         }
     }
 

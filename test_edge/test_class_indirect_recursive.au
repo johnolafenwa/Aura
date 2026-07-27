@@ -9,10 +9,10 @@ def main() -> int32:
 
     print(n1.value)
 
-    match n1.next:
+    match own n1.next:
         case Some(n):
             print(n.value)
-            match n.next:
+            match own n.next:
                 case Some(nn):
                     print(nn.value)
                 case None:
@@ -21,7 +21,7 @@ def main() -> int32:
             print(0)
 
     single = Node(value=42, next=Option.None)
-    match single.next:
+    match own single.next:
         case Some(n):
             print(n.value)
         case None:

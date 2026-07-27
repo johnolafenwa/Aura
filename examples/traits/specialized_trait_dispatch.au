@@ -1,15 +1,15 @@
 trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 class Box[T]:
     value: T
 
 impl Show for Box[int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return f"{self.value}"
 
 impl Show for Box[String]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return self.value.clone()
 
 def render[T: Show](value: T) -> None:

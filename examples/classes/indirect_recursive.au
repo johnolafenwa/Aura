@@ -6,7 +6,7 @@ def main() -> int32:
     tail = Node(value=2, next=Option.None)
     head = Node(value=1, next=Option.Some(tail))
 
-    match head.next:
+    match own head.next:
         case Some(next):
             print(next.value)
         case None:

@@ -1,7 +1,7 @@
 # Test: enum methods via trait impl
 trait Displayable:
-    def name(borrow self) -> String
-    def is_primary(borrow self) -> bool
+    def name(self) -> String
+    def is_primary(self) -> bool
 
 enum Color:
     Red
@@ -9,7 +9,7 @@ enum Color:
     Blue
 
 impl Displayable for Color:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         match self:
             case Color.Red:
                 return "red"
@@ -18,7 +18,7 @@ impl Displayable for Color:
             case Color.Blue:
                 return "blue"
 
-    def is_primary(borrow self) -> bool:
+    def is_primary(self) -> bool:
         match self:
             case Color.Green:
                 return false

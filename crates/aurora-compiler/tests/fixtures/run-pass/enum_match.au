@@ -3,7 +3,7 @@ enum ParseResult:
     Failure(String)
 
 def value_or_zero(result: own ParseResult) -> int32:
-    match result:
+    match own result:
         case ParseResult.Success(value):
             return value
         case ParseResult.Failure(message):

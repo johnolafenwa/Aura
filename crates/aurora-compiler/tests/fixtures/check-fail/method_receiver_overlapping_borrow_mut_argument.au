@@ -1,7 +1,7 @@
 class Acc:
     value: int32
 
-    def merge(borrow mut self, other: borrow mut Acc):
+    def merge(mut self, other: mut Acc):
         self.value += other.value
 
 def main() -> int32:

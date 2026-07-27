@@ -107,8 +107,10 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
 
     let increment =
         host_builtin_metadata("metrics::increment").expect("metrics.increment metadata");
+    // Both are shared: ADR-0022 Q1 removed the copy-parameter snapshot, so a
+    // copy-typed builtin argument is declared exactly like a non-copy one.
     assert_eq!(increment.params[0].passing, ReceiverKind::Borrow);
-    assert_eq!(increment.params[1].passing, ReceiverKind::Value);
+    assert_eq!(increment.params[1].passing, ReceiverKind::Borrow);
     assert_eq!(increment.return_type, crate::sema::Type::Unit);
 
     let secure_int =
@@ -390,9 +392,11 @@ fn json_namespace_exposes_dynamic_tree_contract() {
             Type::Named("Option".to_string(), vec![Type::named("int64")])
         ]
     );
+    // ADR-0022 Q1: the copy-typed `indent` is shared like every other bare
+    // parameter. The ABI still copies its bits.
     assert_eq!(
         dumps.signature.param_passings,
-        vec![ReceiverKind::Borrow, ReceiverKind::Value]
+        vec![ReceiverKind::Borrow, ReceiverKind::Borrow]
     );
     assert_eq!(dumps.decl.params[0].mode, ParamMode::Default);
     assert!(matches!(
@@ -426,7 +430,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         ),
     ] {
         let function = &namespace.functions[name];
-        assert_eq!(function.decl.params[0].mode, ParamMode::Borrow, "{name}");
+        assert_eq!(function.decl.params[0].mode, ParamMode::Default, "{name}");
         assert_eq!(
             function.signature.param_passings,
             vec![ReceiverKind::Borrow],

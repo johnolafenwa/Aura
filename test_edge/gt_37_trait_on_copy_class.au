@@ -2,13 +2,13 @@
 ## Expects: 7
 
 trait Readable:
-    def read(borrow self) -> int32
+    def read(self) -> int32
 
 copy class Sensor:
     val: int32
 
 impl Readable for Sensor:
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.val
 
 def show_reading[T: Readable](s: T):

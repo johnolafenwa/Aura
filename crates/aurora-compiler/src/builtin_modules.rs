@@ -35,7 +35,6 @@ fn value_param(name: &str, ty: TypeRef) -> Param {
     Param {
         name: name.to_string(),
         mode: ParamMode::Default,
-        borrow_label: None,
         ty,
         default: None,
         span: builtin_span(),
@@ -46,7 +45,6 @@ fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
     Param {
         name: name.to_string(),
         mode: ParamMode::Default,
-        borrow_label: None,
         ty,
         default: Some(default),
         span: builtin_span(),
@@ -56,8 +54,7 @@ fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
 fn borrow_param(name: &str, ty: TypeRef) -> Param {
     Param {
         name: name.to_string(),
-        mode: ParamMode::Borrow,
-        borrow_label: None,
+        mode: ParamMode::Default,
         ty,
         default: None,
         span: builtin_span(),
@@ -68,7 +65,6 @@ fn own_param(name: &str, ty: TypeRef) -> Param {
     Param {
         name: name.to_string(),
         mode: ParamMode::Own,
-        borrow_label: None,
         ty,
         default: None,
         span: builtin_span(),
@@ -129,23 +125,9 @@ fn function_info(
         .iter()
         .map(|param| lower_type_ref(&param.ty))
         .collect::<Vec<_>>();
-    let empty_classes = BTreeMap::new();
-    let empty_enums = BTreeMap::new();
-    let empty_imported_modules = BTreeMap::new();
-    let empty_module_registry = BTreeMap::new();
     let param_passings = params
         .iter()
-        .zip(&lowered_params)
-        .map(|(param, ty)| {
-            resolve_param_passing(
-                param.mode,
-                ty,
-                &empty_classes,
-                &empty_enums,
-                &empty_imported_modules,
-                &empty_module_registry,
-            )
-        })
+        .map(|param| resolve_param_passing(param.mode))
         .collect();
     FunctionInfo {
         module_name: module_name.to_string(),
@@ -156,8 +138,6 @@ fn function_info(
             type_param_bounds: BTreeMap::new(),
             receiver: None,
             params: params.clone(),
-            return_passing: ReceiverKind::Value,
-            return_borrow_source: None,
             return_type: return_type.clone(),
             body: Vec::new(),
             span: builtin_span(),
@@ -166,8 +146,6 @@ fn function_info(
             params: lowered_params,
             param_passings,
             return_type: lower_type_ref(&return_type),
-            return_passing: ReceiverKind::Value,
-            return_borrow_source: None,
             rng_clone_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),

@@ -2,10 +2,10 @@ class Builder:
     prefix: String
     suffix: String
 
-    def build(borrow self, middle: String) -> String:
+    def build(self, middle: String) -> String:
         return self.prefix + middle + self.suffix
 
-    def close(borrow mut self):
+    def close(mut self):
         pass
 
 def main() -> int32:

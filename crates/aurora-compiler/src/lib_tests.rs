@@ -833,11 +833,11 @@ fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespa
     let other_path = temp.path().join("other.au");
     fs::write(
         &utils_path,
-        r#"public def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+        r#"public def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
 public class Duplicator:
-    public def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    public def duplicate[T](values: Vec[T]) -> Vec[T]:
         return values.clone()
 "#,
     )
@@ -985,7 +985,7 @@ fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
     fs::write(
         &named_path,
         r#"public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 "#,
     )
     .expect("write shared trait module");
@@ -999,11 +999,11 @@ public class User:
     public def associated() -> String:
         return "remote-associated"
 
-    public def inherent(borrow self) -> String:
+    public def inherent(self) -> String:
         return f"remote-inherent:{self.label}"
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return f"remote:{self.label}"
 "#,
     )
@@ -1019,11 +1019,11 @@ class User:
     def associated() -> String:
         return "local-associated"
 
-    def inherent(borrow self) -> String:
+    def inherent(self) -> String:
         return f"local-inherent:{self.label}"
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return f"local:{self.label}"
 
 def main() -> int32:
@@ -2523,14 +2523,14 @@ class Counter:
 
 class Resource:
     closed: bool = false
-    def close(borrow mut self):
+    def close(mut self):
         self.closed = true
 
-def bump(counter: borrow mut Counter, amount: int32 = 2) -> int32:
+def bump(counter: mut Counter, amount: int32 = 2) -> int32:
     counter.value += amount
     return counter.value
 
-def copy_into(source: borrow Counter, target: borrow mut Counter):
+def copy_into(source: Counter, target: mut Counter):
     target.value = source.value
 
 def worker(value: int32) -> int32:

@@ -1,10 +1,10 @@
 class FileHandle:
     name: String
 
-    def read(borrow self) -> String:
+    def read(self) -> String:
         return self.name.clone()
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closed " + self.name)
 
 def use_resource() -> Result[String, String]:

@@ -2,13 +2,13 @@
 ## Expects: "hello world"
 
 trait Transformable:
-    def transform(borrow self) -> String
+    def transform(self) -> String
 
 class Word:
     text: String
 
 impl Transformable for Word:
-    def transform(borrow self) -> String:
+    def transform(self) -> String:
         return self.text.clone()
 
 def combine[T: Transformable](a: T, b: T) -> String:

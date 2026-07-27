@@ -33,7 +33,7 @@ An identifier spelling can still be rejected by static checking. Builtin types a
 The lexer recognizes these words specially:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public
+class enum def trait impl import from mut own indirect public
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```

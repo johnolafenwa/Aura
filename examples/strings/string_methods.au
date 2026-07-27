@@ -1,5 +1,5 @@
 def print_string_option(value: own Option[String]):
-    match value:
+    match own value:
         case Some(text):
             print(text)
         case None:

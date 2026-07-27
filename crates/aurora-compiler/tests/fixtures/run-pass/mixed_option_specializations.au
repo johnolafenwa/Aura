@@ -2,13 +2,13 @@ def main() -> int32:
     left = Option[int32].Some(42)
     right = Option[float64].Some(3.5)
 
-    match left:
+    match own left:
         case Some(value):
             print(value)
         case None:
             print(0)
 
-    match right:
+    match own right:
         case Some(value):
             print(value)
         case None:

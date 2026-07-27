@@ -1,10 +1,10 @@
 class User:
     score: int32
 
-def score_ref(user: borrow User) -> borrow[user] int32:
+def score_ref(user: User) -> int32:
     return user.score
 
-def echo_score(user: borrow User) -> borrow[user] int32:
+def echo_score(user: User) -> int32:
     alias = score_ref(user)
     return alias
 

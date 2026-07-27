@@ -8,7 +8,7 @@ class Pair[T, U]:
 class Wrapper[T]:
     inner: T
 
-    def unwrap(borrow self) -> T:
+    def unwrap(self) -> T:
         return self.inner
 
 def main() -> int32:

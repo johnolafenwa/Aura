@@ -2,14 +2,14 @@
 class Engine:
     horsepower: int32
 
-    def is_powerful(borrow self) -> bool:
+    def is_powerful(self) -> bool:
         return self.horsepower > 200
 
 class Car:
     name: String
     engine: Engine
 
-    def get_engine(borrow self) -> Engine:
+    def get_engine(self) -> Engine:
         return self.engine
 
 def main() -> int32:

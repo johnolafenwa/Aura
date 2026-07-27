@@ -8,19 +8,19 @@ def main() -> int32:
     b: Option[int32] = find_positive(-5)
     c: Option[int32] = find_positive(0)
 
-    match a:
+    match own a:
         case Option.Some(v):
             print(v)
         case Option.None:
             print("none")
 
-    match b:
+    match own b:
         case Option.Some(v):
             print(v)
         case Option.None:
             print("none")
 
-    match c:
+    match own c:
         case Option.Some(v):
             print(v)
         case Option.None:

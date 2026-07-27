@@ -5,7 +5,7 @@ class Pair:
 def keep(value: own String) -> String:
     return value
 
-def use(left: borrow String, right: own String):
+def use(left: String, right: own String):
     print(left)
     print(right)
 

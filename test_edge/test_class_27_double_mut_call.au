@@ -3,13 +3,13 @@ class Counter:
     value: int32
     name: String
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
-    def bump_by(borrow mut self, n: int32):
+    def bump_by(mut self, n: int32):
         self.value = self.value + n
 
-    def set_name(borrow mut self, new_name: own String):
+    def set_name(mut self, new_name: own String):
         self.name = new_name
 
 def main() -> int32:

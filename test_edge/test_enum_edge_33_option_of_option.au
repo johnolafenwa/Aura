@@ -10,7 +10,7 @@ def main() -> int32:
     # Positive: Some(Some(50))
     match maybe_find(5):
         case Option.Some(inner):
-            match inner:
+            match own inner:
                 case Option.Some(v):
                     print(v)
                 case Option.None:
@@ -21,7 +21,7 @@ def main() -> int32:
     # Zero: Some(None)
     match maybe_find(0):
         case Option.Some(inner):
-            match inner:
+            match own inner:
                 case Option.Some(v):
                     print(v)
                 case Option.None:
@@ -32,7 +32,7 @@ def main() -> int32:
     # Negative: None
     match maybe_find(-1):
         case Option.Some(inner):
-            match inner:
+            match own inner:
                 case Option.Some(v):
                     print(v)
                 case Option.None:

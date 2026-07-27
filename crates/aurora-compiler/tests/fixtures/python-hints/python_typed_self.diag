@@ -1,1 +1,1 @@
-`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate
+`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate

@@ -1,4 +1,4 @@
-def choose(left: borrow String, right: borrow String, pick_left: bool) -> borrow String:
+def choose(left: String, right: String, pick_left: bool) -> String:
     if pick_left:
         return left
     return right

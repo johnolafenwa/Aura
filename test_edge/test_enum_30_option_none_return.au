@@ -3,7 +3,7 @@ def always_none() -> Option[String]:
 
 def main() -> int32:
     r = always_none()
-    match r:
+    match own r:
         case Option.Some(v):
             print(v)
         case Option.None:

@@ -7,7 +7,7 @@ enum NestedQueues:
     Bundle(QueueBundle)
 
 def produce(queues: own NestedQueues) -> int32:
-    match queues:
+    match own queues:
         case NestedQueues.Bundle(bundle):
             bundle.vector[0].put(1)
             for queue in bundle.unique:

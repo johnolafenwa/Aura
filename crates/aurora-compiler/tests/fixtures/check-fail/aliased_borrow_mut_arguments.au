@@ -1,7 +1,7 @@
 class Data:
     value: int32
 
-def add_both(a: borrow mut Data, b: borrow mut Data):
+def add_both(a: mut Data, b: mut Data):
     a.value += 10
     b.value += 100
 

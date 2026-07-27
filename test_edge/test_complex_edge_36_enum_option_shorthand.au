@@ -4,8 +4,8 @@ class Config:
     name: String
     port: int32?
 
-def get_port(c: borrow Config) -> int32:
-    match borrow c.port:
+def get_port(c: Config) -> int32:
+    match c.port:
         case Some(p):
             return p
         case None:

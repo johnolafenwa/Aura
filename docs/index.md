@@ -42,7 +42,7 @@ class Job:
     id: int32
     label: String
 
-def render(job: borrow Job) -> String:
+def render(job: Job) -> String:
     return f"#{job.id} {job.label}"
 
 jobs = [Job(id=1, label="parse"), Job(id=2, label="compile")]

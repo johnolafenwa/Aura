@@ -28,7 +28,7 @@ def run() -> Result[None, io.Error]:
             print(http_response.status())
             print(try http_response.text())
 
-        match server.result():
+        match own server.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):

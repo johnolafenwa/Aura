@@ -2,14 +2,14 @@
 # Can we write a generic unwrap_or function?
 
 def unwrap_or_int(opt: Option[int32], default_val: int32) -> int32:
-    match opt:
+    match own opt:
         case Option.Some(v):
             return v
         case Option.None:
             return default_val
 
 def unwrap_or_str(opt: own Option[String], default_val: own String) -> String:
-    match opt:
+    match own opt:
         case Option.Some(v):
             return v
         case Option.None:

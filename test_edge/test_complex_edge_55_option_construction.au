@@ -3,7 +3,7 @@
 def main() -> int32:
     # With annotation - works
     o1: Option[int32] = Option.Some(42)
-    match o1:
+    match own o1:
         case Option.Some(v):
             print(v)
         case Option.None:
@@ -11,7 +11,7 @@ def main() -> int32:
 
     # Without annotation - fails?
     o2 = Option.Some(99)
-    match o2:
+    match own o2:
         case Option.Some(v):
             print(v)
         case Option.None:

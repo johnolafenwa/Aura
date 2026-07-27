@@ -3,7 +3,7 @@
 def main() -> int32:
     # With explicit type annotation
     r1: Result[int32, String] = Result.Ok(42)
-    match r1:
+    match own r1:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
@@ -11,7 +11,7 @@ def main() -> int32:
 
     # Without type annotation (should be inferred)
     r2 = Result.Ok(99)
-    match r2:
+    match own r2:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

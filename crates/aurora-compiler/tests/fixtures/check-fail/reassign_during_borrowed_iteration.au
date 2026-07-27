@@ -1,7 +1,7 @@
 def main() -> None:
     mut values: Vec[String] = ["aaaa", "bbbb", "cccc"]
     mut step = 0
-    for value in borrow values:
+    for value in values:
         if step == 1:
             values = ["x"]
         print(value)

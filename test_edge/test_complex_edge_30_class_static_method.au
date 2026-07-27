@@ -10,13 +10,13 @@ class Counter:
     def with_step(step: int32) -> Counter:
         return Counter(step=step)
 
-    def increment(borrow mut self):
+    def increment(mut self):
         self.value += self.step
 
-    def decrement(borrow mut self):
+    def decrement(mut self):
         self.value -= self.step
 
-    def read(borrow self) -> int32:
+    def read(self) -> int32:
         return self.value
 
 def main() -> int32:

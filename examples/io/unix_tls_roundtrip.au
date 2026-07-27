@@ -77,7 +77,7 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match unix_task.result():
+        match own unix_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -95,7 +95,7 @@ def run() -> Result[None, io.Error]:
             try tls_client.write_all("ping!", timeout=5s)
             reply = try tls_client.read_exact(9, timeout=5s)
             print(reply.len())
-        match tls_task.result():
+        match own tls_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):

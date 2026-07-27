@@ -12,7 +12,7 @@ class Size:
     def large() -> Size:
         return Size(width=1920, height=1080)
 
-    def area(borrow self) -> int32:
+    def area(self) -> int32:
         return self.width * self.height
 
 def main() -> int32:

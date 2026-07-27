@@ -7,7 +7,7 @@ def consume(value: own String):
 
 def main() -> int32:
     message = Message.Text("owned payload")
-    match message:
+    match own message:
         case Message.Text(text):
             consume(text)
         case Message.Empty:

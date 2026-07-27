@@ -1,4 +1,4 @@
 def main():
     mut rows = [(1, 2)]
-    for left, right in borrow mut rows:
+    for left, right in mut rows:
         pass

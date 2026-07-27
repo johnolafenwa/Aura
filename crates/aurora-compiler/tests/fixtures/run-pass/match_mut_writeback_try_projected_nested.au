@@ -1,0 +1,68 @@
+enum Slot:
+    Filled(int32)
+    Empty
+
+class Holder:
+    slot: Slot
+
+def failing() -> Result[int32, String]:
+    return Result.Err("boom")
+
+def try_exit(slot: mut Slot) -> Result[int32, String]:
+    match mut slot:
+        case Slot.Filled(value):
+            value = value + 7
+            found = try failing()
+            return Result.Ok(found)
+        case Slot.Empty:
+            return Result.Ok(0)
+    return Result.Ok(-1)
+
+def projected_exit(holder: mut Holder) -> int32:
+    match mut holder.slot:
+        case Slot.Filled(value):
+            value = value + 21
+            return 1
+        case Slot.Empty:
+            return 0
+    return 2
+
+def nested_exit(outer: mut Slot, inner: mut Slot) -> int32:
+    match mut outer:
+        case Slot.Filled(a):
+            a = a + 3
+            match mut inner:
+                case Slot.Filled(b):
+                    b = b + 5
+                    return 1
+                case Slot.Empty:
+                    return 0
+        case Slot.Empty:
+            return 0
+    return 2
+
+def show(slot: Slot) -> int32:
+    match slot:
+        case Slot.Filled(value):
+            return value
+        case Slot.Empty:
+            return -1
+
+def main():
+    mut a = Slot.Filled(0)
+    match own try_exit(a):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    print(show(a))
+
+    mut h = Holder(slot=Slot.Filled(0))
+    print(projected_exit(h))
+    print(show(h.slot))
+
+    mut o = Slot.Filled(0)
+    mut i = Slot.Filled(0)
+    print(nested_exit(o, i))
+    print(show(o))
+    print(show(i))

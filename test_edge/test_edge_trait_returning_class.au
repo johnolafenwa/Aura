@@ -5,7 +5,7 @@ class Point:
     y: int32
 
 trait Locatable:
-    def location(borrow self) -> Point
+    def location(self) -> Point
 
 class City:
     name: String
@@ -13,7 +13,7 @@ class City:
     py: int32
 
 impl Locatable for City:
-    def location(borrow self) -> Point:
+    def location(self) -> Point:
         return Point(x=self.px, y=self.py)
 
 def show_location[T: Locatable](item: T):

@@ -51,18 +51,18 @@ The examples are organized by topic so they can serve both as quick references a
     - `6`
     - `12`
 - `borrow_parameters.au`
-  - free-function `borrow` and `borrow mut` parameters with caller-visible mutation
+  - free-function `` and `mut ` parameters with caller-visible mutation
   - prints:
     - `41`
     - `42`
     - `42`
 - `borrowed_returns.au`
-  - copy-valued borrowed returns with explicit source syntax like `-> borrow[user] int32`
+  - copy-valued borrowed returns with explicit source syntax like `-> int32`
   - prints:
     - `7`
     - `7`
 - `borrowed_lifetime_labels.au`
-  - borrowed return labels like `borrow[shared]` flowing through copy-valued calls and locals
+  - borrowed return labels like `` flowing through copy-valued calls and locals
   - prints `7`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
@@ -126,7 +126,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `2`
     - `9`
 - `vec_polish.au`
-  - negative direct/method indexes, non-copy cloned reads, `borrow mut`
+  - negative direct/method indexes, non-copy cloned reads, `mut `
     iteration, an explicit checked `as int32` conversion from `Vec.len()` for
     `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`,
     `clear()`, and Vec equality
@@ -183,13 +183,13 @@ The examples are organized by topic so they can serve both as quick references a
     - `localhost`
     - `8080`
 - `methods.au`
-  - shared `self` methods, the explicit `borrow self` synonym, and associated methods
+  - shared `self` methods, the explicit `self` synonym, and associated methods
   - prints:
     - `4`
     - `8`
     - `0`
 - `mutating_methods.au`
-  - `borrow mut self`, field mutation, and compound assignment through `self`
+  - `mut self`, field mutation, and compound assignment through `self`
   - prints:
     - `6`
     - `1`
@@ -343,7 +343,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `7`
     - `9`
 - `match_borrow.au`
-  - `match borrow ...:` plus unqualified built-in enum variants like `case Ok(value):`
+  - `match ...:` plus unqualified built-in enum variants like `case Ok(value):`
   - prints `ok`
 - `match_borrow_mut_fields.au`
   - mutable matching through a field place while a proven-disjoint sibling field changes
@@ -513,7 +513,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 ### `resources/`
 
 - `with_resource.au`
-  - deterministic cleanup with `with` and `close(borrow mut self)`
+  - deterministic cleanup with `with` and `close(mut self)`
   - prints:
     - `demo`
     - `closed demo`
@@ -764,7 +764,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `9`
     - `3.0`
 - `borrow_str.au`
-  - borrowed string parameters with `borrow str`
+  - borrowed string parameters with `str`
   - prints `Hello, Aurora`
 - `f_strings.au`
   - interpolated `f"..."` strings producing owned `String` values

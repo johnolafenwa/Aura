@@ -3,21 +3,21 @@ class Stats:
     total: float64
     label: String
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.count += 1
 
-    def add(borrow mut self, value: float64):
+    def add(mut self, value: float64):
         self.total = self.total + value
         self.count += 1
 
-    def reset(borrow mut self):
+    def reset(mut self):
         self.count = 0
         self.total = 0.0
 
-    def rename(borrow mut self, new_label: own String):
+    def rename(mut self, new_label: own String):
         self.label = new_label
 
-    def get_total(borrow self) -> float64:
+    def get_total(self) -> float64:
         return self.total
 
 def main() -> int32:

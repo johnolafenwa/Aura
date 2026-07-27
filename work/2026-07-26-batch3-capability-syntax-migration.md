@@ -421,7 +421,7 @@ sides of the matrix are forced explicitly and neither may fall back to `auto`.
 
 Published before the flip, as the plan requires. Produced by
 `scripts/capability_inventory.py`, which is deterministic and re-runnable:
-`borrow` is counted as a keyword token with comments and string bodies blanked,
+`` is counted as a keyword token with comments and string bodies blanked,
 Markdown is counted only inside fenced blocks and inline code spans (ADR-0022
 Q7 retires the keyword, not the English word), and the match/parameter
 populations come from `aura ast-json` rather than from text matching.
@@ -433,7 +433,7 @@ Six normative productions in `docs/manual/grammar.md` mention `"borrow"`:
 `match-statement`, and `match-expression`. The keyword also appears in the
 reserved-word list.
 
-### `borrow` keyword occurrences
+### `` keyword occurrences
 
 | Surface | Files | Tokens |
 | --- | --- | --- |
@@ -455,19 +455,19 @@ what makes a token-aware migrator sufficient:
 
 | Shape | Count | Becomes |
 | --- | --- | --- |
-| `borrow self` | 573 | `self` |
-| `borrow T` | 184 | `T` |
-| `borrow mut self` | 93 | `mut self` |
-| `borrow mut T` | 67 | `mut T` |
-| `borrow[label] T` | 32 | `T` (labels retired) |
-| `borrow mut (` (tuple type) | 2 | `mut (` |
-| `borrow (` (match scrutinee) | 1 | (see match forms) |
+| `self` | 573 | `self` |
+| `T` | 184 | `T` |
+| `mut self` | 93 | `mut self` |
+| `mut T` | 67 | `mut T` |
+| `T` | 32 | `T` (labels retired) |
+| `mut (` (tuple type) | 2 | `mut (` |
+| `(` (match scrutinee) | 1 | (see match forms) |
 
 Statement-position forms counted separately, since they overlap the shapes
-above: 55 `match borrow`, 13 `match borrow mut`, 16 `for ... in borrow`, 7
-`for ... in borrow mut`, 11 `for ... in own`, and 21 `-> borrow` returns.
+above: 55 `match `, 13 `match mut`, 16 `for ... in `, 7
+`for ... in mut`, 11 `for ... in own`, and 21 `-> ` returns.
 
-The 21 borrowed returns are the only non-mechanical `borrow` population. Per
+The 21 borrowed returns are the only non-mechanical `` population. Per
 Q6 they become ordinary owned returns where the value is copy, and require a
 clone, index, handle, or owner operation where they expose non-copy internal
 state.
@@ -475,7 +475,7 @@ state.
 ### Bare matches
 
 764 matches parse across maintained source. 709 are bare and silently flip from
-consuming to shared; 42 are `match borrow` and 13 are `match borrow mut`, both
+consuming to shared; 42 are `match ` and 13 are `match mut`, both
 mechanical respellings.
 
 Of the 709 bare matches, 566 bind at least one pattern variable — these are the
@@ -492,8 +492,8 @@ scrutinee has no surviving owner, so the flip cannot be observed there.
 | --- | --- |
 | bare (`Default`) | 779 |
 | of which declaration-known copy | 416 |
-| explicit `borrow` | 133 |
-| explicit `borrow mut` | 48 |
+| explicit `` | 133 |
+| explicit `mut ` | 48 |
 | `own` | 215 |
 
 The 416 bare copy parameters are the second silent-flip population: universal
@@ -501,8 +501,8 @@ logical sharing (Q1) replaces ADR-0006's declaration-known copy snapshot, so
 each needs review for whether snapshot behavior is load-bearing.
 
 700 receivers, counted from source text because the AST cannot distinguish
-them — bare `self` and `borrow self` both lower to `ReceiverKind::Borrow`:
-565 `borrow self`, 93 `borrow mut self`, 29 `own self`, and 13 already-bare
+them — bare `self` and `self` both lower to `ReceiverKind::Borrow`:
+565 `self`, 93 `mut self`, 29 `own self`, and 13 already-bare
 `self`. Receivers are therefore entirely mechanical; none has a semantic flip.
 
 ### Files the AST cannot see
@@ -580,9 +580,167 @@ silently clobber edits made after the manifest was built.
 ### Dry-run result against the current tree
 
 1,931 maintained files considered, 688 would change, 0 non-idempotent, and 0
-`borrow` keyword tokens left in Aurora source afterwards. 333 `match own`
+`` keyword tokens left in Aurora source afterwards. 333 `match own`
 annotations are added — the intersection of the 390 place-scrutinee and 566
 payload-binding bare matches.
+
+## ADR-0022 §3-§7: the capability flip
+
+Landed as one coordinated change family.
+
+### Grammar (§2, §3)
+
+`mut T`, `mut self`, `in mut`, `match mut`, and `match own` all parse.
+`borrow` is a reserved retired keyword, parsed only far enough to name its
+replacement:
+
+| Written | Diagnostic |
+| --- | --- |
+| `borrow T` | ``` `borrow T` was removed; write `T` for shared access ``` |
+| `borrow mut T` | ``` `borrow mut T` was removed; write `mut T` ``` |
+| `borrow self` | ``` `borrow self` was removed; write `self` for a shared receiver ``` |
+| `borrow mut self` | ``` `borrow mut self` was removed; write `mut self` ``` |
+| `match borrow` | ``` `match borrow` was removed; write `match` for shared access ``` |
+| `match borrow mut` | ``` `match borrow mut` was removed; write `match mut` ``` |
+| `in borrow` | ``` `in borrow` was removed; write `in` for shared iteration ``` |
+| `in borrow mut` | ``` `in borrow mut` was removed; write `in mut` ``` |
+| `-> borrow ...` | `borrowed returns were removed; return an owned value instead` |
+
+`MatchStmt.borrow_mode: Option<ReceiverKind>` became
+`MatchStmt.capability: ReceiverKind`. Removing the `Option` is the point: with
+bare parsing to `Borrow`, there is no "absent" case left to misread, and the
+old consuming default cannot linger.
+
+### Q1: universal logical sharing
+
+`resolve_param_passing` no longer consults the type at all:
+
+```rust
+match mode {
+    ParamMode::Default => ReceiverKind::Borrow,
+    ParamMode::Own => ReceiverKind::Value,
+    ParamMode::BorrowMut => ReceiverKind::BorrowMut,
+}
+```
+
+`ParamMode::Borrow` was deleted; it had become a synonym for `Default`.
+
+Two consequences worth naming, both intended:
+
+- **The FFI adapters needed auditing, as §4 requires.** The dynamic host ABI
+  asserts that an adapter reads each argument with the declared passing.
+  `with_copy` asserted `Value` for copy-typed builtin arguments; those are now
+  `Borrow`. The ABI still hands over copied bits — only the source-level
+  capability changed — so the assertion moved and the read did not.
+- **Two run-pass fixtures became rejections.** Both pinned ADR-0006's copy
+  snapshot: `set(second=value, first=value)` relied on `second` snapshotting
+  before `first` mutated. Under universal sharing that is an overlapping
+  access. `call_copy_read_before_named_borrow_mut` moved to check-fail as
+  `copy_argument_overlaps_named_mutable_argument`, and the snapshot section of
+  `explicit_and_default_argument_order` was replaced with ordering coverage
+  that does not depend on the retired rule.
+
+### Q2: the bare-match diagnostic
+
+Moving a payload out of a bare match now says exactly what to write:
+
+```
+error[AU3002]: cannot move `text` out of a shared match on `packet`
+  = help: write `match own packet` to consume the scrutinee, or call
+          `.clone()` to consume an independent copy
+```
+
+This is what makes the migrator's conservative annotation rule safe: whatever
+it leaves bare that needed `own` becomes this error, never a silent behavior
+change.
+
+### Q3: mutable-match writeback on every exit path
+
+Probing the ratified requirement found it **unimplemented for early exits**.
+Before this change, `match mut` wrote back only on normal arm fall-through:
+
+| Exit | Before | After |
+| --- | --- | --- |
+| normal arm exit | writeback | writeback |
+| `return` | **lost** | writeback |
+| `break` | **lost** | writeback |
+| `continue` | **lost** | writeback |
+| error propagation (`try`) | **lost** | writeback |
+
+`MatchWritebackState` now carries the reconstruction shape, and
+`emit_active_match_writebacks` applies every active writeback — innermost
+first, so nested matches compose — before `return`, `break`, and `continue`
+terminate. `try` returns from inside an rvalue rather than through a
+terminator, so its writeback is applied immediately before the `Try`
+instruction; a successful `try` simply falls through to the arm's own
+writeback with the same or a newer value.
+
+Pinned by `match_mut_writeback_on_every_exit` and
+`match_mut_writeback_try_projected_nested`, which together cover all five exit
+kinds plus the projected-field and nested-match variants Q3 names. Both
+fixtures are byte-identical across the MIR and direct backends.
+
+### Q6: ADR-0009's machinery removed
+
+Borrowed returns cannot be written, so the sema layer that resolved them was
+unreachable. Removed: `resolve_return_borrow_source`, `borrow_source_slot`,
+`BorrowSourceSlot`, `call_expr_borrow_info`, `bound_arguments_borrow_info`,
+`borrow_source_matches`, `borrow_sources_compatible`, `borrow_info_for_place`,
+`ensure_call_result_materializable`, the `return_passing` /
+`return_borrow_source` fields on declarations and signatures, and
+`borrow_label` everywhere. The containment *semantics* survive as ordinary
+move rules: returning a non-copy field of a shared parameter is rejected as a
+move out of a shared value, which is what
+`mir_and_forced_direct_reject_noncopy_internal_exposure` now pins.
+
+### A diagnostic-code hazard worth recording
+
+`stable_code_for_message` infers a code from message text, and one of its
+rules is `contains("borrow") -> AU3002`. Rewording messages to drop the
+retired keyword therefore silently changed their stable codes — a contract
+break that no single test would have named. Comparing every regenerated
+oracle's code against `HEAD` found 11 drifted codes; six were this hazard and
+are now pinned explicitly with `Diagnostic::coded_at`. The rest were genuine
+relocations:
+
+- `call_own_then_projected_copy_read_rejected` → `..._overlaps`, `AU3002` →
+  `AU2004`: the copy read is now a shared loan, caught earlier by argument
+  binding.
+- `match_borrow_self_member_suggests_match_borrow` →
+  `match_own_self_member_rejects_field_move`: bare no longer moves, so the
+  fixture spells the move `match own` to still pin the rule.
+- `borrowed_noncopy_return_in_option_equality` and
+  `trait_impl_borrowed_return_source_mismatch` were deleted; their premise is
+  gone. Two parse-fail fixtures now pin the retirement instead.
+
+### A migrator defect the corpus caught
+
+The first migration run annotated `match own` onto matches that had been
+explicitly `match borrow` — turning shared matches into consuming ones, the
+exact opposite of the source. The cause was ordering: the keyword rules
+collapsed `match borrow X` to `match X` before the annotator ran, so it could
+no longer tell an explicitly shared match from a bare one. The annotator now
+runs first, against the original text, where `match borrow X` does not match
+the bare-match pattern at all. Two regression tests pin it, and the 36
+mis-annotated lines across 23 files were repaired.
+
+### §6: cache boundary
+
+`NATIVE_CACHE_FORMAT` moved from `aurora-native-cache-v3` to `v4`, so no
+Phase-4 artifact built from the old grammar can be reused. Pinned by
+`native_cache_format_is_bumped_past_the_capability_migration`.
+
+### §7: maintained source and reference
+
+689 files migrated by manifest. The normative grammar chapter's `receiver`,
+`parameter`, `return-annotation`, `for-statement`, `match-statement`, and
+`match-expression` productions were rewritten by hand, because a mechanical
+pass collapses distinct spellings into duplicate list entries. The
+current-language-surface tutorial's capability list had exactly that problem
+and was rewritten as one spelling per capability.
+
+ADR dispositions recorded: 0022 Accepted with all ten answers, 0009 superseded
+in part, and amendment notes added to 0005, 0006, 0013, 0016, and 0017.
 
 ## Follow-up
 

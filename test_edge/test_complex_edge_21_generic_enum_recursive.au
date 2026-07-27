@@ -8,7 +8,7 @@ enum List[T]:
 def main() -> int32:
     # Simple non-recursive generic enum
     l: List[int32] = List.Cons(42)
-    match l:
+    match own l:
         case List.Cons(v):
             print(v)
         case List.Nil:

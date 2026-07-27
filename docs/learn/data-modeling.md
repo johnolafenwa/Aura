@@ -49,7 +49,7 @@ consume(job)
 When a helper only needs to look at a job, borrow it:
 
 ```python
-def describe(job: borrow Job) -> String:
+def describe(job: Job) -> String:
     return job.queue + "#" + job.id.to_string()
 ```
 
@@ -65,7 +65,7 @@ class Job:
     queue: String
     attempts: int32 = 0
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.attempts += 1
 
     def label(self) -> String:
@@ -85,8 +85,8 @@ Receiver forms:
 | Receiver | What it can do |
 | --- | --- |
 | `self` | Read fields without taking ownership; this is the default spelling. |
-| `borrow self` | Explicit synonym for shared `self`. |
-| `borrow mut self` | Mutate fields on a mutable receiver. |
+| `self` | Explicit synonym for shared `self`. |
+| `mut self` | Mutate fields on a mutable receiver. |
 | `own self` | Consume the instance. |
 | no receiver | Associated method called on the type, not an instance. |
 
@@ -159,8 +159,8 @@ state = JobState.Running(worker="worker-a")
 `match` then inspects the variant exhaustively:
 
 ```python
-def render_state(state: borrow JobState) -> String:
-    return match borrow state:
+def render_state(state: JobState) -> String:
+    return match state:
         case JobState.Queued:
             "queued"
         case JobState.Running(worker):
@@ -171,7 +171,7 @@ def render_state(state: borrow JobState) -> String:
             "failed: " + message
 ```
 
-Two details are worth noticing. `match borrow state` inspects the enum without taking ownership, which is important because `state` is itself a `borrow JobState`. And the `_duration` name uses the leading underscore convention for a pattern binding that the body does not read.
+Two details are worth noticing. `match state` inspects the enum without taking ownership, which is important because `state` is itself a `JobState`. And the `_duration` name uses the leading underscore convention for a pattern binding that the body does not read.
 
 When each state carries different data, an enum almost always reads better than a class with many optional fields.
 
@@ -184,10 +184,10 @@ class TrackedJob:
     job: Job
     state: JobState = JobState.Queued
 
-    def mark_running(borrow mut self, worker: own String):
+    def mark_running(mut self, worker: own String):
         self.state = JobState.Running(worker=worker)
 
-    def mark_failed(borrow mut self, message: own String):
+    def mark_failed(mut self, message: own String):
         self.state = JobState.Failed(message=message)
 ```
 

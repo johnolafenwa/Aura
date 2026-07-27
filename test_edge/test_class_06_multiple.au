@@ -2,21 +2,21 @@ class Point:
     x: float64
     y: float64
 
-    def magnitude(borrow self) -> float64:
+    def magnitude(self) -> float64:
         return (self.x * self.x + self.y * self.y).sqrt()
 
 class Circle:
     center: Point
     radius: float64
 
-    def diameter(borrow self) -> float64:
+    def diameter(self) -> float64:
         return self.radius * 2.0
 
 class Line:
     start: Point
     end: Point
 
-    def length(borrow self) -> float64:
+    def length(self) -> float64:
         dx = self.end.x - self.start.x
         dy = self.end.y - self.start.y
         return (dx * dx + dy * dy).sqrt()

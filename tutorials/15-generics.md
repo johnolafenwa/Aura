@@ -104,10 +104,10 @@ A generic body may clone values without rejecting the declaration merely
 because `T` is unresolved:
 
 ```python
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
-def forward[T](values: borrow Vec[T]) -> Vec[T]:
+def forward[T](values: Vec[T]) -> Vec[T]:
     return duplicate(values)
 ```
 

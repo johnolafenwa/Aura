@@ -1,7 +1,7 @@
 # Test: trait with default method implementation (if supported)
 
 trait Describable:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "unknown"
 
 class Item:

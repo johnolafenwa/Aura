@@ -4,13 +4,13 @@ class Box[T]:
     value: T
 
 trait Wrappable:
-    def wrap_value(borrow self) -> int32
+    def wrap_value(self) -> int32
 
 class Item:
     n: int32
 
 impl Wrappable for Item:
-    def wrap_value(borrow self) -> int32:
+    def wrap_value(self) -> int32:
         return self.n
 
 def box_it[T: Wrappable](item: T) -> Box[int32]:

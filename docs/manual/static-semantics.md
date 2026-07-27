@@ -213,13 +213,13 @@ declaration slot does not reorder evaluation, and no default is evaluated for a
 supplied parameter. Defaults may refer only to names valid under the
 declaration's default-expression rules; they do not capture a caller's locals.
 A shared-borrow default's temporary lives through the call. An `own` default is
-consumed. A `borrow mut` default is rejected because mutations to its
+consumed. A `mut ` default is rejected because mutations to its
 caller-invisible temporary would be silently lost.
 
 A bare parameter resolves to value passing for a copy type and shared borrowing
 for a non-copy type. An unresolved generic type is not assumed copyable, so its
 bare mode resolves to shared borrow and remains declaration-stable after
-specialization. An `own` parameter consumes a non-copy argument. A `borrow`
+specialization. An `own` parameter consumes a non-copy argument. A ``
 parameter requires a readable place or compatible borrowed value. A `borrow
 mut` parameter requires a mutable place. All arguments at one call boundary
 are checked together for overlapping move/shared/mutable access.
@@ -234,7 +234,7 @@ field types. Supplied field expressions follow the same source-order capture
 rule as call arguments, so a later field expression cannot change an earlier
 captured field value.
 
-A class receiver is declared as shared `self` (or its explicit synonym `borrow self`), consuming `own self`, or mutable `borrow mut self`. A first method parameter written `self: Type` is rejected with guidance naming those forms. A method without a receiver is associated and is called through the class/type rather than an instance.
+A class receiver is declared as shared `self` (or its explicit synonym `self`), consuming `own self`, or mutable `mut self`. A first method parameter written `self: Type` is rejected with guidance naming those forms. A method without a receiver is associated and is called through the class/type rather than an instance.
 
 ## Enum Construction And Matching
 
@@ -297,7 +297,7 @@ path can fall through without returning.
 
 ## `with` Resources
 
-`with` consumes its resource expression and creates a mutable managed binding for the body. Supported builtin resources have runtime-defined cleanup. A non-generic user class may be used only when it declares exactly a `close(borrow mut self) -> None` instance method.
+`with` consumes its resource expression and creates a mutable managed binding for the body. Supported builtin resources have runtime-defined cleanup. A non-generic user class may be used only when it declares exactly a `close(mut self) -> None` instance method.
 
 The managed binding cannot be moved out in a way that would prevent required cleanup. Leaving the scope normally, by return, by loop control, or through a runtime failure runs the cleanup behavior described in [Execution Model](/manual/execution-model).
 
@@ -308,7 +308,7 @@ without `self`. Target arguments are copied or moved into task-owned capture
 storage independently of the target ABI. Default-mode and explicit shared
 target parameters borrow that storage for the child call; `own` parameters
 consume it. Generic targets also enforce their inferred clone-safety
-obligations after specialization. `borrow mut` target parameters are rejected.
+obligations after specialization. `mut ` target parameters are rejected.
 
 Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
 

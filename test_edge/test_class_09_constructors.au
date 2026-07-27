@@ -21,7 +21,7 @@ class Color:
     def gray(level: int32) -> Color:
         return Color(r=level, g=level, b=level)
 
-    def is_bright(borrow self) -> bool:
+    def is_bright(self) -> bool:
         total = self.r + self.g + self.b
         return total > 382
 

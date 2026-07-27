@@ -192,20 +192,20 @@ for the loop and yields shared element access. `own` iteration moves the
 collection into a loop-private source once at entry and yields owned elements;
 reinitializing the consumed source binding in the body does not switch or
 truncate the active iteration. That one-time source selection is accepted
-under ADR-0017 and does not alter ADR-0006's ownership modes. Explicit `borrow` and `borrow mut` iteration
+under ADR-0017 and does not alter ADR-0006's ownership modes. Explicit `` and `mut ` iteration
 retain the collection as allowed by the static rules. Range iteration yields `int32` values from
 `start` inclusive to `end` exclusive; its currently accepted modifiers do not
 change behavior and remain a tracked language-design follow-up.
 
-Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
+Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, ``, and `mut ` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
 
 ## Pattern Matching
 
 The scrutinee is evaluated exactly once. Arms are considered in source order. The first matching arm executes.
 
 - by-value match consumes a non-copy scrutinee place when ownership rules require it
-- `match borrow` leaves the scrutinee owned and exposes shared payload borrows for non-copy data
-- `match borrow mut` permits payload mutation and writes the reconstructed enum value back to the matched mutable place on normal arm exit
+- `match ` leaves the scrutinee owned and exposes shared payload borrows for non-copy data
+- `match mut` permits payload mutation and writes the reconstructed enum value back to the matched mutable place on normal arm exit
 - literal patterns compare against the scrutinee value
 - `_` always matches and binds nothing
 
@@ -237,7 +237,7 @@ When the enclosing function uses a different error type, the implementation invo
 
 ## Resource Lifetime And Cleanup
 
-`with` creates an active cleanup registration after its resource expression succeeds. Leaving the body invokes `close(borrow mut self) -> None` exactly once through that registration.
+`with` creates an active cleanup registration after its resource expression succeeds. Leaving the body invokes `close(mut self) -> None` exactly once through that registration.
 
 Cleanup runs on:
 

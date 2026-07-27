@@ -1,13 +1,13 @@
 class Counter:
     value: int32
 
-def read(counter: borrow Counter) -> int32:
+def read(counter: Counter) -> int32:
     return counter.value
 
-def bump(counter: borrow mut Counter):
+def bump(counter: mut Counter):
     counter.value += 1
 
-def show(counter: borrow Counter) -> int32:
+def show(counter: Counter) -> int32:
     return counter.value
 
 def main() -> int32:

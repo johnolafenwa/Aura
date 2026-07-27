@@ -10,7 +10,7 @@ def main() -> int32:
     b = B(value=20, a_ref=Option.None)
     a = A(value=10, b_ref=Option.Some(b))
     print(a.value)
-    match a.b_ref:
+    match own a.b_ref:
         case Some(b_inner):
             print(b_inner.value)
         case None:

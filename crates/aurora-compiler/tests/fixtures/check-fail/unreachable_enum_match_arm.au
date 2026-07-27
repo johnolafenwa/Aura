@@ -8,7 +8,7 @@ enum Outer:
 
 def main() -> int32:
     value = Outer.Wrapped(Inner.Pair(1, 2))
-    match value:
+    match own value:
         case Outer.Wrapped(_):
             return 1
         case Outer.Wrapped(Inner.Pair(left, right)):

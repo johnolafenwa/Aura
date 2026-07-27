@@ -5,8 +5,8 @@ class Node:
     value: int32
     next: indirect Node?
 
-def count(node: borrow Node?) -> int32:
-    match borrow node:
+def count(node: Node?) -> int32:
+    match node:
         case Some(n):
             # This line fails: trying to pass n.next (a field of borrowed n)
             # to a function taking borrow Node?

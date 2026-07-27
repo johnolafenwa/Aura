@@ -1,14 +1,14 @@
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: own Rhs) -> Out
+    def add(self, rhs: own Rhs) -> Out
 
 copy class Counter:
     value: int32
 
 impl Add[Counter, Counter] for Counter:
-    def add(borrow self, rhs: own Counter) -> Counter:
+    def add(self, rhs: own Counter) -> Counter:
         return Counter(value=self.value + rhs.value)
 
-def bump(counter: borrow mut Counter) -> Counter:
+def bump(counter: mut Counter) -> Counter:
     counter.value += 1
     return counter
 

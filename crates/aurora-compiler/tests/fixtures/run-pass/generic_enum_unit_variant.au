@@ -4,7 +4,7 @@ enum Maybe[T]:
 
 def main() -> int32:
     value: Maybe[int32] = Maybe[int32].Nothing
-    match value:
+    match own value:
         case Maybe.Nothing:
             print(0)
         case Maybe.Just(inner):

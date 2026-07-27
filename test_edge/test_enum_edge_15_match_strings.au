@@ -17,7 +17,7 @@ enum Label:
     Anonymous
 
 def show_label(l: own Label) -> String:
-    match l:
+    match own l:
         case Label.Named(n):
             return "label: " + n
         case Label.Anonymous:

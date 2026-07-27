@@ -1,0 +1,5 @@
+trait Choose:
+    def choose(self, left: String, right: String) -> borrow[left] String
+
+def main():
+    print("unreachable")

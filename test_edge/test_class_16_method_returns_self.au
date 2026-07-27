@@ -3,10 +3,10 @@ class Builder:
     x: int32
     y: int32
 
-    def with_x(borrow self, new_x: int32) -> Builder:
+    def with_x(self, new_x: int32) -> Builder:
         return Builder(x=new_x, y=self.y)
 
-    def with_y(borrow self, new_y: int32) -> Builder:
+    def with_y(self, new_y: int32) -> Builder:
         return Builder(x=self.x, y=new_y)
 
 def main() -> int32:

@@ -1,13 +1,13 @@
 class Builder:
     value: int32
 
-    def get_value(borrow self) -> int32:
+    def get_value(self) -> int32:
         return self.value
 
-    def doubled(borrow self) -> Builder:
+    def doubled(self) -> Builder:
         return Builder(value=self.value * 2)
 
-    def plus(borrow self, n: int32) -> Builder:
+    def plus(self, n: int32) -> Builder:
         return Builder(value=self.value + n)
 
     def new(v: int32) -> Builder:

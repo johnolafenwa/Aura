@@ -6,7 +6,7 @@ class Box[T]:
 
 def main() -> int32:
     box = Box[int32].empty()
-    match box.value:
+    match own box.value:
         case Some(inner):
             print(inner)
         case None:

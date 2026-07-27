@@ -8,9 +8,9 @@ def main() -> int32:
     inner: Option[int32] = Option.Some(42)
     outer: Result[Option[int32], String] = Result.Ok(inner)
 
-    match outer:
+    match own outer:
         case Result.Ok(opt):
-            match opt:
+            match own opt:
                 case Option.Some(v):
                     print(f"got {v}")
                 case Option.None:
@@ -22,9 +22,9 @@ def main() -> int32:
     r: Result[int32, String] = Result.Ok(99)
     opt_r: Option[Result[int32, String]] = Option.Some(r)
 
-    match opt_r:
+    match own opt_r:
         case Option.Some(res):
-            match res:
+            match own res:
                 case Result.Ok(v):
                     print(f"ok {v}")
                 case Result.Err(e):

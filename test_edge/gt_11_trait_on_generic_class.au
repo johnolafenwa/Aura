@@ -2,13 +2,13 @@
 ## Expects: "boxed: hello"
 
 trait Showable:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 class Box[T]:
     value: T
 
 impl Showable for Box[String]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "boxed: " + self.value
 
 def main() -> int32:

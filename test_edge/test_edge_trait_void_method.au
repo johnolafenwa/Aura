@@ -1,12 +1,12 @@
 # Test trait with void-returning method (no -> annotation)
 trait Logger:
-    def log(borrow self)
+    def log(self)
 
 class ConsoleLogger:
     prefix: String
 
 impl Logger for ConsoleLogger:
-    def log(borrow self):
+    def log(self):
         print(self.prefix)
 
 def do_log[T: Logger](logger: T):

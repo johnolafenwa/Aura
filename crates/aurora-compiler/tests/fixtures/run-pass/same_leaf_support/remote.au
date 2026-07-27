@@ -1,8 +1,8 @@
 public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 public trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 public class User:
     public label: String
@@ -10,21 +10,21 @@ public class User:
     public def associated() -> String:
         return "remote-associated"
 
-    public def inherent(borrow self) -> String:
+    public def inherent(self) -> String:
         return f"remote-inherent:{self.label}"
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return f"remote:{self.label}"
 
 public class Holder[T]:
     public value: T
 
-    public def source(borrow self) -> String:
+    public def source(self) -> String:
         return "remote-holder"
 
 impl[T] Describe for Holder[T]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "remote-generic-trait"
 
 public enum Envelope[T]:

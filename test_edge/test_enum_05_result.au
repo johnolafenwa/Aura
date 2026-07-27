@@ -9,25 +9,25 @@ def main() -> int32:
     r3: Result[int32, String] = safe_divide(0, 5)
     r4: Result[int32, String] = safe_divide(100, 3)
 
-    match r1:
+    match own r1:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
             print(e)
 
-    match r2:
+    match own r2:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
             print(e)
 
-    match r3:
+    match own r3:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
             print(e)
 
-    match r4:
+    match own r4:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

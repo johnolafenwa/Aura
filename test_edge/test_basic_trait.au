@@ -1,19 +1,19 @@
 trait Describable:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 class Dog:
     name: String
     age: int32
 
 impl Describable for Dog:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "Dog: " + self.name
 
 class Cat:
     name: String
 
 impl Describable for Cat:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "Cat: " + self.name
 
 def print_description[T: Describable](value: T):

@@ -7,14 +7,14 @@ enum Maybe[T]:
 
 def main() -> int32:
     val: Maybe[int32] = Maybe.Some(42)
-    match val:
+    match own val:
         case Maybe.Some(inner):
             print(inner)
         case Maybe.Nothing:
             print("nothing")
 
     empty: Maybe[String] = Maybe.Nothing
-    match empty:
+    match own empty:
         case Maybe.Some(inner):
             print(inner)
         case Maybe.Nothing:

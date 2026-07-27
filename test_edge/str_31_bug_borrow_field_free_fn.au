@@ -5,7 +5,7 @@
 class Holder:
     text: String
 
-def get_text(h: borrow Holder) -> String:
+def get_text(h: Holder) -> String:
     return h.text
 
 def main() -> int32:

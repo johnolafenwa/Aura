@@ -52,7 +52,7 @@ There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-d
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public
+class enum def trait impl import from mut own indirect public
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -273,27 +273,26 @@ method-parameter-list
 
 receiver
     = "self"
-    | "borrow", "self"
-    | "own", "self"
-    | "borrow", "mut", "self" ;
+    | "mut", "self"
+    | "own", "self" ;
 
 parameter
     = identifier, ":",
-      [ "own" | "borrow", [ "mut" ], [ borrow-label ] ],
+      [ "mut" | "own" ],
       type,
       [ "=", expression ] ;
 
-borrow-label = "[", identifier, "]" ;
-
 return-annotation
-    = "->",
-      [ "borrow", [ "mut" ], [ borrow-label ] ],
-      type ;
+    = "->", type ;
 ```
 
-A receiver, when present, is the first method parameter. Bare `self` and `borrow self` are the two spellings of a shared receiver, `own self` is consuming, and `borrow mut self` is mutable. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary parameter modifiers appear after the colon: `own T`, `borrow T`, or `borrow mut T`. Call sites pass the value directly and never prefix an argument with an ownership modifier.
+A receiver, when present, is the first method parameter. Bare `self` is the shared receiver, `mut self` is mutable, and `own self` is consuming. There is exactly one spelling per capability. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary parameter capabilities appear after the colon: bare `T` is shared, `mut T` is mutable, and `own T` is consuming. Call sites pass the value directly and never prefix an argument with a capability.
 
-Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, mutable-borrow task targets, and borrowed return sources.
+Bare means shared access for every type, including declaration-known copy types. Return annotations carry no capability: every return is an ordinary owned return.
+
+`borrow` is a reserved retired keyword. It is parsed only far enough to emit its exact replacement diagnostic, such as ``` `borrow mut T` was removed; write `mut T` ```.
+
+Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, and mutable task targets.
 
 ## Traits And Implementations
 
@@ -411,7 +410,7 @@ while-statement
 
 for-statement
     = "for", loop-target, "in",
-      [ "own" | "borrow", [ "mut" ] ],
+      [ "mut" | "own" ],
       expression, ":", NEWLINE, suite ;
 
 loop-target = identifier | unpack-target ;
@@ -419,18 +418,19 @@ loop-target = identifier | unpack-target ;
 
 The loop target is one identifier or a recursively nested tuple unpack target.
 Tuple leaves inherit the yielded element's ownership provenance. A tuple
-target is rejected with `borrow mut` iteration because the minimal tuple
+target is rejected with `mut` iteration because the minimal tuple
 surface has no recursive writeback. Loop `else` clauses are not supported.
-Static semantics resolve the absent modifier by iterable kind. Explicit
-modifiers are rejected for Queue iteration because it is a receive operation
-rather than collection-place traversal.
+An absent modifier is shared iteration. Explicit modifiers are rejected for
+Queue iteration because it is a receive operation rather than collection-place
+traversal, and for range iteration because a range yields copy values with
+nothing to modify or transfer.
 
 The iterable position also recognizes two compiler-known call shapes,
 `enumerate(expression)` and `zip(expression, expression)`. They are not values
 and have no production outside this position; static semantics reject either
 name elsewhere, and a user declaration of the name shadows the loop form.
 Explicit ownership modifiers are rejected for both, because they iterate over
-the bare-loop borrow default.
+the bare-loop shared default.
 
 ## `with` Statements
 
@@ -448,7 +448,7 @@ The two forms are equivalent. Static semantics require a supported resource and 
 
 ```ebnf
 match-statement
-    = "match", [ "borrow", [ "mut" ] ],
+    = "match", [ "mut" | "own" ],
       expression, ":", NEWLINE,
       INDENT, match-statement-arm,
       { match-statement-arm }, DEDENT ;
@@ -489,7 +489,7 @@ Pattern parsing uses these contextual rules:
 
 There are no guards, alternatives, ranges, collection destructuring, rest
 patterns, named-payload patterns, duration patterns, or f-string patterns.
-`match borrow mut` rejects a tuple pattern because mutable tuple
+`match mut` rejects a tuple pattern because mutable tuple
 reconstruction/writeback is not part of the minimal surface. Statement match
 arms always contain suites; `case pattern: statement` is not valid.
 
@@ -643,7 +643,7 @@ Otherwise the brackets form an index expression. Consequently, `Box[int32](value
 
 ```ebnf
 match-expression
-    = "match", [ "borrow", [ "mut" ] ],
+    = "match", [ "mut" | "own" ],
       expression, ":", NEWLINE,
       INDENT, match-expression-arm,
       { match-expression-arm }, DEDENT ;
@@ -686,7 +686,7 @@ The grammar intentionally excludes:
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
 - match guards, alternative patterns, and collection patterns
-- call-site `borrow` annotations
+- call-site `` annotations
 - exception statements, `raise`, and `yield`
 - detached `spawn`, `select`, and proposal-only concurrency syntax
 

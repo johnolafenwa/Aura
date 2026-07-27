@@ -1,0 +1,63 @@
+enum Slot:
+    Filled(int32)
+    Empty
+
+def normal_exit(slot: mut Slot):
+    match mut slot:
+        case Slot.Filled(value):
+            value = value + 1
+        case Slot.Empty:
+            pass
+
+def return_exit(slot: mut Slot) -> int32:
+    match mut slot:
+        case Slot.Filled(value):
+            value = value + 10
+            return 1
+        case Slot.Empty:
+            return 0
+    return 2
+
+def break_exit(slot: mut Slot):
+    while true:
+        match mut slot:
+            case Slot.Filled(value):
+                value = value + 100
+                break
+            case Slot.Empty:
+                break
+
+def continue_exit(slot: mut Slot):
+    mut count = 0
+    while count < 1:
+        count = count + 1
+        match mut slot:
+            case Slot.Filled(value):
+                value = value + 1000
+                continue
+            case Slot.Empty:
+                continue
+
+def show(slot: Slot) -> int32:
+    match slot:
+        case Slot.Filled(value):
+            return value
+        case Slot.Empty:
+            return -1
+
+def main():
+    mut a = Slot.Filled(0)
+    normal_exit(a)
+    print(show(a))
+
+    mut b = Slot.Filled(0)
+    print(return_exit(b))
+    print(show(b))
+
+    mut c = Slot.Filled(0)
+    break_exit(c)
+    print(show(c))
+
+    mut d = Slot.Filled(0)
+    continue_exit(d)
+    print(show(d))

@@ -104,8 +104,8 @@ That is what powers `aura analyze` and `aura complete`, which the LSP bridge con
 
 Method hover and completion signatures include the receiver contract. The
 canonical spellings are `self` for a shared receiver, `own self` for a
-consuming receiver, and `borrow mut self` for a mutable receiver. Source
-written as `borrow self` therefore appears canonically as `self`. Compiler
+consuming receiver, and `mut self` for a mutable receiver. Source
+written as `self` therefore appears canonically as `self`. Compiler
 diagnostics also preserve the teaching error for `self: Type`, while the
 compiler-unavailable lexical recovery path includes the reserved `own` keyword
 without attempting to duplicate receiver semantics.

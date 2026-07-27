@@ -13,7 +13,7 @@ enum MapItem:
     Empty
 
 def describe_item(item: own MapItem) -> String:
-    match item:
+    match own item:
         case MapItem.Marker(coords):
             print(coords.x)
             print(coords.y)

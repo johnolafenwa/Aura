@@ -90,30 +90,30 @@ fn capture_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
 fn broad_surface_source_covers_public_compiler_entrypoints() {
     let source = r#"
 trait Labelled:
-    def label(borrow self) -> String
+    def label(self) -> String
 
 class Counter:
     value: int32
 
-    def bump(borrow mut self, amount: int32 = 1) -> int32:
+    def bump(mut self, amount: int32 = 1) -> int32:
         self.value += amount
         return self.value
 
 impl Labelled for Counter:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return f"Counter({self.value})"
 
 class Badge:
     text: String
 
 impl Labelled for Badge:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return self.text.clone()
 
 class Resource:
     closed: bool = false
 
-    def close(borrow mut self):
+    def close(mut self):
         self.closed = true
 
 def worker(value: int32) -> int32:
@@ -195,9 +195,9 @@ def main() -> int32:
     for number in range(values.len() as int32):
         range_total += number
     print(range_total)
-    for value in borrow values:
+    for value in values:
         print(value)
-    for value in borrow mut values:
+    for value in mut values:
         value += 1
     print(values[0])
     values.clear()
@@ -653,7 +653,7 @@ fn path_surface_covers_modules_analysis_completion_and_direct_codegen() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 "#,
     );
     temp.write(
@@ -664,7 +664,7 @@ public class User:
     public label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 public enum Outcome:
@@ -885,7 +885,7 @@ def main() -> int32:
 class Document:
     content: String
 
-    def render(borrow self) -> String:
+    def render(self) -> String:
         self.
 
 def main() -> int32:

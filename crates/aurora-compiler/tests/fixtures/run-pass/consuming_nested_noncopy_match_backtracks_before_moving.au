@@ -8,7 +8,7 @@ enum Outer:
 
 def render(value: own Outer) -> int32:
     mut score: int32 = -1
-    match value:
+    match own value:
         case Outer.Wrapped(Inner.Pair(text, count)):
             print(text)
             score = count

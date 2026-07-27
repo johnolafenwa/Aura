@@ -119,10 +119,10 @@ A module boundary should usually hide representation and expose behaviour:
 public class Counter:
     value: int32 = 0
 
-    public def inc(borrow mut self):
+    public def inc(mut self):
         self.value += 1
 
-    public def get(borrow self) -> int32:
+    public def get(self) -> int32:
         return self.value
 ```
 

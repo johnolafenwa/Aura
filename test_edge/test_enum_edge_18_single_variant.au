@@ -7,7 +7,7 @@ enum Unit:
     Only
 
 def extract(w: Wrapper) -> int32:
-    match w:
+    match own w:
         case Wrapper.Value(v):
             return v
 
@@ -26,7 +26,7 @@ def main() -> int32:
 
     # Single variant with wildcard - should wildcard be allowed?
     w2 = Wrapper.Value(7)
-    match w2:
+    match own w2:
         case Wrapper.Value(v):
             print(v)
 

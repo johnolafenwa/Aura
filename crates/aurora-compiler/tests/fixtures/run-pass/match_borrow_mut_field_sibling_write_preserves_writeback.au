@@ -8,14 +8,14 @@ class Holder:
 
 def main() -> int32:
     mut holder = Holder(state=Opt.Some(10), other=0)
-    match borrow mut holder.state:
+    match mut holder.state:
         case Some(v):
             holder.other = 9
             v = v + 1
         case None:
             pass
     print(holder.other)
-    match borrow holder.state:
+    match mut holder.state:
         case Some(v):
             print(v)
         case None:

@@ -2,23 +2,23 @@ class Stack:
     data: String
     size: int32
 
-    def push(borrow mut self, item: String):
+    def push(mut self, item: String):
         if self.size > 0:
             self.data = self.data + "," + item
         else:
             self.data = item
         self.size += 1
 
-    def get_size(borrow self) -> int32:
+    def get_size(self) -> int32:
         return self.size
 
-    def is_empty(borrow self) -> bool:
+    def is_empty(self) -> bool:
         return self.size == 0
 
-    def contents(borrow self) -> String:
+    def contents(self) -> String:
         return self.data
 
-    def push_many(borrow mut self, a: String, b: String, c: String):
+    def push_many(mut self, a: String, b: String, c: String):
         self.push(item=a)
         self.push(item=b)
         self.push(item=c)

@@ -4,7 +4,7 @@ def get_value() -> int32:
 class Box:
     value: int32
 
-    def get_value(borrow self) -> int32:
+    def get_value(self) -> int32:
         return self.value
 
 def main() -> int32:

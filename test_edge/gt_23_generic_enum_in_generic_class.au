@@ -10,14 +10,14 @@ class Holder[T]:
 
 def main() -> int32:
     h1: Holder[int32] = Holder(content=Maybe.Some(99))
-    match h1.content:
+    match own h1.content:
         case Maybe.Some(v):
             print(v)
         case Maybe.Nothing:
             print("empty")
 
     h2: Holder[int32] = Holder(content=Maybe.Nothing)
-    match h2.content:
+    match own h2.content:
         case Maybe.Some(v):
             print(v)
         case Maybe.Nothing:

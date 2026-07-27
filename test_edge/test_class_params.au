@@ -2,14 +2,14 @@ class Point:
     x: float64
     y: float64
 
-def print_point(p: borrow Point):
+def print_point(p: Point):
     print(p.x)
     print(p.y)
 
 def move_point(p: Point) -> Point:
     return Point(x=p.x + 1.0, y=p.y + 1.0)
 
-def mutate_point(p: borrow mut Point):
+def mutate_point(p: mut Point):
     p.x = 0.0
     p.y = 0.0
 

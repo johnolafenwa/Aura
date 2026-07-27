@@ -8,14 +8,14 @@ def safe_get[T](val: own T, ok: bool) -> Result[T, int32]:
 
 def main() -> int32:
     r1 = safe_get(42, true)
-    match r1:
+    match own r1:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
             print(e)
 
     r2 = safe_get("hello", false)
-    match r2:
+    match own r2:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

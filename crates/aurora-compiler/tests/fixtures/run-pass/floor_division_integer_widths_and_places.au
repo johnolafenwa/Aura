@@ -3,7 +3,7 @@ copy class Totals:
     wide: int64
     ratio: float64
 
-    def apply_floor_rules(borrow mut self):
+    def apply_floor_rules(mut self):
         self.small //= 3
         self.wide %= -3
         self.ratio //= -2.0

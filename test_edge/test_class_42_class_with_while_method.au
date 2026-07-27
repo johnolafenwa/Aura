@@ -2,7 +2,7 @@
 class Fibonacci:
     limit: int32
 
-    def compute(borrow self) -> int32:
+    def compute(self) -> int32:
         mut a = 0
         mut b = 1
         mut count = 0

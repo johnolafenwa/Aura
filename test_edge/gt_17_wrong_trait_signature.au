@@ -2,13 +2,13 @@
 ## Expects: Compile error about mismatched signature
 
 trait Printable:
-    def to_string(borrow self) -> String
+    def to_string(self) -> String
 
 class Widget:
     id: int32
 
 impl Printable for Widget:
-    def to_string(borrow self) -> int32:
+    def to_string(self) -> int32:
         return self.id
 
 def main() -> int32:

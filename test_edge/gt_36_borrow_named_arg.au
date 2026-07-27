@@ -5,10 +5,10 @@
 class Data:
     value: int32
 
-def read(d: borrow Data) -> int32:
+def read(d: Data) -> int32:
     return d.value
 
 def main() -> int32:
     d = Data(value=42)
-    print(read(d=borrow d))
+    print(read(d=d))
     return 0

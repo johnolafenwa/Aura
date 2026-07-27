@@ -3,7 +3,7 @@ enum Container[T]:
     Value(T)
 
 def check(c: Container[int32]) -> int32:
-    match c:
+    match own c:
         case Container.Empty:
             return 0
         case Container.Value(v):

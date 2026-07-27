@@ -1,13 +1,13 @@
 class Builder:
     value: int32
 
-    def set(borrow mut self, v: int32):
+    def set(mut self, v: int32):
         self.value = v
 
-    def add(borrow mut self, v: int32):
+    def add(mut self, v: int32):
         self.value += v
 
-    def build(borrow self) -> int32:
+    def build(self) -> int32:
         return self.value
 
 def main() -> int32:

@@ -4,7 +4,7 @@ enum State:
     Stopped
 
 def tick(s: State) -> State:
-    match s:
+    match own s:
         case State.Running(count):
             if count >= 5:
                 return State.Stopped
@@ -20,7 +20,7 @@ def main() -> int32:
     while not done:
         current = tick(current)
         iterations = iterations + 1
-        match current:
+        match own current:
             case State.Running(n):
                 print(n)
             case State.Stopped:

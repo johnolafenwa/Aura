@@ -7,14 +7,14 @@ def main() -> int32:
     box: Box[int32] = Box.Full(42)
 
     # Borrow first
-    match borrow box:
+    match box:
         case Box.Full(v):
             print(v)
         case Box.Empty:
             print("empty")
 
     # Then consume
-    match box:
+    match own box:
         case Box.Full(v):
             print(v)
         case Box.Empty:

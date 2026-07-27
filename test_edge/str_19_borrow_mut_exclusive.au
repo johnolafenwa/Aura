@@ -3,7 +3,7 @@
 class Data:
     value: int32
 
-def modify(d: borrow mut Data):
+def modify(d: mut Data):
     d.value += 1
 
 def main() -> int32:

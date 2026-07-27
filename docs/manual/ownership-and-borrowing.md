@@ -81,27 +81,27 @@ the source usable.
 | --- | --- |
 | `value: T` | By value for copy `T`; shared borrow for non-copy or unresolved generic `T`. |
 | `value: own T` | Explicit owned ordinary parameter. |
-| `value: borrow T` | Shared borrowed ordinary parameter. |
-| `value: borrow mut T` | Exclusive mutable borrowed ordinary parameter. |
+| `value: T` | Shared borrowed ordinary parameter. |
+| `value: mut T` | Exclusive mutable borrowed ordinary parameter. |
 | `self` | Shared method receiver and the default receiver spelling. |
-| `borrow self` | Explicit synonym for shared `self`. |
+| `self` | Explicit synonym for shared `self`. |
 | `own self` | Consuming method receiver. |
-| `borrow mut self` | Exclusive mutable method receiver. |
+| `mut self` | Exclusive mutable method receiver. |
 | `for value in collection:` | Default shared iteration for `Vec` and `Set`. |
 | `for value in own collection:` | Consuming iteration for `Vec` and `Set`. |
-| `for value in borrow collection:` | Shared-borrow iteration. |
-| `for value in borrow mut collection:` | Mutable-borrow iteration where supported. |
-| `match borrow value:` | Shared borrowed pattern matching. |
-| `match borrow mut value:` | Mutable borrowed pattern matching with writeback. |
-| `-> borrow[source] T` | Shared borrowed result from one declared source. |
-| `-> borrow mut[source] T` | Mutable borrowed result from one mutable source. |
+| `for value in collection:` | Shared-borrow iteration. |
+| `for value in mut collection:` | Mutable-borrow iteration where supported. |
+| `match value:` | Shared borrowed pattern matching. |
+| `match mut value:` | Mutable borrowed pattern matching with writeback. |
+| `-> T` | Shared borrowed result from one declared source. |
+| `-> mut[source] T` | Mutable borrowed result from one mutable source. |
 
-The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: borrow T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
+The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
 
-Call sites never prefix arguments with `borrow` or `own`. The parameter or receiver declaration selects the mode:
+Call sites never prefix arguments with `` or `own`. The parameter or receiver declaration selects the mode:
 
 ```python
-def render(name: borrow String) -> String:
+def render(name: String) -> String:
     return name.to_upper()
 
 name = "aurora"
@@ -113,20 +113,20 @@ A shared borrow permits reading but cannot be moved and cannot be used as a muta
 
 Shared-borrow and `own` parameters may have defaults. An omitted shared default
 creates a fresh temporary that lives through the call; an omitted owned default
-creates a fresh value that the call consumes. A `borrow mut` parameter cannot
+creates a fresh value that the call consumes. A `mut ` parameter cannot
 have a default, even for a copy type: its caller-invisible temporary would make
 every mutation a silent lost write. Require the caller to pass a mutable value,
 or take `own T` and return the result.
 
 ```python
-def add_name(names: borrow mut Vec[String], name: own String):
+def add_name(names: mut Vec[String], name: own String):
     names.push(name)
 
 mut names = Vec[String]()
 add_name(names, "Ada")
 ```
 
-Only a mutable place can satisfy `borrow mut`. A local becomes mutable with `mut`; a field is mutable when its base place is mutable; a `borrow mut` receiver or parameter is a mutable place inside its body. Parameter bindings themselves are not reassigned.
+Only a mutable place can satisfy `mut `. A local becomes mutable with `mut`; a field is mutable when its base place is mutable; a `mut ` receiver or parameter is a mutable place inside its body. Parameter bindings themselves are not reassigned.
 
 ## Call-Boundary Exclusivity
 
@@ -136,7 +136,7 @@ All receiver and argument accesses for one call are checked together. Shared bor
 class Acc:
     value: int32
 
-    def add_from(borrow mut self, source: borrow Acc):
+    def add_from(mut self, source: Acc):
         self.value += source.value
 
 mut acc = Acc(value=1)
@@ -169,14 +169,14 @@ The complete class value cannot be used while any field remains moved. Assigning
 Moving a non-copy field through a shared or mutable borrow is rejected because the borrower does not own the containing value:
 
 ```python
-def bad(user: borrow User) -> String:
+def bad(user: User) -> String:
     return user.name # rejected
 ```
 
 Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
 ```python
-def good(user: borrow User) -> String:
+def good(user: User) -> String:
     return user.name.clone()
 ```
 
@@ -193,7 +193,7 @@ Block-local bindings do not escape their branch, arm, loop, or `with` body. See 
 A borrowed-return signature identifies which receiver or parameter is the source:
 
 ```python
-def identity(value: borrow[source] int32) -> borrow[source] int32:
+def identity(value: int32) -> int32:
     return value
 ```
 
@@ -205,24 +205,24 @@ Borrow labels describe source equivalence across a call signature. They do not c
 
 ## Borrowed Pattern Matching
 
-By-value matching consumes a non-copy enum scrutinee. `match borrow` retains the enum and gives non-copy payload bindings shared-borrow provenance:
+By-value matching consumes a non-copy enum scrutinee. `match ` retains the enum and gives non-copy payload bindings shared-borrow provenance:
 
 ```python
 result: Result[String, String] = Result.Ok("ready")
 
-match borrow result:
+match result:
     case Result.Ok(value):
         print(value)
     case Result.Err(error):
         print(error)
 ```
 
-`match borrow mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the exact scrutinee, its root, or an ancestor field invalidates payload bindings tied to the old value. A write to a proven-disjoint sibling field does not invalidate them.
+`match mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the exact scrutinee, its root, or an ancestor field invalidates payload bindings tied to the old value. A write to a proven-disjoint sibling field does not invalidate them.
 
 Tuple patterns follow a smaller rule. A by-value tuple match consumes the
-whole non-copy scrutinee and gives owned leaf bindings. `match borrow` retains
+whole non-copy scrutinee and gives owned leaf bindings. `match ` retains
 the tuple and gives shared leaf provenance. Tuple patterns are rejected under
-`match borrow mut`; Aurora does not reconstruct and write back recursive tuple
+`match mut`; Aurora does not reconstruct and write back recursive tuple
 targets.
 
 Payload bindings are arm-local and cannot shadow a visible binding. Match typing and exhaustiveness are specified in [Enums And Pattern Matching](/manual/enums-and-match).
@@ -235,8 +235,8 @@ a loop-private source and yields owned elements. Reinitializing the consumed
 source binding in the body cannot switch or truncate that active iteration.
 That one-time source selection is accepted under ADR-0017; ADR-0006's
 accepted loop ownership modes are unchanged.
-`for value in borrow collection` is the explicit shared form.
-`for value in borrow mut vec` requires a mutable vector place and yields
+`for value in collection` is the explicit shared form.
+`for value in mut vec` requires a mutable vector place and yields
 mutable-borrowed elements.
 
 The place selected by bare or explicit borrowed iteration is frozen against
@@ -254,7 +254,7 @@ When an iteration item is a tuple, recursive target leaves inherit the item
 provenance. Shared collection iteration gives shared non-copy leaves, `own`
 collection iteration gives owned leaves, and bare Queue iteration gives owned
 leaves because it receives the item. A tuple target is rejected with
-`borrow mut` iteration; recursive mutable tuple writeback is not defined.
+`mut ` iteration; recursive mutable tuple writeback is not defined.
 
 ## Clone
 
@@ -283,11 +283,11 @@ with `AU3007`.
 ## Tasks And Borrowing
 
 `TaskGroup.start` and `start_soon` accept named functions or associated methods
-with default-mode, `own`, or explicit shared-borrow parameters. `borrow mut`
+with default-mode, `own`, or explicit shared-borrow parameters. `mut `
 targets are rejected.
 
 ```python
-def worker(label: borrow String):
+def worker(label: String):
     print(label)
 
 with group = TaskGroup():
@@ -319,15 +319,15 @@ def show_file() -> Result[None, io.Error]:
 
 `with` consumes the resource expression and creates a fresh mutable managed binding. A managed resource or its non-copy fields cannot be moved out in a way that would prevent cleanup. The registered `close` runs on normal fallthrough, `return`, escaping loop control, `try` propagation, and maintained runtime failure; nested cleanups run in reverse order.
 
-Builtin resource behavior is defined by its module chapter. A user class must be non-generic and define `close(borrow mut self) -> None` with no ordinary parameters. Full cleanup ordering and failure precedence are specified in [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+Builtin resource behavior is defined by its module chapter. A user class must be non-generic and define `close(mut self) -> None` with no ordinary parameters. Full cleanup ordering and failure precedence are specified in [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
 
 ## Grammar
 
 The normative ownership spellings are parameter and return type-position
-`own`, `borrow`, `borrow mut`, `borrow[source]`, and
-`borrow mut[source]`; the four receiver forms; loop-prefix `own`, `borrow`,
-and `borrow mut`; `match borrow` and
-`match borrow mut`; mutable bindings; and `with`. Their productions are in
+`own`, ``, `mut `, ``, and
+`mut `; the four receiver forms; loop-prefix `own`, ``,
+and `mut `; `match ` and
+`match mut`; mutable bindings; and `with`. Their productions are in
 [Grammar](/manual/grammar). Call arguments themselves never carry an ownership
 prefix.
 
@@ -336,9 +336,9 @@ prefix.
 Every expression has one static copy/move category and every parameter has one
 declaration-stable passing mode. Bare copy parameters pass by value; bare
 non-copy and unresolved generic parameters share-borrow; explicit `own`
-consumes; `borrow mut` requires one exclusive mutable place. Shared and owned
+consumes; `mut ` requires one exclusive mutable place. Shared and owned
 defaults are legal, with shared temporaries lasting through the call;
-`borrow mut` defaults are rejected. Place-prefix overlap, partial moves,
+`mut ` defaults are rejected. Place-prefix overlap, partial moves,
 control-flow joins, loop repetition, borrowed-return provenance, borrowed
 matches, borrowed iteration, task capture, and managed-resource containment are
 checked before lowering. Clone-producing generic operations infer obligations
@@ -349,7 +349,7 @@ that are propagated through calls and discharged after specialization.
 A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
 runtime reference values in Aurora 0.1. Mutable borrowed calls and Vec
-iteration write through the original place; `match borrow mut` reconstructs
+iteration write through the original place; `match mut` reconstructs
 and writes back on normal arm exit. Simple Map indexed assignment accepts and
 owns any value type; direct compound indexed assignment requires a copy `Vec`
 element or `Map` value.

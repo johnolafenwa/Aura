@@ -157,10 +157,10 @@ Most of the time you want a function to read or modify a value without taking ow
 
 Aurora has two kinds of borrows:
 
-- `borrow T` -- shared, read-only access
-- `borrow mut T` -- exclusive, mutable access
+- `T` -- shared, read-only access
+- `mut T` -- exclusive, mutable access
 
-### Explicit shared borrows with `borrow`
+### Explicit shared borrows with ``
 
 A shared borrow lets a function read a value without consuming it:
 
@@ -168,7 +168,7 @@ A shared borrow lets a function read a value without consuming it:
 class Counter:
     value: int32
 
-def read(counter: borrow Counter) -> int32:
+def read(counter: Counter) -> int32:
     return counter.value
 
 mut counter = Counter(value=41)
@@ -176,7 +176,7 @@ print(read(counter))       # 41
 print(counter.value)       # 41 -- counter still belongs to us
 ```
 
-The `borrow` keyword makes the shared contract explicit: this function is just
+The `` keyword makes the shared contract explicit: this function is just
 looking, not taking. A bare non-copy parameter such as `counter: Counter` has
 the same shared-borrow behavior; the explicit spelling is useful when you want
 that intent to stand out. After the call returns, the borrow ends and the
@@ -185,7 +185,7 @@ caller still owns the value.
 You can have multiple shared borrows active at the same time because none of them can modify the value:
 
 ```python
-def sum_values(a: borrow Counter, b: borrow Counter) -> int32:
+def sum_values(a: Counter, b: Counter) -> int32:
     return a.value + b.value
 
 c1 = Counter(value=10)
@@ -193,12 +193,12 @@ c2 = Counter(value=20)
 print(sum_values(c1, c2))   # 30 -- both still valid
 ```
 
-### Mutable borrows with `borrow mut`
+### Mutable borrows with `mut `
 
 A mutable borrow lets a function modify the value in place:
 
 ```python
-def bump(counter: borrow mut Counter):
+def bump(counter: mut Counter):
     counter.value += 1
 
 mut counter = Counter(value=41)
@@ -219,10 +219,10 @@ error: argument for parameter `counter` in function `bump` must be a mutable pla
 
 ### The exclusivity rule
 
-You cannot have a `borrow mut` and any other borrow of the same value at the same time. This prevents data races and aliasing bugs:
+You cannot have a `mut ` and any other borrow of the same value at the same time. This prevents data races and aliasing bugs:
 
 ```python
-def bad(a: borrow mut Counter, b: borrow Counter):
+def bad(a: mut Counter, b: Counter):
     a.value += b.value
 
 mut c = Counter(value=1)
@@ -248,7 +248,7 @@ class Account:
 ```
 
 Bare `self` is a shared borrow. The method can read fields but cannot modify
-them, and the caller retains ownership. `borrow self` is accepted as an
+them, and the caller retains ownership. `self` is accepted as an
 explicit synonym when spelling out the shared contract helps readability.
 
 ```python
@@ -257,13 +257,13 @@ print(account.display())    # "Balance: 100.0"
 print(account.balance)      # still accessible
 ```
 
-### `borrow mut self` -- modify the instance
+### `mut self` -- modify the instance
 
 ```python
 class Account:
     balance: float64
 
-    def deposit(borrow mut self, amount: float64):
+    def deposit(mut self, amount: float64):
         self.balance += amount
 
     def display(self) -> String:
@@ -327,13 +327,13 @@ c = Counter.zero()
 | Receiver | When to use | Example |
 |----------|-------------|---------|
 | `self` | Read-only shared access, the default | getters, display, serialization |
-| `borrow self` | Explicit synonym for shared `self` | emphasizing a shared contract |
-| `borrow mut self` | Modify the instance in place | setters, increment, append |
+| `self` | Explicit synonym for shared `self` | emphasizing a shared contract |
+| `mut self` | Modify the instance in place | setters, increment, append |
 | `own self` | Consume the instance to extract data | `into_*` conversions, one-shot use |
 | no receiver | Factory methods, utilities that don't need an instance | `Counter.zero()` |
 
 If you are not sure, start with bare `self`. Add `own` only when the method
-must consume the instance, or `borrow mut` when it must mutate in place.
+must consume the instance, or `mut ` when it must mutate in place.
 
 ## Field Access And Move Semantics
 
@@ -362,7 +362,7 @@ error: use of moved field `name` from `user`
 When you borrow a value, you cannot move non-copy fields out of it because you do not own it:
 
 ```python
-def get_name(user: borrow User) -> String:
+def get_name(user: User) -> String:
     return user.name       # COMPILE ERROR
 ```
 
@@ -375,7 +375,7 @@ The function only borrowed `user` -- it has no right to take the `name` away. Th
 **Option 1: clone the field**
 
 ```python
-def get_name(user: borrow User) -> String:
+def get_name(user: User) -> String:
     return user.name.clone()   # explicit copy, user keeps its name
 ```
 
@@ -389,7 +389,7 @@ def get_name(user: own User) -> String:
 **Option 3: return a copy-type field instead**
 
 ```python
-def get_age(user: borrow User) -> int32:
+def get_age(user: User) -> int32:
     return user.age            # int32 is copy, no move needed
 ```
 
@@ -455,40 +455,40 @@ for x in own xs:
 # another use of xs would now be an error
 ```
 
-### Explicit shared iteration with `borrow`
+### Explicit shared iteration with ``
 
-Bare iteration is already shared; `for ... in borrow` makes that contract explicit:
+Bare iteration is already shared; `for ... in ` makes that contract explicit:
 
 ```python
 mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
-for name in borrow names:
+for name in names:
     print(name)
 print(names.len())     # 3 -- names is still valid
 
-for name in borrow names:   # can iterate again
+for name in names:   # can iterate again
     print(name)
 ```
 
-The `borrow` keyword tells Aurora to iterate over borrowed references. The collection stays owned by the caller.
+The `` keyword tells Aurora to iterate over borrowed references. The collection stays owned by the caller.
 
 For copy element types, the loop variable receives a copy of each element. For non-copy element types, the loop variable is a temporary borrow.
 
-### Mutable borrow iteration with `borrow mut`
+### Mutable borrow iteration with `mut `
 
-To modify elements during iteration, use `for ... in borrow mut`:
+To modify elements during iteration, use `for ... in mut`:
 
 ```python
 class Score:
     value: int32
 
-    def double(borrow mut self):
+    def double(mut self):
         self.value = self.value * 2
 
 mut scores: Vec[Score] = [Score(value=1), Score(value=2), Score(value=3)]
-for score in borrow mut scores:
+for score in mut scores:
     score.double()
 
-for score in borrow scores:
+for score in scores:
     print(score.value)
 # prints: 2, 4, 6
 ```
@@ -501,10 +501,10 @@ This requires the collection binding to be `mut`.
 |------|--------|----------|
 | `for x in collection` | Shared borrow, collection stays valid | Ordinary read-only iteration |
 | `for x in own collection` | Consumes the collection | You are done with the collection after the loop |
-| `for x in borrow collection` | Explicit shared borrow | You want the borrow visible in source |
-| `for x in borrow mut collection` | Mutable borrow, can modify elements | You want to update elements in place |
+| `for x in collection` | Explicit shared borrow | You want the borrow visible in source |
+| `for x in mut collection` | Mutable borrow, can modify elements | You want to update elements in place |
 
-**Default recommendation:** Use bare `for x in collection` for reads, `own` to consume, and `borrow mut` to update.
+**Default recommendation:** Use bare `for x in collection` for reads, `own` to consume, and `mut ` to update.
 
 ## Borrowing In Match
 
@@ -520,11 +520,11 @@ match result:
 print(result)          # COMPILE ERROR if result is non-copy: already moved
 ```
 
-To match without consuming the value, use `match borrow`:
+To match without consuming the value, use `match `:
 
 ```python
 result: Result[String, String] = Result.Ok("success")
-match borrow result:
+match result:
     case Ok(msg):
         print(msg)     # msg is a borrowed reference
     case Err(e):
@@ -532,11 +532,11 @@ match borrow result:
 # result is still valid here
 ```
 
-To match and mutate the payload, use `match borrow mut`:
+To match and mutate the payload, use `match mut`:
 
 ```python
 mut result: Result[String, String] = Result.Ok("hello")
-match borrow mut result:
+match mut result:
     case Ok(msg):
         # msg is borrow mut String -- can call mutating methods
         pass
@@ -598,7 +598,7 @@ def archive(doc: Document):
     print(doc.title)
 ```
 
-Writing `doc: borrow Document` is an equivalent explicit shared spelling.
+Writing `doc: Document` is an equivalent explicit shared spelling.
 
 **Fix 2 -- keep the owned parameter and clone before passing:**
 ```python
@@ -610,13 +610,13 @@ print(doc.title)       # doc still valid
 
 **Problem:**
 ```python
-def get_title(doc: borrow Document) -> String:
+def get_title(doc: Document) -> String:
     return doc.title   # COMPILE ERROR: cannot move from borrow
 ```
 
 **Fix -- clone the field:**
 ```python
-def get_title(doc: borrow Document) -> String:
+def get_title(doc: Document) -> String:
     return doc.title.clone()
 ```
 
@@ -640,13 +640,13 @@ for item in own items:
 
 **Problem:**
 ```python
-for score in borrow scores:
+for score in scores:
     score.double()     # COMPILE ERROR: not mutable
 ```
 
 **Fix -- mutable borrow iterate:**
 ```python
-for score in borrow mut scores:
+for score in mut scores:
     score.double()
 ```
 
@@ -672,8 +672,8 @@ Here is how to translate your Python intuition:
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
 | `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
-| `def f(x): ...` reads x | `def f(x: T): ...` for non-copy `T`, or explicitly `def f(x: borrow T): ...` |
-| `def f(x): x.mutate()` | `def f(x: borrow mut T): ...` |
+| `def f(x): ...` reads x | `def f(x: T): ...` for non-copy `T`, or explicitly `def f(x: T): ...` |
+| `def f(x): x.mutate()` | `def f(x: mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
 | `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
 | No direct equivalent | `for x in own list: ...` (list consumed) |
@@ -686,12 +686,12 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, `random.Rng`, classes) transfer ownership.
 3. Use `.clone()` when you need an explicit independent copy and the move type
    supports clone; `random.Rng` and values containing it do not.
-4. Bare non-copy parameters are shared borrows. Use `borrow T` to make that
-   read-only contract explicit, and `borrow mut T` to lend mutable access.
-5. `borrow mut` is exclusive -- no other borrows of the same value can exist at the same time.
-6. Method receivers follow the same rules: `self` (or `borrow self`) reads, `borrow mut self` modifies, and `own self` consumes.
-7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in borrow mut collection` to modify elements.
-8. Use `match borrow value` to pattern-match without consuming.
+4. Bare non-copy parameters are shared borrows. Use `T` to make that
+   read-only contract explicit, and `mut T` to lend mutable access.
+5. `mut ` is exclusive -- no other borrows of the same value can exist at the same time.
+6. Method receivers follow the same rules: `self` (or `self`) reads, `mut self` modifies, and `own self` consumes.
+7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in mut collection` to modify elements.
+8. Use `match value` to pattern-match without consuming.
 9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.
 
 The compiler enforces all of these rules. When you see an error about moved values or borrowing, come back to this chapter -- the fix is almost always one of the patterns listed above.

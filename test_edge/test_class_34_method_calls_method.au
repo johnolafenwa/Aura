@@ -2,10 +2,10 @@
 class Calculator:
     value: float64
 
-    def get(borrow self) -> float64:
+    def get(self) -> float64:
         return self.value
 
-    def double_get(borrow self) -> float64:
+    def double_get(self) -> float64:
         return self.get() + self.get()
 
 def main() -> int32:

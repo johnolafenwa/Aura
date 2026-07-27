@@ -10,7 +10,7 @@ functions only when results must be unpredictable.
 | `random.Rng` | `Rng(seed: int64) -> random.Rng` | Creates one deterministic xoshiro256** stream from the exact signed seed bit pattern. |
 | `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64` | Advances the stream and returns a uniform value in `[lo, hi)`. |
 | `random.Rng.next_float` | `next_float() -> float64` | Advances the stream and returns a binary64 value in `[0.0, 1.0)`. |
-| `random.Rng.shuffle` | `shuffle[T](values: borrow mut Vec[T]) -> None` | Advances the stream while shuffling `values` in place. |
+| `random.Rng.shuffle` | `shuffle[T](values: mut Vec[T]) -> None` | Advances the stream while shuffling `values` in place. |
 | `random.secure_int` | `secure_int(lo: int64, hi: int64) -> int64` | Returns an OS-secure uniform value in `[lo, hi)`. |
 | `random.secure_bytes` | `secure_bytes(n: int64) -> Vec[uint8]` | Returns exactly `n` bytes from the operating system's secure random source. |
 
@@ -227,7 +227,7 @@ deep. A copied task or queue handle is different: it aliases the synchronization
 handle, not the `Rng` value behind that handle, and therefore does not duplicate
 generator state.
 
-`shuffle(values: borrow mut Vec[T])` borrows the caller's vector exclusively,
+`shuffle(values: mut Vec[T])` borrows the caller's vector exclusively,
 mutates that same place, and returns `None`; it does not move, clone, or replace
 the vector or its elements. Projected mutable vectors receive the same
 writeback semantics as root bindings.

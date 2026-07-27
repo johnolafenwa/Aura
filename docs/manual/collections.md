@@ -6,7 +6,7 @@ Aurora provides three generic owned collection types:
 - `Map[K, V]` for key/value lookup
 - `Set[T]` for uniqueness and membership tests
 
-Collections are move types. Assigning one to another binding transfers ownership. A bare non-copy parameter or loop borrows it by default; use `own` to transfer it deliberately, `borrow` to make shared access explicit, and `borrow mut` to mutate caller-owned storage.
+Collections are move types. Assigning one to another binding transfers ownership. A bare non-copy parameter or loop borrows it by default; use `own` to transfer it deliberately, `` to make shared access explicit, and `mut ` to mutate caller-owned storage.
 
 ## Literals And Constructors
 
@@ -51,10 +51,10 @@ for value in values:
 for value in own values:
     consume(value)
 
-for value in borrow values:
+for value in values:
     print(value)
 
-for value in borrow mut values:
+for value in mut values:
     value += 1
 ```
 
@@ -67,7 +67,7 @@ for entry in counts.items():
     print(entry.key + "=" + entry.value.to_string())
 ```
 
-`for value in borrow mut set:` is not supported. Mutate sets with `insert` and `remove`.
+`for value in mut set:` is not supported. Mutate sets with `insert` and `remove`.
 
 Bare or explicit shared Vec/Set iteration freezes the selected collection for
 the loop. `own` iteration instead moves the collection once into a loop-private
@@ -181,7 +181,7 @@ non-copy keys are shared-borrowed. `set` owns and stores its key and value. No
 clone is needed for lookup followed by insertion:
 
 ```python
-def bump(counts: borrow mut Map[String, int32], key: own String):
+def bump(counts: mut Map[String, int32], key: own String):
     match counts.get(key):
         case Option.Some(count):
             counts.set(key, count + 1)
@@ -281,7 +281,7 @@ type `int32`; Map indexes and lookup keys have exact type `K`. Mutating and
 retaining APIs use the owned positions shown in the tables above, and every
 mutating method or indexed assignment requires a mutable collection place.
 Bare or explicit shared Vec/Set iteration borrows the collection, `own`
-consumes it, and `borrow mut` is supported only for a mutable Vec place. A
+consumes it, and `mut ` is supported only for a mutable Vec place. A
 direct Map read requires copy `V`; a cloned non-copy read uses `get` only when
 `V` is clone-safe, while `remove` transfers any `V`. Simple
 indexed assignment accepts any Vec element or Map value type and owns the

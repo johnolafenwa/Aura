@@ -1,13 +1,13 @@
 class Rng:
     value: int64
 
-    def next_int(borrow self, lo: int64, hi: int64) -> int64:
+    def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(borrow self) -> String:
+    def next_float(self) -> String:
         return "local"
 
-    def shuffle(borrow self, value: int64) -> int64:
+    def shuffle(self, value: int64) -> int64:
         return value
 
 def main() -> int32:

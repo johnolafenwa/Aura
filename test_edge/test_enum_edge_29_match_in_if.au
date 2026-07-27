@@ -6,7 +6,7 @@ enum Level:
 
 def process(l: Level, threshold: int32) -> int32:
     if threshold > 0:
-        match l:
+        match own l:
             case Level.Low:
                 return 1
             case Level.Mid:
@@ -14,7 +14,7 @@ def process(l: Level, threshold: int32) -> int32:
             case Level.High(v):
                 return v
     else:
-        match l:
+        match own l:
             case Level.Low:
                 return -1
             case Level.Mid:

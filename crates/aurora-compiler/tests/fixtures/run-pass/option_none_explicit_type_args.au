@@ -1,6 +1,6 @@
 def main() -> int32:
     value = Option[int32].None
-    match value:
+    match own value:
         case Some(inner):
             print(inner)
         case None:

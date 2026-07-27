@@ -1,11 +1,11 @@
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 class User:
     label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 class Wrapper[T: Named]:
@@ -19,7 +19,7 @@ def main() -> int32:
     wrapped = Wrapper(value=User(label="aurora"))
     value: MaybeNamed[User] = MaybeNamed[User].Empty
     print(wrapped.value.name())
-    match value:
+    match own value:
         case MaybeNamed.Some(inner):
             print(inner.name())
         case _:

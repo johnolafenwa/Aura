@@ -5,7 +5,7 @@ class OptionalVal[T]:
     has_value: bool
     value: T
 
-    def present(borrow self) -> bool:
+    def present(self) -> bool:
         return self.has_value
 
 def main() -> int32:

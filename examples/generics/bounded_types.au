@@ -1,17 +1,17 @@
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 class User:
     label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 class Wrapper[T: Named]:
     value: T
 
-    def render(borrow self) -> String:
+    def render(self) -> String:
         return self.value.name()
 
 enum MaybeNamed[T: Named]:
@@ -22,7 +22,7 @@ def main() -> int32:
     wrapped = Wrapper(value=User(label="aurora"))
     print(wrapped.render())
     value: MaybeNamed[User] = MaybeNamed[User].Empty
-    match value:
+    match own value:
         case MaybeNamed.Some(inner):
             print(inner.name())
         case _:

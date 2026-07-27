@@ -19,7 +19,7 @@ def main() -> int32:
 
         select:
             case value = out.recv():
-                match value:
+                match own value:
                     case Option.Some(v):
                         print(v)
                     case Option.None:
@@ -29,7 +29,7 @@ def main() -> int32:
 
     select:
         case value = out.recv():
-            match value:
+            match own value:
                 case Option.Some(v):
                     print(v)
                 case Option.None:

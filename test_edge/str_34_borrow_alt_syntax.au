@@ -3,7 +3,7 @@
 class Data:
     value: int32
 
-def read_alt(borrow d: Data) -> int32:
+def read_alt(d: Data) -> int32:
     return d.value
 
 def main() -> int32:

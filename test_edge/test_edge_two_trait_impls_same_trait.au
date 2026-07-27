@@ -2,7 +2,7 @@
 # then calling a trait-bounded function with each
 
 trait Greet:
-    def hello(borrow self) -> String
+    def hello(self) -> String
 
 class English:
     name: String
@@ -11,11 +11,11 @@ class Spanish:
     nombre: String
 
 impl Greet for English:
-    def hello(borrow self) -> String:
+    def hello(self) -> String:
         return "Hello " + self.name
 
 impl Greet for Spanish:
-    def hello(borrow self) -> String:
+    def hello(self) -> String:
         return "Hola " + self.nombre
 
 def greet[T: Greet](person: T):

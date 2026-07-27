@@ -9,7 +9,7 @@ def process() -> Result[int32, int32]:
 
 def main() -> int32:
     res = process()
-    match res:
+    match own res:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

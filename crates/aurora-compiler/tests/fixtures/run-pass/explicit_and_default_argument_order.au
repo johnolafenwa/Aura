@@ -5,7 +5,7 @@ def mark(label: String, value: int32) -> int32:
 def combine(first: int32 = mark("default-first", 1), second: int32 = mark("default-second", 2), third: int32 = mark("default-third", 3)) -> int32:
     return first + second + third
 
-def bump(value: borrow mut int32) -> int32:
+def bump(value: mut int32) -> int32:
     value += 1
     return value
 
@@ -30,17 +30,16 @@ def main():
     print(combine(third=mark("explicit-third", 30), first=mark("explicit-first", 10)))
     print("class")
     sample = Sample(third=print("explicit-field-third"), first=print("explicit-field-first"))
-    print("snapshot")
+    print("evaluation order")
     mut value: int32 = 1
-    show(second=value, first=bump(value))
-    print("class snapshot")
-    value = 1
-    pair = Pair(second=value, first=bump(value))
+    show(second=mark("named-second", 2), first=bump(value))
+    print("class order")
+    pair = Pair(second=mark("field-named-second", 5), first=mark("field-named-first", 4))
     print(pair.first)
     print(pair.second)
     print("enum")
     named = NamedPair.Values(second=mark("enum-second", 2), first=mark("enum-first", 1))
-    match named:
+    match own named:
         case NamedPair.Values(first, second):
             print(first)
             print(second)

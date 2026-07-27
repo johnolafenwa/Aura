@@ -7,7 +7,7 @@ class Outer:
     inner: Inner
     name: String
 
-    def bump_inner(borrow mut self):
+    def bump_inner(mut self):
         self.inner.value += 1
 
 def main() -> int32:

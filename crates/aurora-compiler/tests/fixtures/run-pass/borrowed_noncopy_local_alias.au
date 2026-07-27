@@ -1,7 +1,7 @@
 class User:
     name: String
 
-def show(user: borrow User):
+def show(user: User):
     alias = user
     print(alias.name)
     print(user.name)

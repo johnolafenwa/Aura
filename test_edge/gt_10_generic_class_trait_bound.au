@@ -2,19 +2,19 @@
 ## Expects: "aurora" then "empty"
 
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 class User:
     label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 class Container[T: Named]:
     item: T
 
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return self.item.name()
 
 enum MaybeNamed[T: Named]:
@@ -26,7 +26,7 @@ def main() -> int32:
     print(c.display())
 
     val: MaybeNamed[User] = MaybeNamed.Absent
-    match val:
+    match own val:
         case MaybeNamed.Present(inner):
             print(inner.name())
         case _:

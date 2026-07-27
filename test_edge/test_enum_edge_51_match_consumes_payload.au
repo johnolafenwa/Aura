@@ -8,7 +8,7 @@ def main() -> int32:
     m = Msg.Text("hello")
 
     # This match consumes m
-    match m:
+    match own m:
         case Msg.Text(s):
             print(s)
             # s is now the owned String

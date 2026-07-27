@@ -2,10 +2,10 @@
 ## Expects: "hello" (testing if traits work on String like on int32)
 
 trait Shoutify:
-    def shout(borrow self) -> String
+    def shout(self) -> String
 
 impl Shoutify for String:
-    def shout(borrow self) -> String:
+    def shout(self) -> String:
         return self.clone()
 
 def main() -> int32:

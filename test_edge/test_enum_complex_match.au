@@ -4,7 +4,7 @@ enum Shape:
     Empty
 
 def describe(s: Shape) -> String:
-    match s:
+    match own s:
         case Shape.Circle(r):
             return f"circle with radius {r}"
         case Shape.Empty:

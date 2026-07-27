@@ -2,13 +2,13 @@ class Person:
     first: String
     last: String
 
-    def full_name(borrow self) -> String:
+    def full_name(self) -> String:
         return self.first + " " + self.last
 
-    def greet(borrow self) -> String:
+    def greet(self) -> String:
         return "Hello, " + self.full_name()
 
-def borrow_person(p: borrow Person):
+def borrow_person(p: Person):
     print(p.full_name())
 
 def consume_person(p: Person):

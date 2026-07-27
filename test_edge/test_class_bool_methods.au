@@ -3,17 +3,17 @@ class User:
     active: bool
     login_count: int32
 
-    def is_new(borrow self) -> bool:
+    def is_new(self) -> bool:
         return self.login_count == 0
 
-    def status(borrow self) -> String:
+    def status(self) -> String:
         if self.active:
             if self.is_new():
                 return "new"
             return "active"
         return "inactive"
 
-    def login(borrow mut self):
+    def login(mut self):
         self.login_count += 1
 
 def main() -> int32:

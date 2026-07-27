@@ -1,8 +1,8 @@
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl[T] Describe for Queue[T]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "queue trait"
 
 def main() -> int32:

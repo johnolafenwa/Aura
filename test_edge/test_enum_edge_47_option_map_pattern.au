@@ -1,13 +1,13 @@
 # Test: manually implementing a map-like pattern over Option
 def map_option(opt: Option[int32], addend: int32) -> Option[int32]:
-    match opt:
+    match own opt:
         case Option.Some(v):
             return Option.Some(v + addend)
         case Option.None:
             return Option.None
 
 def flat_map_option(opt: Option[int32]) -> Option[String]:
-    match opt:
+    match own opt:
         case Option.Some(v):
             if v > 0:
                 return Option.Some("positive")
@@ -18,7 +18,7 @@ def flat_map_option(opt: Option[int32]) -> Option[String]:
 def main() -> int32:
     a: Option[int32] = Option.Some(10)
     b = map_option(a, 5)
-    match b:
+    match own b:
         case Option.Some(v):
             print(v)
         case Option.None:
@@ -26,7 +26,7 @@ def main() -> int32:
 
     c: Option[int32] = Option.None
     d = map_option(c, 5)
-    match d:
+    match own d:
         case Option.Some(v):
             print(v)
         case Option.None:

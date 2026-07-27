@@ -8,7 +8,7 @@ impl Add[Counter, Counter] for Counter:
     def add(own self, rhs: own Counter) -> Counter:
         return Counter(value=self.value + rhs.value)
 
-def mutate(value: borrow mut Counter) -> Counter:
+def mutate(value: mut Counter) -> Counter:
     value.value = 2
     return Counter(value=10)
 

@@ -1432,7 +1432,7 @@ test("compiler bridge reports typed self with the receiver-forms diagnostic", as
     ""
   ].join("\n");
   const message =
-    "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate";
+    "`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate";
 
   try {
     setWorkspaceRoots([repoRoot, tempRoot]);
@@ -1461,11 +1461,11 @@ test("compiler bridge preserves canonical receiver contracts in hover and comple
     "    value: int32",
     "    def read(self) -> int32:",
     "        return self.value",
-    "    def explicit(borrow self) -> int32:",
+    "    def explicit(self) -> int32:",
     "        return self.value",
     "    def take(own self) -> int32:",
     "        return self.value",
-    "    def bump(borrow mut self):",
+    "    def bump(mut self):",
     "        self.value += 1",
     "",
     "def main() -> int32:",
@@ -1490,7 +1490,7 @@ test("compiler bridge preserves canonical receiver contracts in hover and comple
       "method read(self) -> int32",
       "method explicit(self) -> int32",
       "method take(own self) -> int32",
-      "method bump(borrow mut self) -> None"
+      "method bump(mut self) -> None"
     ]) {
       assert.ok(
         analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
@@ -1513,7 +1513,7 @@ test("compiler bridge preserves canonical receiver contracts in hover and comple
     assert.equal(details.get("read"), "read(self) -> int32");
     assert.equal(details.get("explicit"), "explicit(self) -> int32");
     assert.equal(details.get("take"), "take(own self) -> int32");
-    assert.equal(details.get("bump"), "bump(borrow mut self) -> None");
+    assert.equal(details.get("bump"), "bump(mut self) -> None");
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1526,9 +1526,9 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     "    print(value)",
     "def consume(value: own String):",
     "    print(value)",
-    "def explicit(value: borrow String = \"fallback\"):",
+    "def explicit(value: String = \"fallback\"):",
     "    print(value)",
-    "def mutate(value: borrow mut String):",
+    "def mutate(value: mut String):",
     "    pass",
     "def main():",
     "    mut text = \"aurora\"",
@@ -1550,8 +1550,8 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     for (const signature of [
       "function inspect(value: String) -> None",
       "function consume(value: own String) -> None",
-      "function explicit(value: borrow String = ...) -> None",
-      "function mutate(value: borrow mut String) -> None"
+      "function explicit(value: String = ...) -> None",
+      "function mutate(value: mut String) -> None"
     ]) {
       assert.ok(
         analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
@@ -1560,7 +1560,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     }
 
     const invalid = [
-      "def lost(value: borrow mut String = \"fallback\"):",
+      "def lost(value: mut String = \"fallback\"):",
       "    pass",
       ""
     ].join("\n");
@@ -1568,7 +1568,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     assert.equal(invalidAnalysis.diagnostics.length, 1);
     assert.equal(
       invalidAnalysis.diagnostics[0].message,
-      "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result"
+      "`mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1630,13 +1630,13 @@ test("compiler bridge exposes the complete Duration surface and operator precede
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-duration-"));
   const source = [
     "trait FloorDiv[Rhs, Out]:",
-    "    def floor_div(borrow self, rhs: Rhs) -> Out",
+    "    def floor_div(self, rhs: Rhs) -> Out",
     "",
     "class Counter:",
     "    value: int64",
     "",
     "impl FloorDiv[Counter, Counter] for Counter:",
-    "    def floor_div(borrow self, rhs: Counter) -> Counter:",
+    "    def floor_div(self, rhs: Counter) -> Counter:",
     "        return Counter(value=self.value + rhs.value)",
     "",
     "def inspect(value: int64, left: Duration, right: Duration) -> float64:",
@@ -1989,11 +1989,11 @@ test("compiler bridge includes imported trait methods in completions", async () 
     fs.mkdirSync(path.join(tempRoot, "pkg"));
     fs.writeFileSync(
       path.join(tempRoot, "pkg/named.au"),
-      "public trait Named:\n    def name(borrow self) -> String\n"
+      "public trait Named:\n    def name(self) -> String\n"
     );
     fs.writeFileSync(
       path.join(tempRoot, "pkg/user.au"),
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
@@ -2036,11 +2036,11 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     );
     fs.writeFileSync(
       path.join(tempRoot, "pkg/named.au"),
-      "public trait Named:\n    def name(borrow self) -> String\n"
+      "public trait Named:\n    def name(self) -> String\n"
     );
     fs.writeFileSync(
       userPath,
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
@@ -2769,15 +2769,15 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
       "dumps(value: json.Value, indent: Option[int64] = ...) -> String"
     );
     const accessorDetails = {
-      as_bool: "as_bool(value: borrow json.Value) -> Option[bool]",
-      as_float: "as_float(value: borrow json.Value) -> Option[float64]",
-      as_int: "as_int(value: borrow json.Value) -> Option[int64]",
+      as_bool: "as_bool(value: json.Value) -> Option[bool]",
+      as_float: "as_float(value: json.Value) -> Option[float64]",
+      as_int: "as_int(value: json.Value) -> Option[int64]",
       into_array:
         "into_array(value: own json.Value) -> Option[Vec[json.Value]]",
       into_object:
         "into_object(value: own json.Value) -> Option[Map[String, json.Value]]",
       into_string: "into_string(value: own json.Value) -> Option[String]",
-      is_null: "is_null(value: borrow json.Value) -> bool"
+      is_null: "is_null(value: json.Value) -> bool"
     };
     for (const [name, detail] of Object.entries(accessorDetails)) {
       assert.equal(moduleItems.find((item) => item.name === name)?.detail, detail);
@@ -2949,7 +2949,7 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
     const prelude = [
       "import random",
       "",
-      "def inspect(rng: borrow mut random.Rng) -> int32:"
+      "def inspect(rng: mut random.Rng) -> int32:"
     ];
     const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
     const completionsForLine = async (line) => {
@@ -2999,7 +2999,7 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
     for (const [name, detail] of [
       ["next_int", "next_int(lo: int64, hi: int64) -> int64"],
       ["next_float", "next_float() -> float64"],
-      ["shuffle", "shuffle(values: borrow mut Vec[T]) -> None"]
+      ["shuffle", "shuffle(values: mut Vec[T]) -> None"]
     ]) {
       const matching = memberItems.filter((item) => item.name === name);
       assert.equal(matching.length, 1);

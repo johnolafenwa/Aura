@@ -9,10 +9,10 @@ class RangeIterator:
     def new(start: int32, end: int32, step: int32) -> RangeIterator:
         return RangeIterator(current=start, end=end, step=step)
 
-    def has_next(borrow self) -> bool:
+    def has_next(self) -> bool:
         return self.current < self.end
 
-    def next(borrow mut self) -> int32:
+    def next(mut self) -> int32:
         val = self.current
         self.current += self.step
         return val
@@ -21,10 +21,10 @@ class RangeIterator:
 class Countdown:
     remaining: int32
 
-    def has_next(borrow self) -> bool:
+    def has_next(self) -> bool:
         return self.remaining > 0
 
-    def next(borrow mut self) -> int32:
+    def next(mut self) -> int32:
         self.remaining -= 1
         return self.remaining + 1
 

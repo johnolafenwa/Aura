@@ -10,15 +10,15 @@ class Task:
     status: Status
     priority: int32
 
-    def is_active(borrow self) -> bool:
-        match borrow self.status:
+    def is_active(self) -> bool:
+        match self.status:
             case Status.Active:
                 return true
             case _:
                 return false
 
-    def describe(borrow self) -> String:
-        match borrow self.status:
+    def describe(self) -> String:
+        match self.status:
             case Status.Active:
                 return f"{self.name}: active (p{self.priority})"
             case Status.Inactive:

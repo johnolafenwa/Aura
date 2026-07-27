@@ -4,7 +4,7 @@ enum Token:
     Whitespace
 
 def show(t: own Token) -> String:
-    match t:
+    match own t:
         case Token.Word(w):
             return "word(" + w + ")"
         case Token.Punct(p):

@@ -2,7 +2,7 @@
 ## Expects: 100 then 50
 
 trait Sizeable:
-    def size(borrow self) -> int32
+    def size(self) -> int32
 
 class BigThing:
     s: int32
@@ -11,11 +11,11 @@ class SmallThing:
     s: int32
 
 impl Sizeable for BigThing:
-    def size(borrow self) -> int32:
+    def size(self) -> int32:
         return self.s * 10
 
 impl Sizeable for SmallThing:
-    def size(borrow self) -> int32:
+    def size(self) -> int32:
         return self.s
 
 def report_size[T: Sizeable](item: T):

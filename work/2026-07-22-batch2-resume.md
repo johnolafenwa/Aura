@@ -302,7 +302,7 @@
   not be committed on top of a false ownership contract.
 - Added proposed ADR-0022 for the separately requested future syntax design:
   bare parameters become a universal logical shared capability, `mut T` would
-  replace `borrow mut T`, and `own T` remains transfer. The ADR records the
+  replace `mut T`, and `own T` remains transfer. The ADR records the
   resulting bare-copy snapshot migration, generic-trait representability,
   scoped shared aliases, task-capture exception, two-phase consuming matches,
   indexed mutable-place boundary, borrowed-return and callable-capture

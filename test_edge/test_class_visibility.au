@@ -2,10 +2,10 @@ class Account:
     public name: String
     balance: int32
 
-    def get_balance(borrow self) -> int32:
+    def get_balance(self) -> int32:
         return self.balance
 
-    def deposit(borrow mut self, amount: int32):
+    def deposit(mut self, amount: int32):
         self.balance += amount
 
 def main() -> int32:

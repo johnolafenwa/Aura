@@ -1,5 +1,5 @@
 def check(o: Option[int32]) -> int32:
-    match o:
+    match own o:
         case Option.Some(v):
             return v
         case Option.None:

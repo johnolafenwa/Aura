@@ -6,7 +6,7 @@ Respond to the external newcomer-focused review of the Aurora VitePress book and
 
 ## Work Completed
 
-- Removed invalid call-site `borrow` and `borrow mut` from examples and reference text. Borrowing remains declared at parameter, receiver, loop, and match positions where the compiler supports it.
+- Removed invalid call-site `` and `mut ` from examples and reference text. Borrowing remains declared at parameter, receiver, loop, and match positions where the compiler supports it.
 - Collapsed runnable Aurora calls and collection literals that used unsupported multi-line continuation.
 - Replaced short-form `case Some(...)` / `case None` examples with `Option.Some(...)` / `Option.None`.
 - Rewrote top-level `try` snippets into function bodies or explicit `match` handling, because `try` is only valid inside functions.

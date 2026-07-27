@@ -334,4 +334,4 @@ The runtime is intentionally simple:
 - cancellation is still cooperative rather than preemptive
 - tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - task arguments are owned captures; default/shared and `own` target
-  parameters are supported, while `borrow mut` target parameters are rejected
+  parameters are supported, while `mut ` target parameters are rejected

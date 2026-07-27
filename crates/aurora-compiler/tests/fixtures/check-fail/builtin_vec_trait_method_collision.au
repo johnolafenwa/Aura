@@ -1,6 +1,6 @@
 trait Sized:
-    def len(borrow self) -> int64
+    def len(self) -> int64
 
 impl Sized for Vec[int32]:
-    def len(borrow self) -> int64:
+    def len(self) -> int64:
         return 99

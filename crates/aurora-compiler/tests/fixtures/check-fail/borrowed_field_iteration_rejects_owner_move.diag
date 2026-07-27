@@ -3,5 +3,5 @@ error[AU3002]: cannot move `holder` while `holder.values` is borrowed for iterat
    |
 10 |         consume(holder)
    |                 ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_owner_move.au:9:32: `holder.values` is borrowed for this loop here
+  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_owner_move.au:9:25: `holder.values` is borrowed for this loop here
   = help: finish iterating before moving `holder`, or iterate an owned clone when the owner must be consumed independently

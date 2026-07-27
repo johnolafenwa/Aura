@@ -8,7 +8,7 @@ enum Command:
 def processor(commands: Channel[Command], results: Channel[int32]):
     mut acc: int32 = 0
     for cmd in commands:
-        match cmd:
+        match own cmd:
             case Command.Add(n):
                 acc += n
             case Command.Multiply(n):

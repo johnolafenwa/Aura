@@ -1,11 +1,11 @@
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> borrow[self] Out
+    def add(self, rhs: Rhs) -> Out
 
 class Label:
     value: String
 
 impl Add[Label, String] for Label:
-    def add(borrow self, rhs: Label) -> borrow[self] String:
+    def add(self, rhs: Label) -> String:
         return self.value
 
 def main():

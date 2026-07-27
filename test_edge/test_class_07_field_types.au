@@ -4,7 +4,7 @@ class Record:
     label: String
     active: bool
 
-    def summary(borrow self) -> String:
+    def summary(self) -> String:
         return self.label
 
 def main() -> int32:

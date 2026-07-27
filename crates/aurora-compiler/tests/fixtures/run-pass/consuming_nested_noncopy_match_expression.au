@@ -7,7 +7,7 @@ enum Outer:
     Empty
 
 def extract(value: own Outer) -> String:
-    return match value:
+    return match own value:
         case Outer.Wrapped(Inner.Pair(text, 0)): text
         case Outer.Wrapped(Inner.Pair(text, _)): text
         case Outer.Wrapped(Inner.Solo(text)): text

@@ -14,7 +14,7 @@ def main() -> int32:
     boxed: Box[int32] = Box(value=identity(7))
     wrapped: Wrapper[String] = Wrapper.Item(identity("ok"))
     print(boxed.get())
-    match wrapped:
+    match own wrapped:
         case Wrapper.Item(value):
             print(value)
     return 0

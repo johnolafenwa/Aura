@@ -8,9 +8,9 @@ def main() -> int32:
     # Nested Option-like: Outer[Outer[int32]]
     nested: Outer[Outer[int32]] = Outer.Some(Outer.Some(42))
 
-    match nested:
+    match own nested:
         case Outer.Some(inner):
-            match inner:
+            match own inner:
                 case Outer.Some(v):
                     print(v)
                 case Outer.None:

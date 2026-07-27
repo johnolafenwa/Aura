@@ -8,7 +8,7 @@ def make_box[T](val: own T) -> Box[T]:
 
 def main() -> int32:
     b: Box[int32] = make_box(val=42)
-    match b.value:
+    match own b.value:
         case Some(v):
             print(v)
         case None:

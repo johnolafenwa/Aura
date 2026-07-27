@@ -20,7 +20,7 @@ def main() -> int32:
     while running:
         match ch.recv():
             case Option.Some(msg):
-                match msg:
+                match own msg:
                     case Message.Text(s):
                         print(f"text: {s}")
                     case Message.Number(n):

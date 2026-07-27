@@ -52,7 +52,7 @@ Validate Claude's external Aurora review corpus under `/tmp/aurora_review`, conf
   - compiler-backed LSP document state is globally invalidated on open/change/close, so imported-file edits no longer leave open dependents stale.
   - UNC `file://` URIs are parsed through the shared `src/uri.js` helper with explicit Windows UNC handling.
   - the architecture docs now describe the maintained `wait_any(...)` / `wait_all(...)` concurrency surface instead of `select`.
-  - stale `match borrow mut` binding use after scrutinee reassignment or `borrow mut` helper calls is rejected by the checker.
+  - stale `match mut` binding use after scrutinee reassignment or `mut ` helper calls is rejected by the checker.
   - module-qualified builtin enum constructors preserve `io.Error` / `process.Error` identity through sema and MIR.
   - malformed HTTP requests return `400 Bad Request` and the listener continues serving later clients.
   - TLS listener backlog tests now cover both the Unix multi-slowloris regression and the non-Unix wait-policy helper.

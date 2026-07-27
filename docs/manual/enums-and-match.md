@@ -205,12 +205,12 @@ match result:
         print(error)
 ```
 
-Use `match borrow` to retain the scrutinee and expose borrowed non-copy payload bindings:
+Use `match ` to retain the scrutinee and expose borrowed non-copy payload bindings:
 
 ```python
 result: Result[String, String] = Result.Ok("hello")
 
-match borrow result:
+match result:
     case Result.Ok(message):
         print(message)
     case Result.Err(error):
@@ -219,11 +219,11 @@ match borrow result:
 print("result is still owned")
 ```
 
-`match borrow mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected. A payload binding becomes stale if the exact matched place, its root, or an ancestor field is reassigned; a proven-disjoint sibling-field write remains valid.
+`match mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected. A payload binding becomes stale if the exact matched place, its root, or an ancestor field is reassigned; a proven-disjoint sibling-field write remains valid.
 
 For tuple patterns, by-value matching consumes a non-copy tuple as one whole
-value and gives owned leaf bindings. `match borrow` retains the tuple and gives
-shared leaf provenance. `match borrow mut` with a tuple pattern is rejected;
+value and gives owned leaf bindings. `match ` retains the tuple and gives
+shared leaf provenance. `match mut` with a tuple pattern is rejected;
 the minimal tuple surface has no recursive reconstruction and writeback rule.
 
 Borrowed payloads cannot be moved as owned values. Copy payloads are ordinary copies. The complete place and provenance rules are in [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-pattern-matching).
@@ -275,7 +275,7 @@ Treat every documented timeout, cancellation, closure, and error variant as sema
 ## Grammar
 
 The normative enum declaration, generic parameter, variant payload,
-construction, statement-match, expression-match, pattern, and `match borrow`
+construction, statement-match, expression-match, pattern, and `match `
 productions are in [Grammar](/manual/grammar#enums),
 [Grammar](/manual/grammar#patterns-and-statement-matches), and
 [Grammar](/manual/grammar#match-expressions). Payload-free variants omit
@@ -300,15 +300,15 @@ expressions evaluate in source order. For named construction, captured results
 then bind by payload name to declaration-order slots. Equality compares nominal
 enum identity, variant, and payload values. A match evaluates its scrutinee exactly once,
 tests arms in source order, and executes only the first matching arm. A match
-expression evaluates only its selected result expression. `match borrow mut`
+expression evaluates only its selected result expression. `match mut`
 reconstructs and writes the selected enum value back to its mutable place on
 normal arm exit.
 
 ## Ownership And Evaluation Order
 
 Every variant payload is an owned destination. By-value matching consumes a
-non-copy scrutinee and gives owned non-copy payload bindings. `match borrow`
-retains the scrutinee and exposes shared payload borrows; `match borrow mut`
+non-copy scrutinee and gives owned non-copy payload bindings. `match `
+retains the scrutinee and exposes shared payload borrows; `match mut`
 requires one exclusive mutable place and exposes mutable payload borrows.
 Copy payloads copy normally. Pattern bindings are arm-local, and reassigning a
 matched place or ancestor invalidates dependent mutable bindings while a

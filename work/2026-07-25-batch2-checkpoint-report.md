@@ -73,7 +73,7 @@ behavior, each reproduced before it was fixed:
 - Call-argument place collection resolved module-rooted paths as places, so
   `json.dumps(json.Value.Null)` failed while the named-argument form passed.
 - Call-argument place collection dropped every copy-typed access, losing the
-  retained `borrow mut int32` access, and the new source-ordered rejection
+  retained `mut int32` access, and the new source-ordered rejection
   displaced the parameter-aware same-level overlap diagnostic.
 
 The prior focused verification — 32 conditional tests, `cargo check`, and one

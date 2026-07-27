@@ -2,19 +2,19 @@ class Connection:
     name: String
     active: bool = true
 
-    def query(borrow self) -> String:
+    def query(self) -> String:
         return "result from " + self.name
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closing " + self.name)
 
 class Logger:
     prefix: String
 
-    def log(borrow self, msg: String):
+    def log(self, msg: String):
         print(self.prefix + ": " + msg)
 
-    def close(borrow mut self):
+    def close(mut self):
         print("logger closed")
 
 def use_connection() -> Result[String, String]:

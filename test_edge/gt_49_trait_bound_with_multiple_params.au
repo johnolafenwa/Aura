@@ -2,7 +2,7 @@
 ## Expects: 15
 
 trait HasValue:
-    def value(borrow self) -> int32
+    def value(self) -> int32
 
 class X:
     v: int32
@@ -11,11 +11,11 @@ class Y:
     v: int32
 
 impl HasValue for X:
-    def value(borrow self) -> int32:
+    def value(self) -> int32:
         return self.v
 
 impl HasValue for Y:
-    def value(borrow self) -> int32:
+    def value(self) -> int32:
         return self.v
 
 def add_values[A: HasValue, B: HasValue](a: A, b: B) -> int32:

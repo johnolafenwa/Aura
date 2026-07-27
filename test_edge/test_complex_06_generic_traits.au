@@ -4,14 +4,14 @@
 # when calling trait methods on generic parameters in the same file.
 
 trait Printable:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 class User:
     name: String
     age: int32
 
 impl Printable for User:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"User({self.name}, {self.age})"
 
 class Product:
@@ -19,14 +19,14 @@ class Product:
     price: int32
 
 impl Printable for Product:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"Product({self.title}, {self.price})"
 
 # Generic container with trait bound
 class Container[T: Printable]:
     item: T
 
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return self.item.describe()
 
 # Generic function with trait bound

@@ -79,7 +79,7 @@ Aurora's parser covers a large surface:
 - `if`, `match`, `for`, `while`, `with`
 - expression-form `match`, including binding, argument, and nested block positions
 - calls, named arguments, member access, indexing, specialization, casts
-- default, `own`, `borrow`, and `borrow mut` parameters, plus borrowed returns
+- default, `own`, ``, and `mut ` parameters, plus borrowed returns
 - patterns for `match`
 - f-string interpolation parsing
 
@@ -203,7 +203,7 @@ Aurora's real parser adds:
 - module-level declaration parsing
 - indentation-based block parsing
 - optional type parameter lists and bounds
-- receiver syntax (`self`, `borrow self`, `own self`, and `borrow mut self`)
+- receiver syntax (`self`, `self`, `own self`, and `mut self`)
 - parameter and loop ownership-modifier syntax
 - pattern parsing for `match`
 - postfix parsing for calls, member access, indexing, casts, and specialization
@@ -214,8 +214,8 @@ Aurora's real parser adds:
 ### 1. Receiver recognition
 
 A method receiver, when present, must be first. The parser maps bare `self`
-and `borrow self` to the same shared receiver kind, maps `own self` to the
-value/consuming kind, and keeps `borrow mut self` as the mutable kind. This is
+and `self` to the same shared receiver kind, maps `own self` to the
+value/consuming kind, and keeps `mut self` as the mutable kind. This is
 why later passes do not need to special-case the source synonym.
 
 The lookahead is intentionally stricter than "an identifier named self".

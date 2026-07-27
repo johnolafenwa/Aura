@@ -1,19 +1,19 @@
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
+    def add(self, rhs: Rhs) -> Out
 
 trait Neg[Out]:
-    def neg(borrow self) -> Out
+    def neg(self) -> Out
 
 class Point:
     x: int32
     y: int32
 
 impl Add[Point, Point] for Point:
-    def add(borrow self, rhs: Point) -> Point:
+    def add(self, rhs: Point) -> Point:
         return Point(x=self.x + rhs.x, y=self.y + rhs.y)
 
 impl Neg[Point] for Point:
-    def neg(borrow self) -> Point:
+    def neg(self) -> Point:
         return Point(x=0 - self.x, y=0 - self.y)
 
 def add_all[T: Add[T, T]](left: T, right: T) -> T:

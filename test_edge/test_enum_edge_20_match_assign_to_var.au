@@ -11,7 +11,7 @@ def main() -> int32:
 
     # Can we use match as expression and assign result?
     mut result = 0
-    match t1:
+    match own t1:
         case Token.Num(v):
             result = v
         case Token.Str(s):
@@ -20,7 +20,7 @@ def main() -> int32:
             result = -2
     print(result)
 
-    match t2:
+    match own t2:
         case Token.Num(v):
             result = v
         case Token.Str(s):
@@ -30,7 +30,7 @@ def main() -> int32:
             result = -2
     print(result)
 
-    match t3:
+    match own t3:
         case Token.Num(v):
             result = v
         case Token.Str(s):

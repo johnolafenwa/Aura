@@ -280,8 +280,6 @@ pub struct FunctionSignature {
     /// generic substitution is applied.
     pub param_passings: Vec<ReceiverKind>,
     pub return_type: Type,
-    pub return_passing: ReceiverKind,
-    pub return_borrow_source: Option<String>,
     /// Generic type parameters that must not resolve to a type containing
     /// non-cloneable `random.Rng` state. These obligations are inferred from
     /// clone-producing operations in the callable body and propagated through
@@ -342,145 +340,26 @@ fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
     }
 }
 
-pub(crate) fn resolve_param_passing(
-    mode: ParamMode,
-    ty: &Type,
-    classes: &BTreeMap<String, ClassInfo>,
-    enums: &BTreeMap<String, EnumInfo>,
-    imported_modules: &BTreeMap<String, ModuleNamespace>,
-    module_registry: &BTreeMap<String, ModuleNamespace>,
-) -> ReceiverKind {
+/// Maps a written parameter capability to its passing convention.
+///
+/// ADR-0022 Q1 ratifies universal logical sharing: bare means shared access
+/// for every type, including declaration-known copy types. The ABI may still
+/// pass copied bits, but the source-level shared-loan and ADR-0016 sequencing
+/// rules apply uniformly. That is what keeps this mapping declaration-stable,
+/// which generic trait specializations and builtin signatures depend on.
+pub(crate) fn resolve_param_passing(mode: ParamMode) -> ReceiverKind {
     match mode {
-        ParamMode::Default => {
-            if type_is_copy_in_context_with_modules(
-                ty,
-                classes,
-                enums,
-                imported_modules,
-                module_registry,
-            ) {
-                ReceiverKind::Value
-            } else {
-                ReceiverKind::Borrow
-            }
-        }
+        ParamMode::Default => ReceiverKind::Borrow,
         ParamMode::Own => ReceiverKind::Value,
-        ParamMode::Borrow => ReceiverKind::Borrow,
         ParamMode::BorrowMut => ReceiverKind::BorrowMut,
     }
 }
 
-fn resolve_param_passings(
-    params: &[Param],
-    param_types: &[Type],
-    classes: &BTreeMap<String, ClassInfo>,
-    enums: &BTreeMap<String, EnumInfo>,
-    imported_modules: &BTreeMap<String, ModuleNamespace>,
-    module_registry: &BTreeMap<String, ModuleNamespace>,
-) -> Vec<ReceiverKind> {
+fn resolve_param_passings(params: &[Param]) -> Vec<ReceiverKind> {
     params
         .iter()
-        .zip(param_types)
-        .map(|(param, ty)| {
-            resolve_param_passing(
-                param.mode,
-                ty,
-                classes,
-                enums,
-                imported_modules,
-                module_registry,
-            )
-        })
+        .map(|param| resolve_param_passing(param.mode))
         .collect()
-}
-
-fn resolve_return_borrow_source(
-    receiver: Option<ReceiverKind>,
-    params: &[Param],
-    param_passings: &[ReceiverKind],
-    return_passing: ReceiverKind,
-    explicit_source: Option<&str>,
-    span: crate::diag::Span,
-) -> Result<Option<String>> {
-    if return_passing == ReceiverKind::Value {
-        return Ok(None);
-    }
-
-    let mut candidates = Vec::new();
-    if let Some(receiver_kind) = receiver {
-        if receiver_kind == ReceiverKind::BorrowMut || return_passing == ReceiverKind::Borrow {
-            candidates.push(("self".to_string(), None, receiver_kind));
-        }
-    }
-    for (param, param_passing) in params.iter().zip(param_passings.iter().copied()) {
-        if param_passing == ReceiverKind::Value {
-            continue;
-        }
-        if return_passing == ReceiverKind::BorrowMut && param_passing != ReceiverKind::BorrowMut {
-            continue;
-        }
-        candidates.push((
-            param.name.clone(),
-            param.borrow_label.clone(),
-            param_passing,
-        ));
-    }
-
-    if let Some(source) = explicit_source {
-        let Some((_name, _label, _passing)) = candidates
-            .iter()
-            .find(|(name, label, _)| name == source || label.as_deref() == Some(source))
-        else {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "borrow source `{}` must name a borrowed parameter, receiver, or lifetime label",
-                    source
-                ),
-            ));
-        };
-        return Ok(Some(source.to_string()));
-    }
-
-    match candidates.as_slice() {
-        [] => Err(Diagnostic::at(
-            span,
-            "borrowed return types require a borrowed parameter or receiver",
-        )),
-        [(name, _, _)] => Ok(Some(name.clone())),
-        _ => Err(Diagnostic::at(
-            span,
-            format!(
-                "borrowed return type is ambiguous; write an explicit borrow source such as `-> {}[{}] T`",
-                match return_passing {
-                    ReceiverKind::BorrowMut => "borrow mut",
-                    _ => "borrow",
-                },
-                candidates[0].1.as_deref().unwrap_or(&candidates[0].0)
-            ),
-        )),
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum BorrowSourceSlot {
-    Receiver,
-    Param(usize),
-}
-
-fn borrow_source_slot(
-    receiver: Option<ReceiverKind>,
-    params: &[Param],
-    resolved_source: Option<&str>,
-) -> Option<BorrowSourceSlot> {
-    let source = resolved_source?;
-    if receiver.is_some() && source == "self" {
-        return Some(BorrowSourceSlot::Receiver);
-    }
-    params
-        .iter()
-        .position(|param| param.name == source || param.borrow_label.as_deref() == Some(source))
-        .map(BorrowSourceSlot::Param)
 }
 
 #[cfg(test)]
@@ -1341,8 +1220,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             params,
                             param_passings: Vec::new(),
                             return_type,
-                            return_passing: method.return_passing,
-                            return_borrow_source: None,
                             rng_clone_safe_type_params: BTreeSet::new(),
                         },
                         type_param_bounds,
@@ -1548,8 +1425,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             params,
                             param_passings: Vec::new(),
                             return_type,
-                            return_passing: method.return_passing,
-                            return_borrow_source: None,
                             rng_clone_safe_type_params: BTreeSet::new(),
                         },
                         type_param_bounds,
@@ -1674,31 +1549,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             .get(&trait_decl.name)
             .expect("collected trait should remain available during signature finalization");
         for method in trait_info.methods.values() {
-            let param_passings = resolve_param_passings(
-                &method.decl.params,
-                &method.signature.params,
-                &classes,
-                &enums,
-                &imported_modules,
-                &context.module_registry,
-            );
-            let return_borrow_source = resolve_return_borrow_source(
-                method.decl.receiver,
-                &method.decl.params,
-                &param_passings,
-                method.decl.return_passing,
-                method.decl.return_borrow_source.as_deref(),
-                method.decl.return_type.span,
-            )?;
+            let param_passings = resolve_param_passings(&method.decl.params);
             trait_signature_updates.push((
                 trait_decl.name.clone(),
                 method.decl.name.clone(),
                 param_passings,
-                return_borrow_source,
             ));
         }
     }
-    for (trait_name, method_name, param_passings, return_borrow_source) in trait_signature_updates {
+    for (trait_name, method_name, param_passings) in trait_signature_updates {
         let signature = &mut traits
             .get_mut(&trait_name)
             .expect("finalized trait should exist")
@@ -1707,7 +1566,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             .expect("finalized trait method should exist")
             .signature;
         signature.param_passings = param_passings;
-        signature.return_borrow_source = return_borrow_source;
     }
 
     let mut class_signature_updates = Vec::new();
@@ -1719,31 +1577,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             .get(&class_decl.name)
             .expect("collected class should remain available during signature finalization");
         for method in class_info.methods.values() {
-            let param_passings = resolve_param_passings(
-                &method.decl.params,
-                &method.signature.params,
-                &classes,
-                &enums,
-                &imported_modules,
-                &context.module_registry,
-            );
-            let return_borrow_source = resolve_return_borrow_source(
-                method.decl.receiver,
-                &method.decl.params,
-                &param_passings,
-                method.decl.return_passing,
-                method.decl.return_borrow_source.as_deref(),
-                method.decl.return_type.span,
-            )?;
+            let param_passings = resolve_param_passings(&method.decl.params);
             class_signature_updates.push((
                 class_decl.name.clone(),
                 method.decl.name.clone(),
                 param_passings,
-                return_borrow_source,
             ));
         }
     }
-    for (class_name, method_name, param_passings, return_borrow_source) in class_signature_updates {
+    for (class_name, method_name, param_passings) in class_signature_updates {
         let signature = &mut classes
             .get_mut(&class_name)
             .expect("finalized class should exist")
@@ -1752,7 +1594,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             .expect("finalized class method should exist")
             .signature;
         signature.param_passings = param_passings;
-        signature.return_borrow_source = return_borrow_source;
     }
 
     let empty_functions = BTreeMap::new();
@@ -1845,22 +1686,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             &canonical_type_names,
             &function_type_param_scope,
         )?;
-        let param_passings = resolve_param_passings(
-            &function_decl.params,
-            &params,
-            &classes,
-            &enums,
-            &imported_modules,
-            &context.module_registry,
-        );
-        let return_borrow_source = resolve_return_borrow_source(
-            function_decl.receiver,
-            &function_decl.params,
-            &param_passings,
-            function_decl.return_passing,
-            function_decl.return_borrow_source.as_deref(),
-            function_decl.return_type.span,
-        )?;
+        let param_passings = resolve_param_passings(&function_decl.params);
         functions.insert(
             function_decl.name.clone(),
             FunctionInfo {
@@ -1870,8 +1696,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     params,
                     param_passings,
                     return_type,
-                    return_passing: function_decl.return_passing,
-                    return_borrow_source,
                     rng_clone_safe_type_params: BTreeSet::new(),
                 },
                 type_param_bounds,
@@ -2031,22 +1855,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &method_type_param_scope,
                 Some(&for_type),
             )?;
-            let param_passings = resolve_param_passings(
-                &method.params,
-                &params,
-                &classes,
-                &enums,
-                &imported_modules,
-                &context.module_registry,
-            );
-            let return_borrow_source = resolve_return_borrow_source(
-                method.receiver,
-                &method.params,
-                &param_passings,
-                method.return_passing,
-                method.return_borrow_source.as_deref(),
-                method.return_type.span,
-            )?;
+            let param_passings = resolve_param_passings(&method.params);
             let trait_substitutions =
                 self_type_substitutions(&trait_info.decl, &trait_args, for_type.clone());
             let expected_params = trait_method
@@ -2059,20 +1868,9 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 substitute_type(&trait_method.signature.return_type, &trait_substitutions);
             let params_have_matching_passing =
                 param_passings == trait_method.signature.param_passings;
-            let return_sources_match = borrow_source_slot(
-                method.receiver,
-                &method.params,
-                return_borrow_source.as_deref(),
-            ) == borrow_source_slot(
-                trait_method.decl.receiver,
-                &trait_method.decl.params,
-                trait_method.signature.return_borrow_source.as_deref(),
-            );
             if params != expected_params
                 || !params_have_matching_passing
                 || return_type != expected_return_type
-                || method.return_passing != trait_method.signature.return_passing
-                || !return_sources_match
             {
                 return Err(Diagnostic::at(
                     method.span,
@@ -2090,8 +1888,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         params,
                         param_passings,
                         return_type,
-                        return_passing: method.return_passing,
-                        return_borrow_source,
                         rng_clone_safe_type_params: BTreeSet::new(),
                     },
                     type_param_bounds,
@@ -2138,8 +1934,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                             &trait_method.signature.return_type,
                             &trait_substitutions,
                         ),
-                        return_passing: trait_method.signature.return_passing,
-                        return_borrow_source: trait_method.signature.return_borrow_source.clone(),
                         rng_clone_safe_type_params: trait_method
                             .signature
                             .rng_clone_safe_type_params
@@ -3762,10 +3556,13 @@ struct LocalBinding {
     managed_resource: bool,
     passing: ReceiverKind,
     borrow_origin: Option<String>,
-    borrow_label: Option<String>,
     borrowed_at: Option<crate::diag::Span>,
     match_borrow_mut_place: Option<PlacePath>,
     stale_match_borrow_mut_place: Option<PlacePath>,
+    /// Set on a payload bound by a bare (shared) `match` over a named place.
+    /// ADR-0022 Q2 requires moving such a payload out to name `match own` as
+    /// the replacement instead of the generic borrowed-move wording.
+    shared_match_scrutinee: Option<String>,
     moved: bool,
     moved_at: Option<crate::diag::Span>,
     moved_fields: BTreeMap<ProjectionPath, crate::diag::Span>,
@@ -3781,7 +3578,6 @@ struct ExprResultEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BorrowSourceInfo {
     origin: String,
-    borrow_label: Option<String>,
     passing: ReceiverKind,
 }
 
@@ -3845,7 +3641,7 @@ struct ProjectedField<'a> {
 #[derive(Clone, Copy)]
 struct MatchExprParts<'a> {
     scrutinee: &'a Expr,
-    borrow_mode: Option<ReceiverKind>,
+    borrow_mode: ReceiverKind,
     arms: &'a [MatchExprArm],
     span: crate::diag::Span,
 }
@@ -3888,8 +3684,6 @@ struct FunctionChecker<'a> {
     imported_modules: &'a BTreeMap<String, ModuleNamespace>,
     module_registry: &'a BTreeMap<String, ModuleNamespace>,
     current_return_type: Option<Type>,
-    current_return_passing: ReceiverKind,
-    current_return_borrow_source: Option<String>,
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
@@ -4265,10 +4059,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing: ReceiverKind::Value,
                     borrow_origin: None,
-                    borrow_label: None,
                     borrowed_at: None,
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -4306,8 +4100,6 @@ impl<'a> FunctionChecker<'a> {
             imported_modules,
             module_registry,
             current_return_type: None,
-            current_return_passing: ReceiverKind::Value,
-            current_return_borrow_source: None,
             type_params: BTreeMap::new(),
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
@@ -4317,12 +4109,7 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn with_return_type(
-        &self,
-        return_type: Type,
-        return_passing: ReceiverKind,
-        return_borrow_source: Option<String>,
-    ) -> Self {
+    fn with_return_type(&self, return_type: Type) -> Self {
         Self {
             root_module_name: self.root_module_name,
             module_name: self.module_name,
@@ -4337,8 +4124,6 @@ impl<'a> FunctionChecker<'a> {
             imported_modules: self.imported_modules,
             module_registry: self.module_registry,
             current_return_type: Some(return_type),
-            current_return_passing: return_passing,
-            current_return_borrow_source: return_borrow_source,
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
@@ -4367,8 +4152,6 @@ impl<'a> FunctionChecker<'a> {
             imported_modules: self.imported_modules,
             module_registry: self.module_registry,
             current_return_type: self.current_return_type.clone(),
-            current_return_passing: self.current_return_passing,
-            current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params,
             type_param_bounds,
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
@@ -4393,8 +4176,6 @@ impl<'a> FunctionChecker<'a> {
             imported_modules: self.imported_modules,
             module_registry: self.module_registry,
             current_return_type: self.current_return_type.clone(),
-            current_return_passing: self.current_return_passing,
-            current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
@@ -4419,8 +4200,6 @@ impl<'a> FunctionChecker<'a> {
             imported_modules: self.imported_modules,
             module_registry: self.module_registry,
             current_return_type: self.current_return_type.clone(),
-            current_return_passing: self.current_return_passing,
-            current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
@@ -4623,6 +4402,37 @@ impl<'a> FunctionChecker<'a> {
                     format!(
                         "declare the parameter as `own {}` when the function should consume this non-cloneable value",
                         ty
+                    )
+                });
+                if clone_supported {
+                    let insertion = crate::diag::Span::new(
+                        span.line,
+                        span.column.saturating_add(name.chars().count()),
+                    );
+                    diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                }
+                return Err(diagnostic);
+            }
+            // ADR-0022 Q2: a payload bound by a bare match has exactly one
+            // replacement, so name it instead of the generic borrowed-move
+            // guidance that would send the caller looking for a parameter.
+            if let Some(scrutinee) = &binding.shared_match_scrutinee {
+                let mut diagnostic = Diagnostic::coded_at(
+                    "AU3002",
+                    span,
+                    format!("cannot move `{name}` out of a shared match on `{scrutinee}`"),
+                );
+                if let Some(origin) = binding.borrowed_at {
+                    diagnostic = diagnostic.with_secondary(origin, "value is borrowed here");
+                }
+                diagnostic = diagnostic.with_help(if clone_supported {
+                    format!(
+                        "write `match own {scrutinee}` to consume the scrutinee, or call `.clone()` to consume an independent copy"
+                    )
+                } else {
+                    format!(
+                        "write `match own {scrutinee}` to consume the scrutinee; `{}` cannot be cloned",
+                        binding.ty
                     )
                 });
                 if clone_supported {
@@ -4842,10 +4652,11 @@ impl<'a> FunctionChecker<'a> {
             if !self.is_copy_type(&member_ty) {
                 if let Some(root) = self.borrowed_root_binding_name(object, locals) {
                     let rendered_place = self.render_place_expr(ungrouped);
-                    let mut diagnostic = Diagnostic::at(
+                    let mut diagnostic = Diagnostic::coded_at(
+                        "AU3002",
                         ungrouped.span,
                         format!(
-                            "cannot move non-copy field `{}` out of borrowed value `{}` in match scrutinee; use `match borrow {}:` to inspect it by shared borrow",
+                            "cannot move non-copy field `{}` out of borrowed value `{}` in match scrutinee; use `match {}:` to inspect it by shared access",
                             field,
                             root,
                             rendered_place
@@ -4857,12 +4668,14 @@ impl<'a> FunctionChecker<'a> {
                             .with_secondary(origin, format!("`{}` is borrowed here", root));
                     }
                     diagnostic = diagnostic.with_help(format!(
-                        "use `match borrow {}:` to inspect the field without moving it",
+                        "use `match {}:` to inspect the field without moving it",
                         rendered_place
                     ));
-                    if matches!(object.kind, ExprKind::Name(_)) {
-                        diagnostic = diagnostic.with_edit(object.span, object.span, "borrow ");
-                    }
+                    // The old fix inserted `borrow ` before the scrutinee. The
+                    // new fix is to delete the `own` keyword, whose span this
+                    // check does not carry, so the precise help text stands
+                    // alone rather than offering an edit that would write a
+                    // retired spelling.
                     return Err(diagnostic);
                 }
             }
@@ -5028,10 +4841,11 @@ impl<'a> FunctionChecker<'a> {
 
         for param in params {
             if param.mode == ParamMode::BorrowMut && param.default.is_some() {
-                return Err(Diagnostic::at(
+                return Err(Diagnostic::coded_at(
+                    "AU3002",
                     param.span,
                     format!(
-                        "`borrow mut` parameter `{}` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
+                        "`mut` parameter `{}` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
                         param.name
                     ),
                 ));
@@ -5122,11 +4936,7 @@ impl<'a> FunctionChecker<'a> {
         let return_type = method_info.signature.return_type.clone();
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
-            .with_return_type(
-                return_type.clone(),
-                method_info.signature.return_passing,
-                method_info.signature.return_borrow_source.clone(),
-            )
+            .with_return_type(return_type.clone())
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -5145,10 +4955,10 @@ impl<'a> FunctionChecker<'a> {
                     passing: receiver_kind,
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
-                    borrow_label: None,
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5171,10 +4981,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
-                    borrow_label: param.borrow_label.clone(),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5213,11 +5023,7 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
-            .with_return_type(
-                return_type.clone(),
-                function.return_passing,
-                function_info.signature.return_borrow_source.clone(),
-            )
+            .with_return_type(return_type.clone())
             .with_implicit_param_borrows(
                 &function.params,
                 &function_info.signature.params,
@@ -5247,10 +5053,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
-                    borrow_label: param.borrow_label.clone(),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5311,11 +5117,7 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
-            .with_return_type(
-                return_type.clone(),
-                method.return_passing,
-                method_info.signature.return_borrow_source.clone(),
-            )
+            .with_return_type(return_type.clone())
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -5349,10 +5151,10 @@ impl<'a> FunctionChecker<'a> {
                     passing: receiver_kind,
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
-                    borrow_label: None,
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5375,10 +5177,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
-                    borrow_label: param.borrow_label.clone(),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5476,11 +5278,7 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
-            .with_return_type(
-                return_type.clone(),
-                method.return_passing,
-                method_info.signature.return_borrow_source.clone(),
-            )
+            .with_return_type(return_type.clone())
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -5506,10 +5304,10 @@ impl<'a> FunctionChecker<'a> {
                     passing: receiver_kind,
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
-                    borrow_label: None,
                     borrowed_at: (receiver_kind != ReceiverKind::Value).then_some(method.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5532,10 +5330,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing,
                     borrow_origin: (passing != ReceiverKind::Value).then(|| param.name.clone()),
-                    borrow_label: param.borrow_label.clone(),
                     borrowed_at: (passing != ReceiverKind::Value).then_some(param.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -5622,10 +5420,11 @@ impl<'a> FunctionChecker<'a> {
         allow_return: bool,
     ) -> Result<()> {
         if for_stmt.borrow_mode.is_some() {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 for_stmt.span,
                 format!(
-                    "`{}` iterates over the bare-loop borrow default; write `for ... in {}(...):` without an ownership modifier",
+                    "`{}` iterates over the bare-loop shared default; write `for ... in {}(...):` without an ownership modifier",
                     form.name, form.name
                 ),
             ));
@@ -5673,7 +5472,6 @@ impl<'a> FunctionChecker<'a> {
                         if binding.passing == ReceiverKind::Value {
                             binding.passing = ReceiverKind::Borrow;
                             binding.borrow_origin = Some(root);
-                            binding.borrow_label = None;
                         }
                     }
                     binding.frozen_places.insert(place.clone(), iterable.span);
@@ -5737,10 +5535,10 @@ impl<'a> FunctionChecker<'a> {
                         managed_resource: false,
                         passing: leaf_passing,
                         borrow_origin: None,
-                        borrow_label: None,
                         borrowed_at: (leaf_passing != ReceiverKind::Value).then_some(*span),
                         match_borrow_mut_place: None,
                         stale_match_borrow_mut_place: None,
+                        shared_match_scrutinee: None,
                         moved: false,
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
@@ -5751,9 +5549,10 @@ impl<'a> FunctionChecker<'a> {
             }
             crate::ast::BindingTarget::Tuple { elements, span } => {
                 if passing == ReceiverKind::BorrowMut {
-                    return Err(Diagnostic::at(
+                    return Err(Diagnostic::coded_at(
+                        "AU3002",
                         *span,
-                        "`borrow mut` tuple targets are not supported; bind the tuple to one mutable name and update its elements explicitly",
+                        "`mut` tuple targets are not supported; bind the tuple to one mutable name and update its elements explicitly",
                     ));
                 }
                 let Type::Tuple(element_types) = ty else {
@@ -5877,36 +5676,7 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     if let Some(value) = &return_stmt.value {
-                        if self.current_return_passing != ReceiverKind::Value
-                            && !self.is_copy_type(return_type)
-                        {
-                            let actual_source = self.expr_borrow_info(value, locals)?.ok_or_else(|| {
-                                Diagnostic::at(
-                                    value.span,
-                                    "borrowed return expression must come from a borrowed parameter or receiver",
-                                )
-                            })?;
-                            let expected_source = self
-                                .current_return_borrow_source
-                                .as_deref()
-                                .ok_or_else(|| {
-                                    Diagnostic::at(
-                                        value.span,
-                                        "internal error: borrowed return source was not resolved",
-                                    )
-                                })?;
-                            if !self.borrow_source_matches(expected_source, &actual_source) {
-                                return Err(Diagnostic::at(
-                                    value.span,
-                                    format!(
-                                        "borrowed return expression must come from `{}`",
-                                        expected_source
-                                    ),
-                                ));
-                            }
-                        } else {
-                            self.consume_value_expr(value, locals)?;
-                        }
+                        self.consume_value_expr(value, locals)?;
                     }
                     flow = BlockFlow::AlwaysReturns;
                     break;
@@ -6044,9 +5814,10 @@ impl<'a> FunctionChecker<'a> {
                             if borrow_mode == Some(ReceiverKind::BorrowMut)
                                 && !self.is_mutable_place(&for_stmt.iterable, locals)?
                             {
-                                return Err(Diagnostic::at(
+                                return Err(Diagnostic::coded_at(
+                                    "AU3002",
                                     for_stmt.iterable.span,
-                                    "`for value in borrow mut ...:` requires a mutable `Vec[T]` place",
+                                    "`for value in mut ...:` requires a mutable `Vec[T]` place",
                                 ));
                             }
                             let element_ty = args[0].clone();
@@ -6070,7 +5841,7 @@ impl<'a> FunctionChecker<'a> {
                         {
                             return Err(Diagnostic::at(
                                 for_stmt.iterable.span,
-                                "`for value in borrow mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
+                                "`for value in mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
                             ))
                         }
                         (Type::Named(name, args), borrow_mode) if name == "Set" && args.len() == 1 => {
@@ -6106,9 +5877,10 @@ impl<'a> FunctionChecker<'a> {
                             if name == "Vec" && args.len() == 1
                     ) && !self.is_mutable_place(&for_stmt.iterable, locals)?
                     {
-                        return Err(Diagnostic::at(
+                        return Err(Diagnostic::coded_at(
+                            "AU3002",
                             for_stmt.iterable.span,
-                            "`for` with `borrow mut` requires a mutable iterable place",
+                            "`for ... in mut ...` requires a mutable iterable place",
                         ));
                     }
                     if for_stmt.borrow_mode == Some(ReceiverKind::Value)
@@ -6135,7 +5907,6 @@ impl<'a> FunctionChecker<'a> {
                                     if binding.passing == ReceiverKind::Value {
                                         binding.passing = borrow_mode;
                                         binding.borrow_origin = Some(root);
-                                        binding.borrow_label = None;
                                     }
                                 }
                                 binding
@@ -6253,10 +6024,10 @@ impl<'a> FunctionChecker<'a> {
                 managed_resource: true,
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
-                borrow_label: None,
                 borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
+                shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
@@ -6775,10 +6546,10 @@ impl<'a> FunctionChecker<'a> {
                         managed_resource: false,
                         passing: ReceiverKind::Value,
                         borrow_origin: None,
-                        borrow_label: None,
                         borrowed_at: None,
                         match_borrow_mut_place: None,
                         stale_match_borrow_mut_place: None,
+                        shared_match_scrutinee: None,
                         moved: false,
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
@@ -6802,10 +6573,10 @@ impl<'a> FunctionChecker<'a> {
                     managed_resource: false,
                     passing: borrowed.passing,
                     borrow_origin: Some(borrowed.origin),
-                    borrow_label: borrowed.borrow_label,
                     borrowed_at: Some(assign.value.span),
                     match_borrow_mut_place: None,
                     stale_match_borrow_mut_place: None,
+                    shared_match_scrutinee: None,
                     moved: false,
                     moved_at: None,
                     moved_fields: BTreeMap::new(),
@@ -6825,10 +6596,10 @@ impl<'a> FunctionChecker<'a> {
                 managed_resource: false,
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
-                borrow_label: None,
                 borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
+                shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
@@ -6969,12 +6740,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Match {
                 scrutinee,
-                borrow_mode,
+                capability,
                 arms,
             } => self.type_of_match_expr(
                 MatchExprParts {
                     scrutinee,
-                    borrow_mode: *borrow_mode,
+                    borrow_mode: *capability,
                     arms,
                     span: expr.span,
                 },
@@ -7037,13 +6808,13 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Match {
                 scrutinee,
-                borrow_mode,
+                capability,
                 arms,
             } => {
                 let object_ty = self.type_of_match_expr(
                     MatchExprParts {
                         scrutinee,
-                        borrow_mode: *borrow_mode,
+                        borrow_mode: *capability,
                         arms,
                         span: object.span,
                     },
@@ -7637,12 +7408,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Match {
                 scrutinee,
-                borrow_mode,
+                capability,
                 arms,
             } => self.type_of_match_expr(
                 MatchExprParts {
                     scrutinee,
-                    borrow_mode: *borrow_mode,
+                    borrow_mode: *capability,
                     arms,
                     span: expr.span,
                 },
@@ -8680,25 +8451,6 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn ensure_call_result_materializable(
-        &self,
-        span: crate::diag::Span,
-        callee_name: &str,
-        return_type: &Type,
-        return_passing: ReceiverKind,
-    ) -> Result<()> {
-        if return_passing != ReceiverKind::Value && !self.is_copy_type(return_type) {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "call to {} produces borrowed non-copy result `{}`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead",
-                    callee_name, return_type
-                ),
-            ));
-        }
-        Ok(())
-    }
-
     fn type_of_unary_operator_via_trait(
         &self,
         span: crate::diag::Span,
@@ -8737,12 +8489,6 @@ impl<'a> FunctionChecker<'a> {
             )?;
             let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
             let return_type = substitute_type(&method.signature.return_type, &substitutions);
-            self.ensure_call_result_materializable(
-                span,
-                &operation,
-                &return_type,
-                method.signature.return_passing,
-            )?;
             return Ok(Some(ResolvedUnaryOperatorAccess {
                 return_type,
                 receiver_passing,
@@ -8772,12 +8518,6 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let receiver_passing = method.decl.receiver.unwrap_or(ReceiverKind::Value);
         let return_type = substitute_type(&method.signature.return_type, &substitutions);
-        self.ensure_call_result_materializable(
-            span,
-            &operation,
-            &return_type,
-            method.signature.return_passing,
-        )?;
         Ok(Some(ResolvedUnaryOperatorAccess {
             return_type,
             receiver_passing,
@@ -8829,12 +8569,6 @@ impl<'a> FunctionChecker<'a> {
                 .copied()
                 .unwrap_or(ReceiverKind::Value);
             let return_type = substitute_type(&method.signature.return_type, &substitutions);
-            self.ensure_call_result_materializable(
-                span,
-                &operation,
-                &return_type,
-                method.signature.return_passing,
-            )?;
             return Ok(Some(ResolvedBinaryOperatorAccess {
                 return_type,
                 receiver_passing,
@@ -8876,12 +8610,6 @@ impl<'a> FunctionChecker<'a> {
             .copied()
             .unwrap_or(ReceiverKind::Value);
         let return_type = substitute_type(&method.signature.return_type, &substitutions);
-        self.ensure_call_result_materializable(
-            span,
-            &operation,
-            &return_type,
-            method.signature.return_passing,
-        )?;
         if matches!(
             op,
             BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq
@@ -8952,8 +8680,6 @@ impl<'a> FunctionChecker<'a> {
                             &method.signature.return_type,
                             &trait_substitutions,
                         ),
-                        return_passing: method.signature.return_passing,
-                        return_borrow_source: method.signature.return_borrow_source.clone(),
                         rng_clone_safe_type_params: method
                             .signature
                             .rng_clone_safe_type_params
@@ -9065,8 +8791,6 @@ impl<'a> FunctionChecker<'a> {
                             .collect(),
                         param_passings: method.signature.param_passings.clone(),
                         return_type: substitute_type(&method.signature.return_type, &substitutions),
-                        return_passing: method.signature.return_passing,
-                        return_borrow_source: method.signature.return_borrow_source.clone(),
                         rng_clone_safe_type_params: method
                             .signature
                             .rng_clone_safe_type_params
@@ -9975,7 +9699,6 @@ impl<'a> FunctionChecker<'a> {
                     &function.signature.param_passings,
                     &function.signature.params,
                     &function.signature.return_type,
-                    function.signature.return_passing,
                     &function.type_param_bounds,
                     &function.signature.rng_clone_safe_type_params,
                     args,
@@ -10068,7 +9791,6 @@ impl<'a> FunctionChecker<'a> {
                                         &method.signature.param_passings,
                                         &method.signature.params,
                                         &method.signature.return_type,
-                                        method.signature.return_passing,
                                         &method.type_param_bounds,
                                         &method.signature.rng_clone_safe_type_params,
                                         args,
@@ -10126,7 +9848,6 @@ impl<'a> FunctionChecker<'a> {
                                 &method.signature.param_passings,
                                 &method.signature.params,
                                 &method.signature.return_type,
-                                method.signature.return_passing,
                                 &method.type_param_bounds,
                                 &method.signature.rng_clone_safe_type_params,
                                 args,
@@ -10282,7 +10003,6 @@ impl<'a> FunctionChecker<'a> {
                             &function.signature.param_passings,
                             &function.signature.params,
                             &function.signature.return_type,
-                            function.signature.return_passing,
                             &function.type_param_bounds,
                             &function.signature.rng_clone_safe_type_params,
                             args,
@@ -11400,7 +11120,6 @@ impl<'a> FunctionChecker<'a> {
                                     &capture_passings,
                                     &callable.signature.params,
                                     &callable.signature.return_type,
-                                    callable.signature.return_passing,
                                     &callable.type_param_bounds,
                                     &callable.signature.rng_clone_safe_type_params,
                                     spawn_args,
@@ -12839,7 +12558,6 @@ impl<'a> FunctionChecker<'a> {
                                 &method.signature.param_passings,
                                 &method.signature.params,
                                 &method.signature.return_type,
-                                method.signature.return_passing,
                                 &method.type_param_bounds,
                                 &method.signature.rng_clone_safe_type_params,
                                 args,
@@ -12877,7 +12595,6 @@ impl<'a> FunctionChecker<'a> {
                             &method.signature.param_passings,
                             &method.signature.params,
                             &method.signature.return_type,
-                            method.signature.return_passing,
                             &method.type_param_bounds,
                             &method.signature.rng_clone_safe_type_params,
                             args,
@@ -12921,7 +12638,6 @@ impl<'a> FunctionChecker<'a> {
                         &method.signature.param_passings,
                         &substituted_params,
                         &substituted_return_type,
-                        method.signature.return_passing,
                         &method.type_param_bounds,
                         &method.signature.rng_clone_safe_type_params,
                         args,
@@ -13014,14 +12730,16 @@ impl<'a> FunctionChecker<'a> {
         loop_depth: usize,
         allow_return: bool,
     ) -> Result<BlockFlow> {
-        let active_match_borrow = if match_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+        let shared_scrutinee =
+            self.shared_match_scrutinee_name(&match_stmt.scrutinee, match_stmt.capability);
+        let active_match_borrow = if match_stmt.capability == ReceiverKind::BorrowMut {
             self.begin_match_borrow_mut(&match_stmt.scrutinee, match_stmt.span, locals)?
         } else {
             None
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
-            if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
+            if match_stmt.capability == ReceiverKind::Value && !self.is_copy_type(&scrutinee_ty) {
                 self.consume_match_scrutinee_expr(&match_stmt.scrutinee, locals)?;
             }
 
@@ -13184,8 +12902,9 @@ impl<'a> FunctionChecker<'a> {
                                 &arm.pattern,
                                 &scrutinee_ty,
                                 &mut arm_locals,
-                                match_stmt.borrow_mode,
+                                match_stmt.capability,
                                 active_match_borrow.as_ref(),
+                                shared_scrutinee.as_deref(),
                             )?;
                         }
                     }
@@ -13344,8 +13063,9 @@ impl<'a> FunctionChecker<'a> {
                             &arm.pattern,
                             &scrutinee_ty,
                             &mut arm_locals,
-                            match_stmt.borrow_mode,
+                            match_stmt.capability,
                             active_match_borrow.as_ref(),
+                            shared_scrutinee.as_deref(),
                         )?;
                     }
                 }
@@ -13433,13 +13153,29 @@ impl<'a> FunctionChecker<'a> {
         result
     }
 
+    /// The scrutinee spelling to quote in a `match own <place>` suggestion.
+    ///
+    /// Only a bare (shared) match over a named place can be respelled, so a
+    /// temporary scrutinee or an already-explicit capability yields `None`.
+    fn shared_match_scrutinee_name(&self, expr: &Expr, capability: ReceiverKind) -> Option<String> {
+        if capability != ReceiverKind::Borrow {
+            return None;
+        }
+        matches!(
+            expr.kind,
+            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Index { .. }
+        )
+        .then(|| self.render_place_expr(expr))
+    }
+
     fn bind_pattern_locals(
         &self,
         pattern: &Pattern,
         expected_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
-        borrow_mode: Option<ReceiverKind>,
+        borrow_mode: ReceiverKind,
         match_borrow_mut_place: Option<&PlacePath>,
+        shared_match_scrutinee: Option<&str>,
     ) -> Result<()> {
         match pattern {
             Pattern::Wildcard(_) => Ok(()),
@@ -13460,21 +13196,23 @@ impl<'a> FunctionChecker<'a> {
                 let passing = if self.is_copy_type(expected_ty) {
                     ReceiverKind::Value
                 } else {
-                    borrow_mode.unwrap_or(ReceiverKind::Value)
+                    borrow_mode
                 };
                 locals.insert(
                     binding.name.clone(),
                     LocalBinding {
                         ty: expected_ty.clone(),
-                        assignable: borrow_mode == Some(ReceiverKind::BorrowMut),
-                        mutable_place: borrow_mode == Some(ReceiverKind::BorrowMut),
+                        assignable: borrow_mode == ReceiverKind::BorrowMut,
+                        mutable_place: borrow_mode == ReceiverKind::BorrowMut,
                         managed_resource: false,
                         passing,
                         borrow_origin: None,
-                        borrow_label: None,
-                        borrowed_at: borrow_mode.map(|_| binding.span),
+                        borrowed_at: (borrow_mode != ReceiverKind::Value).then_some(binding.span),
                         match_borrow_mut_place: match_borrow_mut_place.cloned(),
                         stale_match_borrow_mut_place: None,
+                        shared_match_scrutinee: (passing == ReceiverKind::Borrow)
+                            .then(|| shared_match_scrutinee.map(str::to_string))
+                            .flatten(),
                         moved: false,
                         moved_at: None,
                         moved_fields: BTreeMap::new(),
@@ -13484,10 +13222,11 @@ impl<'a> FunctionChecker<'a> {
                 Ok(())
             }
             Pattern::Tuple(tuple_pattern) => {
-                if borrow_mode == Some(ReceiverKind::BorrowMut) {
-                    return Err(Diagnostic::at(
+                if borrow_mode == ReceiverKind::BorrowMut {
+                    return Err(Diagnostic::coded_at(
+                        "AU3002",
                         tuple_pattern.span,
-                        "`match borrow mut` does not support tuple patterns; bind the tuple as one mutable name",
+                        "`match mut` does not support tuple patterns; bind the tuple as one mutable name",
                     ));
                 }
                 let Type::Tuple(element_types) = expected_ty else {
@@ -13516,6 +13255,7 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         borrow_mode,
                         match_borrow_mut_place,
+                        shared_match_scrutinee,
                     )?;
                 }
                 Ok(())
@@ -13600,6 +13340,7 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         borrow_mode,
                         match_borrow_mut_place,
+                        shared_match_scrutinee,
                     )?;
                 }
                 Ok(())
@@ -13643,14 +13384,15 @@ impl<'a> FunctionChecker<'a> {
             arms,
             span,
         } = parts;
-        let active_match_borrow = if borrow_mode == Some(ReceiverKind::BorrowMut) {
+        let shared_scrutinee = self.shared_match_scrutinee_name(scrutinee, borrow_mode);
+        let active_match_borrow = if borrow_mode == ReceiverKind::BorrowMut {
             self.begin_match_borrow_mut(scrutinee, span, locals)?
         } else {
             None
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
-            if borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
+            if borrow_mode == ReceiverKind::Value && !self.is_copy_type(&scrutinee_ty) {
                 self.consume_match_scrutinee_expr(scrutinee, locals)?;
             }
             if arms.is_empty() {
@@ -13805,6 +13547,7 @@ impl<'a> FunctionChecker<'a> {
                                 &mut arm_locals,
                                 borrow_mode,
                                 active_match_borrow.as_ref(),
+                                shared_scrutinee.as_deref(),
                             )?;
                         }
                     }
@@ -13955,6 +13698,7 @@ impl<'a> FunctionChecker<'a> {
                             &mut arm_locals,
                             borrow_mode,
                             active_match_borrow.as_ref(),
+                            shared_scrutinee.as_deref(),
                         )?;
                     }
                 }
@@ -14372,23 +14116,6 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn borrow_info_for_place(
-        &self,
-        expr: &Expr,
-        locals: &HashMap<String, LocalBinding>,
-    ) -> Option<BorrowSourceInfo> {
-        let place = self.borrow_call_place(expr)?;
-        let binding = locals.get(&place.root)?;
-        Some(BorrowSourceInfo {
-            origin: binding
-                .borrow_origin
-                .clone()
-                .unwrap_or_else(|| place.root.clone()),
-            borrow_label: binding.borrow_label.clone(),
-            passing: binding.passing,
-        })
-    }
-
     fn expr_borrow_info(
         &self,
         expr: &Expr,
@@ -14401,7 +14128,6 @@ impl<'a> FunctionChecker<'a> {
                         .borrow_origin
                         .clone()
                         .unwrap_or_else(|| name.clone()),
-                    borrow_label: binding.borrow_label.clone(),
                     passing: binding.passing,
                 })
             })),
@@ -14419,36 +14145,9 @@ impl<'a> FunctionChecker<'a> {
                     self.expr_borrow_info(object, locals)
                 }
             }
-            ExprKind::Call { callee, args } => self.call_expr_borrow_info(callee, args, locals),
-            ExprKind::Match { arms, .. } => {
-                let mut source = None;
-                for arm in arms {
-                    let arm_source = self.expr_borrow_info(&arm.value, locals)?;
-                    match (&source, arm_source) {
-                        (None, current) => source = current,
-                        (Some(existing), Some(current))
-                            if self.borrow_sources_compatible(existing, &current) => {}
-                        _ => return Ok(None),
-                    }
-                }
-                Ok(source)
-            }
-            ExprKind::Conditional {
-                then_expr,
-                else_expr,
-                ..
-            } => {
-                let then_source = self.expr_borrow_info(then_expr, locals)?;
-                let else_source = self.expr_borrow_info(else_expr, locals)?;
-                match (then_source, else_source) {
-                    (Some(then_source), Some(else_source))
-                        if self.borrow_sources_compatible(&then_source, &else_source) =>
-                    {
-                        Ok(Some(then_source))
-                    }
-                    _ => Ok(None),
-                }
-            }
+            // A call, match, or conditional now always produces an owned
+            // value: ADR-0022 removed borrowed returns, so no loan can
+            // propagate out through one of these.
             _ => Ok(None),
         }
     }
@@ -15291,176 +14990,6 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn call_expr_borrow_info(
-        &self,
-        callee: &Expr,
-        args: &[Argument],
-        locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<Option<BorrowSourceInfo>> {
-        let (base_callee, _) = self.peel_specialization(callee);
-        match &base_callee.kind {
-            ExprKind::Name(name) => {
-                let Some(function) = self.functions.get(name).or_else(|| {
-                    self.current_module_namespace()
-                        .and_then(|namespace| namespace.all_functions.get(name))
-                }) else {
-                    return Ok(None);
-                };
-                if function.signature.return_passing == ReceiverKind::Value {
-                    return Ok(None);
-                }
-                let Some(source_param) = function.signature.return_borrow_source.as_deref() else {
-                    return Ok(None);
-                };
-                let callable_params = callable_params_from_decl(&function.decl.params);
-                let ordered_args = bind_call_arguments(
-                    &format!("function `{}`", function.decl.name),
-                    &callable_params,
-                    args,
-                    callee.span,
-                    CallConvention::PositionalOrNamed,
-                )?;
-                let source_indexes = function
-                    .decl
-                    .params
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, param)| {
-                        (param.name == source_param
-                            || param.borrow_label.as_deref() == Some(source_param))
-                        .then_some(index)
-                    })
-                    .collect::<Vec<_>>();
-                if source_indexes.is_empty() {
-                    return Ok(None);
-                }
-                self.bound_arguments_borrow_info(
-                    &function.decl.params,
-                    &ordered_args,
-                    &source_indexes,
-                    source_param,
-                    function.signature.return_passing,
-                    locals,
-                )
-            }
-            ExprKind::Member { object, field } => {
-                if matches!(
-                    &object.kind,
-                    ExprKind::Name(type_name)
-                        if !locals.contains_key(type_name)
-                            && BuiltinAssociatedFunction::resolve(type_name, field).is_some()
-                ) {
-                    return Ok(None);
-                }
-                if self.is_enum_constructor_object(object) {
-                    return Ok(None);
-                }
-                let receiver_ty = self.type_of_expr(object, locals)?;
-                let Type::Named(receiver_name, _) = &receiver_ty else {
-                    return Ok(None);
-                };
-                let Some(class_info) = self.resolve_class_info(receiver_name) else {
-                    return Ok(None);
-                };
-                let Some(method) = class_info.methods.get(field) else {
-                    return Ok(None);
-                };
-                if method.signature.return_passing == ReceiverKind::Value {
-                    return Ok(None);
-                }
-                match method.signature.return_borrow_source.as_deref() {
-                    Some("self") => Ok(self
-                        .expr_borrow_info(object, locals)?
-                        .or_else(|| self.borrow_info_for_place(object, locals))
-                        .map(|mut borrowed| {
-                            borrowed.passing = method.signature.return_passing;
-                            borrowed
-                        })),
-                    Some(source_param) => {
-                        let callable_params = callable_params_from_decl(&method.decl.params);
-                        let ordered_args = bind_call_arguments(
-                            &format!("method `{}`", method.decl.name),
-                            &callable_params,
-                            args,
-                            callee.span,
-                            CallConvention::PositionalOrNamed,
-                        )?;
-                        let source_indexes = method
-                            .decl
-                            .params
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, param)| {
-                                (param.name == source_param
-                                    || param.borrow_label.as_deref() == Some(source_param))
-                                .then_some(index)
-                            })
-                            .collect::<Vec<_>>();
-                        if source_indexes.is_empty() {
-                            return Ok(None);
-                        }
-                        self.bound_arguments_borrow_info(
-                            &method.decl.params,
-                            &ordered_args,
-                            &source_indexes,
-                            source_param,
-                            method.signature.return_passing,
-                            locals,
-                        )
-                    }
-                    None => Ok(None),
-                }
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn bound_arguments_borrow_info(
-        &self,
-        params: &[Param],
-        ordered_args: &[Option<&Argument>],
-        source_indexes: &[usize],
-        source_name: &str,
-        return_passing: ReceiverKind,
-        locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<Option<BorrowSourceInfo>> {
-        let mut combined = None;
-        for index in source_indexes {
-            let Some(argument) = ordered_args[*index] else {
-                return Ok(None);
-            };
-            let param = &params[*index];
-            let current = self
-                .expr_borrow_info(&argument.value, locals)?
-                .or_else(|| self.borrow_info_for_place(&argument.value, locals))
-                .map(|mut borrowed| {
-                    borrowed.passing = return_passing;
-                    if param.borrow_label.as_deref() == Some(source_name) {
-                        borrowed.borrow_label = Some(source_name.to_string());
-                    }
-                    borrowed
-                });
-            match (&combined, current) {
-                (None, next) => combined = next,
-                (Some(existing), Some(current))
-                    if self.borrow_sources_compatible(existing, &current) => {}
-                _ => return Ok(None),
-            }
-        }
-        Ok(combined)
-    }
-
-    fn borrow_source_matches(&self, expected: &str, actual: &BorrowSourceInfo) -> bool {
-        actual.origin == expected || actual.borrow_label.as_deref() == Some(expected)
-    }
-
-    fn borrow_sources_compatible(&self, left: &BorrowSourceInfo, right: &BorrowSourceInfo) -> bool {
-        left == right
-            || (left.passing == right.passing
-                && left.borrow_label.is_some()
-                && left.borrow_label == right.borrow_label)
-    }
-
     fn prepare_method_receiver_borrows(
         &self,
         method_name: &str,
@@ -15692,7 +15221,7 @@ impl<'a> FunctionChecker<'a> {
                     format!("`{}` is borrowed for this loop here", frozen),
                 )
                 .with_help(format!(
-                    "perform owner mutation after the loop; use `for item in borrow mut {}:` when mutating elements through the loop binding",
+                    "perform owner mutation after the loop; use `for item in mut {}:` when mutating elements through the loop binding",
                     frozen
                 )),
             );
@@ -15735,16 +15264,18 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Option<PlacePath>> {
         let Some(place) = self.borrow_call_place(scrutinee) else {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 span,
-                "`match borrow mut` requires a mutable place scrutinee",
+                "`match mut` requires a mutable place scrutinee",
             ));
         };
         self.ensure_place_not_frozen(&place, span, locals)?;
         if !self.is_mutable_place(scrutinee, locals)? {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 span,
-                "`match borrow mut` requires a mutable place scrutinee",
+                "`match mut` requires a mutable place scrutinee",
             ));
         }
         if let Some(active) = self
@@ -16443,15 +15974,14 @@ impl<'a> FunctionChecker<'a> {
         let mut diagnostic = Diagnostic::coded_at(
             "AU3003",
             span,
-            "cannot mutate through shared receiver `self`; declare the receiver as `borrow mut self`",
+            "cannot mutate through shared receiver `self`; declare the receiver as `mut self`",
         );
         if let Some(origin) = locals.get("self").and_then(|binding| binding.borrowed_at) {
             diagnostic =
                 diagnostic.with_secondary(origin, "shared receiver `self` is declared here");
         }
-        diagnostic.with_help(
-            "declare the receiver as `borrow mut self` when the method mutates through `self`",
-        )
+        diagnostic
+            .with_help("declare the receiver as `mut self` when the method mutates through `self`")
     }
 
     fn borrowed_root_binding_name(
@@ -16930,8 +16460,6 @@ impl<'a> FunctionChecker<'a> {
                                     &method.signature.return_type,
                                     &trait_substitutions,
                                 ),
-                                return_passing: method.signature.return_passing,
-                                return_borrow_source: method.signature.return_borrow_source.clone(),
                                 rng_clone_safe_type_params: method
                                     .signature
                                     .rng_clone_safe_type_params
@@ -17187,7 +16715,6 @@ impl<'a> FunctionChecker<'a> {
         param_passings: &[ReceiverKind],
         param_types: &[Type],
         return_type: &Type,
-        return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         callee_rng_clone_safe_type_params: &BTreeSet<String>,
         args: &[Argument],
@@ -17203,7 +16730,6 @@ impl<'a> FunctionChecker<'a> {
             param_passings,
             param_types,
             return_type,
-            return_passing,
             callee_type_param_bounds,
             callee_rng_clone_safe_type_params,
             args,
@@ -17224,7 +16750,6 @@ impl<'a> FunctionChecker<'a> {
         param_passings: &[ReceiverKind],
         param_types: &[Type],
         return_type: &Type,
-        return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         callee_rng_clone_safe_type_params: &BTreeSet<String>,
         args: &[Argument],
@@ -17246,13 +16771,6 @@ impl<'a> FunctionChecker<'a> {
         if let Some(expected_return) = expected_return {
             if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
             {
-                let resolved_return_type = substitute_type(return_type, &substitutions);
-                self.ensure_call_result_materializable(
-                    span,
-                    callee_name,
-                    &resolved_return_type,
-                    return_passing,
-                )?;
                 return Err(Diagnostic::at(
                     span,
                     format!(
@@ -17385,12 +16903,6 @@ impl<'a> FunctionChecker<'a> {
         )?;
 
         let resolved_return_type = substitute_type(return_type, &substitutions);
-        self.ensure_call_result_materializable(
-            span,
-            callee_name,
-            &resolved_return_type,
-            return_passing,
-        )?;
 
         let mut enclosing_accesses = seeded_borrowed_places.clone();
         for (
@@ -17865,10 +17377,11 @@ impl<'a> FunctionChecker<'a> {
         };
 
         let Some(method) = class_info.methods.get("close") else {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU3002",
                 span,
                 format!(
-                    "class `{}` cannot be used with `with` because it does not define `close(borrow mut self)`",
+                    "class `{}` cannot be used with `with` because it does not define `close(mut self)`",
                     name
                 ),
             ));
@@ -17881,7 +17394,7 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::at(
                 method.decl.span,
                 format!(
-                    "`with` resources must define `close(borrow mut self)` returning `None`; `{}` does not",
+                    "`with` resources must define `close(mut self)` returning `None`; `{}` does not",
                     name
                 ),
             ));

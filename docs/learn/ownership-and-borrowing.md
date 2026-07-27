@@ -71,10 +71,10 @@ Clone close to the reason for cloning. A clone at the call site tells the reader
 
 ## Shared Borrows
 
-When a helper should read a value without owning it, the parameter uses `borrow T`:
+When a helper should read a value without owning it, the parameter uses `T`:
 
 ```python
-def render_title(title: borrow String) -> String:
+def render_title(title: String) -> String:
     return title.to_upper()
 
 title = "manual"
@@ -82,7 +82,7 @@ print(render_title(title))
 print(title)
 ```
 
-The call site does not write `borrow`; Aurora reads the borrow form from the function signature. The caller keeps ownership, and the helper cannot move a non-copy value out of the borrowed view.
+The call site does not write ``; Aurora reads the borrow form from the function signature. The caller keeps ownership, and the helper cannot move a non-copy value out of the borrowed view.
 
 Classes make the benefit obvious:
 
@@ -91,7 +91,7 @@ class Job:
     id: int32
     label: String
 
-def render(job: borrow Job) -> String:
+def render(job: Job) -> String:
     return f"{job.id}: {job.label}"
 
 job = Job(id=7, label="compile")
@@ -103,10 +103,10 @@ The same job is rendered twice because `render` never takes ownership.
 
 ## Mutable Borrows
 
-When a helper should mutate a caller-owned value, the parameter uses `borrow mut T`:
+When a helper should mutate a caller-owned value, the parameter uses `mut T`:
 
 ```python
-def add_job(jobs: borrow mut Vec[String], job: own String):
+def add_job(jobs: mut Vec[String], job: own String):
     jobs.push(job)
 
 mut jobs = Vec[String]()
@@ -117,8 +117,8 @@ print(jobs.len())
 
 Two rules apply to mutable borrows:
 
-1. The caller's binding must itself be mutable. You cannot take `borrow mut` from an immutable binding or a temporary value.
-2. A mutable borrow is **exclusive**. If one argument to a call takes `borrow mut`, no other argument in that call may borrow the same value. This is not a stylistic preference; overlapping mutable aliases would make the order of effects unclear, and Aurora rejects them at the call boundary rather than relying on the callee to behave well.
+1. The caller's binding must itself be mutable. You cannot take `mut ` from an immutable binding or a temporary value.
+2. A mutable borrow is **exclusive**. If one argument to a call takes `mut `, no other argument in that call may borrow the same value. This is not a stylistic preference; overlapping mutable aliases would make the order of effects unclear, and Aurora rejects them at the call boundary rather than relying on the callee to behave well.
 
 ## Methods And `self`
 
@@ -131,12 +131,12 @@ class Counter:
     def get(self) -> int32:
         return self.value
 
-    def inc(borrow mut self):
+    def inc(mut self):
         self.value += 1
 ```
 
-Bare `self` reads through a shared borrow; `borrow self` is its explicit
-synonym. `borrow mut self` writes. A consuming method uses `own self` and takes
+Bare `self` reads through a shared borrow; `self` is its explicit
+synonym. `mut self` writes. A consuming method uses `own self` and takes
 ownership of the whole instance.
 
 A borrowed method may look at non-copy fields but cannot move them out:
@@ -208,7 +208,7 @@ argument into task-owned storage before the child can outlive the caller. The
 target function can then borrow that capture or consume it:
 
 ```python
-def worker(label: borrow String):
+def worker(label: String):
     print(label)
 
 with group = TaskGroup():
@@ -230,7 +230,7 @@ with group = TaskGroup():
 `TaskGroup` itself is a resource. Normal practice is to keep it scoped with `with`, so that leaving the block waits for the children and accounts for their results.
 
 Default-mode and explicit shared target parameters borrow their task-owned
-capture; `own` targets consume it. `borrow mut` targets are rejected because
+capture; `own` targets consume it. `mut ` targets are rejected because
 mutation of detached capture storage would have no caller-visible writeback.
 
 ## Resources And Cleanup
@@ -253,8 +253,8 @@ When a program starts to feel tangled, run down this list:
 
 - Write `own T` when the function consumes the argument; a bare non-copy
   parameter borrows by default.
-- Pass `borrow T` when the function only needs to inspect.
-- Pass `borrow mut T` when the function should update a caller-owned value.
+- Pass `T` when the function only needs to inspect.
+- Pass `mut T` when the function should update a caller-owned value.
 - Clone as locally as possible when two owners are genuinely needed and the
   value is clone-safe.
 - Put resources in `with` blocks.

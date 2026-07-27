@@ -4,13 +4,13 @@ class Point:
     x: int32
     y: int32
 
-    def translate(borrow self, dx: int32, dy: int32) -> Point:
+    def translate(self, dx: int32, dy: int32) -> Point:
         return Point(x=self.x + dx, y=self.y + dy)
 
     def origin() -> Point:
         return Point(x=0, y=0)
 
-    def distance_squared(borrow self) -> int32:
+    def distance_squared(self) -> int32:
         return self.x * self.x + self.y * self.y
 
 def main() -> int32:

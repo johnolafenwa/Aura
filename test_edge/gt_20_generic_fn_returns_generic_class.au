@@ -4,7 +4,7 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 def wrap[T](item: own T) -> Box[T]:

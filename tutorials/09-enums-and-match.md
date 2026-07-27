@@ -101,12 +101,12 @@ This is especially convenient with built-in enums like `Result` and `Option`.
 
 ## Borrowed Matching
 
-By default, `match` takes ownership of the value. If you want to inspect a value without consuming it, use `match borrow`. This is important for non-copy types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+By default, `match` takes ownership of the value. If you want to inspect a value without consuming it, use `match `. This is important for non-copy types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 ```python
 result: Result[String, String] = Result.Ok("ok")
 
-match borrow result:
+match result:
     case Ok(value):
         print(value.clone())    # value is a borrowed String
     case Err(message):
@@ -115,11 +115,11 @@ match borrow result:
 # result is still valid here
 ```
 
-Use `match borrow mut` when you need to modify the matched value:
+Use `match mut` when you need to modify the matched value:
 
 ```python
 mut result: Result[String, String] = Result.Ok("hello")
-match borrow mut result:
+match mut result:
     case Ok(msg):
         pass    # msg is borrow mut String
     case Err(e):

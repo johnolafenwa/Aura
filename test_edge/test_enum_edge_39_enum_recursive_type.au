@@ -5,7 +5,7 @@ enum IntList:
     Nil
 
 def sum_list(l: IntList) -> int32:
-    match l:
+    match own l:
         case IntList.Cons(v):
             return v
         case IntList.Nil:

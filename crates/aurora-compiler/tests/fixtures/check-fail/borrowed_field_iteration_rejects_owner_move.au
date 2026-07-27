@@ -6,5 +6,5 @@ def consume(holder: own Holder):
 
 def main():
     holder = Holder(values=[1, 2, 3])
-    for value in borrow holder.values:
+    for value in holder.values:
         consume(holder)

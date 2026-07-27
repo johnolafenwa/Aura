@@ -1,4 +1,4 @@
-def store[T](values: borrow mut Vec[T], value: T):
+def store[T](values: mut Vec[T], value: T):
     values.push(value)
 
 def main() -> int32:

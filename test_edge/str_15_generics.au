@@ -3,7 +3,7 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 enum Wrapper[T]:
@@ -11,7 +11,7 @@ enum Wrapper[T]:
     None
 
 def unwrap_or(w: own Wrapper[String], default: own String) -> String:
-    match w:
+    match own w:
         case Wrapper.Some(v):
             return v
         case Wrapper.None:
@@ -34,7 +34,7 @@ def main() -> int32:
 
     # Option[String] builtin
     some_str: Option[String] = Option.Some("option_value")
-    match some_str:
+    match own some_str:
         case Option.Some(v):
             print(v)
         case Option.None:
@@ -42,7 +42,7 @@ def main() -> int32:
 
     # Result[String, String]
     ok_res: Result[String, String] = Result.Ok("success")
-    match ok_res:
+    match own ok_res:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

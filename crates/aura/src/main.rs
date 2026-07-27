@@ -1305,7 +1305,10 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
     serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
 }
 
-const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v3";
+// Bumped to `v4` by the ADR-0022 capability migration. Q9 requires every
+// Phase-4 artifact and LSP analysis cache built from the old grammar to be
+// invalidated, and this string is part of every native cache key.
+const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v4";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///

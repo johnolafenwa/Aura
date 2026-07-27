@@ -1,10 +1,10 @@
 class Holder:
     values: Vec[int32]
 
-def append(value: borrow mut Vec[int32]):
+def append(value: mut Vec[int32]):
     value.push(9)
 
 def main():
     mut holder = Holder(values=[1, 2, 3])
-    for value in borrow holder.values:
+    for value in holder.values:
         append(value=holder.values)

@@ -44,7 +44,7 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - Removed an unreachable defensive branch in namespace import insertion after the empty-path case already returned.
 - Removed current-surface-dead builtin module helpers for the unused internal `str` alias and builtin trait imports.
 - Added a no-manifest local import regression that rejects a symlinked module escaping the inferred package root.
-- Added parser coverage for mixed enum payload diagnostics, borrowed return annotations with labels, expression-form `match borrow mut`, delimited multiline match expressions, and span offsetting for manual match-expression ASTs.
+- Added parser coverage for mixed enum payload diagnostics, borrowed return annotations with labels, expression-form `match mut`, delimited multiline match expressions, and span offsetting for manual match-expression ASTs.
 - Added focused native-runtime metadata coverage for maintained resource values created through real file, TCP, UDP, HTTP response, process-completed, and process-supervisor constructors.
 - Added direct-runtime internal coverage for cleanup registration/unregistration/refresh success paths, cleanup ID wraparound handling, and nested primary diagnostic guards.
 - Added near-complete module coverage for unresolved builtin module import paths and integer exact float conversion edge cases around zero and non-representable mantissas.
@@ -212,7 +212,7 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - `git diff -- examples/packages/workspace/Aurora.lock`
   - No diff after the full gates or after the compiler coverage reruns.
 - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --test coverage_surface public_surface_covers_escape_diagnostics_argument_counts_and_builtin_member_metadata -- --test-threads=1`
-  - Failed first when the test tried to use `match borrow mut` on a `Vec[int32]` scrutinee; the checker correctly rejected that shape because match scrutinees are currently enum/bool/integer/float/String only.
+  - Failed first when the test tried to use `match mut` on a `Vec[int32]` scrutinee; the checker correctly rejected that shape because match scrutinees are currently enum/bool/integer/float/String only.
   - Passed after narrowing the test to supported public compiler behavior and the public builtin-member metadata helper.
 - `cargo fmt --all --check`
 - `npm run coverage:compiler:check`
@@ -725,7 +725,7 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 - `cargo fmt --all --check`
   - Passed after the native-runtime direct close-wrapper coverage changes.
 - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib sema::tests::return_borrow_source_resolution_covers_explicit_and_inferred_edges -- --test-threads=1`
-  - Failed first because the expected explicit-source `borrow mut` diagnostic path was unreachable; non-mutable sources are filtered out before that branch.
+  - Failed first because the expected explicit-source `mut ` diagnostic path was unreachable; non-mutable sources are filtered out before that branch.
   - Passed after removing the unreachable checker branch and updating the test to assert the real diagnostic path.
 - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib sema::tests::default_argument_reference_detection_walks_nested_expression_shapes -- --test-threads=1`
   - Passed after adding AST-walker coverage for unary, cast, specialize, member, index, call, map, f-string, match-expression, and binary default-argument shapes.
@@ -2250,7 +2250,7 @@ Review the current Aurora repo state against the v1-readiness objective, continu
 
 ### MIR mutable member-call writeback coverage ratchet
 
-- Added focused MIR runtime coverage for mutable class and trait member-call dispatch, including receiver writeback, borrowed parameter writeback, and diagnostics when method metadata claims `borrow mut` but the target MIR function does not return an updated receiver.
+- Added focused MIR runtime coverage for mutable class and trait member-call dispatch, including receiver writeback, borrowed parameter writeback, and diagnostics when method metadata claims `mut ` but the target MIR function does not return an updated receiver.
 - Raised `coverage:compiler:check` again to enforce lines/functions/regions `94.04/92.37/92.38`.
 - Verified with:
   - `RUST_MIN_STACK=33554432 cargo test -p aurora-compiler --lib mir_runtime_mutating_member_calls_write_back_receivers_and_params -- --test-threads=1 --nocapture`

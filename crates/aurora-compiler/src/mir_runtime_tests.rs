@@ -198,7 +198,7 @@ fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
 fn mir_length_free_len_delegation_borrows_receiver_without_snapshot_clone() {
     let module = crate::lower_source_to_mir(
         r#"
-def measure(values: borrow Vec[String]) -> int64:
+def measure(values: Vec[String]) -> int64:
     return len(values)
 "#,
     )

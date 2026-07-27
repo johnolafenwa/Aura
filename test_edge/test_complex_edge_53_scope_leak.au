@@ -10,7 +10,7 @@ def main() -> int32:
 
     # Variable from match
     res = make_result()
-    match res:
+    match own res:
         case Result.Ok(v):
             inner_val: int32 = v * 2
         case Result.Err(e):

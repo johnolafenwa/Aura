@@ -1,4 +1,4 @@
-def set(first: borrow mut int32, second: int32):
+def set(first: mut int32, second: int32):
     first = second
 
 def main():

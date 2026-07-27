@@ -7,13 +7,13 @@ class NamedCounter:
     def new(name: own String) -> NamedCounter:
         return NamedCounter(name=name, count=0)
 
-    def increment(borrow mut self):
+    def increment(mut self):
         self.count += 1
 
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"{self.name}: {self.count}"
 
-    def get_name(borrow self) -> String:
+    def get_name(self) -> String:
         return self.name.clone()
 
 def main() -> int32:

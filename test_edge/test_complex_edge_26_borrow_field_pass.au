@@ -7,7 +7,7 @@ class Inner:
 class Outer:
     inner: Inner
 
-def read_inner(i: borrow Inner) -> int32:
+def read_inner(i: Inner) -> int32:
     return i.value
 
 def main() -> int32:

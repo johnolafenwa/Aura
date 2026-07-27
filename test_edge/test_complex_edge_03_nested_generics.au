@@ -3,7 +3,7 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 def main() -> int32:
@@ -16,9 +16,9 @@ def main() -> int32:
     inner_opt: Option[int32] = Option.Some(99)
     outer_opt: Option[Option[int32]] = Option.Some(inner_opt)
 
-    match outer_opt:
+    match own outer_opt:
         case Option.Some(mid):
-            match mid:
+            match own mid:
                 case Option.Some(v):
                     print(v)
                 case Option.None:

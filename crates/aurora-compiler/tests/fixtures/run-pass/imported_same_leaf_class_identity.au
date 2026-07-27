@@ -10,24 +10,24 @@ class User:
     def associated() -> String:
         return "local-associated"
 
-    def inherent(borrow self) -> String:
+    def inherent(self) -> String:
         return f"local-inherent:{self.label}"
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return f"local:{self.label}"
 
 class Holder[T]:
     value: T
 
-    def source(borrow self) -> String:
+    def source(self) -> String:
         return "local-holder"
 
 impl[T] Describe for Holder[T]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "local-generic-trait"
 
-def describe[T: Describe](value: borrow T) -> String:
+def describe[T: Describe](value: T) -> String:
     return value.describe()
 
 enum Envelope[T]:

@@ -5,9 +5,9 @@ def print_bool(value: bool):
         case false:
             print("false")
 
-def sum_set(values: borrow Set[int32]) -> int32:
+def sum_set(values: Set[int32]) -> int32:
     mut total: int32 = 0
-    for value in borrow values:
+    for value in values:
         total += value
     return total
 

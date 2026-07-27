@@ -8,12 +8,12 @@ def main() -> int32:
     some: Option[int32] = Some(9)
 
     print(status)
-    match ok:
+    match own ok:
         case Ok(value):
             print(value)
         case Err(message):
             print(message)
-    match some:
+    match own some:
         case Some(value):
             print(value)
         case None:

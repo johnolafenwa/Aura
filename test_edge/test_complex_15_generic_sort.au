@@ -2,20 +2,20 @@
 # Tests: traits, generics, trait bounds on generic functions, multiple trait impls
 
 trait Orderable:
-    def rank(borrow self) -> int32
+    def rank(self) -> int32
 
 copy class Priority:
     level: int32
 
 impl Orderable for Priority:
-    def rank(borrow self) -> int32:
+    def rank(self) -> int32:
         return self.level
 
 copy class Score:
     points: int32
 
 impl Orderable for Score:
-    def rank(borrow self) -> int32:
+    def rank(self) -> int32:
         return self.points
 
 # Generic min of two values using trait

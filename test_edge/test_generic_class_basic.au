@@ -1,17 +1,17 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 class Holder[T]:
     item: T
     count: int32
 
-    def get_item(borrow self) -> T:
+    def get_item(self) -> T:
         return self.item
 
-    def get_count(borrow self) -> int32:
+    def get_count(self) -> int32:
         return self.count
 
 def main() -> int32:

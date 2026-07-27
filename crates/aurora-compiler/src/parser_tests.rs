@@ -633,7 +633,7 @@ fn comparison_chains_keep_every_operator_at_one_precedence_level() {
 #[test]
 fn d6_parser_preserves_parameter_modes_and_keeps_own_out_of_match() {
     let item = parse_item_from(
-        "def modes(copy_value: int32, inferred: String, owned: own String, shared: borrow String, mutable: borrow mut String):\n    pass\n",
+        "def modes(copy_value: int32, inferred: String, owned: own String, shared: String, mutable: mut String):\n    pass\n",
     )
     .expect("all ordinary parameter modes should parse");
     let Item::Function(function) = item else {
@@ -649,7 +649,7 @@ fn d6_parser_preserves_parameter_modes_and_keeps_own_out_of_match() {
             ParamMode::Default,
             ParamMode::Default,
             ParamMode::Own,
-            ParamMode::Borrow,
+            ParamMode::Default,
             ParamMode::BorrowMut,
         ]
     );
@@ -664,8 +664,14 @@ fn d6_parser_preserves_parameter_modes_and_keeps_own_out_of_match() {
         })
     ));
 
-    parse_stmt_from("match own value:\n    case _:\n        pass\n")
-        .expect_err("match remains consume-by-default and must not accept `own`");
+    // ADR-0022 Q2 inverts this: bare `match` is shared and `match own` is the
+    // consuming form, so `own` is now exactly what a consuming match writes.
+    let own_match = parse_stmt_from("match own value:\n    case _:\n        pass\n")
+        .expect("`match own` is the consuming form");
+    let Stmt::Match(own_match) = own_match else {
+        panic!("expected match statement");
+    };
+    assert_eq!(own_match.capability, ReceiverKind::Value);
 }
 
 #[test]
@@ -861,11 +867,11 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
             "class Counter:",
             "    def read(self):",
             "        pass",
-            "    def read_explicit(borrow self):",
+            "    def read_explicit(self):",
             "        pass",
             "    def consume(own self):",
             "        pass",
-            "    def bump(borrow mut self, amount: int32 = 1):",
+            "    def bump(mut self, amount: int32 = 1):",
             "        pass",
         ]
         .join("\n")
@@ -901,7 +907,7 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     .expect_err("typed self should fail with the receiver teaching diagnostic");
     assert_eq!(
         typed_self.message,
-        "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate"
+        "`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate"
     );
 
     let bad_param = parse_item_from(
@@ -912,7 +918,7 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     .expect_err("prefix borrowed parameter should fail");
     assert!(bad_param
         .message
-        .contains("ordinary borrowed parameters must be written as"));
+        .contains("ordinary parameters are written as"));
 
     let bad_owned_param = parse_item_from(
         ["def read(own counter: Counter):", "    pass"]
@@ -928,13 +934,13 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     let late_borrow_receiver = parse_item_from(
         [
             "class Counter:",
-            "    def read(value: int32, borrow self):",
+            "    def read(value: int32, mut self):",
             "        pass",
         ]
         .join("\n")
         .as_str(),
     )
-    .expect_err("borrowed method receivers must come first");
+    .expect_err("mutable method receivers must come first");
     assert!(late_borrow_receiver
         .message
         .contains("method receiver must be the first parameter"));
@@ -1460,7 +1466,7 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
 
     let match_stmt = parse_stmt_from(
         [
-            "match borrow mut value:",
+            "match mut value:",
             "    case true:",
             "        pass",
             "    case \"ok\":",
@@ -1479,7 +1485,7 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
     let Stmt::Match(match_stmt) = match_stmt else {
         panic!("expected match statement");
     };
-    assert_eq!(match_stmt.borrow_mode, Some(ReceiverKind::BorrowMut));
+    assert_eq!(match_stmt.capability, ReceiverKind::BorrowMut);
     assert!(matches!(
         match_stmt.arms[0].pattern,
         Pattern::Literal(LiteralPattern {
@@ -1514,7 +1520,7 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
     ));
     assert!(matches!(match_stmt.arms[4].pattern, Pattern::Wildcard(_)));
 
-    let for_stmt = parse_stmt_from("for item in borrow mut values:\n    pass\n")
+    let for_stmt = parse_stmt_from("for item in mut values:\n    pass\n")
         .expect("borrow-mut for should parse");
     assert!(matches!(
         for_stmt,
@@ -1675,12 +1681,12 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
         parse_item_from("enum Flag:\n\n    On\n").expect("enum with blank lines should parse");
     assert_eq!(enum_decl.name(), "Flag");
 
-    let trait_decl = parse_item_from("trait Named:\n\n    def name(borrow self) -> String\n")
+    let trait_decl = parse_item_from("trait Named:\n\n    def name(self) -> String\n")
         .expect("trait with blank lines should parse");
     assert_eq!(trait_decl.name(), "Named");
 
     let impl_decl = parse_item_from(
-        "impl Named for Box:\n\n    def name(borrow self) -> String:\n        return \"box\"\n",
+        "impl Named for Box:\n\n    def name(self) -> String:\n        return \"box\"\n",
     )
     .expect("impl with blank lines should parse");
     assert_eq!(impl_decl.name(), "Named");
@@ -1921,40 +1927,34 @@ fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covere
         .message
         .contains("enum variant payloads must be either all named or all positional"));
 
+    // ADR-0022 supersedes ADR-0009's borrowed-return syntax, so the labelled
+    // form no longer parses at all.
     let borrowed_return = parse_item_from(
-        "def borrow_return(value: borrow [src] String) -> borrow mut [src] String:\n    return value\n",
+        "def borrow_return(value: borrow[src] String) -> borrow mut[src] String:\n    return value\n",
     )
-    .expect("borrowed parameter and return labels should parse");
-    let Item::Function(function) = borrowed_return else {
-        panic!("expected function item");
-    };
-    assert_eq!(function.params[0].mode, ParamMode::Borrow);
-    assert_eq!(function.params[0].borrow_label.as_deref(), Some("src"));
-    assert_eq!(function.return_passing, ReceiverKind::BorrowMut);
-    assert_eq!(function.return_borrow_source.as_deref(), Some("src"));
+    .expect_err("borrowed parameter and return labels were removed");
+    assert_eq!(
+        borrowed_return.message,
+        "`borrow T` was removed; write `T` for shared access"
+    );
 
     let match_expr = parse_expression(
-        [
-            "match borrow mut value:",
-            "    case Ready: 1",
-            "    case _: 2",
-        ]
-        .join("\n")
-        .as_str(),
+        ["match mut value:", "    case Ready: 1", "    case _: 2"]
+            .join("\n")
+            .as_str(),
     )
     .expect("borrow-mut match expression should parse");
     let ExprKind::Match {
-        borrow_mode, arms, ..
+        capability, arms, ..
     } = &match_expr.kind
     else {
         panic!("expected match expression");
     };
-    assert_eq!(*borrow_mode, Some(ReceiverKind::BorrowMut));
+    assert_eq!(*capability, ReceiverKind::BorrowMut);
     assert_eq!(arms.len(), 2);
 
-    let delimited_match_expr =
-        parse_expression("(match borrow value:\n    case Ready:\n        1\n)")
-            .expect("delimited multiline match expression should parse");
+    let delimited_match_expr = parse_expression("(match value:\n    case Ready:\n        1\n)")
+        .expect("delimited multiline match expression should parse");
     assert!(matches!(delimited_match_expr.kind, ExprKind::Group(_)));
 
     let span = Span::new(1, 1);
@@ -1964,7 +1964,7 @@ fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covere
                 kind: ExprKind::Name("value".to_string()),
                 span,
             }),
-            borrow_mode: None,
+            capability: ReceiverKind::Borrow,
             arms: vec![MatchExprArm {
                 pattern: Pattern::Wildcard(span),
                 value: Expr {
@@ -2065,7 +2065,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
 
     let match_stmt = parse_stmt_from(
         [
-            "match borrow value:",
+            "match value:",
             "    case _:",
             "        pass",
             "",
@@ -2079,15 +2079,16 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let Stmt::Match(match_stmt) = match_stmt else {
         panic!("expected match statement");
     };
-    assert_eq!(match_stmt.borrow_mode, Some(ReceiverKind::Borrow));
+    assert_eq!(match_stmt.capability, ReceiverKind::Borrow);
     assert_eq!(match_stmt.arms.len(), 2);
 
-    let for_stmt = parse_stmt_from("for item in borrow values:\n    pass\n")
-        .expect("borrowed for-loop should parse");
+    // ADR-0022: bare iteration is shared, spelled with no modifier at all.
+    let for_stmt =
+        parse_stmt_from("for item in values:\n    pass\n").expect("bare for-loop should parse");
     let Stmt::For(for_stmt) = for_stmt else {
         panic!("expected for statement");
     };
-    assert_eq!(for_stmt.borrow_mode, Some(ReceiverKind::Borrow));
+    assert_eq!(for_stmt.borrow_mode, None);
 
     let with_stmt =
         parse_stmt_from("with resource as handle:\n    pass\n").expect("with/as form should parse");
@@ -2167,7 +2168,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
 
     let match_with_whitespace_only_gap = parse_stmt_from(
         [
-            "match borrow value:",
+            "match value:",
             "    case _:",
             "        pass",
             "    ",
@@ -2226,8 +2227,8 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let trait_with_default_method = parse_item_from(
         [
             "trait Named:",
-            "    def name(borrow self) -> String",
-            "    def label(borrow self) -> String:",
+            "    def name(self) -> String",
+            "    def label(self) -> String:",
             "        return self.name()",
         ]
         .join("\n")
@@ -2364,4 +2365,130 @@ fn parser_internal_helpers_cover_member_names_patterns_and_match_terminators() {
         .parse_expr()
         .expect_err("unterminated match expression should report its missing end");
     assert!(error.message.contains("expected end of match expression"));
+}
+
+#[test]
+fn capability_prefixes_parse_as_bare_mut_and_own() {
+    // ADR-0022: bare means shared everywhere, `mut` is mutable access, and
+    // `own` is ownership transfer. `borrow` no longer appears in any position.
+    let params = parse_item_from(
+        "def f(shared: String, mutable: mut String, owned: own String) -> int32:\n    return 0\n",
+    )
+    .expect("the three parameter capabilities should parse");
+    let Item::Function(function) = params else {
+        panic!("expected a function item");
+    };
+    let modes: Vec<_> = function.params.iter().map(|param| param.mode).collect();
+    assert_eq!(
+        modes,
+        vec![ParamMode::Default, ParamMode::BorrowMut, ParamMode::Own]
+    );
+
+    for (receiver_source, expected) in [
+        ("self", ReceiverKind::Borrow),
+        ("mut self", ReceiverKind::BorrowMut),
+        ("own self", ReceiverKind::Value),
+    ] {
+        let source =
+            format!("class C:\n    value: int32\n    def read({receiver_source}) -> int32:\n        return 0\n");
+        let Item::Class(class) = parse_item_from(&source).expect(&source) else {
+            panic!("expected a class item");
+        };
+        assert_eq!(class.methods[0].receiver, Some(expected), "{source}");
+    }
+
+    for (source, expected) in [
+        (
+            "match value:\n    case _:\n        pass\n",
+            ReceiverKind::Borrow,
+        ),
+        (
+            "match mut value:\n    case _:\n        pass\n",
+            ReceiverKind::BorrowMut,
+        ),
+        (
+            "match own value:\n    case _:\n        pass\n",
+            ReceiverKind::Value,
+        ),
+    ] {
+        let Stmt::Match(match_stmt) = parse_stmt_from(source).expect(source) else {
+            panic!("expected a match statement");
+        };
+        assert_eq!(match_stmt.capability, expected, "{source}");
+    }
+
+    for (source, expected) in [
+        ("for item in values:\n    pass\n", None),
+        (
+            "for item in mut values:\n    pass\n",
+            Some(ReceiverKind::BorrowMut),
+        ),
+        (
+            "for item in own values:\n    pass\n",
+            Some(ReceiverKind::Value),
+        ),
+    ] {
+        let Stmt::For(for_stmt) = parse_stmt_from(source).expect(source) else {
+            panic!("expected a for statement");
+        };
+        assert_eq!(for_stmt.borrow_mode, expected, "{source}");
+    }
+}
+
+#[test]
+fn retired_borrow_spellings_report_their_exact_replacement() {
+    // `borrow` stays reserved for one compatibility window, parsed only far
+    // enough to say what to write instead.
+    for (source, expected) in [
+        (
+            "def f(value: borrow String):\n    pass\n",
+            "`borrow T` was removed; write `T` for shared access",
+        ),
+        (
+            "def f(value: borrow mut String):\n    pass\n",
+            "`borrow mut T` was removed; write `mut T`",
+        ),
+        (
+            "class C:\n    value: int32\n    def read(borrow self) -> int32:\n        return 0\n",
+            "`borrow self` was removed; write `self` for a shared receiver",
+        ),
+        (
+            "class C:\n    value: int32\n    def bump(borrow mut self):\n        pass\n",
+            "`borrow mut self` was removed; write `mut self`",
+        ),
+        (
+            "match borrow value:\n    case _:\n        pass\n",
+            "`match borrow` was removed; write `match` for shared access",
+        ),
+        (
+            "match borrow mut value:\n    case _:\n        pass\n",
+            "`match borrow mut` was removed; write `match mut`",
+        ),
+        (
+            "for item in borrow values:\n    pass\n",
+            "`in borrow` was removed; write `in` for shared iteration",
+        ),
+        (
+            "for item in borrow mut values:\n    pass\n",
+            "`in borrow mut` was removed; write `in mut`",
+        ),
+    ] {
+        let parsed = if source.starts_with("class") || source.starts_with("def") {
+            parse_item_from(source).map(|_| ())
+        } else {
+            parse_stmt_from(source).map(|_| ())
+        };
+        let error = parsed.expect_err(source);
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn retired_borrowed_returns_report_their_replacement() {
+    let error = parse_item_from("def pick(a: String) -> borrow String:\n    return a\n")
+        .expect_err("borrowed returns were removed with ADR-0009's syntax");
+    assert_eq!(
+        error.message,
+        "borrowed returns were removed; return an owned value instead"
+    );
 }

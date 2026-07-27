@@ -44,7 +44,7 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     pass
-        match tcp_server.result():
+        match own tcp_server.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(message):
@@ -63,7 +63,7 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     pass
-        match unix_server.result():
+        match own unix_server.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(message):

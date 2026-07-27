@@ -4,7 +4,7 @@ enum Payload:
     Pair(int32)
 
 def describe_payload(p: own Payload) -> String:
-    match p:
+    match own p:
         case Payload.Text(s):
             return s
         case Payload.Number(n):

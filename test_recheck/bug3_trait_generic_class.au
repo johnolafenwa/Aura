@@ -1,11 +1,11 @@
 trait Displayable:
-    def display(borrow self) -> String
+    def display(self) -> String
 
 class Box[T]:
     value: T
 
 impl Displayable for Box[int32]:
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return "box"
 
 def main():

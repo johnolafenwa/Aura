@@ -1,26 +1,26 @@
 trait Serializable:
-    def serialize(borrow self) -> String
+    def serialize(self) -> String
 
 trait Validatable:
-    def is_valid(borrow self) -> bool
+    def is_valid(self) -> bool
 
 trait Copyable:
-    def copy(borrow self) -> Email
+    def copy(self) -> Email
 
 class Email:
     address: String
     verified: bool
 
 impl Serializable for Email:
-    def serialize(borrow self) -> String:
+    def serialize(self) -> String:
         return self.address
 
 impl Validatable for Email:
-    def is_valid(borrow self) -> bool:
+    def is_valid(self) -> bool:
         return self.verified
 
 impl Copyable for Email:
-    def copy(borrow self) -> Email:
+    def copy(self) -> Email:
         return Email(address=self.address.clone(), verified=self.verified)
 
 def check_and_serialize[T: Serializable + Validatable](item: T):

@@ -15,7 +15,7 @@ def main() -> int32:
         # This should timeout since producer sleeps 500ms but we only wait 50ms
         select:
             case value = ch.recv():
-                match value:
+                match own value:
                     case Option.Some(v):
                         print(v)
                     case Option.None:

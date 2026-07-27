@@ -5,6 +5,16 @@
 - Amended: 2026-07-14 (G2 Queue carve-out and G3/R4 default rules)
 - Roadmap decision: D6
 
+> **Amended by ADR-0022 (2026-07-27).** Two changes. First, the
+> declaration-known copy snapshot is removed: a bare parameter is now shared
+> for every type, including copy types (universal logical sharing). The ABI may
+> still pass copied bits, but the source-level shared-loan and sequencing rules
+> apply uniformly, which is what keeps passing declaration-stable for generic
+> specializations and builtin signatures. Second, the spellings changed: shared
+> is bare, mutable is `mut T` (was `borrow mut T`), and consuming remains
+> `own T`. Loop iteration follows the same rule: bare is shared, `mut` is
+> mutable with writeback, `own` consumes.
+
 ## Decision
 
 An ordinary parameter written `value: T` resolves at its declaration:

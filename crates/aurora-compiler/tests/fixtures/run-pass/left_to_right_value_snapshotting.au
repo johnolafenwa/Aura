@@ -1,4 +1,4 @@
-def bump(value: borrow mut int32) -> int32:
+def bump(value: mut int32) -> int32:
     value += 1
     return value
 
@@ -17,15 +17,15 @@ def make_argument() -> int32:
     print("argument")
     return 7
 
-def push_and_return(values: borrow mut Vec[int32]) -> int32:
+def push_and_return(values: mut Vec[int32]) -> int32:
     values.push(2)
     return 0
 
-def bump_and_return(value: borrow mut int32) -> int32:
+def bump_and_return(value: mut int32) -> int32:
     value += 1
     return 10
 
-def bump_counter_and_return(counter: borrow mut Counter) -> int32:
+def bump_counter_and_return(counter: mut Counter) -> int32:
     counter.value += 1
     return 10
 

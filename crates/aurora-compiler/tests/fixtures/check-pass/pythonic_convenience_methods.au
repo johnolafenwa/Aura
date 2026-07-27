@@ -22,7 +22,7 @@ def run_process_examples() -> Result[None, process.Error]:
         match child.stdout():
             case Option.Some(stdout_pipe):
                 line = try stdout_pipe.read_line(timeout=500ms)
-                match line:
+                match own line:
                     case Option.Some(text):
                         print(text.trim())
                     case Option.None:

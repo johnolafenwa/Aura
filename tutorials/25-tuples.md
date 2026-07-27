@@ -117,7 +117,7 @@ for label, count in [("ready", 2), ("done", 3)]:
 
 Bare collection iteration keeps the collection and gives non-copy tuple leaves
 shared access. `own` collection iteration gives owned leaves. Bare Queue
-iteration receives each tuple already owned. `borrow mut` iteration with a
+iteration receives each tuple already owned. `mut ` iteration with a
 tuple target is not supported because the minimal tuple surface does not
 reconstruct and write a changed tuple back into the collection.
 
@@ -133,8 +133,8 @@ match ((1, 2), true):
 ```
 
 A normal by-value match consumes a non-copy tuple as one whole value.
-`match borrow` keeps it and gives shared access to non-copy leaves.
-`match borrow mut` with a tuple pattern is not supported.
+`match ` keeps it and gives shared access to non-copy leaves.
+`match mut` with a tuple pattern is not supported.
 
 ## What Tuples Are Not
 

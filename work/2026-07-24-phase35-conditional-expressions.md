@@ -35,7 +35,7 @@ without beginning a later Phase 3.5 ticket.
   - Call-argument place collection resolved module-rooted paths as places, so
     `json.dumps(json.Value.Null)` failed while `json.dumps(value=...)` passed.
   - Call-argument place collection dropped every copy-typed access, losing the
-    retained `borrow mut int32` access that
+    retained `mut int32` access that
     `call_borrow_mut_then_copy_read_rejected` pins, and the new source-ordered
     rejection pre-empted the parameter-aware same-level overlap diagnostic for
     plain place arguments.

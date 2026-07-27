@@ -4,13 +4,13 @@ enum Boxed:
 
 def main() -> int32:
     mut value = Boxed.Filled(1)
-    match borrow mut value:
+    match mut value:
         case Filled(v):
             v = v + 1
         case Empty:
             pass
 
-    match value:
+    match mut value:
         case Filled(v):
             print(v)
         case Empty:

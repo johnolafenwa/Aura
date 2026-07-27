@@ -1,4 +1,4 @@
-def identity[T](value: borrow[src] T) -> borrow[src] T:
+def identity[T](value: T) -> T:
     return value
 
 def main():

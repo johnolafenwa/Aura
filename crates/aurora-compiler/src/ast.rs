@@ -103,8 +103,6 @@ pub struct FunctionDecl {
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub receiver: Option<ReceiverKind>,
     pub params: Vec<Param>,
-    pub return_passing: ReceiverKind,
-    pub return_borrow_source: Option<String>,
     pub return_type: TypeRef,
     pub body: Vec<Stmt>,
     pub span: Span,
@@ -146,9 +144,12 @@ pub enum ReceiverKind {
 /// specialization from changing the function ABI.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum ParamMode {
+    /// Bare `name: T`. ADR-0022 makes this shared access everywhere, including
+    /// declaration-known copy types.
     Default,
+    /// `name: own T`.
     Own,
-    Borrow,
+    /// `name: mut T`.
     BorrowMut,
 }
 
@@ -156,7 +157,6 @@ pub enum ParamMode {
 pub struct Param {
     pub name: String,
     pub mode: ParamMode,
-    pub borrow_label: Option<String>,
     pub ty: TypeRef,
     pub default: Option<Expr>,
     pub span: Span,
@@ -265,7 +265,10 @@ pub struct IfBranch {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchStmt {
     pub scrutinee: Expr,
-    pub borrow_mode: Option<ReceiverKind>,
+    /// The written capability. Bare `match` is `Borrow`, `match mut` is
+    /// `BorrowMut`, and `match own` is `Value`. There is no absent case:
+    /// ADR-0022 makes bare mean shared access in every position.
+    pub capability: ReceiverKind,
     pub arms: Vec<MatchArm>,
     pub span: Span,
 }
@@ -445,7 +448,7 @@ pub enum ExprKind {
     Group(Box<Expr>),
     Match {
         scrutinee: Box<Expr>,
-        borrow_mode: Option<ReceiverKind>,
+        capability: ReceiverKind,
         arms: Vec<MatchExprArm>,
     },
     /// `value in container` or `value not in container`.

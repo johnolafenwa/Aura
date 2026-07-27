@@ -286,31 +286,31 @@ Types fall into one of these broad categories:
 Canonical borrow syntax:
 
 ```python
-borrow T       # shared borrow
-borrow mut T   # exclusive mutable borrow
+T       # shared borrow
+mut T   # exclusive mutable borrow
 ```
 
-Aurora uses the `borrow` keyword in both type positions and expression positions:
+Aurora uses the `` keyword in both type positions and expression positions:
 
 ```python
-name: borrow str = ...
-reader = borrow config
-writer = borrow mut config
+name: str = ...
+reader = config
+writer = mut config
 ```
 
 Borrowing must stay visually obvious.
 
-Applying `borrow` to an already borrowed value creates a reborrow rather than a nested surface type such as `borrow borrow T`.
+Applying `` to an already borrowed value creates a reborrow rather than a nested surface type such as `T`.
 
 Reborrows still obey the ordinary exclusivity rules:
 
-- `borrow` of a shared or mutable borrow creates a temporary shared reborrow
-- `borrow mut` requires mutable access and may not be derived from a shared borrow
+- `` of a shared or mutable borrow creates a temporary shared reborrow
+- `mut ` requires mutable access and may not be derived from a shared borrow
 
 Shared borrows allow read-only aliasing:
 
 ```python
-def show_total(xs: borrow Vec[int32]) -> int32:
+def show_total(xs: Vec[int32]) -> int32:
     return xs.len()
 ```
 
@@ -319,14 +319,14 @@ Exclusive mutable borrows allow mutation, but they must be unique while active:
 ```python
 mut counter = Counter(value=0)
 
-reader = borrow counter
+reader = counter
 # writer = borrow mut counter   # error: cannot take a mutable borrow while `reader` is alive
 ```
 
 ```python
 mut counter = Counter(value=0)
 
-writer = borrow mut counter
+writer = mut counter
 writer.value += 1
 # reader = borrow counter       # error: cannot take a shared borrow while `writer` is alive
 # other = borrow mut counter    # error: cannot take a second mutable borrow while `writer` is alive
@@ -335,12 +335,12 @@ writer.value += 1
 Once the mutable borrow ends, borrowing again is valid:
 
 ```python
-def bump(counter: borrow mut Counter):
+def bump(counter: mut Counter):
     counter.value += 1
 
 mut counter = Counter(value=0)
-bump(borrow mut counter)
-snapshot = borrow counter
+bump(mut counter)
+snapshot = counter
 ```
 
 ## 5.4 Lifetimes
@@ -388,8 +388,8 @@ Conceptually, `with` lowers through a standard-library protocol like:
 
 ```python
 trait With[T]:
-    def enter(borrow mut self) -> T
-    def exit(borrow mut self)
+    def enter(mut self) -> T
+    def exit(mut self)
 ```
 
 `with name = expr:` evaluates `expr`, calls `enter()`, binds the entered value to `name`, and always calls `exit()` on scope exit. The runtime may use specialized implementations for types like task groups, but the user-facing model stays trait-like rather than ad hoc.
@@ -397,7 +397,7 @@ trait With[T]:
 Example:
 
 ```python
-def read_file(path: borrow str) -> Result[String, IoError]:
+def read_file(path: str) -> Result[String, IoError]:
     with file = try fs.open(path):
         return file.read_all()
 ```
@@ -411,8 +411,8 @@ Rules:
 - class values are move types by default
 - a class may be declared with `copy class Name:` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
 - passing a class through an explicit `own` parameter or returning it by value moves ownership unless the class is `copy`; a bare non-copy parameter borrows
-- method calls do not create hidden aliasing; shared `self`/`borrow self`, consuming `own self`, and mutable `borrow mut self` obey normal ownership and borrow rules
-- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self`, `borrow self`, or `borrow mut self` is illegal unless an explicit extraction operation is defined
+- method calls do not create hidden aliasing; shared `self`/`self`, consuming `own self`, and mutable `mut self` obey normal ownership and borrow rules
+- field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `self`, `self`, or `mut self` is illegal unless an explicit extraction operation is defined
 - class fields are stored inline by default
 - direct recursive class fields are illegal; recursive structures use the built-in `indirect` storage modifier
 - `indirect T` means the field owns a `T` value stored indirectly rather than inline; moving the outer object moves ownership of that indirect child
@@ -423,7 +423,7 @@ In practice, there are only a few things you can do with fields through a borrow
 - copy a field if that field's type is `copy`
 - return or pass along a borrowed view of a non-copy field
 - clone a non-copy field explicitly if you need a second owned value
-- mutate a field in place through `borrow mut self`
+- mutate a field in place through `mut self`
 
 What you cannot do is silently move a non-copy field out of a borrowed object.
 
@@ -450,13 +450,13 @@ class User:
     def user_id(self) -> uint64:
         return self.id         # valid: `uint64` is a copy type
 
-    def name_view(self) -> borrow str:
+    def name_view(self) -> str:
         return self.name.as_str()
 
     def name_copy(self) -> String:
         return self.name.clone()
 
-    def rename(borrow mut self, new_name: own String):
+    def rename(mut self, new_name: own String):
         self.name = new_name   # valid: mutate in place through an exclusive mutable borrow
 
 def into_name(user: own User) -> String:
@@ -481,15 +481,15 @@ How to read this example:
 - `user_id` is valid because `id` is a `uint64`, and `uint64` is a copy type. Bare `self` is a shared receiver, so reading it copies the value.
 - `name_view` is valid because it does not take ownership of the `String`; it returns a borrowed string view instead.
 - `name_copy` is valid because `.clone()` creates a new owned `String` while leaving the original field in place.
-- `rename` is valid because `borrow mut self` gives exclusive mutable access, so replacing a field in place is allowed.
+- `rename` is valid because `mut self` gives exclusive mutable access, so replacing a field in place is allowed.
 - `into_name` is valid because the function owns `user`. Moving `user.name` out is allowed when the whole object is owned.
-- `bad_name` is invalid because `borrow User` only gives temporary access. Moving `user.name` out would partially empty a value that the function does not own.
+- `bad_name` is invalid because `User` only gives temporary access. Moving `user.name` out would partially empty a value that the function does not own.
 
 This is the core distinction:
 
 - from `User`, you may move non-copy fields out
-- from `borrow User`, you may inspect, borrow, or clone non-copy fields, but not move them out
-- from `borrow mut User`, you may inspect, borrow, clone, or mutate in place, but not move fields out without an explicit language mechanism that leaves the object valid
+- from `User`, you may inspect, borrow, or clone non-copy fields, but not move them out
+- from `mut User`, you may inspect, borrow, clone, or mutate in place, but not move fields out without an explicit language mechanism that leaves the object valid
 
 For recursive data structures, Aurora prefers `indirect` over exposing a wrapper type in ordinary code:
 
@@ -532,7 +532,7 @@ Example:
 class Cell[T]:
     value: T
 
-def first[T](xs: borrow [T]) -> borrow T:
+def first[T](xs: ) -> T:
     return xs[0]
 ```
 
@@ -560,21 +560,21 @@ Example:
 
 ```python
 trait Display:
-    def format(borrow self, w: borrow mut Writer)
+    def format(self, w: mut Writer)
 ```
 
 Trait implementations use explicit conformance blocks:
 
 ```python
 impl Display for User:
-    def format(borrow self, w: borrow mut Writer):
+    def format(self, w: mut Writer):
         w.write(self.name.as_str())
 ```
 
 Canonical v1 syntax for generic constraints uses inline bounds:
 
 ```python
-def sort[T: Ord](xs: borrow mut [T]):
+def sort[T: Ord](xs: mut ):
     ...
 ```
 
@@ -583,7 +583,7 @@ Aurora may add trailing `where` clauses later, but inline `T: Trait` bounds are 
 Multiple bounds use `+`:
 
 ```python
-def render_sorted[T: Display + Ord](xs: borrow [T]):
+def render_sorted[T: Display + Ord](xs: ):
     ...
 ```
 
@@ -625,14 +625,14 @@ Aurora should include pattern matching from v1.
 Canonical v1 rules:
 
 - `match value:` matches by value and may move non-copy payloads out of the scrutinee
-- `match borrow value:` and `match borrow mut value:` borrow the scrutinee instead of consuming it
+- `match value:` and `match mut value:` borrow the scrutinee instead of consuming it
 - bindings introduced by a by-value match receive owned values for move types and copied values for copy types
 - bindings introduced by a borrowed match are borrowed values
 
 Example:
 
 ```python
-match borrow result:
+match result:
     case Result.Ok(value):
         print(value)
     case Result.Err(err):
@@ -653,12 +653,12 @@ The language should support:
 Aurora uses two canonical UTF-8 string forms in v1:
 
 - `String` for owned text
-- `borrow str` for borrowed string slices
+- `str` for borrowed string slices
 
 Rules:
 
-- string literals have type `borrow str`
-- APIs that inspect text should usually accept `borrow str`
+- string literals have type `str`
+- APIs that inspect text should usually accept `str`
 - APIs that construct or store text should return or contain `String`
 - converting borrowed text to owned text is explicit, for example `String("hello")`
 
@@ -666,14 +666,14 @@ Rules:
 
 Borrowed slices are a future design target for copy-avoiding access to contiguous data; they are not implemented in Aurora 0.1.
 
-- `borrow [T]` is a borrowed slice of elements of type `T`
+- `` is a borrowed slice of elements of type `T`
 - slices are non-owning views and do not allocate
 - slices are the preferred parameter type for read-only access to vectors and buffers
 
 Examples:
 
 ```python
-def sum(xs: borrow [int32]) -> int32:
+def sum(xs: ) -> int32:
     total = 0
     for x in xs:
         total += x
@@ -681,7 +681,7 @@ def sum(xs: borrow [int32]) -> int32:
 ```
 
 ```python
-def starts_with(data: borrow [uint8], prefix: borrow [uint8]) -> bool:
+def starts_with(data: , prefix: ) -> bool:
     ...
 ```
 
@@ -715,7 +715,7 @@ Rules:
 Example:
 
 ```python
-def greet(name: borrow str) -> String:
+def greet(name: str) -> String:
     return f"Hello, {name}"
 ```
 
@@ -758,7 +758,7 @@ Fixed-size owned arrays are deferred until after v1.
 Aurora v1 standard sequence types are:
 
 - `Vec[T]` for owned growable sequences
-- `borrow [T]` for borrowed contiguous slices
+- `` for borrowed contiguous slices
 
 ---
 
@@ -805,7 +805,7 @@ Example:
 class Counter:
     value: int32 = 0
 
-    def inc(borrow mut self):
+    def inc(mut self):
         self.value += 1
 ```
 
@@ -814,9 +814,9 @@ The self model must make ownership and mutability clear.
 Recommended receiver kinds:
 
 - `self` for shared borrow by default
-- `borrow self` as an explicit synonym for shared borrow
+- `self` as an explicit synonym for shared borrow
 - `own self` for by-value consumption
-- `borrow mut self` for exclusive mutable borrow
+- `mut self` for exclusive mutable borrow
 
 The typed spelling `self: SomeType` is not a receiver and is rejected with a
 diagnostic naming these forms.
@@ -853,28 +853,28 @@ Core rules (as amended by the implemented 0.1 ownership defaults):
 
 - bare `for x in expr:` over `Vec` or `Set` iterates by shared borrow
 - `for x in own expr:` consumes a `Vec` or `Set` and yields owned elements
-- `for x in borrow expr:` iterates by shared borrow
-- `for x in borrow mut expr:` iterates by mutable borrow
+- `for x in expr:` iterates by shared borrow
+- `for x in mut expr:` iterates by mutable borrow
 - iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide consuming `into_iter(own self)` to yield an iterator object
-- iterator objects provide `next(borrow mut self) -> Option[T]`
+- iterator objects provide `next(mut self) -> Option[T]`
 - if `expr` already has a borrowed type, `for x in expr:` uses that borrowed iteration behavior
-- `for x in borrow expr:` where `expr` is already borrowed is treated as a reborrow, not as a nested `borrow borrow ...` type
-- shared borrowed iteration yields copied element values for copy element types and `borrow T` for non-copy element types
-- mutable borrowed iteration yields `borrow mut T` elements
-- borrowed iteration works through ordinary `Iterable` implementations for borrowed receiver types such as `borrow [T]` and `borrow Vec[T]`, not through a separate compiler-only escape hatch
+- `for x in expr:` where `expr` is already borrowed is treated as a reborrow, not as a nested `...` type
+- shared borrowed iteration yields copied element values for copy element types and `T` for non-copy element types
+- mutable borrowed iteration yields `mut T` elements
+- borrowed iteration works through ordinary `Iterable` implementations for borrowed receiver types such as `` and `Vec[T]`, not through a separate compiler-only escape hatch
 
 This lets ownership stay explicit:
 
 - iterating over `Vec[T]` with `own` consumes the vector
-- iterating over `borrow [int32]` yields copied `int32` values because `int32` is copy
-- iterating over `borrow [String]` yields `borrow String` elements
+- iterating over `` yields copied `int32` values because `int32` is copy
+- iterating over `` yields `String` elements
 - iterating over a channel receives values until the channel is closed
 
 Example:
 
 ```python
 trait Iterator[T]:
-    def next(borrow mut self) -> Option[T]
+    def next(mut self) -> Option[T]
 
 trait Iterable[T, IterT: Iterator[T]]:
     def into_iter(own self) -> IterT
@@ -882,7 +882,7 @@ trait Iterable[T, IterT: Iterator[T]]:
 for value in range(4):
     print(value)
 
-for item in borrow xs:
+for item in xs:
     print(item)
 ```
 
@@ -900,7 +900,7 @@ Rules:
 - default values may not reference other parameters in v1
 - shared-borrow and `own` defaults are permitted; a shared default temporary
   lives through the call
-- `borrow mut` defaults are rejected because mutations to a caller-invisible
+- `mut ` defaults are rejected because mutations to a caller-invisible
   temporary would be silently lost
 - trait method declarations do not use default arguments in v1
 - partial initialization is not part of v1
@@ -1140,7 +1140,7 @@ Primary recoverable errors should use a `Result[T, E]` style.
 Example:
 
 ```python
-def parse_int(s: borrow str) -> Result[int32, ParseError]:
+def parse_int(s: str) -> Result[int32, ParseError]:
     ...
 ```
 
@@ -1156,7 +1156,7 @@ Aurora uses `try expr` for recoverable error propagation.
 Example:
 
 ```python
-def load_config(path: borrow str) -> Result[Config, IoError]:
+def load_config(path: str) -> Result[Config, IoError]:
     text = try fs.read_to_string(path)
     return parse_config(text)
 ```
@@ -1173,7 +1173,7 @@ Example:
 trait From[T]:
     def from(value: own T) -> Self
 
-def load_and_parse(path: borrow str) -> Result[Config, AppError]:
+def load_and_parse(path: str) -> Result[Config, AppError]:
     text = try fs.read_to_string(path)   # IoError converts into AppError
     config = try parse_config(text)      # ParseError converts into AppError
     return Ok(config)
@@ -1551,7 +1551,7 @@ enum Message:
 ## 17.4 Functions
 
 ```python
-def greet(name: borrow str) -> String:
+def greet(name: str) -> String:
     return f"Hello, {name}"
 ```
 
@@ -1563,14 +1563,14 @@ class User:
     name: String
     email: String
 
-    def display(borrow self) -> borrow str:
+    def display(self) -> str:
         return self.name.as_str()
 ```
 
 ## 17.6 Match
 
 ```python
-match borrow msg:
+match msg:
     case Message.Ping:
     print("ping")
     case Message.Text(text):
@@ -1712,14 +1712,14 @@ Before writing the full compiler, freeze these decisions. The rest of this docum
 1. Source files use the `.au` extension.
 2. Package metadata lives in `Aurora.toml`.
 3. Bindings use `x = 10` and `mut y = 20`; there is no `let` keyword; first assignment in a scope introduces the binding, later assignment is reassignment, and local shadowing is not part of v1.
-4. Borrow syntax is `borrow T` and `borrow mut T`.
+4. Borrow syntax is `T` and `mut T`.
 5. Assignment of non-copy values moves ownership.
 6. Nominal product types use `class`; inherent methods live in class bodies; `impl Trait for Type` is reserved for trait conformance; classes move by default, `copy class Name:` is the explicit copy spelling, and recursive fields use the built-in `indirect` storage modifier.
-7. Pattern matching is by value unless the scrutinee is explicitly borrowed with `match borrow value:` or `match borrow mut value:`.
+7. Pattern matching is by value unless the scrutinee is explicitly borrowed with `match value:` or `match mut value:`.
 8. `for` loops use a trait-based iteration model; bare `Vec`/`Set` iteration is shared and `for x in own expr:` is the consuming spelling. Queue iteration is a receive operation and accepts only the bare form.
 9. Concurrency uses `spawn`, `task_group`, `Channel[T]`, and `select`; detached tasks require explicit `spawn detached`; channel sharing uses cloned handles over shared channel state; `.send()` returns `Result[None, SendError[T]]`; `.recv()` returns `T?`; and ordinary network/timer APIs are task-aware rather than split into a separate `async` dialect.
 10. Recoverable errors use `Result[T, E]`, `try expr`, and `None` as the unit success payload when no value is needed.
-11. Text uses `String` for owned values, `borrow str` for borrowed string slices, `borrow [T]` for borrowed contiguous slices, and `f"..."` to produce owned interpolated strings.
+11. Text uses `String` for owned values, `str` for borrowed string slices, `` for borrowed contiguous slices, and `f"..."` to produce owned interpolated strings.
 12. Visibility uses `public`, with items private by default.
 13. The initial standard library uses `string`, `bytes`, `collections`, `task`, `sync`, `fs`, `fmt`, `json`, and related core modules.
 14. Scoped cleanup uses `with`; the same construct is also used for managed task scopes; there is no general-purpose `defer` in v1.
@@ -1746,7 +1746,7 @@ Support only:
 
 - integers
 - booleans
-- `String` and `borrow str`
+- `String` and `str`
 - functions
 - local variables
 - immutable and mutable bindings
@@ -1929,12 +1929,12 @@ Additional frozen rules:
 
 ## 23.2 Borrow syntax
 
-Aurora uses `borrow T` and `borrow mut T`.
+Aurora uses `T` and `mut T`.
 
 This keeps borrowing visually explicit in an indentation-based language and reads more naturally than sigils.
 
-Method receivers use bare `self` for the common shared case, `borrow self` as
-its explicit synonym, `own self` for consumption, and `borrow mut self` for
+Method receivers use bare `self` for the common shared case, `self` as
+its explicit synonym, `own self` for consumption, and `mut self` for
 exclusive mutation.
 
 ## 23.3 Product type keyword
@@ -1951,7 +1951,7 @@ Additional frozen rules:
 - `copy` is only legal when all fields are copy types
 - direct recursive class fields are illegal; recursion uses the built-in `indirect` storage modifier
 - `T?` is shorthand for `Option[T]` in type positions, so recursive fields commonly look like `indirect Node?`
-- accessing a non-copy field through shared `self` or `borrow self` does not move that field out of the object
+- accessing a non-copy field through shared `self` or `self` does not move that field out of the object
 - shared identity must be modeled through explicit wrapper types rather than plain classes
 
 ## 23.4 Trait and iteration model
@@ -1963,13 +1963,13 @@ Inherent methods are written inside class bodies. Trait implementations use expl
 Additional frozen rules:
 
 - `for` loops use a trait-based iteration protocol
-- iterable values provide consuming `into_iter(own self)` and iterator objects provide `next(borrow mut self) -> Option[T]`
+- iterable values provide consuming `into_iter(own self)` and iterator objects provide `next(mut self) -> Option[T]`
 - bare `for x in expr:` over `Vec` or `Set` iterates by shared borrow
 - `for x in own expr:` consumes the collection and yields owned elements
 - multiple trait bounds use `T: Trait1 + Trait2`
-- `for x in borrow expr:` over an already borrowed iterable is a reborrow
-- shared borrowed iteration yields copied element values for copy element types and `borrow T` for non-copy element types
-- mutable borrowed iteration yields `borrow mut T` elements
+- `for x in expr:` over an already borrowed iterable is a reborrow
+- shared borrowed iteration yields copied element values for copy element types and `T` for non-copy element types
+- mutable borrowed iteration yields `mut T` elements
 - borrowed iteration uses ordinary `Iterable` implementations for borrowed receiver types rather than compiler-only special cases
 
 ## 23.5 String, slice, and interpolation model
@@ -1977,10 +1977,10 @@ Additional frozen rules:
 Aurora uses:
 
 - `String` for owned UTF-8 text
-- `borrow str` for borrowed UTF-8 string slices
-- `borrow [T]` for borrowed contiguous slices
+- `str` for borrowed UTF-8 string slices
+- `` for borrowed contiguous slices
 
-String literals have type `borrow str`. Converting borrowed text to owned text is explicit.
+String literals have type `str`. Converting borrowed text to owned text is explicit.
 
 Additional frozen rules:
 
@@ -2011,7 +2011,7 @@ Aurora does not use Python-style `__init__`.
 
 `match value:` matches by value and may move non-copy payloads.
 
-`match borrow value:` and `match borrow mut value:` borrow the scrutinee instead.
+`match value:` and `match mut value:` borrow the scrutinee instead.
 
 ## 23.9 Historical task and channel model
 
@@ -2083,23 +2083,23 @@ ordinary parameter and bare collection loop as by-value:
 - an unresolved generic `T` is not assumed copyable, so its bare parameter is
   a shared borrow; this decision is declaration-stable even when a later call
   specializes `T` to a copy type
-- `value: own T` explicitly consumes, while `value: borrow T` and `value:
+- `value: own T` explicitly consumes, while `value: T` and `value:
   borrow mut T` explicitly share or mutate
 - class fields and enum payloads are owned constructor positions, as are the
   retained/storing builtin arguments shown with `own` in the API reference
-- bare `Vec` and `Set` loops share; `own` consumes; `borrow` is the explicit
-  shared spelling; `borrow mut` is supported only where element writeback is
+- bare `Vec` and `Set` loops share; `own` consumes; `` is the explicit
+  shared spelling; `mut ` is supported only where element writeback is
   defined
 - Queue iteration receives each item already owned. The Queue handle is a copy
-  value, so `own`, `borrow`, and `borrow mut` modifiers are all rejected; use
+  value, so `own`, ``, and `mut ` modifiers are all rejected; use
   `for item in queue:`
 - match and local assignment retain their consuming defaults
 - shared-borrow defaults are valid and their temporary lives through the call;
-  `own` defaults are consumed; `borrow mut` defaults are rejected because they
+  `own` defaults are consumed; `mut ` defaults are rejected because they
   would create silent lost writes to caller-invisible temporaries
 - task-start capture is independent of the target ABI. Arguments first move or
   copy into task-owned storage; default/shared targets borrow that capture,
-  `own` targets consume it, and `borrow mut` targets are rejected
+  `own` targets consume it, and `mut ` targets are rejected
 
 These rules supersede any incompatible historical examples elsewhere in this
 proposal. The normative detail is in the language manual and ADR-0006.

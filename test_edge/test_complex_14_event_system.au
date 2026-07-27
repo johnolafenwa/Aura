@@ -26,7 +26,7 @@ def event_producer(events: Channel[Event]):
     events.close()
 
 def handle_event(event: Event) -> String:
-    match event:
+    match own event:
         case Event.Click(data):
             return f"click at {data.x},{data.y}"
         case Event.KeyPress(key):
@@ -47,7 +47,7 @@ def main() -> int32:
         while running:
             select:
                 case evt = events.recv():
-                    match evt:
+                    match own evt:
                         case Option.Some(e):
                             msg = handle_event(e)
                             print(msg)

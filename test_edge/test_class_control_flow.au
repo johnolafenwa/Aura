@@ -1,7 +1,7 @@
 copy class Counter:
     value: int32
 
-    def get(borrow self) -> int32:
+    def get(self) -> int32:
         return self.value
 
 def main() -> int32:

@@ -64,7 +64,6 @@ fn callable_params_follow_default_presence() {
         Param {
             name: "required".to_string(),
             mode: ParamMode::Default,
-            borrow_label: None,
             ty: dummy_type("int32"),
             default: None,
             span: Span::new(1, 1),
@@ -72,7 +71,6 @@ fn callable_params_follow_default_presence() {
         Param {
             name: "optional".to_string(),
             mode: ParamMode::Default,
-            borrow_label: None,
             ty: dummy_type("int32"),
             default: Some(Expr {
                 kind: ExprKind::Int(1),
@@ -270,8 +268,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
 fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     let params = vec![Param {
         name: "value".to_string(),
-        mode: ParamMode::Borrow,
-        borrow_label: None,
+        mode: ParamMode::Default,
         ty: dummy_type("String"),
         default: None,
         span: Span::new(2, 4),
@@ -472,7 +469,7 @@ fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
         .contains("half-open interval `[0, 1)`"));
     assert_eq!(
         BuiltinMember::RngShuffle.detail(),
-        "shuffle(values: borrow mut Vec[T]) -> None"
+        "shuffle(values: mut Vec[T]) -> None"
     );
     assert_eq!(
         BuiltinMember::RngNextInt.receiver_passing(),

@@ -1,7 +1,7 @@
 class Counter:
     value: int32
 
-def increment(borrow mut c: Counter):
+def increment(mut c: Counter):
     c.value = c.value + 1
 
 def main():

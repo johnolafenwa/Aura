@@ -1,8 +1,8 @@
 trait Add[Rhs, Out]:
-    def add(borrow mut self, rhs: borrow mut Rhs) -> Out
+    def add(mut self, rhs: mut Rhs) -> Out
 
 trait Neg[Out]:
-    def neg(borrow mut self) -> Out
+    def neg(mut self) -> Out
 
 copy class Counter:
     value: int32
@@ -11,13 +11,13 @@ class Holder:
     counter: Counter
 
 impl Add[Counter, Counter] for Counter:
-    def add(borrow mut self, rhs: borrow mut Counter) -> Counter:
+    def add(mut self, rhs: mut Counter) -> Counter:
         self.value += rhs.value
         rhs.value += 1
         return self
 
 impl Neg[Counter] for Counter:
-    def neg(borrow mut self) -> Counter:
+    def neg(mut self) -> Counter:
         self.value = 0 - self.value
         return self
 

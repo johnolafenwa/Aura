@@ -2,12 +2,12 @@ enum Opt:
     Some(int32)
     None
 
-def replace(value: borrow mut Opt) -> None:
+def replace(value: mut Opt) -> None:
     value = Opt.Some(99)
 
 def main() -> int32:
     mut x: Opt = Opt.Some(10)
-    match borrow mut x:
+    match mut x:
         case Some(v):
             replace(x)
             v = v + 1

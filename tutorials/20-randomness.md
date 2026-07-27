@@ -69,7 +69,7 @@ advance the caller's stream without taking ownership, give it a mutable borrow:
 ```python
 import random
 
-def roll(rng: borrow mut random.Rng) -> int64:
+def roll(rng: mut random.Rng) -> int64:
     return rng.next_int(1, 7)
 ```
 

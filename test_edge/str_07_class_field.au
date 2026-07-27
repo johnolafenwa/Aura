@@ -6,13 +6,13 @@ class User:
     name: String
     email: String
 
-    def greet(borrow self) -> String:
+    def greet(self) -> String:
         return f"Hello, {self.name}"
 
-    def get_email(borrow self) -> String:
+    def get_email(self) -> String:
         return self.email.clone()
 
-    def show(borrow self):
+    def show(self):
         print(self.name)
         print(self.email)
 

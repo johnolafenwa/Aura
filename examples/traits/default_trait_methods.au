@@ -1,6 +1,6 @@
 trait Named:
-    def name(borrow self) -> String
-    def label(borrow self) -> String:
+    def name(self) -> String
+    def label(self) -> String:
         return "name=" + self.name()
 
 class User:
@@ -10,14 +10,14 @@ class Team:
     name: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.name.clone()
 
 impl Named for Team:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.name.clone()
 
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "team=" + self.name()
 
 def show[T: Named](value: T):

@@ -1,15 +1,15 @@
 ## Goal
 
-Fix the remaining fifth-pass review findings around `match borrow mut` stale bindings, TLS accept-loop slowloris handling, and malformed HTTP listener recovery without regressing the maintained examples or CLI/runtime behavior.
+Fix the remaining fifth-pass review findings around `match mut` stale bindings, TLS accept-loop slowloris handling, and malformed HTTP listener recovery without regressing the maintained examples or CLI/runtime behavior.
 
 ## Work Completed
 
 - Added and kept the failing-first regressions for:
-  - stale `match borrow mut` pattern-binding use after a real scrutinee reassignment
-  - dead-branch `match borrow mut` writeback preservation
+  - stale `match mut` pattern-binding use after a real scrutinee reassignment
+  - dead-branch `match mut` writeback preservation
   - malformed HTTP request recovery with a `400 Bad Request` response
   - multi-client TLS slowloris resistance without linearly delaying the next valid client
-- Extended the checker’s local-binding state to track `match borrow mut` pattern bindings, invalidate them after a real overlapping scrutinee reassignment, and reject later stale binding use with a targeted diagnostic.
+- Extended the checker’s local-binding state to track `match mut` pattern bindings, invalidate them after a real overlapping scrutinee reassignment, and reject later stale binding use with a targeted diagnostic.
 - Kept the dead-branch behavior correct by making `if false` / `while false` bodies continue to type-check but stop merging unreachable writeback-invalidating state back into the live branch state.
 - Reworked `TlsListenerValue::accept()` so it can keep draining the TCP backlog while prior TLS handshakes remain pending, and replaced the interim `thread::sleep(...)` loop with the runtime’s existing deadline-aware fd wait path so Aurora task scheduling still makes progress during in-runtime TLS handshakes.
 - Updated `HttpListenerValue::accept()` to treat malformed request syntax and premature EOF as per-connection `400 Bad Request` cases, close that client, and continue accepting the next request.

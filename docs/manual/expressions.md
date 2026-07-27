@@ -399,7 +399,7 @@ evaluated afresh in declaration order. Binding a named value to its parameter
 slot never reorders evaluation, and no default runs for a supplied parameter.
 Mutable defaults are not shared process-global singletons.
 
-Call sites pass a value directly to default-mode, `own`, `borrow`, and `borrow
+Call sites pass a value directly to default-mode, `own`, ``, and `borrow
 mut` parameters. Prefix argument forms such as `own value` or `borrow value`
 are not expressions. The callee signature selects whether the argument is
 moved, shared-borrowed, or mutable-borrowed. A bare non-copy parameter is a
@@ -445,7 +445,7 @@ Status.Ready
 io.Error.NotFound
 ```
 
-An instance method call evaluates the receiver before its arguments. The method declaration determines whether the receiver is shared-borrowed (`self` or `borrow self`), consumed (`own self`), or mutable-borrowed (`borrow mut self`). A method without a receiver is associated and is called through its type.
+An instance method call evaluates the receiver before its arguments. The method declaration determines whether the receiver is shared-borrowed (`self` or `self`), consumed (`own self`), or mutable-borrowed (`mut self`). A method without a receiver is associated and is called through its type.
 
 Visibility and resolution are static. Missing or private members are compile-time errors.
 
@@ -556,7 +556,7 @@ grouping. Inside an enclosing delimiter, its required arm layout forms a
 layout island rather than being suppressed by ordinary continuation. The exact
 forms are defined in [Grammar](/manual/grammar#match-expressions).
 
-Use `match borrow value` to inspect without consuming a non-copy scrutinee, or `match borrow mut value` when an arm must mutate through payload bindings.
+Use `match value` to inspect without consuming a non-copy scrutinee, or `match mut value` when an arm must mutate through payload bindings.
 
 ## `try`
 

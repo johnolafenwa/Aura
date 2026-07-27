@@ -13,13 +13,13 @@ def main() -> int32:
     t1 = Tree.Leaf(42)
     t2 = Tree.Branch(Pair(left=1, right=2))
 
-    match t1:
+    match own t1:
         case Tree.Leaf(v):
             print(v)
         case Tree.Branch(p):
             print(p.left)
 
-    match t2:
+    match own t2:
         case Tree.Leaf(v):
             print(v)
         case Tree.Branch(p):

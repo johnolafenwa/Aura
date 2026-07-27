@@ -12,7 +12,7 @@ def main() -> int32:
     while true:
         match ch.recv():
             case Option.Some(inner):
-                match inner:
+                match own inner:
                     case Option.Some(v):
                         print(v)
                     case Option.None:

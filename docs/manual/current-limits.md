@@ -35,9 +35,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 - `for` loop bindings cannot shadow names already visible in the same scope.
 - Duration literals have only the integral `ms`, `s`, and `m` suffixes; there is no `ns` or fractional Duration literal and no unary `-Duration`. Associated constructors and checked Duration arithmetic provide signed and sub-millisecond results instead.
 - Task starting currently supports named functions and associated methods without `self`.
-- `TaskGroup.start(...)` and `start_soon(...)` support default/shared and `own` target parameters; `borrow mut` targets are rejected because child tasks cannot write back through the starting call frame.
+- `TaskGroup.start(...)` and `start_soon(...)` support default/shared and `own` target parameters; `mut ` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form; use `TaskGroup`.
-- `for value in borrow mut set:` is not currently supported.
+- `for value in mut set:` is not currently supported.
 
 ## Runtime
 

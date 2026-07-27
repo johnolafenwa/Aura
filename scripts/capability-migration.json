@@ -1,0 +1,3450 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "architecture_docs/02-ast-and-source-model.md",
+      "before": "822695c4cc2e0733a25eba94fcc40352d140673a069bc50f71e7ea459f2e251d",
+      "after": "f85a6611fd94353ca85874147a2251ad99422d91dffe2898361f387264bfeac1"
+    },
+    {
+      "path": "architecture_docs/04-parser.md",
+      "before": "75f81675794130972d9877b8f5bcc076a648c5492ca013493f23cfce856cb498",
+      "after": "f34ee57990ea67169ce2fe0fe6fe24a7db3354ac92f8aea846c8d04ffba11349"
+    },
+    {
+      "path": "architecture_docs/05-semantic-analysis.md",
+      "before": "975b1e90534fd2846224c1e5d9705cf28ca830e98080074461e755bc8df9f11b",
+      "after": "8e9366b36ce5e2e27b1fed13ffe6b15bdcd83916114dee336113fdabad4b161c"
+    },
+    {
+      "path": "architecture_docs/11-editor-tooling.md",
+      "before": "8adfec52678d9acb368a1a1b663d0106dd4418fc97c58a4920369d234e6cbfb1",
+      "after": "374abf35a3e6c9985396a3cc96fb2ef994bd75fcc7d9a9e117f1c3ccc767142e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/aliased_borrow_mut_arguments.au",
+      "before": "38bb31aec77f59912581f1f4265eefafa6720a114353e94b2afa9c75b9ffd0fe",
+      "after": "48e05ca6bdf2876b28942c9f2a6c8c39ce5137f8bb46770175d693598cc5e79d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/ambiguous_floor_division_trait_impls_are_rejected.au",
+      "before": "31f0a106c2bb7452039545aab811af92c62b4d0a6f77c7ac423d736fa9d852e9",
+      "after": "d0d1608cd63762b8102638d4a7c443f37595575f76f36d99657292075603bb22"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/ambiguous_overlapping_trait_impls_are_rejected.au",
+      "before": "bfcd00a2dce9c20174d29f9f76b2474876bc65ee5d0a37cf107a00b9f6d847de",
+      "after": "95f7e0214ccbb236d7d4783296b81862a46b746142c282afdb098b5a33f17069"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/binary_left_borrow_rejects_later_mutation.au",
+      "before": "398dba5c1c40c9529988f0b07de9b88cc1e6864be2700c1b51c93835ac8f5fa5",
+      "after": "556814488aadf79078208a7bdd59f332d6bd8d1f9f4f61ca31de9c849b07d09a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrow_call_argument_not_supported.au",
+      "before": "15f40555dc75ec8910d52741d2cc84b1472f0134943fa27b3ef134085f8d1fc7",
+      "after": "cde15625cc4327d25908fe9e6774aacb7ab23d11e34914994e0cba26ba3d96fc"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrow_mut_copy_default_rejected.au",
+      "before": "7216f137907a63cac6ee421c5fb76e78be25f9a6b6ef1c4dce99effe09f36329",
+      "after": "f6760087548d8073c1b624ef20cd557835b85070adeac38a71cf17025dde97ff"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrow_mut_noncopy_default_rejected.au",
+      "before": "30bbc6ea7061c0e5321521e7dace6ebb006cb07846c7aa7f2ffb47be7d6d13bd",
+      "after": "4b8864d168b00086c8cc63e3aeb4c267d45995a5e0e35bb8ebc12d689f86c85c"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrow_self_non_copy_field_return.au",
+      "before": "872160ea2791e8cb61cfcad3e7177aeb21db7078581d1ba46c7243f8af0c0eeb",
+      "after": "a3433a0b2832e5f25d08feb59252562b10d8dfd9d42696d6f2f906ac14aeea32"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_overlapping_mut_borrow.au",
+      "before": "8c06d77ef6c74daf9679c01394c16e64b88c5df0bcf7372525b5417d4d3492ca",
+      "after": "943864d92749b1ffc0816208ee03e89bb90f2669f5a8936ce249811fcd58058a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_owner_move.au",
+      "before": "acdde36e6255dee1702ff2d18d2a8b1d7760c8562976a962d79c3e4a4c57e331",
+      "after": "b5f5b4d760afaa0882b5ae4642ded92a9858b7550c6ac189ffb2818f85fdfb95"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_same_field_mutation.au",
+      "before": "ea4c0d3234b15f64838421c52bfa688010b1ae99bc648fbcc40887faa55892df",
+      "after": "2b450ee1d2502fb290b14f4167633a8c78f781bfe066d939f3cfcd91c8b22dae"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_generic_noncopy_return_call.au",
+      "before": "e364ef0854911d497e0f6b953b371acad8843341d1bc01b6c93b362b62a6f124",
+      "after": "07bdfc1725e66f9d234f708093d582ad32a92ba196b06244cf74a8bcc01a2c02"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au",
+      "before": "4ddbb1756b890b6d050fdb84d56599db79e48856818b08a486ea049213043e4f",
+      "after": "52c99a0bbf49b6443eb4bee5acabb6d78649c7a3e9c8d52a8694e2f2a0afe9a7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au",
+      "before": "46fe46a48aed4bdcbb629ede86d439606db5eef7be4ba65b1c212cc9660fb1c8",
+      "after": "31d9e691d55ee3f957503d860364fbc86e67350403ef957e4316e41ad87cd118"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_in_option_equality.au",
+      "before": "2100e6152907a1465f3baacd7c393517a2135ed3ceac75cd72ab209c139df26a",
+      "after": "ed74a11b30d148febbc9310f6d3cd62c1a1ef87a76dba2c5e7e6273cb754524b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au",
+      "before": "849f151e49c2bdc30ae01bbb6e05e5943ccf860052a6da76b1d444306729b267",
+      "after": "e531f30c4dc7ceda1e8e554953502427497c40281aaefa155cb914c28184b054"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_wrong_source.au",
+      "before": "3ff71f133d8f99bb826e0f8bcef917e03f0a3cefc01be82892073da0f4162968",
+      "after": "8a4f35432fa55fd85cde96299c2fb001f16e05bcc880f365d8697c0b4b98d826"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/borrowed_vec_iteration_rejects_mutation.au",
+      "before": "1349ff59df08c5978c47fccecbfd3f419e14b9d5934a2c89b5446ab8f931858a",
+      "after": "f066aedd3bd92027da96beec795d776b4e975565c7c70ad54cb0fd9901992954"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_file_trait_method_collision.au",
+      "before": "8e6251992413c3df95110afc8ec0e7430ae9a2568f9b34d0473913580292c383",
+      "after": "08926f3a2e0124f995ed72b28504a14ec40c707d9810fa9f70b582153845a314"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_option_none_without_context.au",
+      "before": "53653da75ec1acfd4a539d9600f1d06c389f6feb1c9ca396551030326a839d14",
+      "after": "ac021980b1a63688b6b63e325f28adf4077902c1fb0b634c787378f5114b59b9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_queue_trait_method_collision.au",
+      "before": "ad84a0bce3b51f8f1e9548d998d2fb60847565c0a4969c4be7cbc925363d9d12",
+      "after": "f51ac362179b68b42e3c4d472b5aba806b1a46ac4062f79a80532648191248df"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_string_trait_method_collision.au",
+      "before": "b8d786a3e2730591c83247c2610de062b24634025ccc213adf6237f792820347",
+      "after": "669000e0b3b3b69d0860a070dd53303a1dfd5818ec9cd43a7e1c452f825b0d22"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_task_group_trait_method_collision.au",
+      "before": "f1e85f9568ec76b1935ab32a6c2f97a1b0406d583efbf4dd876de40cef7abbed",
+      "after": "f1fd1f8a0c248e0a3a3a8d95be660a65151d898f0bca85323a23d17ca1b7980e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_task_inherited_trait_method_collision.au",
+      "before": "5366619445669f67bc07e7568fde9178d6ddef9b7e06afb60f657195982e7be0",
+      "after": "947d9c1bc85ce6da1cb6025f0a955611d2fc8ea9a238bb0ada655a11786c4f53"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/builtin_vec_trait_method_collision.au",
+      "before": "379793ebc78c023ed95ef33273e92d1808a5728f60d146f1b906d4140a64688c",
+      "after": "78b592ebd24f28df7cb7d29762ed1aa66a19b8edc6c6ebc249cf03eeaa66239a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/call_borrow_mut_then_copy_read_rejected.au",
+      "before": "4e7d4c4e427a7d5305e91773e36db05f84603dc1f1be969de6468a4f1c3b8fa3",
+      "after": "383e60feabcbd95f52394daf7aa8c47c99dc6f0fb219678842188f73b679df6d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/compound_noncopy_target_rejects_rhs_mutation.au",
+      "before": "9bcbe2b6ebbdf581d013b4a6893bcbe15eea8a3f7d52a0cb402a86bb2ce93276",
+      "after": "c07a4f39973d12b032748cc93c9f54744923e582b14cf7ef8b4d0e517d317d11"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/consume_and_borrow_same_argument.au",
+      "before": "a0b0aee2732b2cd5bfa2461202cac418ad8cd776622e8a44d2ab1b1973c862a0",
+      "after": "ec3bafba312446ee0928a186474e9a8c6ca37b0162bb249e9e04ecd9da1f91a9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/free_function_borrow_mut_requires_mutable_place.au",
+      "before": "9cab988d4105272eb34eff6ae8ee1834930192599d6bf2851ac5cf8d59ee9748",
+      "after": "a65e34ef58e36cb42374ad85933474f784171fe63d315c0b2271e792d8a486b5"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/generic_borrow_specialization_retains_copy_argument.au",
+      "before": "14d606fbc1ddadb74937a9e862ac38317e6484820bca9d6d3638a865a476c048",
+      "after": "4c3603726262ea8bb43a548195d582dd6446a6c6d940a9ba20e1e414b3851f63"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au",
+      "before": "ae228d8c0729d44b8154ae1924d51f7eaeddb462223d6cb3e1a118250f534a6f",
+      "after": "7ef4672a7886deb65907911ad3de0ff82cb87a04a27b5a327510661e72856e15"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/immutable_mutating_method.au",
+      "before": "c59cf35fcc90db361da907b785798776227635cc02f806baec85247a276b5806",
+      "after": "97935d2f37196ce15c0de246d6eb1e48b87d91166f19bdd13337540900d54390"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/index_base_borrow_rejects_index_mutation.au",
+      "before": "085ab17a0b348142122f5c9559813590ea7ab1da2dc88ef1ba281244bdd67100",
+      "after": "0ff66d5c6b2c1be2837fce8c9d5c7c5816b95178fbc7401abeb0ac0b236abb1e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/indexed_assignment_target_rejects_index_mutation.au",
+      "before": "66cc11444308808453b6cec6edb4d055307a674319080248f14e31fa30b7dbf7",
+      "after": "3caf410161542825935ecbdfbbe9316a23cec372fa8e87c69451593ade51c832"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/indexed_assignment_target_rejects_rhs_mutation.au",
+      "before": "ed4623f86f99ee8f7b7dac1cbdb8ffcb03b39d8166da8d35ed7f15cafeba2d8a",
+      "after": "e6be0ad4db2fd21e092962d1b6e938d87d5baaa610b3ca651d34445a35212a0a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au",
+      "before": "67012151fa385e54fcc56d594bf589758b6c5a16330ce35f96e1c82b95fd925f",
+      "after": "a940f87d995cc1c9faad3bba554959b24a0714d009049eb4741521c4dddcf76f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_binding_use_after_borrow_mut_call.au",
+      "before": "700ac0133e08792c3db05541c0bb82fbd94bdef350d5f2baee0b383e69278437",
+      "after": "72cd3d53818b8a3a90afe65929715fb819082510ec6f213a0025a6bfaa82a93b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_binding_use_after_scrutinee_reassign.au",
+      "before": "cee4a8396885b5b14a9a999151655f3eb54ddcbb58aa68f29bdb9e551aa70281",
+      "after": "4d80e092e1498613665720c65e654390b248137b6e7379619e18b2d41e55fa5e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_field_binding_use_after_scrutinee_reassign.au",
+      "before": "c27a1879b531714a1bfa0f21bd47193c5fdddabd7040131d82a47ba7dd7d8462",
+      "after": "a7155aced0af506830ca5191ea9f98d421e51c5de5b5b01cbebedf925acb8e9d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_nested_field_binding_use_after_ancestor_reassign.au",
+      "before": "75a9d31b7751c094f4528d16df08237006183c72555db9ea2cbc03426f954e6e",
+      "after": "a265d6a2b3f478263db920ef64f1ed116869cc0610749b35890a3de466d88ccc"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_rebinding_moves_value.au",
+      "before": "617a47a6fbb590f03a49556231a0ff7b27bd79d01468bd5a261750a42b482419",
+      "after": "3840bcf7c185275c4259cd3598fccdcba31c76ceebfdf27eb85f9401d2d335c8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_self_member_suggests_match_borrow.au",
+      "before": "09864796dad6ac12f1874d0a2d9b1d1c2c316fb3dd6117566f93b9bb67e37c92",
+      "after": "8a15e6b76ee44684e39700f93aa759a3125b97df73ec862e1df17591e30531b8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_borrow_rejects_nested_argument_mutation.au",
+      "before": "544102c13fef8f981d5f61f200bf9b798f2357b8ae94ea68bdeebb4890690f62",
+      "after": "8c2083902115b2e6c1499ff6c288e26769d2e772f95ee93c1eaf54865129aab1"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_argument.au",
+      "before": "74c15356521a93585a0f0513db4449d80e12f7b786e39e6c5e5edcf18bf2926c",
+      "after": "7e131cb12d4448ca3e1c8f0e4b8063c1242741dc70759e2f9ecd7ed1a068e1eb"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_mut_argument.au",
+      "before": "08074a4a7fc25b90cce8a4d88133e0580f3dc507df604e4e3e79aea00fcdadf9",
+      "after": "dd86ccf9cf8b8a14787ef666dbc748f5f6644dca376628b2f8ec244f208a7e97"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_rejects_nested_owned_method_argument.au",
+      "before": "813a0600cd16273f41ac78211a7a52c9f7a0f1b3203cd54ec8dc51eb2fcb5ef4",
+      "after": "f1ba65c0b485b54ebc96ba46c252ecd9d2704f4339a13cd386715d07800d76e9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/move_out_of_borrowed_param.au",
+      "before": "8d3ad035d59558ae6789b2c8545d49681a869800883592cfeab5bc963ce3bc4b",
+      "after": "e8931a5effd30d955e361dae4bd1cc02cc32bde3dd88eb4dd3e7caf95e9d2264"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/nested_borrow_and_consume_binary_operand.au",
+      "before": "5ec92008f645f0d995671208747fdd7ed75f030c511b817a51873bb373e4cebe",
+      "after": "d231d8308ca9c7eaf9abc3ceb54ad0f73f9bd904337b2ab581960da4f568a92f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au",
+      "before": "4729732f6e8599dae39d7e888dfabc685c94ebc909974241129f7843c05de4e0",
+      "after": "e260287a68eda4a3df3f2e67b788206f82f28c0689a9f9adf10d4aa94ba06ca2"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/nested_match_borrow_mut_same_place.au",
+      "before": "9565630f6da1341505141b60a39090ccdaa09db1075e6248f90d553af3e78813",
+      "after": "7c04daac6dd6ddff698ee6398940e6281db55192d53d6905a8c207dbd84292d3"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/overlapping_borrow_and_borrow_mut_arguments.au",
+      "before": "0bbe6a9a288fef3a59b3158639a1f096c3f1290a8857730b3073278bac4f15f9",
+      "after": "cf9e4beadc7c70489f675a2a50194799b1ab890b699b5c8f506f35bf5e209362"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/projected_binary_left_borrow_rejects_later_mutation.au",
+      "before": "6e42e9a8470bcccdc7a765a862bea7a804d912eeb611856b4649566bbbd88a6d",
+      "after": "bfdd2c9681101821b814284ce6a2ecf9055d53d61e7a81a264b567a15cbd8ebc"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/queue_borrow_iteration_rejected.au",
+      "before": "dbd7cbd084c187f222f402d485199a168e431b55218a7595f9e31a037fe942f5",
+      "after": "6b3e34f129cad1befdbeec4485b6ceaa182e3f1cf5e5bb2a80468582b9e23f0e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/queue_borrow_mut_iteration_rejected.au",
+      "before": "05ecc98b88c608cf468d816f73f5276bd992a8d12fdedaae3abdb8e0f85dfa4f",
+      "after": "4d6f16b7e3a841902f26af7fb455405401bccc17a43471f2b8fc7aa73172760b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/random_generic_enum_clone_obligation.au",
+      "before": "074fb5f901ea4c4a97bfb4a3ed9e9bcb0ef8112d0c73981710a396403e8690ee",
+      "after": "1430ec90132f07da721107af9d52688c3bea33cc3ea81c1e75d3c3c83ac68899"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/random_recursive_generic_enum_clone_obligation.au",
+      "before": "628b3d7bc719106b0cd3922782242798e99528370f3a57fcffc4210a9127b795",
+      "after": "cba4045afd856c5666d4aae45ddb662277fe062c9705fba8475a891eb86b5a35"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/reassign_during_borrowed_iteration.au",
+      "before": "46187582bc5b32cab8dba51fad3bec8037d767bc54114b10f808a5fc692d772c",
+      "after": "c26a3f597021d7d9375614e489fc791ff20fca27c76cdc2d7067ce2983aaff96"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/retained_argument_nested_consumption_repro.au",
+      "before": "a0f7931082a1011a97242bd4eb0e3f345305af75f3b3db020d642768a76b4dd4",
+      "after": "0bb2f7c68501242464e99b60448fa236392475b0933d200eaa0312b84849609a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/retained_call_enum_constructor_payload_overlap.au",
+      "before": "9c2b8bf953165c1cf521c495fc93819ab337adff8703d35349848f6eeb4ff44a",
+      "after": "e58c4abff7a2e2d5140ce31815881e9a5256469b8b95e720a35ec6e989abb781"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/retained_parameter_rejects_nested_argument_consumption.au",
+      "before": "f05058ac15ad032217029d65c39835f7efede0fa0447907e186c38e1bf8b5879",
+      "after": "48ae835c74cf83de825876feea8ac933f62f025a838cc8427fecb287e3562713"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/shared_borrow_mut_binding_rejected.au",
+      "before": "0954991890084150b7c6470c24e61a2ae3cf4a1e8001735aa769630d284666be",
+      "after": "39ce1dd363619f4a94990dc2e77c1f3e1e035e7205cd714a9ce5797a4dd96830"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/spawn_rejects_borrowed_params.au",
+      "before": "cb7f3f88d87c30ac51d1456fbc05c1b6af815a0d79dae4cd4bdf37716c1b0e4a",
+      "after": "bc772b30c40bcbbb40ea558cc6a8e5bc45bb19f8c1ec27a8af25fca8d45277dd"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/supertrait_impl_requires_supertrait_impl.au",
+      "before": "10dee7004564e57145582e994d202ab335d86725f8f38082a3fbfdbfcad69fd0",
+      "after": "402fc2f7c1cc0d950c295226039bc81dba7a380983cd0c1d32a5bb33940fcda5"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/task_group_borrow_mut_target_rejected.au",
+      "before": "eb2dbf59cfc9da333b1a324e6cb802b6c31c9e7f1674e9593bd3835a3c0877c3",
+      "after": "43710cb45ff831b32985aa47197a31cb7bdd2001975284c24506cfa342972c9b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_bound_missing_impl.au",
+      "before": "4170fcccfdfa7e51c4c0cd9ebccf5b6e73d9ad87a48dd7849aa84f3ee25df618",
+      "after": "301025fba76f464c03e8d7e010b0b24556475e9ddd57d9784d1b8e2d0dfaf1e9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_impl_borrowed_return_source_mismatch.au",
+      "before": "7ed2c0afd788ad9272fe30abc7e42b8970c88fe8e839728db07b5fa29eb0ae24",
+      "after": "84d16050eb76776832324f14d0a1e7c856de4c91c0fbbe9fa8a0d71f753f3752"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_impl_parameter_passing_mismatch.au",
+      "before": "16e9c36df9f794b2abf4f6ef674a42a6345360e8ce86ba8a94df412a2dc9eeaa",
+      "after": "7363a97773b1888830b6004b1c501949b48bc2850a5f159e3ba44aa8035cd568"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_borrow_mut_receiver_requires_mutable.au",
+      "before": "a4f9ab9264efd63fd932f8aab639e518490f40628cfd0a59adbbfc9037d453e6",
+      "after": "22c8a8aedbd32b1c91eebe7b3e65ff149e0b6db244e260d57a3622ac7e7c52ed"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_copy_left_retains_borrow.au",
+      "before": "7b22293a534e127b63660b2cf325fc027f1fb52dfc98777a046445541eb52c16",
+      "after": "51d3ce7a08e9fbec19a29ba2bf99709f0fa2fce41db18a0f3c1fdacd0e2c8f14"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_receiver_moves_value.au",
+      "before": "9ef7ad8746fbddd79a62a8e530d586abfda02b13f7793455d5c6dfc85eb7c549",
+      "after": "7ab4366c38fcd03f4ad50e30daa3d3c65e8ac03d79642a827950f43a0337f895"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_rhs_moves_value.au",
+      "before": "e5c5d0d4372ebb13ca317f470cec7b6b7abaf3e794fbe17fa8a93fb4c0336782",
+      "after": "985564329d69ff45dc385c78554d48c3e88f1712c49a297efed19b7568e16101"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au",
+      "before": "f0a35f59cb7804011b27aa7bafa561a29563421bc482727f28c6592295a75ebf",
+      "after": "ba08b1291e1fb626cfd4005c94a136ae5a5836ec3859ca653a494aaded4ffd31"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_middle_borrow_rejects_later_mutation.au",
+      "before": "0cb613e939a4d795d34e13a252254c7746475e09e5e75d37cd61fa5a5f034c94",
+      "after": "5bd5296f4b474cb945a53216d546e1528b19ea4cf0a6877e3f277a2371bd1349"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/tuple_for_borrow_mut.au",
+      "before": "910983191be4c1880621188ffe6c9096b1eaea81b380bcf8e5764b025d8e4a3d",
+      "after": "cce3a257f97fa75ceef1309194d314e55ec71e80ec24bca07d1c79313da35946"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/tuple_pattern_borrow_mut.au",
+      "before": "3e9f16e77a46cf39ad5967d4fe845f2a5556d78c3226c5c8312558e3a1564df6",
+      "after": "40042c0e815ecf92191850874b82fd5d9dde060e2333321109b57b6908ee7e8b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/unreachable_enum_match_arm.au",
+      "before": "9e4463ba71e9f4951300c9df24a332c718c7b67f028235c18066c87bb40c3d79",
+      "after": "a188c0a91db8448c9d1206176ab77c806416aae554432291ba1ee10db26d2689"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/vec_borrow_mut_iteration_requires_mutable_binding.au",
+      "before": "05bc2b2c0a4cb4ab50a13f0c3fb1221ab6a6af5f1b989f1933fddf546d14a590",
+      "after": "dc51d549647917ee05f9b5d2ccdf40cb7c38368b930577ed2b00d528a2834ed0"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/with_move_persists.au",
+      "before": "f93eed0ceb0ab16adca077d30778903c72fcf06aa3657c84b1e0eb5c06dabc45",
+      "after": "9dfcea244ccd31daeb6347df35fce827d380336dba1ac5a7a1b9abd8bd51e117"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/with_resource_move_out_field_rejected.au",
+      "before": "824b454be080b854e702ffb2df230bdbd94e4a795b2130853bc9a445d1ec9e41",
+      "after": "d740fda07762d29ed9915d599dd7ab04f3499aba096433462d5b6647e501087d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-fail/zip_rejects_ownership_modifiers.au",
+      "before": "27aa66f03c25112d6d9323304bd150678a984e5decd4c1abcdac5a2f16cde5a8",
+      "after": "0bd934a4d38d9d91e231bc296de5e29834b7768b132570883930036cec8e327b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/borrowed_return_copy_mut_binding.au",
+      "before": "36add0c7922ea26bb6a4604f282950073e0107bb882897042a23cbee15569357",
+      "after": "9dcdfe1e6200b23b7ac04cc430dc64324aa360b6d96b894090a878ecd9dfba99"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/class_methods.au",
+      "before": "2c872c25be1a200955f27067a9a3044e8688b47ce427c3fe09c8d0ae3fe37845",
+      "after": "bbb82cc6200a617f68e3b5095140aa47ce436eb2c2f4a1d32d573b112139e740"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/contextual_none_positions.au",
+      "before": "7550c1b81fcc8726efd62a5b043e818f7a029bdab302923bc6e1161bddfda8d1",
+      "after": "6a5bfc6b47d278c2105014a5b820f2aa2594c30cd422e50c513445d23baffed7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/enum_match.au",
+      "before": "85e07322e457d0231fe1727dc1a55e94faa58a016c438737376da71657a698ab",
+      "after": "0d92450d8452243e76e9dd300e4b93e817d3286677f4083806219b8376eb10df"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/free_function_borrow_params.au",
+      "before": "8570c20dbfee2c314612dfa86ee4d78dffa81df7c18d4acf05d823b9e3a99f6e",
+      "after": "ee9f673bad5497ebd2c8ef97457e9ff9cd277beffc8e5ae8edfe57943decd180"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/generic_enum_unit_variant.au",
+      "before": "addd554589d45c944f6d7fba6d930d2ac16dc754e69f03ea400ba85a5e3efc91",
+      "after": "56f5e867ff2577a2d0793da9038a7c2cdf77c55daa8736c407de927c213caed0"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/generic_static_method_option_none.au",
+      "before": "a12f413cdb087cd447e4c77e149d03c20fa6c3838ed4be76f4af81a41628dfdc",
+      "after": "2f04d4ae6b1d1991ac525c5c69991a0c9dee21423e8a5cdaaff666b1a152ea2e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/generic_type_param_bounds.au",
+      "before": "ee6d31c6c525ee5d93c873731392267e849e89b5fe37b4310680ff7729117ae9",
+      "after": "a168082f39c067cf7cee9b3a9c92b4ee48d52b9e436c06f00a75b33849c6759b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/literal_match_patterns.au",
+      "before": "a7d4f983eeb851e3ff8b673f19f3eeafbb3032336bb75c0f4e9952dca153aac6",
+      "after": "68990619eb945a00d0c79fbc1919a6507df9d71925369b733dfe8cae53e39cab"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/multiple_trait_bounds.au",
+      "before": "42ee0cd4e0c67f3c6f7cd094f5b0c5dc9e7f29a097ccecac2fabc0452b82757b",
+      "after": "4ccdc8cc6cee63af66683c7e63e5a0a8f8f5abf89b4a61433e3b9d3b92f10ff6"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/mut_binding_from_borrowed_copy_field.au",
+      "before": "9e203bee2457c9146d0d16c4d6a5285e9ae9c8b0aa555503022736404f20b627",
+      "after": "358483527480d7f05834258503c37bb9c288de531af9a6c46be8b7c70cc042ee"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/mutating_methods.au",
+      "before": "f7766e4fa7238b473617e873b8c0c4b96b485f9b669280c8f84aa743307f5e44",
+      "after": "d82e00bcc114e4894bcd7d4c0e7665a1bf438dc41afec0d0b53ddedc8d53a76b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/named_arguments.au",
+      "before": "fce6f8b5763ac5dd158f9376dca5f555bb17caac8abbc0e74294e7f002b8400e",
+      "after": "f6387d6937cffc8ddbead3bfe701389a73653684bd6d44a1106545c357abf9a7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/open_generic_impl_header.au",
+      "before": "c495741b7880d63fc3d4bcef783a6fc48044a79a1d1b22d487743a70a007b2d9",
+      "after": "04f8465413825e3cd05a844205e1f8f6ac12f7878c3ed473f205869a81dfcf4a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/option_none_explicit_type_args.au",
+      "before": "b712f6a0ec3937e1ffb3d78adba5e7e22a935934ec29faeaa3ecd44398f61a22",
+      "after": "435322850180cdb8b44142e89aece559b776e01d2a08cf6b0cbb68724641c8e1"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/pythonic_convenience_methods.au",
+      "before": "6a26068d0e5cf230a2121cb4b44838dae584ca80b15414863b8fae278a44aa4d",
+      "after": "2c509d90fa44b838387f6fb802335e4e922c82622ba4f42f4395ea1cce050a50"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/random_generic_enum_clone_obligation.au",
+      "before": "668e1ed4f31e1a7d4ba008a821711dabeea5292976f74e45f9eff1bc7630b47c",
+      "after": "78dd4f0fa318bd27ac75bdbd53eda7d6ec3895c950fbd46c766ce33d03c87025"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/random_recursive_generic_enum_clone_obligation.au",
+      "before": "01f12f7d1af05901095a39fce1165af6184116a2614b83e6a47431d47497b286",
+      "after": "1b36374e9847b5a044cabebe05fc3db6c996ebc15e1391b7f717ac65f0789159"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/result_option.au",
+      "before": "abcf15413f0ae7eb7498d469b7592fc0b57e265f1eda25f3fb1bbaef04aad7ac",
+      "after": "acfba1df05c2b02e5cad2847d23d220b6eaa6f66d53c73e3cd744a962812482a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/send_result.au",
+      "before": "6949714f5e2f767b84aa57bdc0d01497f9981b0418fb3f53393fbb3bfb3233b4",
+      "after": "a3db199edaa896868701c090bc149952be9d8c202b19a7be9c8b19660d261153"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/task_group_wait_helpers.au",
+      "before": "aacc273f41823ab175e6732f2de863a24a523c0ff8d8c5dd92bbbf33966b4de8",
+      "after": "4a9f04e715d1a7d24273d1b0ef88524dab8ec9c5de22704d0cf36d523c6992ee"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/traits.au",
+      "before": "f20ab24421abdb8f20c966ecf257a8de8c5ced828dbf1c1d3bc0e6f847d87355",
+      "after": "45c47b65459691e56936df1574a30fe532b21bb245ee4ceedf54c393d4b1a6fb"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/tuple_contextual_typing.au",
+      "before": "2a1f3731df5d575aa689dfc06193c2018637db6caafddf02fec47484025a39b7",
+      "after": "20b2bfd67b236fe35832072617590571ac517929049ee8867f4c03df6c055a9f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/user_generics.au",
+      "before": "fdf52f1e9e41bba3eedd16530e62281f495f993d6da5f15b9bee31bb4b52dcd0",
+      "after": "2902d4cf35ef8f0ccdb2bc6fb0433971d058e2e2ff2081ba4305eb99ba2b1a9d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-pass/with_resource.au",
+      "before": "7111f512e36764f11525059563af1bacda4b756272240be364d3fa02b4e4eb01",
+      "after": "7013824750aadc3b3dd9a049cc94c546685f2f6c6eb251cdc72000872ef630a4"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-path-fail/imported_generic_support/remote.au",
+      "before": "eab8f9756ddb788689c45cd7596cdd44c0a23e3800dac2c3e08643eefc6735e5",
+      "after": "b2ed8c170f2097d3f3af145bfee80a67b23c509ffbd6469314eac5cd94738c1f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/check-path-pass/imported_generic_support/remote.au",
+      "before": "eab8f9756ddb788689c45cd7596cdd44c0a23e3800dac2c3e08643eefc6735e5",
+      "after": "b2ed8c170f2097d3f3af145bfee80a67b23c509ffbd6469314eac5cd94738c1f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-fail/prefix_borrow_mut_param_not_supported.au",
+      "before": "5e3b15d125732de68e6feba520283e553b46bb5cac00e99ef098343fe107c00c",
+      "after": "7cdc90373c9b16da9db294864cebac0a0ddb302c32ef4efff3c46c50000328ee"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-fail/prefix_borrow_param_not_supported.au",
+      "before": "8d82c92fbac4529d1485f894594d1423925f00cc971a504d5289351763ca28da",
+      "after": "fa3a195b1efcb86561082d6395751ab6d3af2267d283ae158a3ba484852c0cfa"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/mutating_methods.au",
+      "before": "f7766e4fa7238b473617e873b8c0c4b96b485f9b669280c8f84aa743307f5e44",
+      "after": "d82e00bcc114e4894bcd7d4c0e7665a1bf438dc41afec0d0b53ddedc8d53a76b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/send_result.au",
+      "before": "6949714f5e2f767b84aa57bdc0d01497f9981b0418fb3f53393fbb3bfb3233b4",
+      "after": "a3db199edaa896868701c090bc149952be9d8c202b19a7be9c8b19660d261153"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/spec_surface_syntax.au",
+      "before": "6c5aed30de1e38d8d6f7f2f076134793bbc05cf6414cb23f0d82cfc3b9b67062",
+      "after": "b5f1c2a7ff7b83bd86ab27be01861ebe820c8a4e34a27c9fb3f597622f8ab161"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/task_group_wait_helpers.au",
+      "before": "aacc273f41823ab175e6732f2de863a24a523c0ff8d8c5dd92bbbf33966b4de8",
+      "after": "4a9f04e715d1a7d24273d1b0ef88524dab8ec9c5de22704d0cf36d523c6992ee"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/traits.au",
+      "before": "277524eafae8a6ba43b9079fc375fd99de8a3df7e97115ae96d2f0cebac16dc9",
+      "after": "f65fc4f95761f0d13f7990dbce87eb0e39b367c17beae9eaf3b352fe740391aa"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/tuple_syntax.au",
+      "before": "158246c976819598643c08bf9b8535f14d057d8f3e3648fe9dd32f502398d9c4",
+      "after": "63bd3306d066bbd7407f286835306ff480ff2c096c618b12b580b065bb58fd41"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/parse-pass/with_resource.au",
+      "before": "7111f512e36764f11525059563af1bacda4b756272240be364d3fa02b4e4eb01",
+      "after": "7013824750aadc3b3dd9a049cc94c546685f2f6c6eb251cdc72000872ef630a4"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/assert_true_is_lazy.au",
+      "before": "51eb81612c0fc75b1cd83c7f7efd6c5cddf959bb22b8154df2b8b646a4c7f8cc",
+      "after": "6039b48578779db62a351769f161769fef9e656b37671ceb41147baac7fc955d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/bare_builtin_enum_constructor.au",
+      "before": "27241ab9cd8bf76f41350ac38712550d2dae3367b4bd47f9342717cfbccae8b5",
+      "after": "416d385cd6bb4ce094b5f2a6dd9ec49b79ce6345c81e0af505b11f69899b66be"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrow_str.au",
+      "before": "41ac4b446814d65bd92476e8c041f22aef881ed862a76bf8d727afa334d1fd7e",
+      "after": "b82f20eb6369ea4403af68b0a260b87a5a26e372258d3c152bf4566b2c585567"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_field_iteration_allows_sibling_mutation.au",
+      "before": "a356ca81757099e033e3a2996f7b67542c5ce09f419c578577e91112d869cdec",
+      "after": "f5a6563e9153bdc839c0d98bbf72c3d0316c1a384046bc4a66be5255e6ceb21d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_generic_copy_return.au",
+      "before": "d22758d64346b17f02798edb870d795da5e96014bd78ba95d9fa3dcf5fff2c17",
+      "after": "fbe858d7e742230f71843d0c6a8221d1b699ef8a4e053cfb9fd1d2519551abaf"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_lifetime_labels.au",
+      "before": "2d00815f2bf14bafecf77173c745d14a5919435c75b13965e004c79a139d2aca",
+      "after": "7abce3c53f5515f31988f68927e369a0d857ecccad7466318abfe4ec18e5b42e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_noncopy_local_alias.au",
+      "before": "0e0daaec1fe8f803867e8a58c3d6b01cfdee0e9c2af5cec85970473b58d4d668",
+      "after": "4a7048b9034cb1f29c708b9610b8f693a157aea7e7c01ea2b4346fe64ba4ed54"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_return_local_bindings.au",
+      "before": "bf4afe03809299096a96070bc83c444e67f085a3a80ac49db292e63da95cf36d",
+      "after": "76acf33bc0e9aaa1d0fa5ecd8086e1b1bf348c46b45682b8a1c1543c36c907c3"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/borrowed_return_values.au",
+      "before": "95826a2f4143381d5ad4bf6f5506722a529e896e4333ae195e85319517ccafcf",
+      "after": "852344045c4191ebcc1f2757c96bea00f2bb3745ed176dd244bb4bb99d735136"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/builtin_enum_explicit_type_args.au",
+      "before": "6dfbcd690f46a069c02daf1c15dd4d857d19816f67d32ee146cd48e252967283",
+      "after": "164432685e8dbfb100f82c0e746fb4f4b815fbf0833c84d6a52e9fb244354533"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/builtin_option_some_without_annotation.au",
+      "before": "cb79370091e7429f7646ca1f55fb3a22e0a5043e5e3d7aebc86258179a6f5492",
+      "after": "c4c27cb34ecd00d6679f658a8094e1ff2f20a0aeac75a19269f48ca4c104f19c"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/bytes_associated_borrow_scope.au",
+      "before": "a96790d76820a0b21c5fbb56c179d4e1c4a86c1ed4d78cdc2631c41d24db4a7b",
+      "after": "52230d9d432538e661940dad451baa3ab8dffdae5bf84376b3877dd0cff7f238"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/call_copy_read_before_named_borrow_mut.au",
+      "before": "7367bd0a498cd71939b6992eeaf37cc12af12825bc7406c19acd3a5cb5d51aa5",
+      "after": "cbcd83d09af27be9b1d2905d34b0d6ff4d804e760c102113c7450f9f0cff86fb"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/class_methods.au",
+      "before": "2c872c25be1a200955f27067a9a3044e8688b47ce427c3fe09c8d0ae3fe37845",
+      "after": "bbb82cc6200a617f68e3b5095140aa47ce436eb2c2f4a1d32d573b112139e740"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_backtracks_before_moving.au",
+      "before": "5dcd5f498e29221e96245a2c1cee7fb62912e18c8559e71970d9ad772d842a32",
+      "after": "ce7ec1f844f7d9af87fbf0a56de6c5e776f65e67ba6a1bc9cda263d1e5b33bd9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.au",
+      "before": "5401435c541c733671965e0da839f63c4426abfa654a68ed47091c14ba0de5a6",
+      "after": "808267679cf97863a100ec7cf00e79ec8dd5b7c90fe92c65a8e26858bebce3bb"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/contextual_none_equality.au",
+      "before": "fc9fa96c0587ef658517054769d0884dcaf4df44a0dd73a453d667277e25ea69",
+      "after": "3eb89f3f3e096cb16fc2c5c2c0151c0be61430f0af3a25012febcd366c9a5420"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.au",
+      "before": "074604cada7db99ab709904f21868936da42bbbc8aef735bc43ca92971ef7ad6",
+      "after": "374140cff2544ae38a4e7902b9a45fb605a2437d7d486abba75bc467d0999452"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/default_integer_is_int64.au",
+      "before": "f5ae7b09c9fe2e6fd2820b98ba9ad1b83a9a8f9b29b6d30fa6940d48119d7774",
+      "after": "ba6e2354d9fe3e20821980ec245b79eb1691c90a914e19a87376d5e9347c8a8b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/default_trait_methods.au",
+      "before": "fda0d7b8795b5d420068bf97cd3d87373df0e6767afea90ce241bcb9aa5ee57d",
+      "after": "4de7394a7c6429606f8c34f46c000b23b5292988ed519518b27bdd087f8b6b76"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/enum_match.au",
+      "before": "85e07322e457d0231fe1727dc1a55e94faa58a016c438737376da71657a698ab",
+      "after": "0d92450d8452243e76e9dd300e4b93e817d3286677f4083806219b8376eb10df"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au",
+      "before": "98a2a355cb86d745181ebc6d3b30048213ed30572f37215fc9581a2b97f2c735",
+      "after": "6bc752dde65925552c19641b2d0627c836ac8498cc541855ee3e195d155af716"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/float_context_integer_literals.au",
+      "before": "042d128b70374663ecda6a4e39a54726f35d8f67bec567d0b50795c31647bc44",
+      "after": "f61b04ec74e9e432ff7310f315c54fa555a2fdfb37d40b90e834f3958acbd9de"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.au",
+      "before": "1ae1d456410c7100dc13d964739dd53c2be6e3f60abaf2e1d29b51557b7915a9",
+      "after": "7e0974b4d0640cc4a51c492f7508d66c54eb43e0b68da076e996da8ae7034d4f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/floor_division_trait_dispatch.au",
+      "before": "3e8dfe665fc049e9f528a5c665a56970952d4f831104e1fb2da8b73224560cac",
+      "after": "f7632eba37d88362a1c1f0b04297ac9543313b3fec85384b56a0c3b96893a661"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/free_function_borrow_params.au",
+      "before": "8570c20dbfee2c314612dfa86ee4d78dffa81df7c18d4acf05d823b9e3a99f6e",
+      "after": "ee9f673bad5497ebd2c8ef97457e9ff9cd277beffc8e5ae8edfe57943decd180"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/free_function_borrowed_string_field.au",
+      "before": "702fcf4dc1a94e804286c81f31c83f1b2b91d93bf2b91921a3be57d9dac6c3e5",
+      "after": "25493f6ee5b4634e520d901e51eabd082a58d0b35f20081742f656f9d14466ef"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_builtin_trait_dispatch.au",
+      "before": "8b03fe44ad2f27b38a8ded6b0711dd4ae606c80952c04307119767d64be9dc68",
+      "after": "2fa0078c40984cc93a6e260eba4984599b24d76155cfca9e61754d366d7ddfcc"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_enum_unit_variant.au",
+      "before": "addd554589d45c944f6d7fba6d930d2ac16dc754e69f03ea400ba85a5e3efc91",
+      "after": "56f5e867ff2577a2d0793da9038a7c2cdf77c55daa8736c407de927c213caed0"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.au",
+      "before": "9e673f2b21f39dab195ee9aa74d6f7952b4acc7808cf6f3ea72e57239ae3b50e",
+      "after": "c793b276a8db13263ca7ef954f1f3f53baaeff081eb08fe3a928b14fd0f33ff7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_static_method_option_none.au",
+      "before": "a12f413cdb087cd447e4c77e149d03c20fa6c3838ed4be76f4af81a41628dfdc",
+      "after": "2f04d4ae6b1d1991ac525c5c69991a0c9dee21423e8a5cdaaff666b1a152ea2e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_trait_bounds.au",
+      "before": "019b1c394b84b379c1d96e178a9a06f916248d367dbc4c97b69b10eedcd99d59",
+      "after": "da390dd74490296760f396856691ca1e0bd7872b2025e294cb1ac516c5bf2770"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_trait_dispatch_multiple_types.au",
+      "before": "c788292abafc0fd26cdd416e07928c87711859d1b86bdafbc59912c5f80d6c84",
+      "after": "a7b29437bcfbd869a83cabf0f649d782918c8e9a01c32b67a1b99cd0d72ef20d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_trait_impl_header.au",
+      "before": "c852eef199f7b6631a74c8bc08e650d214c72aa4bb9ffe671cfa1fa863824c21",
+      "after": "6ee4dbacc8a325d9693f4670c684b8b0caef5a9f1f124d945efa2b9699dce676"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/generic_type_param_bounds.au",
+      "before": "e0d9f3e6bf5eed7c11cae7c18a350ffe95872181d2299d2c2930953a71cb73bf",
+      "after": "e45649cd9a3c4d8f80a646b7037429eb0194b2311a4f171327964d86bf04fa6b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/imported_same_leaf_class_identity.au",
+      "before": "5e182d967370583a8a74663b4736ec7b8baccf6b1a37652bc7311f9f0f8e90b5",
+      "after": "bb72147c64fda821a90f3727b9303ffc46d8e96f0f80d87d03928748d2798e2e"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/indirect_recursive.au",
+      "before": "4c0911d62396062ab518130bab24b819382c58044a141352903249b219f73f24",
+      "after": "1303c548de4e96bd9e84e66e70c98a5b00918c757a68a1ff569f7ccd19052095"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/left_to_right_value_snapshotting.au",
+      "before": "8aae63caaf1ac5faf7024f9ec3d081e21dc05c2203ae3d1d2a2e064b65511c30",
+      "after": "d0b1b892e50b67ac81469947f980cb7cd4a2f11817c935d979971204940165af"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/literal_match_patterns.au",
+      "before": "a7d4f983eeb851e3ff8b673f19f3eeafbb3032336bb75c0f4e9952dca153aac6",
+      "after": "68990619eb945a00d0c79fbc1919a6507df9d71925369b733dfe8cae53e39cab"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/map_basics.au",
+      "before": "44128ab5f559d9493d8fca7e2e91f1d3e7954427abcc7c73b0628ebe3d6d594b",
+      "after": "7f871e02afe280563fdcf36dcc05f5303f116e446432439fead25e044c482667"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/map_literal_duplicate_keys.au",
+      "before": "9394e325fb7d4b1007d0e912e32498fe7216c76531e0ea552b8427ce1da0f377",
+      "after": "5900ed705e566f6aac606ddcc69237dc87774d7cacb6e691558af13662d87f38"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_indirect_field.au",
+      "before": "e47c58b1c964cb6813a3b5d3891bbaebe3d05f74daf2179c3a8e8ce84bb6b1f5",
+      "after": "5b357c88adba5cb3caeca4917dcc769475c44473aeca11d4ae7772ad2dcaa54b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_field_sibling_write_preserves_writeback.au",
+      "before": "aa245e85f4a367cc4523a200e72c182daa6dcf2aea0087d027636eea754ecc3b",
+      "after": "96ce52b9a203161e47b29dc6e3f6bcb94b409a68f558761099482a07672aa2a4"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_reassignment_updates_scrutinee.au",
+      "before": "60603b364b2d27aa649ad88a789fbd0d7d08092f1966fb9840eb16232884a9d7",
+      "after": "51976ca952adb9dc77447b77746b203f5d96afcc3c1e47449269057c135c26db"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_unreachable_reassignment_preserves_writeback.au",
+      "before": "a51e7526779bf4dce8a5ca1ca5d2e3e8b3392b7a28d1c4c9ebf34558639887ed",
+      "after": "028b50fd504b5138471794f3813d29e5ae52ac1eb4cd7de434cefa79e7dd0f10"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_updates_payload.au",
+      "before": "1857d84e0b29c98afd8ae2feb8701b15a1ee44542c6c94bf7ca2b96346e9fdc2",
+      "after": "115d604cb3ad65d87cae2ee9e900726ab3c2b0fae04c3adaa52f0919e2b295a7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_borrow_unqualified.au",
+      "before": "1068c82d5037c6a150c8b027bcae8efae4926c8951809a08404ecade556b2301",
+      "after": "e281fe2b623773138260f7b4a42f6a32359b822d8504b17e387a55a9ae9c68e8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/match_consumes_by_default.au",
+      "before": "4f0a547719c0705c9a04bb8db4533837ca642a9f4df7a91512236ffc40c0de41",
+      "after": "6a0d07ca772f2f33154b6ef9be41af8bb30e11e9f26127bd0f549f5a6129fe1f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/method_receiver_modes.au",
+      "before": "cdcd2f996801f9193747eeb432dde51af389ca021e5afa194e4dcda50be9323a",
+      "after": "44c790557a4b4f623c4922a05d2ef18a53bcd6eb86d9af483d25082dedc4157a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/mixed_option_specializations.au",
+      "before": "b74e30c4c977c83601b3dca4a9896bbaee497ebfd31c1540f1715fe3ffa4502a",
+      "after": "d93daac644b4eaf42eae0e85ebbd3c072577b102d48a0caa864146ca4c958b31"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/multiple_specialized_trait_impl_dispatch.au",
+      "before": "ed57b38fba3021a919271f71255dd5dabe98c95d22668511399c874350f0fe63",
+      "after": "6ddc5e5d19e7d016411bf86b6a7fc416dccecc3d85050fd9950c1e02feaf474c"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/multiple_trait_bounds.au",
+      "before": "42ee0cd4e0c67f3c6f7cd094f5b0c5dc9e7f29a097ccecac2fabc0452b82757b",
+      "after": "4ccdc8cc6cee63af66683c7e63e5a0a8f8f5abf89b4a61433e3b9d3b92f10ff6"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/mutating_methods.au",
+      "before": "f7766e4fa7238b473617e873b8c0c4b96b485f9b669280c8f84aa743307f5e44",
+      "after": "d82e00bcc114e4894bcd7d4c0e7665a1bf438dc41afec0d0b53ddedc8d53a76b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/named_arguments.au",
+      "before": "fce6f8b5763ac5dd158f9376dca5f555bb17caac8abbc0e74294e7f002b8400e",
+      "after": "f6387d6937cffc8ddbead3bfe701389a73653684bd6d44a1106545c357abf9a7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/nested_match_patterns_discriminate_same_outer_variant.au",
+      "before": "edb1fa5eeea175b4f73896016bd1545ab8ec0da791defc65fa1442ad65a62a38",
+      "after": "1d6614092b43372017fc0494e5e7ab54073c3cf06c444783a9a3f4edb10f97fe"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.au",
+      "before": "ae1f22dff18b9eb70195345a117fe9eb30608129c9fd773d7cf96cede6e7e858",
+      "after": "66534ea09c76a6a494a231f080b0451e9c13b5976b5d82be2b9e76114bfd517f"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/nested_projected_move_preserves_sibling.au",
+      "before": "ec3b9636d675276b62988232445ea735cf831d392a28b5bd27034f2289c0cdea",
+      "after": "59172afb987e79732a4cb3492a7a5d6a3ca9f4c2ef952692cefd8254b8bb6401"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/operator_borrow_mut_writebacks.au",
+      "before": "a677c34e8f0a846cf4f1e2e4527e71aacb1f6d35bbe7fee168001ef6b95a39ac",
+      "after": "4c85e1cd1701987bb747842415115738509479949c8045f500d5c2a542d361b8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/operator_index_and_task_defaults.au",
+      "before": "f45a8ace7c797cbb19e7d00903b7e94ea17ddae3ce4acb03e3ff9c7b9a05c528",
+      "after": "773ffeb4f38ad5882d42b04d44ddc3dc04dae478d8ee9ba9c19e93bfd7a70f0d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/operator_trait_value_receiver_snapshot.au",
+      "before": "70c2efa3e1dfeac9fcae5d211083b4c2d2484bf3e769fee88ee2f113e1c37f79",
+      "after": "447348155691433b80aa72b690b712668c808444968c0ebafa10881d0f8d95c1"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/operator_traits.au",
+      "before": "2993ac0dd499593d8b400b1f1fde3deb20f63662a08544932f7b5b638c806fa6",
+      "after": "abbd87bdf87c3b656a3ab4a9354c933493dd5912f88e23d7862879238d014ee7"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/option_none_explicit_type_args.au",
+      "before": "b712f6a0ec3937e1ffb3d78adba5e7e22a935934ec29faeaa3ecd44398f61a22",
+      "after": "435322850180cdb8b44142e89aece559b776e01d2a08cf6b0cbb68724641c8e1"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/ordering_traits.au",
+      "before": "7852812d99178f25322b0ef607da4ae4251104ad0d65dc6bb98f8209a8670243",
+      "after": "506e262273dd279988066a3fbf5572e92accafa65b211711aabb486a610289a8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/parameter_default_temporaries.au",
+      "before": "7f527e57c244ac1a0b71be6534b77b1534c9d8fd159faf89c50ab28b643ccfc1",
+      "after": "4734e37e05f661010f1e2ae3761a05f2967533c3b550c770d7b735c341d42f0b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/pythonic_convenience_methods.au",
+      "before": "6a26068d0e5cf230a2121cb4b44838dae584ca80b15414863b8fae278a44aa4d",
+      "after": "2c509d90fa44b838387f6fb802335e4e922c82622ba4f42f4395ea1cce050a50"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/random.au",
+      "before": "36b0f81a6cef4fd375117d146ae81f8160f48c39f3482a8b844f8b903e97b102",
+      "after": "c11cfa6f6af9e567ff87f782a64493c3739895b935184d8dd98ee37f51d6f578"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/random_opaque_user_clone_dispatch.au",
+      "before": "d98c41d05b2dd9ce04fe87ad1fa88155fad6fbe08aee066e5ab1108e0f0b61bd",
+      "after": "a14f0cbed97024a96c11414b752860a8eef895a762c48399b1c1f2f14341d825"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/random_projected_shuffle.au",
+      "before": "fe81c57ff5808d4e75f838a19059d57b2cb4eb1b0cbecb52bf565c25e69eae0b",
+      "after": "0a1f429bd6cc333defe966a523cb5c1a283221107209e4a4a957752505518b60"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/random_rng_trait_dispatch.au",
+      "before": "2825dd7070794ae8c219ef24f3d25dd31bc781a31b17afd82f6c02430f5d08d1",
+      "after": "8eea28e94316ba55fddd1ccec42b4b7061be232466128f4625856869827458e3"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/result_option.au",
+      "before": "abcf15413f0ae7eb7498d469b7592fc0b57e265f1eda25f3fb1bbaef04aad7ac",
+      "after": "acfba1df05c2b02e5cad2847d23d220b6eaa6f66d53c73e3cd744a962812482a"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/same_leaf_support/remote.au",
+      "before": "2b57e637637c772e69daa103a6cea50d74b5e381ebfd8dd862268ed758726ff9",
+      "after": "04a143b05368070e79bab582445934993f92a62066e671450ea155fa8660f5f5"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/self_parameter_in_trait_methods.au",
+      "before": "a92b54ce41482d8a1fca9c7d613ddc27644e5c7458609204e20436b2f9b41bcd",
+      "after": "d910f5a4c97f0000b1086d9002c6c65898e9a38119d37330529fd42b6e60a3c6"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/send_result.au",
+      "before": "6949714f5e2f767b84aa57bdc0d01497f9981b0418fb3f53393fbb3bfb3233b4",
+      "after": "a3db199edaa896868701c090bc149952be9d8c202b19a7be9c8b19660d261153"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/specialized_generic_trait_impl.au",
+      "before": "b9348ebe88d0208917aca3e5867bb1c039064d760e937da84d7ff35665418d92",
+      "after": "3b21b5a934fbe4a8343ba9de5e01874d97adcb4c4dac10c98881679b2e4df03b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/storage_own_parameters.au",
+      "before": "ed4e72585e80420cc258531f1fce63764bd083fc67559e4ed38c3fdb5342a60e",
+      "after": "8a29218d41dd979c3d54f64ad58c8625b26762bed9a9b292c04e7a03f6297a4b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/string_utilities.au",
+      "before": "dba0912c7efa294a0d046c2829773e37994f133d0ca3585de224a87aa4f4ee90",
+      "after": "7c0a7a382092daeac3c80f866ce73476859b937d81747529f638afbbe2fc5ee8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/supertrait_bound_inherits_methods.au",
+      "before": "63279fd9f6545266ebe0a8fd657643e65486d324744428fc07773000349b4645",
+      "after": "f91869b93b9bcda495c1eb7c198d8e05e9d5006ab3d73dad21e5f49605bc55ee"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/supertrait_syntax.au",
+      "before": "feaa87888004b9baa8db484b6ac65317d49f65836495c229fd129929e50652d2",
+      "after": "52d3a21bce3d4763168e2087d8a8a7b776f2e65b80d24fd45b60da0e5f57d2f2"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/task_capture_snapshots_copy_arguments.au",
+      "before": "83c5880d4f4a088a698d9fb2d82215bbf2d4c2cbfd122744d368f20e36d9be53",
+      "after": "7714e8a099cf3a708745cbc271a7040d541186cc5c8e5fe6b54be573f158df47"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/task_group_shared_targets.au",
+      "before": "ebcd1fcdeeaa0330248e1ac54085f8288b261acac5cf5cefd4d49e02ba873425",
+      "after": "80122efd64dca39a39da6753f887c58191abe8606106223a70e4662b966293e0"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/task_group_wait_helpers.au",
+      "before": "67aac3b01d50cef2a3a5eccfdc6a652386088c518d9e770421717c17eda181f7",
+      "after": "6ae2c8ff95d223128a94ba95b5ad6bd9df5ec0ec248c069a802d42a4a2eebdb6"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.au",
+      "before": "b96b9a19d7560dd9ef822985902a2c967ea586895c9bab56884617927cf6f4c8",
+      "after": "c8dfdfcdb9f626b00de0536c29feaee393f1f2badc107541e52a1154a407c1d9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.au",
+      "before": "b24cec31f75eee7295bc190a5100c59e2e790e5e92266f2256f4ce6773cf3dd4",
+      "after": "a3a48a40b7ddee5fe28134de6785255463f511a7eba1b9c08158fc08c3a7513b"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/trait_impl_builtin_and_enum.au",
+      "before": "5b3a2f2da3b2ab5078dc2600de3ab6f02bf07bbbe32bb84a7eefc3d69d2df08f",
+      "after": "c88dbb0d9294f98eb84b7d8d78f494e7b2118b929aeaca0aef0c8029fec0e4b8"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/trait_impl_queue_borrow_mut_writeback.au",
+      "before": "7ce9007d056b1b2871c6543f0d8ca92991f6a8b457af5559107fe31ad3655eb9",
+      "after": "b28c47f36bd43a0ceb413cef5f40c0d3f0ea740a603f74a2343d966e8fab47b2"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/trait_impl_queue_handle.au",
+      "before": "c81d8af1241f3b12efecc5125901e78252b2c00768b35d23ca905df51bf15dea",
+      "after": "baa58b5fa24645b3d0a79d9b11ff38c946b2314e0db361aafdd4226374832944"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/trait_impl_task_handle.au",
+      "before": "ad2e4ecea4632357f7f5cd042586395de140ad643994a4ef3d4854998ffc5a9c",
+      "after": "cf9a6f0c24d70a1378724ec3257c898207934c9695cd2aa3f5a9476b05335f60"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/trait_specific_impl_beats_blanket_impl.au",
+      "before": "f7e47a585eec4e3f3de6fe95709dc5b2341505e9d4046b9b03404a4d7dd715f3",
+      "after": "4e3ae0d9adb87c68b736fd223d8f268d8ba12214bea8abead691679b623ab23c"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/traits.au",
+      "before": "f20ab24421abdb8f20c966ecf257a8de8c5ced828dbf1c1d3bc0e6f847d87355",
+      "after": "45c47b65459691e56936df1574a30fe532b21bb245ee4ceedf54c393d4b1a6fb"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.au",
+      "before": "9076acc59e8e717a1aefcdcd87865554b2bd53f6a3fa1e7dc62474fd13761db5",
+      "after": "c5b0d94c4c33e83222f020cc93040b180264d066510610de6ce3ecf431cc7de9"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/user_class_named_rng.au",
+      "before": "870444aaa7a05698e00de1629513d93890cf5ff0bb11814ba48b7a0cc3f2c62d",
+      "after": "181e374727e0c8ff59dfe30d680354eb01f72bf9f2f17500decc50ef6e28af78"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/user_generics.au",
+      "before": "fdf52f1e9e41bba3eedd16530e62281f495f993d6da5f15b9bee31bb4b52dcd0",
+      "after": "2902d4cf35ef8f0ccdb2bc6fb0433971d058e2e2ff2081ba4305eb99ba2b1a9d"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/user_rng_origin_support/random.au",
+      "before": "043dfebc5548d80451fab3015b391c2ec101274bf75363d59f1cb4ddb5c9e513",
+      "after": "1358a3d17b2be5741c4c43e5c8dbfc7aea2083e9a270dd79439dcb50154b2e01"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_iteration.au",
+      "before": "9d1f5e79df316bb78fd19f243c8dc8b5ed8b8bf34f7479328c41605b7ad9ad31",
+      "after": "f72fc76457fade0e240f7387d0739d44397905e4e1e7f3011ac680897f8fbcb6"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au",
+      "before": "ca61b9fc0cb91ff89fa8b37ba0ab4af4d6cad5bdc8b83408adb51911c008313c",
+      "after": "83d816df17aacb1b0361fb2788528f24858aaed4f623dec321d8624794bc9a57"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/vec_literals_and_methods.au",
+      "before": "5d2a4ac7818749cb415c420daf673af8ae936f92f87fb13d7dee8be633272003",
+      "after": "164bd543503c89052e10e33e1c4c4d971b33d8eb32f54dd2d9ccf701a0c372ae"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/vec_map_set_utilities.au",
+      "before": "c3a73711389ffdee8ed7edd74076de433e1580161d39c697fcc599091f2eb428",
+      "after": "c7df95f37a188a1ea15fd093a4696648a3c68d07e55229258e1d2d5e30894c74"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/vec_negative_indexing.au",
+      "before": "77c2cbb4b54a4846eefb9a3df0dd6f7305242aff47faaf970e974a08e881c891",
+      "after": "9c8d900d349da201f31af48f4c401028d90a5f1f8bd81b06461e0e821a706027"
+    },
+    {
+      "path": "crates/aurora-compiler/tests/fixtures/run-pass/with_resource.au",
+      "before": "7111f512e36764f11525059563af1bacda4b756272240be364d3fa02b4e4eb01",
+      "after": "7013824750aadc3b3dd9a049cc94c546685f2f6c6eb251cdc72000872ef630a4"
+    },
+    {
+      "path": "docs/aurora_language_proposal.md",
+      "before": "0af2901abb7d1f86a77abc919cab287bd3de18c10747caab4fe8c68d88a5a971",
+      "after": "2e4aa42e4b7a5458c3e78e0d6b8c50f405cd96276639624a243c8ffdf9be36c6"
+    },
+    {
+      "path": "docs/index.md",
+      "before": "fe98981c04f7e2fd31b065ad9eb9c47b3030e66903a8b8171d76fc6c2433b4a0",
+      "after": "e2e29a4882c349c5131f54e14e01cf8522188dfa8e2dbf2b9711a2eec7dedc15"
+    },
+    {
+      "path": "docs/learn/case-studies/log-analyzer.md",
+      "before": "4c73c7d8c691cdf5772e8dfed30b1715be1a7059151a22af2df69b78ba42f731",
+      "after": "6ad6f72ee8856479bf4244b57b303b1dffc04abe8e07270af2ef4cdb487933a4"
+    },
+    {
+      "path": "docs/learn/case-studies/queue-worker-pool.md",
+      "before": "258888bc67330861d051fd5dc06dd11e44dca8ea9f43786bd6e9dc3259f705cb",
+      "after": "1cae52a53f608a8508f494ae56d18c0db010cae9d30297dad148c12ef5869682"
+    },
+    {
+      "path": "docs/learn/collections.md",
+      "before": "03af6223f8d904493e4abc894a4713438c640e0d51df74c5c15eef7459a5ff87",
+      "after": "e897e3d6af99990277b93abff10f19030efdcba1f2b4d884bcd7f9d575c4c2a4"
+    },
+    {
+      "path": "docs/learn/concurrency.md",
+      "before": "69a877edd4b9f50f3a390b048dc810d524596d977e8b378ca5388ff55ef6fd16",
+      "after": "f649f9c63f49fe8cff98c86bb1ff0a43ed5cd6660e2814bb4986a9f264e6d101"
+    },
+    {
+      "path": "docs/learn/data-modeling.md",
+      "before": "aa8b29fb4778cc468c5d68505805e0384d92f30a6efd2a41f9a354e8f1ae2c86",
+      "after": "62b53b10463a00ebc0380f06eb309771a26855a0f91eef5fbe3665386b4d9be7"
+    },
+    {
+      "path": "docs/learn/index.md",
+      "before": "fc3ce72c0d93613db3e500859193131f368b04b610834036fdfb96319e6af9ca",
+      "after": "0ba5e2f6128a75479eec3964b6ce1646883938fa1d97d17342afa8841143a4bd"
+    },
+    {
+      "path": "docs/learn/modules-and-packages.md",
+      "before": "9959591823acfa2a94cc0f536b941e446fc44546e672f3d16faec56ad47fc688",
+      "after": "1d043187f810714235528f783d73b5ad427860c55c13baa58151c88f9c842d49"
+    },
+    {
+      "path": "docs/learn/ownership-and-borrowing.md",
+      "before": "512c0b7bc19b6db44f01a227746dd9fcbcf5da77bfe5f314aa6ee40cbf00b55e",
+      "after": "094ddddc46d144643bbf36ab1d35168ea32875e1f009cdff62699477fa39931b"
+    },
+    {
+      "path": "docs/learn/small-programs.md",
+      "before": "939b092037ee99f57a5cd9cd84feb771c8dcad9ae2172a82f757827509cfe0c1",
+      "after": "1b8d1da31e04ed1ca5e84ca9c4c909ee1e64708c637c1476ed4c943c7bc3d389"
+    },
+    {
+      "path": "docs/manual/api-index.md",
+      "before": "daa9731b1806213670c90d9d614b14bb59c8d3609611f296f98c46c003d30f48",
+      "after": "73f18932b46cee118d054eb7ff0a6ddbcff04860c46f22b16db04450705cb290"
+    },
+    {
+      "path": "docs/manual/classes.md",
+      "before": "716f2b3058a3ad54838aa41772c045048d6d4c859b2e310ee97770b1f875fbb5",
+      "after": "bbeba56d5b076a3ae2afa29fc16654b4e97b995c5e5f187ddedb2de21b8c5991"
+    },
+    {
+      "path": "docs/manual/cli-and-tooling.md",
+      "before": "b16c6e9b7957b2fc3909fd3eecbac9d4dcd51585be29b4347d78682e65df8ba1",
+      "after": "8cc9cd72dc346b4bd1ee809fb9e44e92537865273c07765ae988f83fe82085f6"
+    },
+    {
+      "path": "docs/manual/collections.md",
+      "before": "c0f0ea989e07136b9cf100b13fea3a204b91b577f6aa5738c30820d4bce33c16",
+      "after": "ea82b76df5c970ff1489e7c390dada45ec3eda84a8569d613855712be89a204c"
+    },
+    {
+      "path": "docs/manual/concurrency.md",
+      "before": "bdd75c72b679a403a0af38d432f4dee2f99586b9059645635e4c696e4e190a17",
+      "after": "896ed62765d3407b376ea2391d1cba0accf24212fe37f4f4a5be39ed1ed525d6"
+    },
+    {
+      "path": "docs/manual/current-limits.md",
+      "before": "099073e5e6c489830cc6cc563ba97471dc43adcdbaac2831cb390903395c1363",
+      "after": "1c114f8ae440ff80930a860659c8114d6c98d64fc9415bde801bf6bffbfde7d4"
+    },
+    {
+      "path": "docs/manual/diagnostics.md",
+      "before": "de23d55e6f0c2e0f4059e936d35c401fb7c06e1936ad470dec8fc3d67e3b0755",
+      "after": "04a53c9d838186d3f2f6d31c08e7e13a49e2f1d9a6d0c1cccf4d1897dd5af703"
+    },
+    {
+      "path": "docs/manual/enums-and-match.md",
+      "before": "8bc021bacd5e4c801a92540b19a4ffd7cff566ab3fd90d006fbc6ad31be99dd8",
+      "after": "b015f30f08b31a837fae2347ca7253fe760a25dcafcb26bb64ce01e17bd5d375"
+    },
+    {
+      "path": "docs/manual/execution-model.md",
+      "before": "7326b932d358ad61123ae41a835b8354c4b89298cf1c0247c7a8dcc364f99a0f",
+      "after": "907bfc83dfd3021a532e796b4a2da6d6ebc4cb0471085cd9562d4f20ef7c6128"
+    },
+    {
+      "path": "docs/manual/expressions.md",
+      "before": "0d7fd2973e53af495504bb06dbd749adbbe7039fc99b769bf30dcd0934615865",
+      "after": "9f4d961f7bf5429f389ec7361439f08be9e925b223056af7035fdcf0d3e2645e"
+    },
+    {
+      "path": "docs/manual/functions.md",
+      "before": "518ca9211d64cadfc01afbc19cd61f27332a528e9f1258d0d3359643cbd05c6a",
+      "after": "e5cdfadd88ad5b5720bee9d363b95c5610dc1c20f1062e01c1224e3c04405d72"
+    },
+    {
+      "path": "docs/manual/generics-and-traits.md",
+      "before": "17476c5fc5f1315f2770deb3518cd89eff943a4a7095ab208e0a4dbe5d8bf3f6",
+      "after": "4fb977fd81a4455d939e3cd114a56a932987e8c09d34f1b4cd62439c1d06ed3b"
+    },
+    {
+      "path": "docs/manual/grammar.md",
+      "before": "83692c0f58986be60d02f27449ded5dc7200cf177112899f34795b2753f7213c",
+      "after": "888303a4e79b4e367528f5c2f1ce1ddb4aaaf24fd01a9a049448c9162c92334a"
+    },
+    {
+      "path": "docs/manual/json.md",
+      "before": "650a522544ec54735131e3cbe979c93d7b41b1c2f006713d4cc15f965afb7aec",
+      "after": "219851178586b96c218215e021308d64997dea6e6a28777550b07e77d5ec7e17"
+    },
+    {
+      "path": "docs/manual/lexical-structure.md",
+      "before": "be4e72dc6e02d1587501fafee679ae47eae8a3313818f58dd449396b64f34b34",
+      "after": "379dd937d668c54b8c3f3cacab16047aaf57610db4347895110e2d6db481b607"
+    },
+    {
+      "path": "docs/manual/names-and-scopes.md",
+      "before": "e47009a0fbfe773e162714b772e965357443f7b82137b491b39b33f78c20d4c1",
+      "after": "b9671217bb38d0e5da370390aed9e75cacb58f5bda163356a48a27ca26b387bc"
+    },
+    {
+      "path": "docs/manual/ownership-and-borrowing.md",
+      "before": "5e4bc79af7380dc2b5690395fa4cc024bc533272d7bffefc97ba937ff0c85642",
+      "after": "73f5a410a60986109b28feace55284fadf7fa16fd210d6d27ad372f834923366"
+    },
+    {
+      "path": "docs/manual/randomness.md",
+      "before": "54b3b017c14f92bc0f73f723f6ed9b97a6e4140a4280b4b4571535f083c10013",
+      "after": "9d2b3b863c35b5d7f42d40e6fad7294be7bfc764e768da0b19d96d55ae34f45a"
+    },
+    {
+      "path": "docs/manual/statements.md",
+      "before": "3f808c50291e5230ef4c1981e78f754c624f1f03710dc7480c6c40305dc8dc5d",
+      "after": "2ae33cc770faff65248edf10a3df8bbe407e42c13cdcc6c807eecaf5fc81ae8d"
+    },
+    {
+      "path": "docs/manual/static-semantics.md",
+      "before": "2b369f0738285f8bb84881e54e8e9e50a8076c6b45c4a7ec997917420674c634",
+      "after": "6daeaebf4f0c6f337a83cab6f65652d5fa0656070f685468a3e2cd47f5290f8d"
+    },
+    {
+      "path": "docs/manual/tuples.md",
+      "before": "832234fe10aaa80b8088275357fd3b242efb7a74def831b36fb5db3d7cfb620c",
+      "after": "808104049b9c26ce8a2dfbc8678e71a75b8b3e66eef85c12d3767d6a7c915815"
+    },
+    {
+      "path": "docs/manual/types.md",
+      "before": "272910399bb561d87668bc5d8152a95925d46bbcf9314c765ed617286efcb237",
+      "after": "a42066baf6e75dfd92f4343c4a1cbe4ae30e8a8f3c6cea1d17385b98a9c94139"
+    },
+    {
+      "path": "examples/README.md",
+      "before": "5f2c96720999e73aa57790c30eae92663164e298de72aa5da006fa20dddb0c47",
+      "after": "1e76504217d2998fd146b381b38fcbd0bdff160108d8f25468570e80d0df9f60"
+    },
+    {
+      "path": "examples/agents/retrying_network_worker.au",
+      "before": "bdf2342a6043245494f7f496232550f773158f1c381acae66feb969b6cd0e7a3",
+      "after": "aeaa4bcc4e64f401df831f20234b2958168b1dfa0de10c5f03c552ba3d2fed59"
+    },
+    {
+      "path": "examples/basics/borrow_parameters.au",
+      "before": "8570c20dbfee2c314612dfa86ee4d78dffa81df7c18d4acf05d823b9e3a99f6e",
+      "after": "ee9f673bad5497ebd2c8ef97457e9ff9cd277beffc8e5ae8edfe57943decd180"
+    },
+    {
+      "path": "examples/basics/borrowed_lifetime_labels.au",
+      "before": "2d00815f2bf14bafecf77173c745d14a5919435c75b13965e004c79a139d2aca",
+      "after": "7abce3c53f5515f31988f68927e369a0d857ecccad7466318abfe4ec18e5b42e"
+    },
+    {
+      "path": "examples/basics/borrowed_returns.au",
+      "before": "bf4afe03809299096a96070bc83c444e67f085a3a80ac49db292e63da95cf36d",
+      "after": "76acf33bc0e9aaa1d0fa5ecd8086e1b1bf348c46b45682b8a1c1543c36c907c3"
+    },
+    {
+      "path": "examples/basics/named_arguments.au",
+      "before": "fce6f8b5763ac5dd158f9376dca5f555bb17caac8abbc0e74294e7f002b8400e",
+      "after": "f6387d6937cffc8ddbead3bfe701389a73653684bd6d44a1106545c357abf9a7"
+    },
+    {
+      "path": "examples/basics/simple_example.au",
+      "before": "fb17e89255167100f3366669e183d41de86ccb49d718f97b71ca02882281c79d",
+      "after": "4cd9b171446cce0ee7c029d0329b1caf76f307b8ee651d1b47edeaae1d60dbf4"
+    },
+    {
+      "path": "examples/basics/tuples.au",
+      "before": "7a4e923d1e312c13817dff0da21828b52c202e2d0fcb0cff82fb60fa4a6dd77a",
+      "after": "9ee966f5f2278125abf02fa7072da3186705a3cd89ef213136ebcadade4374c5"
+    },
+    {
+      "path": "examples/classes/indirect_recursive.au",
+      "before": "4c0911d62396062ab518130bab24b819382c58044a141352903249b219f73f24",
+      "after": "1303c548de4e96bd9e84e66e70c98a5b00918c757a68a1ff569f7ccd19052095"
+    },
+    {
+      "path": "examples/classes/methods.au",
+      "before": "2c872c25be1a200955f27067a9a3044e8688b47ce427c3fe09c8d0ae3fe37845",
+      "after": "bbb82cc6200a617f68e3b5095140aa47ce436eb2c2f4a1d32d573b112139e740"
+    },
+    {
+      "path": "examples/classes/mutating_methods.au",
+      "before": "2416a57d551ebd7e85cc5f8337d51fd5ee99c168913a220349f360c07f49a91e",
+      "after": "6210c0cba87bf48df4b2f7f329e5b0e57a6b4e1749961f1ed25a5722dc657c7f"
+    },
+    {
+      "path": "examples/collections/map_basics.au",
+      "before": "37073829714888701667afe1635f300c2702ef06223e37e265bd999e19305f3b",
+      "after": "ea3f874e629e4feb119481fd20bd4eb9bbae7bb7802d6d54bab424f3d5a4390e"
+    },
+    {
+      "path": "examples/collections/set_basics.au",
+      "before": "97a8e5fa32eef268cc33ab18a2d4b7e87aecd27c80fe203b9c9e740d6ed78fb0",
+      "after": "b56ce989089c70c9142e6e4ee643af6311b7613e4aadf1ae63eaf25d856a3c05"
+    },
+    {
+      "path": "examples/collections/vec_basics.au",
+      "before": "ac49d5438514909ec2e2446ad1f7d3cefea0ed8695f3c4bf42af32d0a80070c8",
+      "after": "7e3215163668d93ced1bbfde83008bfc04cf36c30c92ed5b5db5b0ca649d1f94"
+    },
+    {
+      "path": "examples/collections/vec_iteration.au",
+      "before": "d3091179a824fb25077b7b1d9f71e547733bb976836820c4619fc627a8b929f1",
+      "after": "baa0ecd701c8e31a86b6b336e54d24757660dd7bb3473e968672d75d1c0cfa9b"
+    },
+    {
+      "path": "examples/collections/vec_polish.au",
+      "before": "8a68c92ce0c123699b36385f06e9180e02a2ac935d63cedc291b6b18b0af2522",
+      "after": "35693617bda66e5958afc9f8370249ebe536934a908cc297797a7805b5518c68"
+    },
+    {
+      "path": "examples/concurrency/send_result.au",
+      "before": "6949714f5e2f767b84aa57bdc0d01497f9981b0418fb3f53393fbb3bfb3233b4",
+      "after": "a3db199edaa896868701c090bc149952be9d8c202b19a7be9c8b19660d261153"
+    },
+    {
+      "path": "examples/concurrency/task_group_wait_helpers.au",
+      "before": "9a3a3ab4e6e93eee92b199655f9edefc9bff31592ab6f7d7ff5c860baffdf822",
+      "after": "80a320234f2bc347945e61b7fcc271481822bd075880b1454c2f881a0c3043e8"
+    },
+    {
+      "path": "examples/control_flow/match_literals.au",
+      "before": "fc12ecd17543788d8437be66895b892f2c5244b181753b39b4dc66187d61b947",
+      "after": "3e36c81e9d3f69bd1c30289f156bfec205039648309e2f06e0a9cb3d7f63fccd"
+    },
+    {
+      "path": "examples/enums/constructor_ergonomics.au",
+      "before": "70696b7c60160c37fae0f65714bb9fce53bd1f7514b773b2c24882cfbf7519e2",
+      "after": "c7e57f20da631968a7cf0a485cc4f1826a9a46734425fdf106c7c59181926e46"
+    },
+    {
+      "path": "examples/enums/explicit_type_args.au",
+      "before": "6dfbcd690f46a069c02daf1c15dd4d857d19816f67d32ee146cd48e252967283",
+      "after": "164432685e8dbfb100f82c0e746fb4f4b815fbf0833c84d6a52e9fb244354533"
+    },
+    {
+      "path": "examples/enums/match_borrow.au",
+      "before": "8dc4b0f448f0fabf1d0ba3580f260ea8a04f588d9a3f928ca1690764e7806668",
+      "after": "e91cf64235651ac3555c9f20169fc7dac8a7d36e1f4ea36711237739b3dcf71f"
+    },
+    {
+      "path": "examples/enums/match_borrow_mut_fields.au",
+      "before": "8055f01469625116ea12f7f96adadd36ec2f582bbbb798bfdba88cecc6664090",
+      "after": "96bdfc05db55f61385d44323c479d2e5af7d3ec9da11229366277bdd8cecb2fb"
+    },
+    {
+      "path": "examples/enums/result_match.au",
+      "before": "85e07322e457d0231fe1727dc1a55e94faa58a016c438737376da71657a698ab",
+      "after": "0d92450d8452243e76e9dd300e4b93e817d3286677f4083806219b8376eb10df"
+    },
+    {
+      "path": "examples/enums/result_option.au",
+      "before": "abcf15413f0ae7eb7498d469b7592fc0b57e265f1eda25f3fb1bbaef04aad7ac",
+      "after": "acfba1df05c2b02e5cad2847d23d220b6eaa6f66d53c73e3cd744a962812482a"
+    },
+    {
+      "path": "examples/generics/bounded_types.au",
+      "before": "e0d9f3e6bf5eed7c11cae7c18a350ffe95872181d2299d2c2930953a71cb73bf",
+      "after": "e45649cd9a3c4d8f80a646b7037429eb0194b2311a4f171327964d86bf04fa6b"
+    },
+    {
+      "path": "examples/generics/box_and_wrapper.au",
+      "before": "fdf52f1e9e41bba3eedd16530e62281f495f993d6da5f15b9bee31bb4b52dcd0",
+      "after": "2902d4cf35ef8f0ccdb2bc6fb0433971d058e2e2ff2081ba4305eb99ba2b1a9d"
+    },
+    {
+      "path": "examples/generics/clone_safety_obligations.au",
+      "before": "dc1372b4fa6ebbf76b89589af4a5beac476201afd967d9b9373961b492b61d18",
+      "after": "cd019c04c27026a406e46620bc504d6a93dec38b4d51370d7848e01871a3583f"
+    },
+    {
+      "path": "examples/io/tcp_echo.au",
+      "before": "bb6ccae0c6d160d6e175f1b87d65a6260e74e4cc556301838a0670dda949f1a6",
+      "after": "2298e08e4b9a5944036f2be5caad562a327d5c3b46723c377a7d1044c80df54f"
+    },
+    {
+      "path": "examples/io/udp_echo.au",
+      "before": "6166be6341fd094a875373c5a66a90c72e6763f4c976be30d8caf4c97ae85df3",
+      "after": "9776ecffc30f1b7824d4031c01872f5e23afc7c1c8752681ed2c116b05a694c4"
+    },
+    {
+      "path": "examples/modules/helpers/counter.au",
+      "before": "a7bc2b5ffb8d2dadb2ec8af79475605aa891a279983e697f17a2ea899d6e448b",
+      "after": "329f88db79eba890d34fd8156f2b093f912757ede3d01bdc369b306b72b556dc"
+    },
+    {
+      "path": "examples/modules/pkg/named.au",
+      "before": "b8bf2fd526a5bf42b2b8f74135a27588b5c7686994d80c971806bfaedac7da49",
+      "after": "c4bbe072b84923e83888cb5760abbad05081bf73aceb34c43719546111fc2b5a"
+    },
+    {
+      "path": "examples/modules/pkg/types.au",
+      "before": "0079600ac0b681aa8500416777413d3707e2d49ca4cda053b6328556efbdcc4d",
+      "after": "6debf8e87d65ed3a24ff8377b5cf94100f58034e3b86dca8f28f412fd4acab73"
+    },
+    {
+      "path": "examples/modules/pkg/user.au",
+      "before": "0b2096500bc950254ffb51a3e367e21e2bca19e783fd7ee75ea63a4eb85a9619",
+      "after": "81a7446d4459efec4be5df344b3fb455958b67ece49f839c608909a02b5be781"
+    },
+    {
+      "path": "examples/resources/with_resource.au",
+      "before": "7111f512e36764f11525059563af1bacda4b756272240be364d3fa02b4e4eb01",
+      "after": "7013824750aadc3b3dd9a049cc94c546685f2f6c6eb251cdc72000872ef630a4"
+    },
+    {
+      "path": "examples/strings/borrow_str.au",
+      "before": "381a03eb643d3e733c8b110fa0a338e5550dfd18f371f08acc2178bbe0572fda",
+      "after": "818f764d4d7bba19a9095abb87c906ea6d1e54e30d230461b11c90afe3f8d6a8"
+    },
+    {
+      "path": "examples/strings/string_methods.au",
+      "before": "b9035863273792bb7f8a9d4d1b2bf254b4b0bb7468cd71898809cbb784379ff8",
+      "after": "f03200035974781759e6081deef89769fe69f23acac80f180671cd16f27e677a"
+    },
+    {
+      "path": "examples/traits/builtin_target_traits.au",
+      "before": "ee5d6d5892fd0c92154774157f0a2b44bf984e713ee8559b6b0c15122e4efa7e",
+      "after": "1dbb54503634a073bb6b4aaa5e6be90c6f002a88a0488e307811beeb81a67259"
+    },
+    {
+      "path": "examples/traits/clone_safety_contract.au",
+      "before": "21dfa8139a6c438f474d094057fce15aae6723691a84d605f308e5b1608a94cc",
+      "after": "e2fd9079826583d08473bcc942c1078bccdafab0fff6684c9d99d7aab67dabec"
+    },
+    {
+      "path": "examples/traits/default_trait_methods.au",
+      "before": "fda0d7b8795b5d420068bf97cd3d87373df0e6767afea90ce241bcb9aa5ee57d",
+      "after": "4de7394a7c6429606f8c34f46c000b23b5292988ed519518b27bdd087f8b6b76"
+    },
+    {
+      "path": "examples/traits/generic_dispatch_multiple_types.au",
+      "before": "7a0fccfe99fa29dc9677fecc1ad1e3d71323b0881b1a7be09207059b3faf3a96",
+      "after": "4902b0e17dee39ff6f93db8545a469d9ac5ecc799babf4a017000c315a02a4a3"
+    },
+    {
+      "path": "examples/traits/generic_trait_bounds.au",
+      "before": "6b6c14c2ecd9f61c32c58ef57601427150e8f529d29fe21ee68fa5547afeb6c7",
+      "after": "cba316933426fb374a766e7260220af27112c9f1b7307b06440872d57e05f3df"
+    },
+    {
+      "path": "examples/traits/generic_trait_impl.au",
+      "before": "c852eef199f7b6631a74c8bc08e650d214c72aa4bb9ffe671cfa1fa863824c21",
+      "after": "6ee4dbacc8a325d9693f4670c684b8b0caef5a9f1f124d945efa2b9699dce676"
+    },
+    {
+      "path": "examples/traits/greeter.au",
+      "before": "f20ab24421abdb8f20c966ecf257a8de8c5ced828dbf1c1d3bc0e6f847d87355",
+      "after": "45c47b65459691e56936df1574a30fe532b21bb245ee4ceedf54c393d4b1a6fb"
+    },
+    {
+      "path": "examples/traits/multiple_bounds.au",
+      "before": "42ee0cd4e0c67f3c6f7cd094f5b0c5dc9e7f29a097ccecac2fabc0452b82757b",
+      "after": "4ccdc8cc6cee63af66683c7e63e5a0a8f8f5abf89b4a61433e3b9d3b92f10ff6"
+    },
+    {
+      "path": "examples/traits/operator_traits.au",
+      "before": "1dbe81b01c9f683563aa9564d779e045a884aa6a8b26a446af98ab2ec3d6ccc8",
+      "after": "b85cedee04deb8ca4f0ce7c3a7c8a44e729b744c12a94ad620beec2b9d41dca8"
+    },
+    {
+      "path": "examples/traits/ordering_traits.au",
+      "before": "7852812d99178f25322b0ef607da4ae4251104ad0d65dc6bb98f8209a8670243",
+      "after": "506e262273dd279988066a3fbf5572e92accafa65b211711aabb486a610289a8"
+    },
+    {
+      "path": "examples/traits/self_parameters.au",
+      "before": "e6905aa92d1d7b8bf10005e9d639aab47bc13d94db0bd76c295096cd5ca48c53",
+      "after": "d910f5a4c97f0000b1086d9002c6c65898e9a38119d37330529fd42b6e60a3c6"
+    },
+    {
+      "path": "examples/traits/specialized_generic_impl.au",
+      "before": "b9348ebe88d0208917aca3e5867bb1c039064d760e937da84d7ff35665418d92",
+      "after": "3b21b5a934fbe4a8343ba9de5e01874d97adcb4c4dac10c98881679b2e4df03b"
+    },
+    {
+      "path": "examples/traits/specialized_trait_dispatch.au",
+      "before": "ed57b38fba3021a919271f71255dd5dabe98c95d22668511399c874350f0fe63",
+      "after": "6ddc5e5d19e7d016411bf86b6a7fc416dccecc3d85050fd9950c1e02feaf474c"
+    },
+    {
+      "path": "examples/traits/supertraits.au",
+      "before": "0d3b2a8a477e38b8f48925774094804fb13b3dd04805133efc7b18c77a8bfdf7",
+      "after": "832cbd35a61d5f0989c585ae0395ab314e775fd621566e9c182ab97bb9d1aa37"
+    },
+    {
+      "path": "test_edge/04_string_class_fields.au",
+      "before": "c870b6d97d84da59cb7574d04b1d5f80cdb12e05830983860af0b5378447a87e",
+      "after": "055c1bd529f327b9a86c8920cd3a78761c50753314366fedfd469ebc5ec3b242"
+    },
+    {
+      "path": "test_edge/10_with_resource.au",
+      "before": "172c19506424d6b228be1390cf553c1cbf51e2b4002a8d4a3bb0ae114239a171",
+      "after": "85cdd5576246165f94b61a886de09afa779777a590f49c0b7484e1500b6f6832"
+    },
+    {
+      "path": "test_edge/12_string_match.au",
+      "before": "038ab6afd2a7267c72f65122eef1065210d23020e8a11979e1d02b90e4483296",
+      "after": "99b24b33855ec10e549ade3a10aa1cc5de2910e7bddd3aa5f1fe6421fd0d09a2"
+    },
+    {
+      "path": "test_edge/17_nested_with.au",
+      "before": "3b574b730c158229123a155d9cbd5d16e64bcafa1ac4bb0170ef3c4304d3ad41",
+      "after": "847a8d7c37f5320a9db5cd5bee979e042b92af370fd7db784e473e1b2b900af0"
+    },
+    {
+      "path": "test_edge/19_multiple_classes_strings.au",
+      "before": "5a23ef685dad0f75b2003bd48afc1c2a8a4c4c878d603b3c6f30fc9a622d3eb7",
+      "after": "8c6c26f3e448e5ccd52a241cbef5b60528237284dcb1197b78888946a6c7cbe7"
+    },
+    {
+      "path": "test_edge/20_enum_string_match_exhaustive.au",
+      "before": "0ca99f49616816ad578388afa2e0e130258dd3c7c1c8dc0022f98fc2aebf0899",
+      "after": "479646d18b95458388d7570ee56e09cf1d465e59c413763b57183e4a5dc36bbb"
+    },
+    {
+      "path": "test_edge/24_with_close_order.au",
+      "before": "2cd478550fc1f8b52235676fccc2c5ab394deab00ca2ecab74460290d88815fa",
+      "after": "b935507e72e21477f680685c413a42c8889b204040360d9decebb6cd8355352f"
+    },
+    {
+      "path": "test_edge/31_string_concat_in_class_method.au",
+      "before": "94668476a2868b681362e2c9cfcf1f2fd68df00420788ad89366551f04791a97",
+      "after": "429ec8d776ebf0ec50feaac665d5110a6826b2ec7cbf4e354be7d135727ce713"
+    },
+    {
+      "path": "test_edge/35_enum_multiple_string_variants.au",
+      "before": "936d44b9468a40a8d42a44487814d92c9aa4eedd496d6d1a6468a81ede37bd54",
+      "after": "889181858f71d04712dd9f0610faa8e9d39c5c3f1fae050889d11677e76050a0"
+    },
+    {
+      "path": "test_edge/conc_09_select_multi_channel.au",
+      "before": "15392846c1f22f9e7b572f5d916ad03c2a5d79e8955b32f4272b86feaf81dd94",
+      "after": "b5ac74b197f99757ca64d12bc8427d24b34b8c914fb8eec5dfdf32870279e216"
+    },
+    {
+      "path": "test_edge/conc_14_send_closed.au",
+      "before": "7661d28596f14b23d33a9a0068f937f6e73727cd680b43ebb132bc5feaf86341",
+      "after": "dbe723ed67cd17b5d685748c59ac4d083fbaf573048dae560620ca2198268c31"
+    },
+    {
+      "path": "test_edge/conc_16_channel_enum.au",
+      "before": "19961cabc874addbfd0c388c08a873f2795079343c51b57b27ff2f4dc0e35fcc",
+      "after": "b19cc43d548e6ca4e626bbc98c4207ba10a8d547dab49b25e0d45b5481641ca6"
+    },
+    {
+      "path": "test_edge/eval_concurrency.au",
+      "before": "0841b7d69d48ab3b0ac7f1e9f8ba4ac9363c913e18b122b77c2a9d7d7fc339fb",
+      "after": "e54af24326bac73377a4704e74c4f5d8f5a3cbcf7c51952ab24d39e875511dcd"
+    },
+    {
+      "path": "test_edge/eval_errors.au",
+      "before": "c44d77c3de8aa888fe76a7b5b9d688245c9996103cdcace49c5c3f53a6e877cd",
+      "after": "95600d5710db6c06abbad712ae451a20799437cae6cb5ef003f90dabb48a5434"
+    },
+    {
+      "path": "test_edge/eval_generics.au",
+      "before": "fc279221f965f46868079b3bd2b5a50461e26965396d477ab56e1b4659b5ff5e",
+      "after": "3bee8143cf96ea7d3a001a3e1cf7947cf59cf4d63c49cca1d5a81fb651ec4f54"
+    },
+    {
+      "path": "test_edge/eval_strings.au",
+      "before": "16ba325897b043edd670ba40c8a06e6df2263a4b5f38e85aa9c61f3db6d0a2fb",
+      "after": "f7a6f3a6ec814187129d5a6ed00834b82b7f820adf27454a51d5c32de03542ea"
+    },
+    {
+      "path": "test_edge/gt_03_generic_class.au",
+      "before": "d9834f58e351f14e7f0ca3efd2d0f2bbd0185aced40d3ec00c1f8156292255cd",
+      "after": "5e3882b6e63828336d52c446379466b58f005efbd52cdf84db22d9eded21ad27"
+    },
+    {
+      "path": "test_edge/gt_04_generic_enum_match.au",
+      "before": "3c25b02e94dea9688124db92727f0405146f87a2da1fcd5bac8e2891cb09edc8",
+      "after": "ab98b5eb8d771a7d028474999df4700ffb1f8a4808a4aad76d48977bd1912b41"
+    },
+    {
+      "path": "test_edge/gt_05_basic_trait.au",
+      "before": "a3730bad2a9070655ddf0e8e5925313d653bf93a4109fbd4c6aab85640056c38",
+      "after": "34be887d8bae0eb4556b78b25f4a28d6b64f1e8b6b5c8b963dd5dc5cd88851ea"
+    },
+    {
+      "path": "test_edge/gt_06_trait_bounds.au",
+      "before": "184885bc15c0fafeceefcdb0235377ce3d20e1bcf790ca1c721354719452a060",
+      "after": "9f046a4ab595e16ff43268ce2e46a52202cff4cff8c161adbfd7a9af1fd2e141"
+    },
+    {
+      "path": "test_edge/gt_07_multiple_trait_bounds.au",
+      "before": "3cbe1ef1a0fd38ff05ae7e63f4091c2d5596b74f51127af81239f6075f12929b",
+      "after": "0fbbc8627548063d6150edc239743f852d1238168fd4da3a87be405a154f7c13"
+    },
+    {
+      "path": "test_edge/gt_08_trait_multiple_methods.au",
+      "before": "36f1f6c0d302450952909cfe4907bdfe71fc842cd1d99b4b4389093bb6c5a62f",
+      "after": "2adb775b9f64504a7308ac848e3fa304299617763d42fbd9f96c64959620ca52"
+    },
+    {
+      "path": "test_edge/gt_10_generic_class_trait_bound.au",
+      "before": "d49550117eba49b63d332732bff4eff929bde704f5fef92e5ba48760a60e31d9",
+      "after": "4249c29f231876f80fd9646987f48a231fe377fb3b3bea05132773624d714960"
+    },
+    {
+      "path": "test_edge/gt_11_trait_on_generic_class.au",
+      "before": "ac8fe0cd68aea34801dc281ee84a2092a750792ce0aa579a13370b4fc60cadb2",
+      "after": "62eeccd7e204ce6ee13f1b8729adc9c4077f5efb93cbdf7d889673a85444c7b8"
+    },
+    {
+      "path": "test_edge/gt_12_nested_generics.au",
+      "before": "571d84873b2636f81d6c97e6a0d223ff8511461ef158baefbf578af6f9e104aa",
+      "after": "815af81d15d36ad6033d2caec5d7ddd8dff94ec44992135ff5d3530a0cf6b028"
+    },
+    {
+      "path": "test_edge/gt_13_generic_method_nongeneric_class.au",
+      "before": "9b84c68d817b42d51f4dccb2bc9523b7ad2150d9383b3246464b9cdfdb25c1d8",
+      "after": "fd5c43e6af5a49d0f5d628cccc1d92837afb5eba2bb5b59c8cfbfd04b1ca1976"
+    },
+    {
+      "path": "test_edge/gt_14_trait_in_generic_context.au",
+      "before": "c52055258ce91cc4b5f61cd3fc62d8a6ec94bdaf002fa96765425159dd2d89df",
+      "after": "cbcde5370bd61a41be23632ce0471741d81944365c0c4de5f4d04c563c27fed6"
+    },
+    {
+      "path": "test_edge/gt_15_multiple_generic_classes.au",
+      "before": "43e93f12094fb746af874cc7ead991adfa2b9be86144da5d5837831f51883537",
+      "after": "8173725804e3256aa84f4ba6e45c34d50cb35fe4e47f409eb63074268c321d4e"
+    },
+    {
+      "path": "test_edge/gt_16_missing_trait_impl.au",
+      "before": "4e6fca167d04b64f1d187336bbb76842515e03ef86245b2dd0a6b5a8eba3ad98",
+      "after": "5e26e07bfe453ea17d1057f9f0aa2cdc7520e60cbc0e3076344d42311e196fba"
+    },
+    {
+      "path": "test_edge/gt_17_wrong_trait_signature.au",
+      "before": "25b63cb6b5ff6fae9bf64cb84081a09585271dc2bf55ec75d129320fce740e39",
+      "after": "eb29ae13543b8c3eee3a79ddb1a03ffe50143e4f2791001ef903ed6567a2a1a3"
+    },
+    {
+      "path": "test_edge/gt_18_trait_on_builtin.au",
+      "before": "486ad754128979166c6a7c6256e23360149ae8ef11fed244741e3e3e18161d11",
+      "after": "1e66c14237ec77447192d5ceef202e4c39939ab07cd44a540a5fbc22452ba45e"
+    },
+    {
+      "path": "test_edge/gt_18b_trait_on_builtin_direct.au",
+      "before": "5a82473d823e15ceb7fa70b70a496379aa1a637e6d16d38a92f5c6ae6f20e5dc",
+      "after": "70c13f5eb5bd39e0c4b337b34a0d2e5652368374b915e05b72c13b60df2b0192"
+    },
+    {
+      "path": "test_edge/gt_19_generic_enum_multi_variant.au",
+      "before": "154447d61138baad83233d2d0c84cecd4b0fedcec2fb011c824b6a953525cfd8",
+      "after": "5a6415211869791f5c80a68344226991d03e2a060ac6182afaed22ed56caeafc"
+    },
+    {
+      "path": "test_edge/gt_20_generic_fn_returns_generic_class.au",
+      "before": "d66a4c161b6860093d19e2dded668890bb2f72a3ddc3e8f6e4d8b0af1031034e",
+      "after": "a3dc7eb5c565f7626b79a23515ed08ba950255389e656e30a1bd800495a6c3a8"
+    },
+    {
+      "path": "test_edge/gt_21_trait_method_chaining.au",
+      "before": "e3c48f0e7caab4305f35ca017255151ab59ab3ca0f23482d7c3d613d071f0adc",
+      "after": "375d2dc5d4765f08a636229320d39cba0b49ae2271463de6df7bda557c203597"
+    },
+    {
+      "path": "test_edge/gt_22_borrow_generic_param.au",
+      "before": "b49b546b705ba065f6317dc6ed32a805ddbf2a23fd2cc7420123eadd648c2c98",
+      "after": "6a68ba37e3f508965050aed36d3d45873d5cf8df99934244f4ae5360d09b050b"
+    },
+    {
+      "path": "test_edge/gt_23_generic_enum_in_generic_class.au",
+      "before": "57f17a75b3ebbc69d83ca8408885c795cb97773e559a71c8f2bda4196f9e8077",
+      "after": "9caa89372750c59c631a90b2151e010da251fa30727a885db0e3a23cbc6e3165"
+    },
+    {
+      "path": "test_edge/gt_24_two_traits_same_type.au",
+      "before": "b6228100127a65e7a116c0a48a5c6bffd9719418f124d6bbec26c9019c2107b5",
+      "after": "83a7e2d15bcc809b5a80bb9cca2cdc2de8a126c0c4a662d563c52855dc344a6a"
+    },
+    {
+      "path": "test_edge/gt_26_generic_fn_with_trait_bound_returns_int.au",
+      "before": "9bed756ee7e393e8fd2197ad6c42d3fe7399476589d962ac178eb83c63501c8f",
+      "after": "d584f44ac976f1576a36705a32ca30b1dc6c2ecc93904cdabdd0ff079a9f5a15"
+    },
+    {
+      "path": "test_edge/gt_27_generic_enum_method.au",
+      "before": "4234368a1b2fa778d4d8ac6511f454d47a915902cb5a2488e59e7a447e54ed9e",
+      "after": "ff55ef0e26de8cb18d74d986fd84fc12d48e780eafd0e11d2a870e4dff0d9679"
+    },
+    {
+      "path": "test_edge/gt_28_trait_on_enum.au",
+      "before": "cfcf32c5be4fdad0b66d67eb4afbcfb69784ca3348e1dc42e4bf12743c5d4bbd",
+      "after": "4d76e55f07a4fb246537d959dfa93604ce4ed43c7c230fd75c350fa318f7728e"
+    },
+    {
+      "path": "test_edge/gt_30_trait_bound_violation_multi.au",
+      "before": "5900d6ec8d8072a4fa5b0bd834a664efaf427614aa3283d6579ecf60845b5886",
+      "after": "91fd99a41e81b728d78f90ed3149432aeb1801c8331aca1e6ebdf86eb356c376"
+    },
+    {
+      "path": "test_edge/gt_31_trait_impl_missing_method.au",
+      "before": "f33e7eed89f8e396e98509f5d34df94ba38372a36bc376f616dd0af3aa3f4132",
+      "after": "565b244fdab0276b704b844c2ab7c79c1ab17f4f9cc20eef998a4b9ec8f0190f"
+    },
+    {
+      "path": "test_edge/gt_32_generic_class_method_uses_field.au",
+      "before": "c6d98d24d03efdf369e2c1cdb1486486a5c4148ce2eb3ab0149d333ac20e8491",
+      "after": "701a72adb83f32aee702649c90014dee6ffe582d8c8735d9aa279144c10eb827"
+    },
+    {
+      "path": "test_edge/gt_34_trait_with_int_return.au",
+      "before": "06a398c0b35970899374c14363034887dff3d4ab4f177410d219327a5162f0b2",
+      "after": "721b105805de4424723063e3ed3695e66e96ef7ca0220d293ef2175e4d71a0a1"
+    },
+    {
+      "path": "test_edge/gt_35_generic_class_method_on_nongeneric.au",
+      "before": "af3f3e77948b20480c44ac36c0b6d4beb61c200b636a2e4779675728bdc803e0",
+      "after": "daff7746dd8e905d501ad9e900701b859b5175fa3935089cc525937d653434c5"
+    },
+    {
+      "path": "test_edge/gt_36_borrow_named_arg.au",
+      "before": "8a0fbf82d3f66fec3bd47eeae59fd200a2cadb66a4433defc68c1e02afacdde6",
+      "after": "dcffc3e8674525c4120b15dc594e2e8db89625a4e738afde37a1fdc609205b09"
+    },
+    {
+      "path": "test_edge/gt_37_trait_on_copy_class.au",
+      "before": "0601afd08528130beabd2aad66a257b6eec0c2adff218f6696c65891e6762bec",
+      "after": "602f4850cb84c5654328adf220e4bf0cdc443f4b3ce2998067fadf02b7ec601d"
+    },
+    {
+      "path": "test_edge/gt_38_generic_with_result.au",
+      "before": "6d82973ebb0cb8c04e6ad26c3fbb4b5f4ac107680f4cc04168878a81e1213e66",
+      "after": "61be0516e18d383da9a683cde16fb24521506d458423e7fa99358531d0d5b9ed"
+    },
+    {
+      "path": "test_edge/gt_39_generic_class_with_method_returning_bool.au",
+      "before": "131c00c137a11a19f33f1435bf8e4524210acdf2d90a25cdc99048215c094247",
+      "after": "8efd1b95a0592c6de3757766341f477940dec478c3d94cf97cca82229febd377"
+    },
+    {
+      "path": "test_edge/gt_40_deeply_nested_generics.au",
+      "before": "e1a1daf84db20b1fafd1fb962512acdee9ce0dc6c4e1ff3d6d17fc7f12d17bbe",
+      "after": "588d0cc79ca919a3ba433034776f2ccfed743005f270635ec84fe04619643450"
+    },
+    {
+      "path": "test_edge/gt_41_enum_method_inline.au",
+      "before": "4f7746fc3addefbcbe2048a69c3636013c7aff2a3d4322c79bac27e4c24bf031",
+      "after": "9abad36bd9135e9ef9a24fee2fed33c867cf07979ff3f78adb092d4f4af4756c"
+    },
+    {
+      "path": "test_edge/gt_42_trait_two_impls_same_trait_diff_types.au",
+      "before": "3c8388fdad593fc9d0167f704633c215422ca3a2a9472031f6e3b8c64ed72c75",
+      "after": "ea80f331ce64519ab374a41d374f24da779f70db112bfce7c56f4826b2dd5310"
+    },
+    {
+      "path": "test_edge/gt_44_generic_with_bool_type.au",
+      "before": "5202ecd4e4ae27660c9a7c81af7d403336bd7ec25e9e964af2547a4f1adca83a",
+      "after": "460e476889bb501b6d176f96035d5c8d58b2b2c07493d6acdafcbefbde3bcae9"
+    },
+    {
+      "path": "test_edge/gt_45_trait_method_calls_another_method.au",
+      "before": "bfc95fb31d54375b39ffb5d0a414944398bd15129136be49932ce1b1ab233ab0",
+      "after": "85acb5564610346f036afbd2bf0f7e4de18022e7a0ea4b7c2e6af68739468af2"
+    },
+    {
+      "path": "test_edge/gt_46_generic_class_holds_generic_class.au",
+      "before": "ac62a8f075c281b9a7f3dce8288a7f23513190e0f8706f56501fa2eceb3e05df",
+      "after": "ed1cda208baa798aa844d625a60956c5c913a8b396587a4b09b90383182838ef"
+    },
+    {
+      "path": "test_edge/gt_47_trait_impl_for_generic_class_open.au",
+      "before": "9ef7b4a653f304bffe041612129f88e89874cfc0768f032fb5f6d15494798d06",
+      "after": "394e77c49d170a10b17ecba1aafae25dc70d3c3cf67dc65fb95489f05c682699"
+    },
+    {
+      "path": "test_edge/gt_48_generic_enum_two_type_params.au",
+      "before": "3c07be5047b454a0a62ea7475f1a3b8d844f13a313d6afce290e9456c47315a2",
+      "after": "9da4eb017069354d780fc90febddeda8a49a2f35815cbe95fa38fd3a4bda453c"
+    },
+    {
+      "path": "test_edge/gt_49_trait_bound_with_multiple_params.au",
+      "before": "ec43b6d38b54ecb6e4bd033f32403167b3f770f7d2647e2cb1e71c4dbe3c1dbd",
+      "after": "8fd2926df55e9b7601886844bd07dc2a786d7114b2c9b91b7b7955ce3ca3ad48"
+    },
+    {
+      "path": "test_edge/gt_50_trait_with_string_param.au",
+      "before": "30d26ba5d9261d1a6084b0001ad3aa65f490a4fc20ca63f3d36dde3354b420a3",
+      "after": "6829f60df729037579c60c5f35308945553804e38a1909358b30bba450af70a2"
+    },
+    {
+      "path": "test_edge/gt_51_builtin_trait_via_generic.au",
+      "before": "3b05ec6f2d15e66bb2e33854abf96b87d820e0f446fe4ca111a3bbdb7574c897",
+      "after": "e2bb7438d680ebe80e6edf9298890a61bf277057098fae4c228e42d9314d35cf"
+    },
+    {
+      "path": "test_edge/gt_53_generic_class_with_string_concat.au",
+      "before": "6b937d47766e9733a25a8933a95d07d71462023ba47a3d52364e3183cca8dc64",
+      "after": "e70cd29e7708e439a3d919258adfe76042e0789feecb37681c6cc3b3ae4dfbf7"
+    },
+    {
+      "path": "test_edge/gt_54_mut_field_on_generic_class.au",
+      "before": "91c9024496e3877642aeeb27bdfab6f856aea98935943f304eaba675238273e0",
+      "after": "1c06937fe6969b79439448ac410865f2e7a46f01128c977bda69c5cc99d86f01"
+    },
+    {
+      "path": "test_edge/gt_55_trait_impl_for_string.au",
+      "before": "6c476e4ed4dc11c7422a526862fd5497dff6003726e6aa74b8c63afb110015fe",
+      "after": "81ad0431abf0a69bac160a2160a83781e1a04e09a00d99c4e700649f20cc67a7"
+    },
+    {
+      "path": "test_edge/modules/collections/pair.au",
+      "before": "a4dc25a68c5b3a88a74416b12f9f84c083fd374ee2bdd175c5f8597a5147042c",
+      "after": "e8394a75f5e8de0b6f3ae76f4e892f4d95042e8fd6f55d792545943a01f8f8c5"
+    },
+    {
+      "path": "test_edge/modules/geometry/shapes.au",
+      "before": "edca7b07ce47c6a3451c95545971644656cdc91a2c42dc41d78b557c6f72d433",
+      "after": "9951cf852154d4505c3e17800520533439c498532edd5b11eccf8ff3bd2f94ec"
+    },
+    {
+      "path": "test_edge/modules/helpers/counter.au",
+      "before": "d3cf3e0d17399494a39a05bb29d80ec774319fba62c5d0362a721d20ce98aebc",
+      "after": "ddb1371fcce6ffd05deab6d7e0ecf18bf83b8455350155985c7eae6f792f2ad9"
+    },
+    {
+      "path": "test_edge/modules/models/point.au",
+      "before": "543002a41b464fdd20e2fb3a524e266035367272071ffb374212d435dfff615d",
+      "after": "0cf97f25a8bd14624e057c055600ead8b83d50f0bb8536bf9ae698550647519c"
+    },
+    {
+      "path": "test_edge/modules/nested/deep/utils.au",
+      "before": "e2a07e6ebe9998e7bd1faf6d084076b3afd3927b090c199e880cb756a5b2e5a2",
+      "after": "20a84697e27f67962610230e1c4555c36a6edc5e248a38049756faf82c170aa9"
+    },
+    {
+      "path": "test_edge/modules/shapes/circle.au",
+      "before": "1ce7eef2897b1a880bf429e82f876fd172609b4daca456f7d1d8e95ce49f01fe",
+      "after": "e42dc5d3cc7eda8a80693d1eb721bea0eef01b6a2b711d0d7d45bc982c65806b"
+    },
+    {
+      "path": "test_edge/str_05_func_param.au",
+      "before": "fe5c164dcad20904a99b84d55d118d37eb712db304f389bc385774039897fadd",
+      "after": "9295ad8f1e3e546c6bfd61acf7b3b49955d6018ca6a4ba59bf5755cd1731031a"
+    },
+    {
+      "path": "test_edge/str_07_class_field.au",
+      "before": "2a84e3fa8fdd280b14534b06d5b1ea540670753dd557088ed479aab753dc4aa4",
+      "after": "bc323b2c5827732def51cc0b8ce2a7303b6ae5259e85ba21b531b9b9a589c4b7"
+    },
+    {
+      "path": "test_edge/str_07b_borrow_field_print.au",
+      "before": "32126d01fb03cdbfd6378adbbec71c0c8fd38c0745a17a88117c304fd0c0770a",
+      "after": "6f00b73898ef897646bdd19aaac8969b00db8ad7ecfcdbfe378fb6f6faec9a67"
+    },
+    {
+      "path": "test_edge/str_07c_borrow_self_field.au",
+      "before": "6aad93c6bceb1a9a2eb4b80d135157f15b2664b267d3b604b1dac126444a9c00",
+      "after": "b2f350b411344c80654a59ef3031c6aa4cc5c752fe0b6685ba425db8302067e0"
+    },
+    {
+      "path": "test_edge/str_07d_borrow_param_field.au",
+      "before": "82a1ba47e7f7eb90f9556bba903563c6aad61f41679d749b1514124dbcf09536",
+      "after": "492cc4e45ea62ae13ec5e85b5251a666cc2e36807865959f1fb306e2867a34f5"
+    },
+    {
+      "path": "test_edge/str_07e_borrow_self_print.au",
+      "before": "6365f028e697d7182e4ba6ffdc59f0a7fb3febc22d87da129672f4feafd61d54",
+      "after": "ba51d6d03bfca03083811cb8f2037c0529f0394a9c38ce256cd1b937dd9d2d4a"
+    },
+    {
+      "path": "test_edge/str_10_borrow_semantics.au",
+      "before": "f2ce8785487e446ca4aab311181b3695b0a8af3b8602fbebd4f3a611b01bb013",
+      "after": "b041453d824acd613d63167a3489b2b125bac8f4037d7d156441b7c8ec4741f8"
+    },
+    {
+      "path": "test_edge/str_11_return_string.au",
+      "before": "1556e467c82aac729c3433fc1455c67e51efb93cce11ba60ed99e5c811a34845",
+      "after": "757ce21f8d5c6dc57b8713b6c27b94633fb5f5d6235064c99a56acd97c921eef"
+    },
+    {
+      "path": "test_edge/str_12_match_enum_string.au",
+      "before": "a345efb898f4aaecb6fd50a66e5bbed375651675632d8c8de1c56f8a5286121d",
+      "after": "6cbedf75e945b731de5500bd517e29809fea7f6440530b53d49a5682eaa58add"
+    },
+    {
+      "path": "test_edge/str_13_enum_payload.au",
+      "before": "ac8c306f42da64bb046b0e0d1146a53f372ad2cd046133592d2c7584cbaf5aec",
+      "after": "177bf7042d64a63cc34d85eaa7b882dc468ead3161b79570f9ee38caad4bd82c"
+    },
+    {
+      "path": "test_edge/str_15_generics.au",
+      "before": "a450d7ec5a0418f5d848ad6827978464e6882a720532f0f65252cafcdcf4f5d4",
+      "after": "395bac6e96cb78ed5b8e15027b525c07c7ab0ee09ee8cf335dc74d5daa607689"
+    },
+    {
+      "path": "test_edge/str_18_multiple_borrow.au",
+      "before": "dcb64b6553d8ad79217e5623216981a2a7ce8728dde5e963f700b9c8da560ef1",
+      "after": "2dbe7af07f2866febf7744e30f566035055a5fbe27ce828b688555f3fda7bc77"
+    },
+    {
+      "path": "test_edge/str_19_borrow_mut_exclusive.au",
+      "before": "f73034a29d044f42b3bcb097d76dd0048bd14cd50df86f035a2c9b016437cebf",
+      "after": "0cabdbc713f11a3a6cfec1fda71a97d4eaeb2ae92b328934a4aa86b8453fbfb5"
+    },
+    {
+      "path": "test_edge/str_20_fstring_complex.au",
+      "before": "bc154792402d2cf9c22a1b359053af0054cfd0cfeeb291a3cdbd69cc0e7aca01",
+      "after": "0dbf7c6b7c18df93be87112da5fed6e108c25a3e057150db2d86a7c777fad71f"
+    },
+    {
+      "path": "test_edge/str_22_class_string_methods.au",
+      "before": "7f61def65991b5c7a8a1574ff822a5d98e4df10e6f5f7001ff04de0eefea22cd",
+      "after": "a830aefd64e143bca5806ff7578ae05b05b46f63e9ec377750e97d51a09a536f"
+    },
+    {
+      "path": "test_edge/str_23_positional_args.au",
+      "before": "cf1ab3693796b9756dd2d5a23d46067a6412e18a045a8fcabef19b822ba3b8df",
+      "after": "34f62b2f832f6052db05e3aca257e6e7b7dcdc9e73e9d86257f727bf3f82003e"
+    },
+    {
+      "path": "test_edge/str_24_borrow_str_concat.au",
+      "before": "2a357af43d00b46d208a7f4c1b21232c0c2b61947cfc9c4b38046370c3208336",
+      "after": "26aa86423a056a86c25621e65ca7788cb1a985f32ad9f955a02882de005ab3c5"
+    },
+    {
+      "path": "test_edge/str_25_match_string_value.au",
+      "before": "d5349a248aca792cc8608c55e34a8328987f351dcc09ef3717aeb001e6bcf74a",
+      "after": "b9506b9d4c17b26eb512a2798967eb545adde2d3086d1e656d76f3b55a6a66a3"
+    },
+    {
+      "path": "test_edge/str_26_borrow_passthrough.au",
+      "before": "f8337e20de1105c1d583d73f21fb62e4b4b247fad1139e797367d7e2caf9acf2",
+      "after": "54d73f27dd131a159997dc0df3e14dd8303cb17f2af5c496c114b12f153caaa0"
+    },
+    {
+      "path": "test_edge/str_27_field_reassign_borrow_mut.au",
+      "before": "56b1f110fe101bf19ebd041830b3a6180b31bbb3e47d39792a5d20eb3aebafb5",
+      "after": "565bcc79bd8bbc63660317e2513e872eb381837c7cfe0774601530f7525ed10a"
+    },
+    {
+      "path": "test_edge/str_28_move_into_enum.au",
+      "before": "4a3cca6540b04acfc7db722837861e04b8abe17a28422a7c639e1721ff75cc52",
+      "after": "d17660627ff087be175a1cafc50e2adcab39c3675d4a68d95051e56fc3ec6f03"
+    },
+    {
+      "path": "test_edge/str_29_borrow_field_access_bug.au",
+      "before": "3fe5b3943b299b0bfe914dddb0a2118e46d47a89b9842cbb72a58b2b6c0c98ba",
+      "after": "6cd665a84c0ca0541bcf238daf953a74da75bee15fdfe366b1441f6793541057"
+    },
+    {
+      "path": "test_edge/str_29b_fstring_borrow_field.au",
+      "before": "86560340333cf59e6800fe48f04ae271115325e0a1ca767195117aa6a809b9d9",
+      "after": "eb427ff2f5638600347c7902ae13f9becd95173eaffc5e83b19c3a4d588f5baf"
+    },
+    {
+      "path": "test_edge/str_31_bug_borrow_field_free_fn.au",
+      "before": "9455532b134348a2abfbb9d0be3c883283861ccb004183f696e5067dc6685368",
+      "after": "87a2880690676e98766c93ce06c9a00220dbec212f2d21a5c59c978635117e3e"
+    },
+    {
+      "path": "test_edge/str_32_bug_borrow_field_clone.au",
+      "before": "0d5d62a11b11810b8b4958f9d5e0d1bfa90dd077214391b109c0cab6aa61806c",
+      "after": "0aad2673e65643091cde796e2d22a84d35cb6b503f13b152089711d722641b2c"
+    },
+    {
+      "path": "test_edge/str_33_bug_print_borrow_field.au",
+      "before": "9ede39a8589d0746ae5f5cd15cc42c6a5786fe57c7779e63bfa4e746aaa23bc6",
+      "after": "4348cacd6393d721d8512ce07b213eabcca51ba3cc327431e8eed0fb483471b8"
+    },
+    {
+      "path": "test_edge/str_34_borrow_alt_syntax.au",
+      "before": "d5daad8e9e7f2672e6aac88aedbea76bc1f1658ca0293c9ff742372bd74fb226",
+      "after": "3107a2abb0725365c9817dfeb7ad6b0db1e4d792e6a156a9bda201d5973ecf86"
+    },
+    {
+      "path": "test_edge/str_35_result_string.au",
+      "before": "2d191f5a1557991304d16f898d869ca2c85a09c78683457bdb712d04a88634d7",
+      "after": "b394236f6ee4269e5851b8c47ea91efb0560391019dc0804fc00dae6d0b5c282"
+    },
+    {
+      "path": "test_edge/str_36_match_borrow_enum.au",
+      "before": "93f610409c276699c7539e550af680c005983939fb1be230d4bad9e7ae1050a0",
+      "after": "05644256af32c2ef9ba783928b501aa98babbf70cf3fcec719fb6cfcea065c9e"
+    },
+    {
+      "path": "test_edge/str_38_option_string.au",
+      "before": "e2dac25ef82f099b2276cecec398c31d9669d22edf7e44d4f8c4f076cec6e564",
+      "after": "bdb60daa2b1a28c6082dde0f83dca1f2f3c06a794a09d17990b1866ae6b9eb31"
+    },
+    {
+      "path": "test_edge/str_42_match_borrow_result_string.au",
+      "before": "d72117274c510f517429d68f0d29faf8da479bfaf599bea1e0c5e6f10fd9c6f1",
+      "after": "b6e13c54e83244d8e32f7856012ed2fb58ffc143ff7a16a0d5fe7aa1907fba9e"
+    },
+    {
+      "path": "test_edge/str_43_bug_fstring_error_location.au",
+      "before": "62e6122c1e3c20e55acf8f1914e5e2189f01c7e82e905583e539821c443cfa57",
+      "after": "c27501d1d03b12f4a7d98238191053f95f9539cfc31911e49c416dbaa881507b"
+    },
+    {
+      "path": "test_edge/test03_channel_close.au",
+      "before": "bbe403e5f4e259e28784ce6c64927419b02eee325a2fd3868c680e6978617482",
+      "after": "3f3c39f4eb567793195439a89f1d7a9a391762c35b3a03529426c3d64a554281"
+    },
+    {
+      "path": "test_edge/test07_task_group.au",
+      "before": "c9630d14d70df432fb89dd4f673a8d28029deb29b517c7bea0be33cad26ffeb2",
+      "after": "4bb07203d6a5327a90ab48e99d3b16020876c839c01b29d96f158b2d7f399093"
+    },
+    {
+      "path": "test_edge/test08_task_group_cancel.au",
+      "before": "1fe1725b74511cb19f69d5ab061344e2948c44f825ecbbbd0dedb9938ce36b04",
+      "after": "43fde97dd38a4923789faec848f4badf6c39ebecdede6c6e409907e4e2897b88"
+    },
+    {
+      "path": "test_edge/test14_multiple_sends_closed.au",
+      "before": "f79f77dfcb8235da314c1e4a8a3c4a63607d22226bcacd7f29c0c2c71a98ff65",
+      "after": "1dfabd64a9e0154ac0d07036a292908751b63bef50b3880b9c4b370581c13248"
+    },
+    {
+      "path": "test_edge/test15_select_recv_with_data.au",
+      "before": "f35a63e457cb65be35a6840909662f6831812e8ac770ce877517b317b4344be5",
+      "after": "04947975f3706a75480bedef80609cecbc5cf93c8cba4ea41b1cf83b2e0c6e47"
+    },
+    {
+      "path": "test_edge/test16_task_group_multiple_workers.au",
+      "before": "a50c8996b14a0d8932139aff0ad6c11ba0bbe564e7b9a4bf766c806f8f453216",
+      "after": "64070371b25117ef32966cf032780c93799eb0a21f6f6568fc1f8100543926da"
+    },
+    {
+      "path": "test_edge/test18_select_send_timeout.au",
+      "before": "d61371ed3ef7770fefea57dbb3e752fb4ccb2c957c890565aae7d088f4be5631",
+      "after": "f582c6a3a4961e7877cf37d2ea38d6dabd10a6f3357e6fff79baf3df97a36cb8"
+    },
+    {
+      "path": "test_edge/test22_select_multi_channel.au",
+      "before": "fe852a4a4beb2a7812e680d834b922b168880b8ad1950a48cd97b4373eb2f55e",
+      "after": "2b35dfd94a940d5fdc90399006777fd3831bb59808d0d239c82cb06894d7c1a8"
+    },
+    {
+      "path": "test_edge/test25_group_cancel_multiple_workers.au",
+      "before": "9a04379b507076e7649b74880570c3289f411e01bbee9a56cdd8f9282ffa0996",
+      "after": "76e5b27f377941274bfc5295ee99f8cd4e390e91cf5ead714cab0eae13525b40"
+    },
+    {
+      "path": "test_edge/test31_nested_task_groups.au",
+      "before": "c3a9bf52dfc177f1e8714ce20d97ce5adc560cf0d6eb3ef0edaf907ffdb291d0",
+      "after": "e4cfed2f6b049b12bcedfcd52be6f8375e4d0836943202cb126ef1b81d1d936b"
+    },
+    {
+      "path": "test_edge/test_basic_trait.au",
+      "before": "f7da4c8fa1016207a73f46e8e2be832f342f78d99229d311424d942757a44a28",
+      "after": "0944d6d70bd1412faf2534bbaaf49bbae7d5034721b81d9efa10c59ab1e7ab47"
+    },
+    {
+      "path": "test_edge/test_bug_method_on_generic_param_clean.au",
+      "before": "f24024564d64f12c3ca30daabd29bc19ab1d5b836edfac2eb983bc70f0d7d1f1",
+      "after": "daa69f631549d8f2d1dcef1f80cccf52372b9586fb42047aa88ef31f714b2219"
+    },
+    {
+      "path": "test_edge/test_bug_swap_inference.au",
+      "before": "f220b9cf3ff2d455f364c0ce8d320d3ff18f356afaa632aafeb776d9070bc620",
+      "after": "d70b907f12fa31ea5e9c0f86c3748cb9fdc287780aa1c9c6b9cbe09b628004f6"
+    },
+    {
+      "path": "test_edge/test_class_02_methods.au",
+      "before": "5ba4cff790bdd00b3f9697861f47291b7992ef3ebb2752e7f2b135e3bd1de2b2",
+      "after": "44caa2a2a2320c8a5ba022d742b8b1fd96a50fc07cbe0fc2e9ff0ce083083e99"
+    },
+    {
+      "path": "test_edge/test_class_05_method_chain.au",
+      "before": "b86afcd4be3e71dadd9f438743e59adf23d78dea0a65b6ee95d4918d803d850e",
+      "after": "eab55233b8305b8d0ca5816bbba8a69dad2a05716708ad7f90ac53eea4633881"
+    },
+    {
+      "path": "test_edge/test_class_06_multiple.au",
+      "before": "3cd3f8a108d4537d6bc3c2599b2a89c53240581b4b413c10c31fa91b3b491019",
+      "after": "61fabea8655c8df328c159bd107608e042096b83ff1abf6b6c9bbf90e1ded0f6"
+    },
+    {
+      "path": "test_edge/test_class_07_field_types.au",
+      "before": "537f06fb98efe8081dc1c9917205a9e70f285b1fd35512f4c9a7452b78e68ff7",
+      "after": "ac585b86332ba2d2a03484544100087379bf30f1391ba78bc17143b6d98d5e18"
+    },
+    {
+      "path": "test_edge/test_class_08_mutating.au",
+      "before": "bd1f3e83d5d990aed003d9a408e0690b671a1e5656415a977df858fc4e3c2071",
+      "after": "6244f96bb8185d788b9ec8fb293729f392d2a7dbce77078f70a9788a705b84d4"
+    },
+    {
+      "path": "test_edge/test_class_09_constructors.au",
+      "before": "15fcfee06636893b0c1d75f3afcaef6b0a89b4f409afd5180ea97537021fa7f5",
+      "after": "008f89be88b34068ff7e3097b73feeb9c2d0c61cf2a0d6bdc3b86f0cf1780791"
+    },
+    {
+      "path": "test_edge/test_class_12_method_on_immutable.au",
+      "before": "0d3efe06d79cefccdb2c7131755f96680178af26ad701594238cefa6de920e09",
+      "after": "daa06d097200463c0726e12e6181b90581985d0a8092eaead9dbc3a3f76f6352"
+    },
+    {
+      "path": "test_edge/test_class_16_method_returns_self.au",
+      "before": "1a33234c33d4e1fe76f584d05264832fec48d3850da5b1b60ae254e7909adc09",
+      "after": "334e660a69ae088f397efdd2c591f66e593ee42276672fcf40341d0cd8f58864"
+    },
+    {
+      "path": "test_edge/test_class_18_empty_method.au",
+      "before": "c4f72c71c50beea8ddaba85567de23f820da468a019641c900b76c233378c3c6",
+      "after": "809aa2c5720ca73b168d4a1e2c7feb3171b128330136e626f0c986ee3fa9bc73"
+    },
+    {
+      "path": "test_edge/test_class_23_nested_method.au",
+      "before": "2dca19460b338dc5306a10c4fb6c080184475da9650fadba52b1d862f726693b",
+      "after": "ef350b25165a07e2cb52b131d6043896cdb928d68bfbd2bb5d2ce9145d4ef6a4"
+    },
+    {
+      "path": "test_edge/test_class_25_constructor_inline.au",
+      "before": "5b238bb8d981c6c0cdf9c5ef2ea16a323e28db74d79e946f0cdd2cdacbad578b",
+      "after": "c2375e683652503d2b94fec03cab7b8418f4c958e8c5f4b5676301883f18fbf1"
+    },
+    {
+      "path": "test_edge/test_class_27_double_mut_call.au",
+      "before": "f34470f825bcad7276e97b73e488ca4a0c25221fde4f1f2f570a8b1e45575cd2",
+      "after": "0994c442e15d503db16e035a2a526a121b1ab164e8750b3106b8cb165c3dce45"
+    },
+    {
+      "path": "test_edge/test_class_29_class_in_loop.au",
+      "before": "4425519ff0dcaf2a989ae1dadb16637f587a8f5cb7044a9820947ca7301add06",
+      "after": "b6a180c3f7a4cf79bce816916616b2ef14bf801068ceb60a5b3675049e7ae4d7"
+    },
+    {
+      "path": "test_edge/test_class_30_no_main_return.au",
+      "before": "7b2029aaa1d8bcdb64e5ce0dde21bcff6b8a8566a0431316bbe1abdde27196a3",
+      "after": "f00ad77896fbbf4c8b89d09d205ea7b71f145d4eecf43fc4be058814987aa5f9"
+    },
+    {
+      "path": "test_edge/test_class_32_nested_mut.au",
+      "before": "4a0c3e9fc7a1e03113db4b7a847f95a4d33c843357210fc8b3723a31bdac829a",
+      "after": "e1a0506aa748e1106b4a3c3ae5de8fcc037784405ac2ca4c7ec467618b809dce"
+    },
+    {
+      "path": "test_edge/test_class_33_class_in_for.au",
+      "before": "7e4d564888503742cbae54725824e7f148e4c769e8a80d4ac70d2c5e247d6fd0",
+      "after": "2ac2780dc6f4fc022a0f4a34127dd90c4beb19e58024a93a1322fa515d2127a0"
+    },
+    {
+      "path": "test_edge/test_class_34_method_calls_method.au",
+      "before": "d2415c786e4221c1f93ae4ae733be33ce69a2c391dff9e8e7cde264fe5ee40fc",
+      "after": "541abd4d248282ec8247dff5a4da4e6719d2c4c47e9642bd671c93d2fb08d092"
+    },
+    {
+      "path": "test_edge/test_class_36_mut_method_return.au",
+      "before": "485f623bf8848eec6df62514bc5f570bd8d14ed03d7ebe26c9af88260222736f",
+      "after": "76aabbbb8418b695edbf69174b066322b990dcdb879d5257cf07ebae593ef283"
+    },
+    {
+      "path": "test_edge/test_class_41_borrow_func_arg.au",
+      "before": "8a457b69f1662defac974aa6df4aab337fc06db5e565726a0469a0c99d77d2e7",
+      "after": "9ae05d3e0f71196956dee7efdf767b4dda1d32e2b5a47675c6042f014c0bd8da"
+    },
+    {
+      "path": "test_edge/test_class_42_class_with_while_method.au",
+      "before": "8a6ef1fdea658cf62c128035846d982b9c66a8fdc4df1ba4f7cf5f74d5fa3d50",
+      "after": "82495155bbdc746c28933a539fc78a1d902fa5abb764021de7ef51355e0b3082"
+    },
+    {
+      "path": "test_edge/test_class_43_multiple_associated.au",
+      "before": "e7a7cbf5a3086401805e34dbd9f5d0cef554f9a062022565c44614c3c79e4bc6",
+      "after": "61d6647e6637b390a6054c4f32535837d6a8baea62fecbf297834872464b1ead"
+    },
+    {
+      "path": "test_edge/test_class_bool_methods.au",
+      "before": "7fcf849ad9ac8dce357addcb6d5702c62b152e499ceb599726a9c91b74bd8f43",
+      "after": "8a7b91f06557de06ffec5728a3cbe6f3855916bd841fa054444c88099f67f117"
+    },
+    {
+      "path": "test_edge/test_class_borrow_match_indirect.au",
+      "before": "a765b61140cdb991d33f22edf70341127efb89fd475c63c5d8e88c37d3d18157",
+      "after": "1c340b5333193de35df66211e3b261b4f2ec9f11bbae216eb3cfe8ae7c9e51c9"
+    },
+    {
+      "path": "test_edge/test_class_complex_methods.au",
+      "before": "f901bfdd9f374b0cbf3b8f9fa3ae7a02d0a89b1b53efdbc978128bcfc7b366bd",
+      "after": "dee148f28f8ff6799d76e13615c732beb2473f837e6f5358a823da05bfa2c6c3"
+    },
+    {
+      "path": "test_edge/test_class_control_flow.au",
+      "before": "bb7cb86baa7fe1479b49c5f208458a45b1f9ebbd875719566216d474fcf88adc",
+      "after": "07a996ea8e4add0ab475fb208cc556fcb718f5d30c3b9e3a7568d3de612d71fe"
+    },
+    {
+      "path": "test_edge/test_class_copy_mutating.au",
+      "before": "455f05d91675b6eae2024043d6ec5e78363e358bb03fcd3a07b0b7840338cdd1",
+      "after": "fb5777445390a61b96009b480436dfa68b35d4234a5b5123944eddc28cc172df"
+    },
+    {
+      "path": "test_edge/test_class_copy_with_methods.au",
+      "before": "7ec417a7645e1d43ceeeacdc053a50e9f2f928e44c711e5f4d6761f06a9ecf2e",
+      "after": "9353fd45f8f5f268eb2c5663f4543e455fe2062465f8ae1b6fba780790ab2d6e"
+    },
+    {
+      "path": "test_edge/test_class_empty.au",
+      "before": "3b2031dda0ebaeaa0486bee51c6013b3e0862a9773ec3966345f707150df8937",
+      "after": "980eed140cafd1f50d560b9d057d33e2d259e9b5f4e521bf3a7100500329df0c"
+    },
+    {
+      "path": "test_edge/test_class_field_method_name.au",
+      "before": "131d02278f86f8c795e38a60351cbf2fb2a1ae741c3fa78d1da06ea1b2cd3ccb",
+      "after": "cb3769b2cf7ece72a8a91e743568992e447a414e145f5658e6216cfe3a94e9c0"
+    },
+    {
+      "path": "test_edge/test_class_fstring.au",
+      "before": "15335dc0e72ded51960c0b42e0bcb2a4dbe0b5915bf69e70948d250f03bc04c4",
+      "after": "bb53dec7b1808fa930c35a35f3db6c39b86122695beca095b5d076d2a93939e2"
+    },
+    {
+      "path": "test_edge/test_class_immutable_mutating.au",
+      "before": "11659647373369dac457f5e001afa10a89106ca0e43cd2d934ac74536ca3d386",
+      "after": "5ad61836db72e27166b0a140fecc0ece7f616a4dbd4f54830e60be5bf6e2d5be"
+    },
+    {
+      "path": "test_edge/test_class_indirect_recursive.au",
+      "before": "309488412c19119d2f1589a8d290f5537e1a6071be5a9247e279a7d789d9f8e9",
+      "after": "bedf9721294653ab0cf6af44cf9b667f42118afc6efcc00fd40bf88195c5526e"
+    },
+    {
+      "path": "test_edge/test_class_inline_field_access.au",
+      "before": "dea37e45a671318cfdfe925378df4dd54973ea30e9c0f0ec07bcb09193dc2ad0",
+      "after": "5455f7f567ffbaadd5bdce7130268c16b7dd1e750fb07ce41411471c9b856075"
+    },
+    {
+      "path": "test_edge/test_class_interaction.au",
+      "before": "5e0993babe07a35a12c557a06b4f0bce7b550097e7389b7fa30dc2b3f4e9a2cb",
+      "after": "3a4ef9397a71df9caea70fec7fa149ba48fbbcb34f3873ab0f72e66b3e9b955b"
+    },
+    {
+      "path": "test_edge/test_class_many_fields.au",
+      "before": "c5717ac19dfcc18514af1819d51aaebff8b47c3a5e8d146a8f5fc8fcb82ced57",
+      "after": "5614e2a3a204b97aed14f98890a2e4bfbf4bc2e6bb06a896b0ef038dd24eaffb"
+    },
+    {
+      "path": "test_edge/test_class_method_calls_method.au",
+      "before": "6a37c38eb375251dcfbde8287e8114d8f51402615dbf11c0f2b4583096a6b79f",
+      "after": "4dcce1d114cb6207b060fd2ff31468f02e3381fb3a939e6e7110bb73a266f680"
+    },
+    {
+      "path": "test_edge/test_class_method_chaining.au",
+      "before": "0b1f1203ba61d34a303699b9ae18dc4428ebb5381dec9b2a4dc6403192c52bbf",
+      "after": "91479f8ee620865ec8eb7b3d9edb5b46aa68546cdf0275d9ad001d327b35ef85"
+    },
+    {
+      "path": "test_edge/test_class_method_default_param.au",
+      "before": "965a6b9eef9fd03292a815e5e6672ffb348f7efb201cbb954db52aa9438370eb",
+      "after": "90a43f70b7f20dd4ac69834dd662bdb583e02428770cbaa83f250d20a02a61af"
+    },
+    {
+      "path": "test_edge/test_class_method_in_expr.au",
+      "before": "e3a2f3043d6ca8bb625eb13998c9e0d79ffae398f8ca6f5863513541403970bf",
+      "after": "57ec324912da9dded128f06ee60e39cdc4fb191db1914e6175a9a23e881cfab7"
+    },
+    {
+      "path": "test_edge/test_class_method_name_collision.au",
+      "before": "191fdedb4fc79de63f22317b968a5bf4e38bd2a9e2f2272b44a75321c8eacea8",
+      "after": "2d2550fcc28610476ff097130fefeba0f73c0c03c8152c11453cc2f1fa968026"
+    },
+    {
+      "path": "test_edge/test_class_method_returns_self.au",
+      "before": "eb20e1c7295482dc66e40738de43d8a834aef9f1b02953f85d4fa1632339893b",
+      "after": "05712e5fa96b044bec5920441649bfac3d2521bd1644b071971f1f76b6b8d95e"
+    },
+    {
+      "path": "test_edge/test_class_methods.au",
+      "before": "ff7d8f25e6108bfe2b86af61a7a53d9aa5c6fa308d34674b99d36eb4556138b1",
+      "after": "a952ed3c4288a6a406dc988298e0c36a8466affb9da1044cf16bd0bd8154a166"
+    },
+    {
+      "path": "test_edge/test_class_mutual_recursive.au",
+      "before": "172be4077bb13927c22265d56f321a5ca67fdf877e70de1bbfc8f6a72b818073",
+      "after": "745899ff467fc5a1ae9437685a326bcaa20bbe2102e57c7924601950bc49ab46"
+    },
+    {
+      "path": "test_edge/test_class_nested.au",
+      "before": "ef1c67988d9eac91f7c811955541ef927499b29000eee8c00e2ba261f9cc53f9",
+      "after": "bd028aecdbaabe72f53d68923d9703c4be0f349c5cd08057651bd971c26f94f9"
+    },
+    {
+      "path": "test_edge/test_class_optional_field.au",
+      "before": "672ecd3b7703a0c7bc7d6f275da65bd8d159dcae81423572c094bd7ce38343ce",
+      "after": "509f3f67a10007d957bc0408e1c7c81f5c0efed36511bd0de8eb0780631e09dc"
+    },
+    {
+      "path": "test_edge/test_class_params.au",
+      "before": "2c92f0174dd5d27082dbf33e885c8a69ce44ec0618a49d975713755279491f13",
+      "after": "7b612c2342e30def1f87a84c3b33b84743288da52448171fa2f9f8fd6e3957e7"
+    },
+    {
+      "path": "test_edge/test_class_string_fields.au",
+      "before": "9f9cbeefb6f779bc930f878bd5625c697bc98dbc0cccab48a0cf0ad67c9a87b8",
+      "after": "9384b00cc7ae9d3a559214d71117c2ce847e8fade42e7f930ff7081f7cff7298"
+    },
+    {
+      "path": "test_edge/test_class_trait.au",
+      "before": "8dfd11d42dc3c4061e9e79a4c86b596b12b0430920c488f01c6fdfe1e74f7976",
+      "after": "e48dc45c3cfd6be122aa2e124f459c09b4ddd456a3db9c641e673d3486946a41"
+    },
+    {
+      "path": "test_edge/test_class_visibility.au",
+      "before": "046b39f55bfbacd2076357a28e7bf08569fda5b13fba820c33348f6a600b127e",
+      "after": "0707586438ccdd35b19747eb7fa2a860d55083f50622f2a9b70dd727ca63e6bc"
+    },
+    {
+      "path": "test_edge/test_class_with_methods.au",
+      "before": "482ef98b349f1a24729ab722aa021b6fcd13f05d40a3d50d31b64d67b726e1c7",
+      "after": "ac7e240ee0efe87043d006dd755733cd2b365736d451447d2a89933265b47145"
+    },
+    {
+      "path": "test_edge/test_complex_01_linked_list.au",
+      "before": "e8f5eccc9d0c9d0b51e01f0d7b806c094862cdf69c56ab10b778c0856c1a217d",
+      "after": "688aeead5595a2568fe9ceb0100594b65e86ff4f41c2cd28fd5c4eb3a1c29067"
+    },
+    {
+      "path": "test_edge/test_complex_02_stack.au",
+      "before": "d25bd828340ebc23fa77130f2866d82da5fa898e049436dee13b92027ef198e7",
+      "after": "907fcf50d00c4fc576b0a608acf1affd0f7585b824397ae38c01933c9a35fd2e"
+    },
+    {
+      "path": "test_edge/test_complex_03_calculator.au",
+      "before": "1bd1d87de8363940ceb5107c2189c40300b0d1a8d251bab7b72906f25a2af12f",
+      "after": "2562735f38efc3db6ee66c245b2e7168fff580100aaf9210dd6f1ddb10ac93a5"
+    },
+    {
+      "path": "test_edge/test_complex_05_state_machine.au",
+      "before": "1299dab073a652adde49039b58a3d17177c5b6892d87d5810c81fff1916d40ab",
+      "after": "d8a7e74e00aff28f48030230cd8139277a450df386c13e2fb4badea475410ea7"
+    },
+    {
+      "path": "test_edge/test_complex_06_generic_traits.au",
+      "before": "675f4a1272dd38613b25b9a94e8c3f445c467866bd086037225adf961cba486f",
+      "after": "88f8910ef95d9b5d4dcab1017e3da62ff6838e00e2a6d965cae2efd7960565f7"
+    },
+    {
+      "path": "test_edge/test_complex_08_class_hierarchy.au",
+      "before": "fbe67a0a63cfac463681b436abaadb8a33bdf05ad95811f9d3ac6feed3560265",
+      "after": "f13d9661f5a5e62bafb580d4fef6df0b24b22c6678bd116c2d4cee5ec0890a6a"
+    },
+    {
+      "path": "test_edge/test_complex_09_producer_consumer.au",
+      "before": "8e7053587743a24c0e50e8ed139ee7f595cbf1dc4cbbe21ac36c202a4a496115",
+      "after": "32533c8febfb4b6fe0910bff36e6a1f7eda25f6ba5f53bd840cc1905d3c00eac"
+    },
+    {
+      "path": "test_edge/test_complex_09b_select_timeout.au",
+      "before": "95e63a96d2551477f59d7de5692298005f7e9ff8fa563115964e6e122e55f8b4",
+      "after": "753116b981369f428a30ee2633fa7aad528c5c844a847b8612554e03fb640fcb"
+    },
+    {
+      "path": "test_edge/test_complex_11_fibonacci.au",
+      "before": "880c2142f3a262a86df61252d30632c79c714fe73bae9a962d7408ca2a732868",
+      "after": "55bf1bc4987c3d20c2b592bb4bb42f9cb5e9d13aff1ccdbe43380f49c741485e"
+    },
+    {
+      "path": "test_edge/test_complex_12_iterator.au",
+      "before": "290db67521b4ad8ce75f1fd696c75536bdf05a54fd0dee1de0915ea3e628e083",
+      "after": "a11df1f5f03b444a5367c80dc0ff13c643b372c77c9cdf1d3bd8edcd1ec96920"
+    },
+    {
+      "path": "test_edge/test_complex_13_builder.au",
+      "before": "2a696ef56cbaac6ac4b8820cbe92a1d83a98eba3698e54a1df071171617b095d",
+      "after": "a3bc6c5adc59c99e6a4f3f4587b3487d6ceb0c92d1d1e3bb86ffff9082c88c91"
+    },
+    {
+      "path": "test_edge/test_complex_14_event_system.au",
+      "before": "a8d8f70425b709bc60d531805d7a6c235243f9ee14ed00f80a765c716d402098",
+      "after": "3bcd1de8feb8ee6ed39f3ba3ef7a3a6c44db0db3e318e80bbaafc588152e2156"
+    },
+    {
+      "path": "test_edge/test_complex_15_generic_sort.au",
+      "before": "cafedcde5cbebb0fa35057016baf840ae12ed66deb0a5b98a0fffbd5a71285d9",
+      "after": "31779b35a76f97405270af26df0ec4e593179a30c46d530871c700e9f53e3c0c"
+    },
+    {
+      "path": "test_edge/test_complex_edge_01_recursive_enum.au",
+      "before": "b88ebfc3a3d850e1a38628513763bf21ac129881ef61fde0dc9f81bdc43e6300",
+      "after": "f3d20e2ce6e7112ac048a9c64aee9ff257e892713b8002e311b20ef06807209f"
+    },
+    {
+      "path": "test_edge/test_complex_edge_02_generic_enum_method.au",
+      "before": "90d3dd9fcf781bc3e221aeee7c7598cd4a0c66e15a9a2309d21c9a7fe0df3daf",
+      "after": "0b1efbba14e5798e4b53b99a37049bf93cf345f1bb174a17b091cbfb4d6c48a1"
+    },
+    {
+      "path": "test_edge/test_complex_edge_03_nested_generics.au",
+      "before": "7a506f92b3b386c38d250957d5746a0fe24ffdd87e4d692540e5db7fdcab1772",
+      "after": "3e461d4140c9edd27cfc39b244de4d563a36b7fc01176c3973a6b2e7287b7a44"
+    },
+    {
+      "path": "test_edge/test_complex_edge_04_trait_on_enum.au",
+      "before": "f92e3189b21e10634337ee8bc6f9d9447453e20f012b757c2abac977a170879c",
+      "after": "2ecaee9f5f908d54aa3c666af1d2d99a93eb1822693902b03e3574105f537461"
+    },
+    {
+      "path": "test_edge/test_complex_edge_05_multi_channel_select.au",
+      "before": "51d15ad02bd1b7299a3034886b0cd072f7a50f60316c1cfe4423e574c90e0c53",
+      "after": "179b2dd2668bc390baccb328747a25fbdb0bd282082aa0e3a439aff1d506ccc5"
+    },
+    {
+      "path": "test_edge/test_complex_edge_05d_loop_select.au",
+      "before": "8f643b8a2025844630f23398e11fed17239a2ff73e173fb5cb661df44099b0dd",
+      "after": "94823d298adf452ccbab1324654fb45b2b95e0153c3b0a92ebd98c312ea8cbe9"
+    },
+    {
+      "path": "test_edge/test_complex_edge_07_copy_class_in_enum.au",
+      "before": "bdd627164a14c6ab49967aa1d6b85ce036c1c19d4c870f087e224dd700cc7330",
+      "after": "6ac1429fd3ab89ba96f5fe7fdcd88bb23b0e5e90c929c94915c34ccf3b7fc84e"
+    },
+    {
+      "path": "test_edge/test_complex_edge_08_enum_in_class.au",
+      "before": "ff762dba4fd14f199d313b7811538395fab5d009a802d2c28f92501188d746dd",
+      "after": "4c20c589fcfb280a8e2a06d001aea1fd560c39c23b75c1b28a4746a2fa6f8e08"
+    },
+    {
+      "path": "test_edge/test_complex_edge_09_generic_with_result.au",
+      "before": "028ce4269789416a8f7d5ef9930a0748548b54b7d71909f24db721400e993957",
+      "after": "547f16d2444428574087f97095a6b1afff90c34efca15aba7798a149e644170f"
+    },
+    {
+      "path": "test_edge/test_complex_edge_10_method_returns_self.au",
+      "before": "44b8cea689f0c63ec910f548ee6ade5c52dcac903b3edc5610b57dae3c0cbb3b",
+      "after": "1fa5a85e528604002f656a0e250ab5df966a99196976bd7c271412ae9645b1f9"
+    },
+    {
+      "path": "test_edge/test_complex_edge_11_with_resource_error.au",
+      "before": "c0b1ed358371c2f88eb6b65616074a8aaf54f2eefdb3deb8e496e60459ea509b",
+      "after": "62686a9dfdd405f7f5c0ec4f89acd20f7e729a80a7e633ae894d3272627fdf39"
+    },
+    {
+      "path": "test_edge/test_complex_edge_12_multiple_traits.au",
+      "before": "f701b8d1fb9465e0fcd7e3bfa4d1ee8e8392f6248db2ed8affea97fe850797a6",
+      "after": "9163c137547e9dbffcee1236190afb5d78f19e2b1150b73f24d3c0c8e5f857d8"
+    },
+    {
+      "path": "test_edge/test_complex_edge_14_generic_option_chain.au",
+      "before": "9ace3beaaebd51a9ddac11d9db60aad772a5ab2eba7a18f34745baaa0617288c",
+      "after": "b82f50ccc7f8eb247c0d135fb82261fe25ce02a9f478f1f61153756e3b2247d5"
+    },
+    {
+      "path": "test_edge/test_complex_edge_15_generic_class_with_method.au",
+      "before": "4aea4c95e511918f639a7dc86861a4fae7831d12bafcb0080579b897bcd0c8a5",
+      "after": "4fb8268dc3bdac14d8a84f529a480749ec114be8e5eb7abf1e6385538cb2fbe5"
+    },
+    {
+      "path": "test_edge/test_complex_edge_16_deeply_nested_match.au",
+      "before": "dfc0e87ac6011191ce55c346837a086f533cc6674788972a1f9bb3c7ed397c89",
+      "after": "406773a96a7a14f489966e834d7826569dff837638a437e8a54946db650c5af9"
+    },
+    {
+      "path": "test_edge/test_complex_edge_17_channel_of_enum.au",
+      "before": "7c1e4c8d75c421d0698a0c2c700b1d888a4bca645b93b88ca07e955c2cc731e3",
+      "after": "52d10e6486e90b2b119761098ea0c161360e17351fc192e6b47905ed300bb7ea"
+    },
+    {
+      "path": "test_edge/test_complex_edge_19_class_with_option_field.au",
+      "before": "316561eb752ff59f84c587b17c60378928a398211977d5a96b05b229ba6e61a3",
+      "after": "36d0a37f8086fea63eadab4b7dfb18b71846dd001fe8b82ce052b17e32e2bc68"
+    },
+    {
+      "path": "test_edge/test_complex_edge_21_generic_enum_recursive.au",
+      "before": "0b78db0b5dfb7985926f4573e0e3c8619e417030dd2e8ee5d17f3a1c86a2de8a",
+      "after": "a3b3362372120e227d910537a5928652f71fc11a744aae804a90f13f439b0ec4"
+    },
+    {
+      "path": "test_edge/test_complex_edge_22_nested_class_mutation.au",
+      "before": "02ff85caa82a2271eda56bc99342f23040072c8e10967f9dbeb26e090e547016",
+      "after": "e831f8eebbb2769c5ac15b5e781bbf801d6c7ac239a9fb2a1dca501f46c1fc59"
+    },
+    {
+      "path": "test_edge/test_complex_edge_26_borrow_field_pass.au",
+      "before": "3fe8ef1a9a25168656369d6f6f10ba34df8e917d14bc48bd64190a3da29e2b20",
+      "after": "d99abaac4339ca3a6e48bc526afb74a0d52b6cfba8eab7270a0563f17b242a9e"
+    },
+    {
+      "path": "test_edge/test_complex_edge_27_match_borrow_field_pass.au",
+      "before": "9b7eb2fd94cd4b58f2fa678558b39062d58c03306a2f5d6bf81ef2b467e440ec",
+      "after": "a17299fde2fd1898ee09d74c7b055f23610f9c535d72b7faf340b59dbac9cfff"
+    },
+    {
+      "path": "test_edge/test_complex_edge_28_match_borrow_string_field.au",
+      "before": "a65256076c1bbbfd9f48509fef7f59aeb686195218a60df75e65250210d9df53",
+      "after": "8a8b7dc2d3a3a045624d6ce921ecae5c061bc463d9200c52b2276972a7c2db4e"
+    },
+    {
+      "path": "test_edge/test_complex_edge_29_for_channel_complex.au",
+      "before": "0eef61cff1006d608dbdbd17e9e8e92e9360bce08ca69781b35b37a38ee94672",
+      "after": "f5cb48829dc956d04e95d0df73b66e3b6441d5293a2a21660e2b6b459a71b74c"
+    },
+    {
+      "path": "test_edge/test_complex_edge_30_class_static_method.au",
+      "before": "f85a329e9562cdaf3a3b412173cd85290820ab3d076c5b09ef232a177152dd07",
+      "after": "bd1156155ea5285b5ef92d9f229b840a2c8e93e6c49cce1f7fe99da0f9b0f65e"
+    },
+    {
+      "path": "test_edge/test_complex_edge_32_trait_default_method.au",
+      "before": "3ae75208520ca3ac30d230b76dfd741a115701d2ac4744168bdad71ff6e01e59",
+      "after": "89c8a350ef43c84a7f0b1152e3f01e83638262a79a2acb593d64726376791e25"
+    },
+    {
+      "path": "test_edge/test_complex_edge_36_enum_option_shorthand.au",
+      "before": "704048e3823c38ec730404bd91b472144628962f713552e5a473faf8897219b9",
+      "after": "87c78b778c3f50d8f3f53470c8efc1f6d275decb26dc1c4aaa1bf7dc5a0811c5"
+    },
+    {
+      "path": "test_edge/test_complex_edge_38_generic_enum_with_class.au",
+      "before": "c1d2c1951e515a1f87d8798cc1a9484f54279787f3111901ba3a020ec0f49c2d",
+      "after": "163ad12c4788a318ea5ac29bae2501ffacfb378b9c0fc367e68d2341c4de719d"
+    },
+    {
+      "path": "test_edge/test_complex_edge_39_trait_generic_interaction.au",
+      "before": "a921ac8b37fc4f7dd5692e31529bbb920b0d30a6ab4bd619311069f0ea267c55",
+      "after": "ed702481eaf9d70ebc51f96ff44973a0e0d960320d408f9b427f48a6b3528c47"
+    },
+    {
+      "path": "test_edge/test_complex_edge_41_import_trait_generic.au",
+      "before": "f097cf9906c7c539f20a3da50fa2b73d60c282282b6aa94956a24f87ad01e419",
+      "after": "1713c36bf5520f24841e170c7ba893027f9b51fad0940c08d098cbeb4e6d067b"
+    },
+    {
+      "path": "test_edge/test_complex_edge_43_generic_result_enum.au",
+      "before": "cefbdbc4b58a0f7c0f3308506da6f71620906e1c4a675f0518845c4d2638bd0d",
+      "after": "b08a205d18c79fb09270b4041b667e56d2919117f2ad21fae86c98e837f93a01"
+    },
+    {
+      "path": "test_edge/test_complex_edge_44_multiple_generic_params.au",
+      "before": "f1640adf029e08f46b719e165dab76aa6f9e824ec5f9855681ce18f0ea3baac4",
+      "after": "da685f112e89b1bb86151cbe79d77238113c3fd4b978df4133caae8c3af4bfc5"
+    },
+    {
+      "path": "test_edge/test_complex_edge_44h_narrowed_bug.au",
+      "before": "36cdde5a5c9a989e2dd69805f51d2f3b6eaf5f46596697d9b9780f3138a68435",
+      "after": "cd6281e0180c0a644546ad2140915519d83548b2ee57181f04593ecdf39ff4a4"
+    },
+    {
+      "path": "test_edge/test_complex_edge_46_self_referential.au",
+      "before": "89d8d4c28b187bfb771861edacf28e4dc3dabb3cd7781b44b39f55ecb59788a8",
+      "after": "0eeae541f82dd9b3713b15d8bc3a168fc99867f3cd1382452fa60bff5f4dc678"
+    },
+    {
+      "path": "test_edge/test_complex_edge_47_class_with_channel.au",
+      "before": "8b26cb5baa1729d97be55e32a348f21a265da6e8b4aa3c5a8a4a814923228576",
+      "after": "8f23da8921cc3d049be6855e7f7be9b2e7aa5ce2a383bb63ef85c371349935f6"
+    },
+    {
+      "path": "test_edge/test_complex_edge_48_method_returns_option.au",
+      "before": "843f1a095e4044f2120f1221a6858c034548c510c39d9ae73825629c6e6713dd",
+      "after": "02be87377b64002b8fd9d28d2ef57ae89a942f8f9663f5549c1196c845fe8733"
+    },
+    {
+      "path": "test_edge/test_complex_edge_49_comprehensive.au",
+      "before": "36ee7572d1338226bce4d547a4ea4b52f82599df8f514cec05e624e09634b5cb",
+      "after": "a778f66f3e2ee33c8edac9c1d6357daae0db46092a2731b8515a4d9a343a799c"
+    },
+    {
+      "path": "test_edge/test_complex_edge_50_borrow_match_chained.au",
+      "before": "efd014970ba2fdb748ab32d824bb2a6e962f97c23fd55756a08f1333cac7b1f6",
+      "after": "128124356bf5dcdf4bb26fcf6f6d94c0bddca75024fef023a4cb2395ef1e4603"
+    },
+    {
+      "path": "test_edge/test_complex_edge_51_match_in_match.au",
+      "before": "54a94c9e6ed075b504324d680f58f35f6e35100b3ad9d14384f7e080733a848c",
+      "after": "1eec7a364c16ff0256c2e1acfa74264d9dfa6be35013caad3aefea2f124879ec"
+    },
+    {
+      "path": "test_edge/test_complex_edge_53_scope_leak.au",
+      "before": "67b8d75c6379f68a854f1884fc630f610754ade5f290c4428fc389f6e6cb75a9",
+      "after": "bd0dd689f76316b6054685dbdfe5fc3b8f519f7dd4d0ace337bc5b8f2a330b70"
+    },
+    {
+      "path": "test_edge/test_complex_edge_54_result_construction.au",
+      "before": "6266d89ff58120637aeca6ae0b06be96ef8e3fde92d7963cb4ac73516d353409",
+      "after": "3615c55b1ab657827593507a7a3551c26457796c014368cb090b7e7f14e3af13"
+    },
+    {
+      "path": "test_edge/test_complex_edge_55_option_construction.au",
+      "before": "1807eba367767d5710fc1815b387d951e2ad1067089bbd0fa77d1b8badd75a1a",
+      "after": "b8344c9faf38f5676dcb46aac40d8ac48653499dce9061424bb1c0c136ec875e"
+    },
+    {
+      "path": "test_edge/test_complex_edge_56_enum_as_param.au",
+      "before": "1dd0df1b397a8c55297995445aac1ae1b92e3e7e83f5ac831424f9c0ee606036",
+      "after": "06ee0233fe0b34c8cd99196019252cc7efe81e0dc5258423695644a8d05e57d3"
+    },
+    {
+      "path": "test_edge/test_edge_builtin_result_in_generic.au",
+      "before": "5957e0151e3be6e4f0b5d5093c3cb385cfe7344061fc427dfe392ffd2e61b1da",
+      "after": "b98ac9693320258876e49340b3f52e4e9eb22772839453a8897ec95dc4bced69"
+    },
+    {
+      "path": "test_edge/test_edge_generic_class_default_field.au",
+      "before": "3f97b5afdf4d4ec90b2c3a0d1569bd46b29ff6217f549c8a643065401054656a",
+      "after": "65a50dc35f4738f30f596ecea08687ec9e2ec0fcd36fc5bdf3af7ee847195d7c"
+    },
+    {
+      "path": "test_edge/test_edge_generic_class_field_method_conflict.au",
+      "before": "7165489db9a4e160873ddc9e8cf7f448414465576d68a0a0372b8a3a2c67bc2c",
+      "after": "daf47ec050d61a6b688c3d406848349b2586e0e7a2a3dbc05cae4130a9fb6974"
+    },
+    {
+      "path": "test_edge/test_edge_generic_class_method_returns_self.au",
+      "before": "5e5e8f3015b250db4213006270758b3986baaad73abe74fc3fb4eff22c01d1c4",
+      "after": "86b94fe1018c2c85afaa90907da133d098ee2f242ed4a47440a4056717619756"
+    },
+    {
+      "path": "test_edge/test_edge_generic_class_multiple_methods.au",
+      "before": "7b85511218fd5e11e41fa8f3df8056d28c0caf3a6ac352e48b43257f96ab6a6c",
+      "after": "0ae7b97df6af03dbef1fb46f90e1d3e20e154fb6319a05b9386fc8da995c693e"
+    },
+    {
+      "path": "test_edge/test_edge_generic_class_static_method.au",
+      "before": "1ba937b8a392b58207f4fbae66f4f69dc80a5011f1a9dc84469d491b21e771a8",
+      "after": "33f3c468720c0a60ae7996cb39d41cd2e1a4b1e2599c12ee48af488a5228352a"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_bound.au",
+      "before": "f209fd985e19561c047a31cca4e0238b5b1ee47e755b1c8988270362c842f09c",
+      "after": "ca20e0ea84eb0715fe2f1ee3a40a1312a5c869b45cc7ad7e5984bd3bd3b1542d"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_in_generic_class.au",
+      "before": "c2c98fd693ce91ecae6edf7ab3cbbf6104427b5d9921e643f07bb5359050e7e3",
+      "after": "59d57e43f911b8355fa63aee3d2e4413e91956b33fb6ce57ca855c107fe5362d"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_methods.au",
+      "before": "9c119ec267eeb516b9846f7b9e9dc12df1cbc7f3bdb9a66e0d7f91dcc29b4f96",
+      "after": "2defe78a893908e004d9204da91c00f091ef84320d0ff45bd2078b5cd9d82a77"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_multiple_variants.au",
+      "before": "690d5efde5197f4f3d9a94652c679f72c93bed7d1a96c33eecdc26f7e92dafef",
+      "after": "c9d34af30a420d39abf937a050c906acd617d1bc50369ea99299d98d4d5014d3"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_no_match_all.au",
+      "before": "d6075ddd5c51c97a3bdc1631d3dc38d7ce52a9af761dd679fee476a6e85cf38f",
+      "after": "345f4f242f6e09a91264954b2243b3fe6d5f74139fdded850afb8b80b8903b6d"
+    },
+    {
+      "path": "test_edge/test_edge_generic_enum_two_params.au",
+      "before": "bd8a2963fb90231d9dd48e69347046a4c95db355ba15cefb90eeed3e8bc0a2a7",
+      "after": "51dbbe1e9630f60ec19404ffee56ab0867f1624bd79a24baa71ab2af67a9914e"
+    },
+    {
+      "path": "test_edge/test_edge_generic_method_chain.au",
+      "before": "6da7b4a6bc0f8a587ab1b6b10ccef357d354830ebb6b71c6e3043f7515de8f34",
+      "after": "78bbab21eff438cb4dd8b1d7921a0f9e3b4cbce9229f5ffc4dc7c8860901fca1"
+    },
+    {
+      "path": "test_edge/test_edge_generic_method_on_trait_param.au",
+      "before": "ba8a0a18ffdd5347289dff2dbe71df16b3462b9dab271a42a019bcb000a81cc4",
+      "after": "1e6fcab6d40194844c6cedd9f4b298a789076dd7409e5e2b95030421171dbbd3"
+    },
+    {
+      "path": "test_edge/test_edge_generic_return_generic.au",
+      "before": "b3e2d89b0f5bd92a31bec0cc4fe0c66d7a0584fbfcd25cfcba5d7cbbad93f893",
+      "after": "65c33cf07d984902df53fd4ef210759ac3eec11b77ffd20695749db36e5d115f"
+    },
+    {
+      "path": "test_edge/test_edge_generic_with_bool.au",
+      "before": "cf0120649472a6651a7747a812b01196ec4fd6dd8217a94e2b480bf8ec83e021",
+      "after": "0307ab8be74fc41a32df41c6d4a48afec2ab984dd4a7068197698384ea545f4c"
+    },
+    {
+      "path": "test_edge/test_edge_impl_trait_for_generic_class_unbounded.au",
+      "before": "ba8aa1f756085166fc4fc32a4b6dddd3cf60f0ffd72867c396ebd8d94548415d",
+      "after": "ec0aa66ad61196ef290f966a4c4bca086669d39d91ce14c81510aab145a81ed0"
+    },
+    {
+      "path": "test_edge/test_edge_method_on_generic_in_nongeneric.au",
+      "before": "9d2a7041dc884b22eebeabcad49b0a8aea42df4e5dabb32b908546845402a051",
+      "after": "f4fa88ad3a62a7b2649207d0462cc7ab4f222b4bdcc83697ab26bcd512857fdf"
+    },
+    {
+      "path": "test_edge/test_edge_mutating_trait.au",
+      "before": "8ccb0015fde819ad7519b41c89abe18dd6872334d05e16b01ff7497825396554",
+      "after": "6417955faa501d3c77059e6e5d27e9f335366d824ccb2e995edf8be5708d9085"
+    },
+    {
+      "path": "test_edge/test_edge_nested_generics.au",
+      "before": "e74270053fe9ea2d32b986014d07c8405dff02847a5cc4f99cb0e4ce88340947",
+      "after": "be7862aee90321e3b7acb2262efea82781dd90c79b02b7155bbdd94bc9c0ac4a"
+    },
+    {
+      "path": "test_edge/test_edge_nested_match_generic.au",
+      "before": "f3b687a54d2ad011dc79f4a4809884f49e0c1220a94623df4388ca9602ed3dc1",
+      "after": "04dce4cde0023d09c374c82a38c9aa27cd8449f0c9802362e170597c61247070"
+    },
+    {
+      "path": "test_edge/test_edge_single_method_trait.au",
+      "before": "348ebd7eb9d5352464cce66d3320fb785f4c955e3f7ad93739f9dacf1365d724",
+      "after": "91205da3ef51be756629f02336b8ac568715980c0286f409b6c485e7c3dafa84"
+    },
+    {
+      "path": "test_edge/test_edge_trait_bound_with_generic_return.au",
+      "before": "ec0a4c55304f54601ff66e0b9c07c04e68260a54abd8c964f124d42ccdfe79a6",
+      "after": "4a58aa0a67a1cc1122ff0752571ef55c917a7cc3e87fcb37ff92059ab2015fd6"
+    },
+    {
+      "path": "test_edge/test_edge_trait_bounds_multiple_params.au",
+      "before": "f236d4f57255ec6f9c247ba51ef2a22e562c93a564522546c50301c21e644d30",
+      "after": "c8cb8194bdca66d7f69e975ac4b610698e5b321e135ecd1d5dcb5e198842a618"
+    },
+    {
+      "path": "test_edge/test_edge_trait_default_method.au",
+      "before": "24fbcf7c988c66ece6aa7dd2905fc834733e333aaeba56be978208084892d99d",
+      "after": "609f2e914eb179a7e63a4b56ee3f332ceb0167220d8440b7cfcabf344a5ee349"
+    },
+    {
+      "path": "test_edge/test_edge_trait_impl_missing_method.au",
+      "before": "d89b02b509d706dec4ac4477dc44bfe79ab8258a88d689739921ed02fff1672b",
+      "after": "7c6688b298d4714a8200a0fcd868e44825efc47f3758cc79b4211fafe7596ea6"
+    },
+    {
+      "path": "test_edge/test_edge_trait_method_called_in_generic.au",
+      "before": "d7235176ff93f94405e56c4177f05d0ef0a46dbf410dfca06d4a17ec53adcc72",
+      "after": "322744fdb10ae361eac26a26d1c3f27d99d0c7bee4c017d1132167f61339d247"
+    },
+    {
+      "path": "test_edge/test_edge_trait_method_chaining.au",
+      "before": "24a75de3547fcf50eb907e4c5ae6a368aa45af7e4073600e5f39cadbefa11c36",
+      "after": "e241604186041d3d826b78e4d30dd4a92c78395df85ee75baf89d0657903b82a"
+    },
+    {
+      "path": "test_edge/test_edge_trait_on_generic_class.au",
+      "before": "6717c5eda9d79b4f7bbafc2089b3d1744b096f4705e13bbe5e3c62790ade5c55",
+      "after": "7d55e34e4b9b5d272cd993636381fe7b9fe4c20106d829643ab98f6b2558b7ed"
+    },
+    {
+      "path": "test_edge/test_edge_trait_returning_class.au",
+      "before": "ffe4d4e251a6ff3108c4f542597120e96aa50235a8f8b36faca1852d679b25ca",
+      "after": "d138460f691cf5c95cfb9daa49925df04c6886c923277e18f138b83841f28da6"
+    },
+    {
+      "path": "test_edge/test_edge_trait_void_method.au",
+      "before": "097bcbb471e3ee36100a0876b14dc64208cf87380d2e8d451cf52585449765d7",
+      "after": "8bf46d473c8a8677acb143215556491ada7045a00768465461a160e3481dfb47"
+    },
+    {
+      "path": "test_edge/test_edge_trait_with_generic_param.au",
+      "before": "82b1612024957194f0ba73a1df825f55d406cb66bfb0ee582613223f6b2d8c79",
+      "after": "ca367932fd547a36af58885167ec5adaf98beec233ecda7453787330e4a5c60d"
+    },
+    {
+      "path": "test_edge/test_edge_trait_wrong_signature.au",
+      "before": "3a4ed2464cd3e3ad44864a38135d86256f3e4c47852a7fc674bc2e767b7ac11f",
+      "after": "46b2c8ef7eae1fb60ce31221479a6628d8eb613d8182b88c2c0a2c57fb868134"
+    },
+    {
+      "path": "test_edge/test_edge_two_trait_impls_same_trait.au",
+      "before": "379cd434a60bb30db988d7bb3e577934ad5a75c903fd233c07ad43d160b8313d",
+      "after": "22ad5bb6f552eced1b0d4012225d9ba3d0791767a94799d43815cefe47ab760f"
+    },
+    {
+      "path": "test_edge/test_edge_use_unimplemented_trait.au",
+      "before": "7f5185886b830f8507f56c14831d774e889e6629d9ad423ba592a25e3681aede",
+      "after": "9298931a2551086d0a1a9490b957210be93f866bb1080eb0e09ee9b7cfb9091e"
+    },
+    {
+      "path": "test_edge/test_enum_01_basic.au",
+      "before": "18397e6bfd1b5fbda525b6ac3d8a695a6c0aed3eaf633cc9349ff9a91acbce43",
+      "after": "d505dfaba148321d9ddc9c83400a0b6765c62677d3184e70a2a962be98928b6e"
+    },
+    {
+      "path": "test_edge/test_enum_02_generic.au",
+      "before": "754d025133c80ff7a1635af5551da889e996227ff7da645625e7c201de607f02",
+      "after": "73d7eec8e5070ff0ad09a65fc8c4881f3b7f1367d35f09973816cb74ec6bd839"
+    },
+    {
+      "path": "test_edge/test_enum_02b_generic_no_annotation.au",
+      "before": "560bba70268480e04428439d5645be3b446c04bfe1ccc76f6ac3d14b814b7d2e",
+      "after": "bdfd3238aabe0789aef13412a31e9252c2ec2bf719e0e6c192dded17f75ae099"
+    },
+    {
+      "path": "test_edge/test_enum_04_nested_match.au",
+      "before": "f909401d0bd8b646f8c76bfa6347bd29475d682f0a10604684440747961387b8",
+      "after": "f9317f323053919c1774ce935426ecec07595b87a40d1b04191e79201f3d2bf9"
+    },
+    {
+      "path": "test_edge/test_enum_05_result.au",
+      "before": "9e9f6ed111f92a019ecf18dc9f42897582bfe025a87285171c0df7cd53af43a8",
+      "after": "56f1dde1275380102bbd49c379aa24f1d14fd72f5d2f2926b10b6091395ed26c"
+    },
+    {
+      "path": "test_edge/test_enum_06_option.au",
+      "before": "55881ecfbfa5c8c468b509fb3ba5a5ef289000605e58dc84bd460d075595e681",
+      "after": "2edfe2c5f36cb263d7c93925b473b666dc99f0f3cdbb63581c38b7fd93844539"
+    },
+    {
+      "path": "test_edge/test_enum_09_param_return.au",
+      "before": "cb43e160e4e8cc77e26624f4301ac7be3ad81ba2ca0a2695312fcf40fb4d34c1",
+      "after": "3652785ac9c152192420e45b5609e9b439877bae02e5baa5741ca511dc7dcf69"
+    },
+    {
+      "path": "test_edge/test_enum_10_complex_payload.au",
+      "before": "7c0465aa8c5990fec3a0b4ca0c43efaaad82aa21fe51f62d28f3858f3a6d5621",
+      "after": "594cf83216c1b46ac5cfb979cf9827c852cb1b7b1e96fa88890cebd5f81ae84b"
+    },
+    {
+      "path": "test_edge/test_enum_15_enum_in_enum.au",
+      "before": "2e1bfdb7d327016e019e39de7de54dee17301d3ecd9ef055062729d98739fc3d",
+      "after": "e455a9d1677fde488fad5414a3a665db386ac5e197bf3a6848efd0c1384386d9"
+    },
+    {
+      "path": "test_edge/test_enum_16_enum_with_class.au",
+      "before": "dc497552a8a6a28acb91beee704a41f494af5d84f61d3a9a407b0d64b865d5c2",
+      "after": "08f7a14da3b74ad9193258afc31f31d3259b24f6757f931faed5d1f71570c469"
+    },
+    {
+      "path": "test_edge/test_enum_17_single_variant.au",
+      "before": "858434771fac711e156c326ea188ec20e7fa53422f352705199a6af4af070245",
+      "after": "3806e45398b8d9b40c438a2e09e0455b7fecd55b724a471f302c4cf327e3a4d8"
+    },
+    {
+      "path": "test_edge/test_enum_20_option_chain.au",
+      "before": "d89616dd7bdd8e90edeb677839c588b94fd90f38d229fc78355f257334052121",
+      "after": "f74553a234265fb94f616fd07b8089ac7fac44715325a4bd7ac6e3aea78f5968"
+    },
+    {
+      "path": "test_edge/test_enum_21_match_string_payload.au",
+      "before": "6f54c39c83dec44adf73d2868713ef8a62f69afd9b0d759384aaaa6039cdf0d5",
+      "after": "030ade80b5265c184daa85403e812a1326dfb89c5b9abfca801487bbedc15df2"
+    },
+    {
+      "path": "test_edge/test_enum_22_result_string_err.au",
+      "before": "5500b0c92d401ff9891de3ec800c82a110a84b055c2634110774c057773b5807",
+      "after": "5a75c398f0f3e80733717dd18e34420f1a40ee4c04b79584c3398742b162b354"
+    },
+    {
+      "path": "test_edge/test_enum_30_option_none_return.au",
+      "before": "60ffc750dde4c58776b05cb74632d90f5c85894f82486328acaa59e1ed8cf5e9",
+      "after": "8340b6f629df6fcf58e672b3d2bdd1b363e4e8db83ddbb2be02fbcf9d0030b79"
+    },
+    {
+      "path": "test_edge/test_enum_31_generic_inferred_empty.au",
+      "before": "1ae17e0eb85c85d2815d5e3ab923231df7b1461f430e46eb7932f55a33c8773e",
+      "after": "5b2d5663db2e8ea91812b8e462dd4265b4804f94083f1a53eb8c8b42b54c6d06"
+    },
+    {
+      "path": "test_edge/test_enum_34_match_inside_while.au",
+      "before": "a639ac0e4f12d1f690e44017676ebc23568d50660276ad213ce91ff86aef4b37",
+      "after": "eebce32de0d19163f9100fe1fb3f36b27df0ab1f84f30db41118644defde6918"
+    },
+    {
+      "path": "test_edge/test_enum_35_enum_mixed_payload.au",
+      "before": "92f8e77e4bc1c5a4bb75299705037242e85f90a7f10d948ad99c3c5c76bc1474",
+      "after": "a15df236df63f9c4abd900f932038a4d5dd8e7dc300bb47e6fa127c422c46176"
+    },
+    {
+      "path": "test_edge/test_enum_36_reuse_binding_name.au",
+      "before": "ebafe818dd3e5c7fb72d4b12b430fa02c9f913e7392d1cd3e195161aafca1288",
+      "after": "d8b6e123d6ff17fd459e536962b54120e17ec270e4814aa0a45ddaca7864ad82"
+    },
+    {
+      "path": "test_edge/test_enum_37_option_none_pass.au",
+      "before": "5b3c16615640129d03857c660598e74d98aeacc4563a67629e9a3832a04fe5da",
+      "after": "cffaf4af06248a5649624937dbb732fff8f5de3e091960aa0347c54cdb6f1994"
+    },
+    {
+      "path": "test_edge/test_enum_39_match_then_use_binding.au",
+      "before": "87c020a89cac001571a490d2900af892249533c909ec56a08e0017c91d9d45a7",
+      "after": "70875c53737b9863c75532234c8b1c3bcb85d52b1cbbb1a9f6aa80ad535b60fa"
+    },
+    {
+      "path": "test_edge/test_enum_40_nested_result_option.au",
+      "before": "77d9bf9dbf74bf92d86284efeab9ac4953ca4c9474385dc1eb5b7f9fb11e1e0b",
+      "after": "1fcf2e5fcd01c78879cb2be406f46bb0764a2e4a8e0bac592a3f99ff7e47423a"
+    },
+    {
+      "path": "test_edge/test_enum_41_enum_variant_same_name.au",
+      "before": "78fa0c282dc2246a656ca7a07fa2a41a7b0ac33b0b945815761d63e59d3ba4a7",
+      "after": "e4315bcd8b76cf6736567a9c8107e9ec2b30fd3f803f107087265eef95bf3eed"
+    },
+    {
+      "path": "test_edge/test_enum_43_generic_string.au",
+      "before": "de37f3526fd584ca8abf378e0b9c6298b78f9a830a8024e5cf865632697672b6",
+      "after": "0041f253634a6376fffe93347d4306eb5659623475ab91087545a7dc7ca633bf"
+    },
+    {
+      "path": "test_edge/test_enum_44_generic_return.au",
+      "before": "ab3774e1cd3db7ed1f9871bb5aa7dcd576415322e6a83d67074bc04c96ae9a6e",
+      "after": "1dbdd0e6db9e3a8a924b4e67b66d2aaee2406ce832937a71285b85cfa47dd7de"
+    },
+    {
+      "path": "test_edge/test_enum_complex_match.au",
+      "before": "66c3457db7f227c4fa8ad89bd406a786ae04adba7df1b8e0b4a4bc330c7b8619",
+      "after": "2993344ebebf94c5e4efb2d24786bf463903b126ca6b860d8eb49ae2bd9270a3"
+    },
+    {
+      "path": "test_edge/test_enum_edge_02_mixed_payloads.au",
+      "before": "bff5666ab7e1318fb5e1555a50382a9c688a4c91cf28ada9f375c3121b6f566e",
+      "after": "339182b0a84e709ac8ed0d42911c0d1230d81c7dbc4326df9a8562c0d146f4f3"
+    },
+    {
+      "path": "test_edge/test_enum_edge_03_exhaustive_binding.au",
+      "before": "abf0f1802328e6fce4b8c476c08f4a6348a9d5d46cf2ffac2f658e7522177f00",
+      "after": "49515ee85df706bbf585d33854e8795c45e44a3301fa7d135c6b70498a2d47c7"
+    },
+    {
+      "path": "test_edge/test_enum_edge_06_result_type.au",
+      "before": "91233af29f5bcfb890c7f1caf92229df14bb8842a2db262d1dc75f11c761aada",
+      "after": "dd978d7710d2cb5400ecf3577076864e890e44826427385b512b24af4987937b"
+    },
+    {
+      "path": "test_edge/test_enum_edge_07_option_type.au",
+      "before": "3640ec919f02567555f14eaff019f9a38f01b1059a132c5ee41b49eae188db41",
+      "after": "c63083e033fcffbfc9517c1338c0487cafbc842b02d98770f28a753a880d6898"
+    },
+    {
+      "path": "test_edge/test_enum_edge_12_enum_class_payload.au",
+      "before": "2dff8f3f0da78b4f7717699e7b6d5eb98025d147ac658fc1a037e7cd5454db1e",
+      "after": "85c47b7bbba2be225843b54f468751571aebff9fdab2f402d6bf50f5391dffb3"
+    },
+    {
+      "path": "test_edge/test_enum_edge_13_generic_enum.au",
+      "before": "500ea4aa6f225965ac3d7ff533b1b2132b2502b74d447e9157c58d5e850bfcd5",
+      "after": "ed4980715827a997f3c1670cce9c5c6b1cfe584b8cf94d476cfddd61f7e2a753"
+    },
+    {
+      "path": "test_edge/test_enum_edge_14_match_borrow.au",
+      "before": "b70ca57555796e0344bd088b58b62364ca1f80a4694aa49ebda7c73a2f7719dc",
+      "after": "cce5fdd075523e4e47d90ff39691ac6fec3165fa4809bbcf098ac45900368cc6"
+    },
+    {
+      "path": "test_edge/test_enum_edge_15_match_strings.au",
+      "before": "ea57c96b336c7b1fcb30dc1c506a895476dc8fa4eba2c108a79d28d737b58354",
+      "after": "d45f95ca229ca460b9bb5cd01f99298392d7cbb71f90c0b53959b378d2ca9e81"
+    },
+    {
+      "path": "test_edge/test_enum_edge_16_result_in_result.au",
+      "before": "983a130333bc418ad1928d367b85f37623f45a43795f369280a99086ce795bb2",
+      "after": "aa8d82e41e4089974844a08afccfa5df50d7592f3b61066c76d2cb7a3c54f70d"
+    },
+    {
+      "path": "test_edge/test_enum_edge_18_single_variant.au",
+      "before": "28dd2cd98060126c6549e6ed552c0eebcfe3f759f4c70dc0d93be5f73c81df61",
+      "after": "19b83a020b8b6d7a93d169d9183a6300ceff95a92b9986b79ea326a90c979a49"
+    },
+    {
+      "path": "test_edge/test_enum_edge_20_match_assign_to_var.au",
+      "before": "6d67a52d412180bcc9a113338b4ee5d6064db14cf2c0efa729f66c31d88d3ffb",
+      "after": "699b73fa68342e12871cf814a23c41dc3e8d83997c73d861c31e9819da40f502"
+    },
+    {
+      "path": "test_edge/test_enum_edge_21_enum_in_loop.au",
+      "before": "a15a6e448d6d3bb4036e3566b445c0883f956051496825d51fab8f8dc5371799",
+      "after": "01c032122cdc2929e0e262228e6d8c5cb774746ae00b602f0d647994ce9e8ad0"
+    },
+    {
+      "path": "test_edge/test_enum_edge_23_enum_reuse_binding.au",
+      "before": "2ce877f31edcb3eea19a2e28115658b33209ec1de37e020a1a7ac841fffa448c",
+      "after": "6b30ca79abb846254409b01ce9dbfbfce2755e646d69b3b9fb4f4456ba096334"
+    },
+    {
+      "path": "test_edge/test_enum_edge_24_option_result_interplay.au",
+      "before": "2f07d18160a2f78bd82e5941601b208bbed196893e98bb9901306c7a93dbe014",
+      "after": "e865dedd8830d90d1b848f409c39d6d38a974e2bbcb6adbf549852eb3781de7a"
+    },
+    {
+      "path": "test_edge/test_enum_edge_26_match_borrow_then_consume.au",
+      "before": "ea6a32e172ca8de2b3e681ef11fc80ac5cfce03e049cbffa81d2766c0db4658e",
+      "after": "51326524d0fca991216cfed7e854ae9051fce4ba84b2255d0498855444a4bf2a"
+    },
+    {
+      "path": "test_edge/test_enum_edge_27_use_after_match_consume.au",
+      "before": "7664b34cb18788f980503a1282d703a666a9be5373acb653d21f45ef59f68714",
+      "after": "f0a8537cffba7638eeea1b99c7d9204c6662f9b352f97e562deae7539bd0b6e1"
+    },
+    {
+      "path": "test_edge/test_enum_edge_28_enum_method.au",
+      "before": "9f1635b5c588c4729cb5f2a338d47131014301aa7ece80eeae1d865b79e0dca3",
+      "after": "10d907cbc951e79a11a3d5dc232f8e54abdd01acfc40617b5cdba11f0f354bc0"
+    },
+    {
+      "path": "test_edge/test_enum_edge_29_match_in_if.au",
+      "before": "09ca1e15e32e11d401cf91f0b8f2f543269b097d6fce6b35c44a920ecc23a25a",
+      "after": "7cc0096a991552a01174ee57a54b3ede470cbd8ee0d41147d9292e7a0af0f1f5"
+    },
+    {
+      "path": "test_edge/test_enum_edge_32_generic_enum_two_type_params.au",
+      "before": "006b7baf3eb52098908fe80dfa6753a5158d39931230265c0e105e4fa4cdc245",
+      "after": "9a64cdc9077b4d0dae8a7a1556484f12052fcddbc156c7477fbfaa118476347e"
+    },
+    {
+      "path": "test_edge/test_enum_edge_33_option_of_option.au",
+      "before": "387a6cddeba64e079f302b1d156522f91dccac84c7670ccbeef24bd941070f54",
+      "after": "d136f8226e033f93f12a55ad3035e056d014df06b024380ab3f464eecedfee49"
+    },
+    {
+      "path": "test_edge/test_enum_edge_37_match_borrow_class_field.au",
+      "before": "f0b0c393da96d66566518c5fd4aa54567d2648e019539ef82c679ae253975411",
+      "after": "b4464806618ae356a42022dd7d850ddda5488649d995a84e3e81072aa5bdb70d"
+    },
+    {
+      "path": "test_edge/test_enum_edge_39_enum_recursive_type.au",
+      "before": "a9378464a8d0af0474e795b2f50ded994a3f422818e2bb7bdd1b98be158a3de9",
+      "after": "f4c84b8bd5e60827b3808b04a0b4b64783c24f3ef3521441e2b46709020149ed"
+    },
+    {
+      "path": "test_edge/test_enum_edge_40_enum_bool_payload.au",
+      "before": "0b66254eb6d80d09fba238230b4a573cd3d59eb2466254232f26cec2dec2dd3d",
+      "after": "52a36b0390e3f88d58fc4cac078160c4637233e5f2c293fc7996a0592b5c8355"
+    },
+    {
+      "path": "test_edge/test_enum_edge_44_generic_enum_with_class.au",
+      "before": "84b3ba47ec604db6c07745e095ab878f79d599bf383f9f5e9737fa131e423a3e",
+      "after": "03fcee031ae3f7b0494a16dd6336c5b5755d023d80c77cd9d9dabd903f6ed004"
+    },
+    {
+      "path": "test_edge/test_enum_edge_46_match_in_for_loop.au",
+      "before": "d0202c757fb1bf73e6a9b71f76dc4ec118f1fe04175d0fde30f0843005cf75d9",
+      "after": "70b9588806dc474d82074305f6d5a453e2ab33b6479761a7b265b76e2d6d2942"
+    },
+    {
+      "path": "test_edge/test_enum_edge_47_option_map_pattern.au",
+      "before": "fac0d4523f5565d8ba29f2ccece60a7f131ee1d80c6b690a5736b0ce37031e91",
+      "after": "63fcb8bb9b876551c1133bb48d5f3e00875f73ca1077c8c95132bbedaace6e35"
+    },
+    {
+      "path": "test_edge/test_enum_edge_48_match_borrow_with_wildcard.au",
+      "before": "12d06d3a98489e8184777cc39384c7db3c87eb4d05d8955b6e6be760aa3b8e39",
+      "after": "1f1d7f1f3c53649823be1476a15c91dc2ea50f5fa845e47d815e6ea08b94a7da"
+    },
+    {
+      "path": "test_edge/test_enum_edge_49_direct_impl_enum.au",
+      "before": "4cea214fcc53a922f584f05c4d52e51ed841e21b7a878ff1f07f43cc924f7404",
+      "after": "dccbdeac4a9b546a087fef16701a82677a50ba9aac19914b5425836f0a427b1e"
+    },
+    {
+      "path": "test_edge/test_enum_edge_51_match_consumes_payload.au",
+      "before": "4f44a3507163857706b7d6ca59c31e417df30a08eaa163d2c3bd7ef810070d3d",
+      "after": "6f097595e5df2ba9ffc3b9023523a940d7b6b91f47e1f0c81739c17e28559d79"
+    },
+    {
+      "path": "test_edge/test_enum_edge_52_generic_func_with_option.au",
+      "before": "bbae87e34a5b82146468139db492dbd2f48638b27ac9f568b3a89cad0d7afcfc",
+      "after": "62c4a573b0ba8cdcce987334c79b7a3149b263f23a7f7a0af2840985ffdd88a9"
+    },
+    {
+      "path": "test_edge/test_enum_edge_53_truly_generic_unwrap.au",
+      "before": "32159d6d9f11dcdffb8ac2c53b3e2e503e59196c28c1f2d8b7ba8c91437acc44",
+      "after": "e535d8faa4e98e1b109ec0fb30ed849f997542143bbece02e7302de9efb4c9e0"
+    },
+    {
+      "path": "test_edge/test_enum_edge_54_generic_result_unwrap.au",
+      "before": "826213ec8a71f834154ff41c197eb6e324af1fe62ebef1329bbfc39985795098",
+      "after": "431a875096bc4864f5b2b4a9b7972ed3a587a1a8e006189093fffea419559d90"
+    },
+    {
+      "path": "test_edge/test_generic_class_basic.au",
+      "before": "e65b1796efeff8f1405402be541cdd7ce702ef3988f5f5e08a560a4e1732a59c",
+      "after": "dfa2b4ed956f0257c69fde4124be0065e37e8a5916f94b300dfb5f4064996dea"
+    },
+    {
+      "path": "test_edge/test_generic_class_trait_bound.au",
+      "before": "e2b1f78169c9cec737e8708d898f1b4f6b976786e863c9d3e3ed3bbdc5753ac6",
+      "after": "3e85d0be3a2538fece6a5ceedb9e2f25010b5219096b88f0d227e6d327606368"
+    },
+    {
+      "path": "test_edge/test_generic_enum.au",
+      "before": "ba3175bd295fabc18c8888e9ceccf3889c7d75a137aa3873b9e0d64fc3686d36",
+      "after": "3d3ea38e876a8d517af94504285322a74f0394a6dee2477f884e37a69d4a28f9"
+    },
+    {
+      "path": "test_edge/test_generic_functions.au",
+      "before": "1e058aa028e0e5781257ef88a77c3fd307e02e2259425cb6e1ea2f619444bd67",
+      "after": "2592e7f5cfce20ba236947ec58e7953102c5a0c29932f837502294448ea1e79b"
+    },
+    {
+      "path": "test_edge/test_multi_impl.au",
+      "before": "812c161cd2dab48e63d0c66190341a3d296602d4fe9204ff99b5f213f821d24a",
+      "after": "956b38c9cd109caadbf9c852d5524e0fbec9ba33be49bb4c607ecb16a5dcc1de"
+    },
+    {
+      "path": "test_edge/test_multiple_bounds.au",
+      "before": "92aa5156ca7731dd3775b3a36c39e312496534b2a9b00406560f365bab243af6",
+      "after": "08b7079e7e7813a6acde6682f2d11285abc90eb84ebd645a910dd35f37746aa2"
+    },
+    {
+      "path": "test_edge/test_multiple_type_params.au",
+      "before": "a264cd36cb5646223287f5980d7bb3feedfeab62b40f303c75c0568e9304a30f",
+      "after": "a6ed3621107027976130b6a05c92f66aaa29a29a00cb9746c6fe2ad69d7cb0f8"
+    },
+    {
+      "path": "test_edge/test_nested_with.au",
+      "before": "6c122bd4431e5554a45f4d22c06b6d2da3b674bdf4a82aeeb371f5cf432e9883",
+      "after": "3b73a95b0b28e244345896c515d9fb686bb7c8c9c1aa8b82856a2fc38e9e64a3"
+    },
+    {
+      "path": "test_edge/test_option_none.au",
+      "before": "f1b9320f54b6c83c4302235a69f41b812021bcd2e81ec365ff32d8ece9b4ca1f",
+      "after": "c91b5cb22ebda3674488fc012cefa8a8ee52531a9064f29fbb3451af85169965"
+    },
+    {
+      "path": "test_edge/test_trait_bounds.au",
+      "before": "c43c8b0adddcacc33636f6c50fba7316e9f648ebf02543878df2c092fafa430f",
+      "after": "dba38696a89b4beac4d610fcd255a317e82286cb469452ded498a48407b7fceb"
+    },
+    {
+      "path": "test_edge/test_trait_multiple_methods.au",
+      "before": "663b1ea03b9b6a0e1c8b74567843caf1078e68913de3d05c744bb06135b14257",
+      "after": "fc11a8e118ee59c3605ef59680264fc80d44073161f533f65cf869470ba8c51c"
+    },
+    {
+      "path": "test_edge/test_trait_return_types.au",
+      "before": "9a0fd8ac5d1d4500aa29b86e92b55a39211b65f3add07f4ab5f00d9b2ff2f5f2",
+      "after": "88b29e055317d7cea38ffdc9fb923cecc239eed79ef7e6df773df1c4032b58d5"
+    },
+    {
+      "path": "test_edge/test_with_error_path.au",
+      "before": "43d283400887959089fd7b73a14d93f5e9579731af2301c3a41bae12ef9a2275",
+      "after": "be27fe5f5587febf493a96457e62d4788c7735536f7a4049cb5524265739cb40"
+    },
+    {
+      "path": "test_edge/test_with_statement.au",
+      "before": "39bb9780cf86f0d30d6589f17cff7da7eeff2b74f739979a35d1754e558c6a24",
+      "after": "1b72ba5ceb9ae74cf0322931ea0fe99a9a277b0ae00bb87800d3628e877304d2"
+    },
+    {
+      "path": "test_recheck/bug1_generic_method.au",
+      "before": "c3b8ea9913cbd530dbf92954396620380da2db58051179bd046116a2a5e3cf59",
+      "after": "6a0110975064e42a7a1e54da2b73b55121dbbf20190bcfd1786cfa03892508c8"
+    },
+    {
+      "path": "test_recheck/bug2_generic_enum_unit.au",
+      "before": "cbddf7f07f3c37b43976aab74d209ab5dac49e47a32f6cfbdecefe602051ad96",
+      "after": "88fe95e0a83750fd95e01e06cf28f07ef9d29e2befebee63972f82c780e9df70"
+    },
+    {
+      "path": "test_recheck/bug3_trait_generic_class.au",
+      "before": "ea316f3a9e98a3decb0e6b3e46ffe328d48b500966e24215445f37858a1ebd8c",
+      "after": "f6a015be6d0d9bb7c84c23f16a681454105bd7bfba1880cd87112479cff322a2"
+    },
+    {
+      "path": "test_recheck/extra_borrow_param.au",
+      "before": "1d455077263a5909bfb8a5ed7ed6600531acc69054bd7a3a4f3c9f77d496a747",
+      "after": "d3d5c2b208fcd4aa7cb42be53551cb40a94ff558b99a15bee919541f53a04731"
+    },
+    {
+      "path": "test_recheck/gap1_class_trait_bound.au",
+      "before": "999c10db0b959054a1fb7adec94ebfcb3b5d755c543c2482fc121f174e2d6d28",
+      "after": "ff7019125e9d9cba3a91365014b59a98c5bd51267328e53df5349ec53bcce237"
+    },
+    {
+      "path": "test_recheck/retest_borrow_param1.au",
+      "before": "1d455077263a5909bfb8a5ed7ed6600531acc69054bd7a3a4f3c9f77d496a747",
+      "after": "d3d5c2b208fcd4aa7cb42be53551cb40a94ff558b99a15bee919541f53a04731"
+    },
+    {
+      "path": "test_recheck/retest_borrow_param2.au",
+      "before": "3de3e85fa8f397325388126bd3a49576ce08437347d0a1f9b44dba5995bd3450",
+      "after": "6566b2e8ac7ebf38bbb4da57ea65aa5a0e5e44e94de22a76ed740d39ed998b9d"
+    },
+    {
+      "path": "test_recheck/retest_borrow_param3.au",
+      "before": "d2018a567baab9f83ad456fb428f2e488c8d5e43eefaab9d4932cbf7b9d7a961",
+      "after": "5c2007557ee58f8caa53631aa0dad59441b20c5ab66d8346f8bae4e7d950ecbc"
+    },
+    {
+      "path": "test_recheck/retest_borrow_param4.au",
+      "before": "925c27be733c135fe4b9f8c18f262f6c2a78f77de96014c91d7678573d464842",
+      "after": "7c2e7334694f5945691e4febb230a4eada4ba074a0c536020a4f353ab783392b"
+    },
+    {
+      "path": "test_recheck/retest_borrow_param5.au",
+      "before": "f457fb4b0f865460889dd8f1dbe1e204744888777417ff0e35096861f81ccf67",
+      "after": "2a2274930606a5aa403a97572157f8cc3d71307c77827e6910c5494687258438"
+    },
+    {
+      "path": "tutorials/00-overview.md",
+      "before": "48c85f1eb84cc8eb9d0dbcc6d245ea1df76c26f0adde5c9a0bc1c2335e9de37c",
+      "after": "532ed8f7d63a40528c4d86beb2c21a2c70fb5e4d76c536330d47d0eb56c25eef"
+    },
+    {
+      "path": "tutorials/02-bindings-and-types.md",
+      "before": "d72ae6d6bfe6ea1b607197e237490297042ca346db6c29216f54b0b159e6fd19",
+      "after": "72c040db625c7e64d46890ecb7b7450317112bee3f66dcf7ac3595c3f759095e"
+    },
+    {
+      "path": "tutorials/03-functions.md",
+      "before": "92ee021101411bd8fa27a07a1e3d8a61fb6946161068f97899c295cc694ceacd",
+      "after": "54e9a38ddf2663fb8be1ca545fa9bc05c7cf6a28c6f6c6cb79ca1cdf475fe997"
+    },
+    {
+      "path": "tutorials/04-control-flow.md",
+      "before": "1e2236ea5e6686ef63960bec27fc3407155fb866938227ccf4f01cf36a0ce5bb",
+      "after": "889559cfe136399ccaf4ffe8e5b972aa4bb4bd1a1a0e9c747fc9190caf1dcaf8"
+    },
+    {
+      "path": "tutorials/05-classes-and-data.md",
+      "before": "cbaa1685b0cd24dc74d264b3b757302534b1548265b4686556e2643c9aff21f0",
+      "after": "22363a60d4405dd6e3da0cc571a863449339dc33ff7c641073465426a4685130"
+    },
+    {
+      "path": "tutorials/06-ownership-and-borrowing.md",
+      "before": "da3fbb4e7cbd1fb697127901b784aa7d02064983e827c5db92ad20d362f78a02",
+      "after": "cb3a6da995ebbd144e07708f038307ad6a79e726b2a36b245d2c62c078dc505c"
+    },
+    {
+      "path": "tutorials/07-strings-and-numbers.md",
+      "before": "746956ca046d32a2eaca8654bbfe3ea433e30f789845ae22f155622b5b74c374",
+      "after": "a45f957934da1350e45ad8d2b86505d257a85dcbf9d4a9f35403f08ff8c1d673"
+    },
+    {
+      "path": "tutorials/09-enums-and-match.md",
+      "before": "b43b13e6b2cd167deb01f84bca53c786d4810153069b966cb19bd156608ba42f",
+      "after": "cc5133d5256333ba23f74c8ce467ca1a7f5425cb9c44539a735570d7a874df68"
+    },
+    {
+      "path": "tutorials/11-resource-management.md",
+      "before": "d5aa4c72e0a86a59c713701bdd9f572af2ae63507c703be667e5093f40207f2b",
+      "after": "4aef9eed8959da1770b79c4b917c2816ab16569e09f0edbc45c73dcfc79dc474"
+    },
+    {
+      "path": "tutorials/13-concurrency.md",
+      "before": "0e1ad48ae4b25ee31c5f2ab69465d5505612616c9dd43e810174687737f4a75f",
+      "after": "1e4ba1975c3bbe9fdc8b36dc2f305ae3f2ae13fc43c86df47897ca51e4306a1e"
+    },
+    {
+      "path": "tutorials/14-current-language-surface.md",
+      "before": "388916e0bd0081df051caa9e661a06c324276044e26af1a82b2e06953c1a5415",
+      "after": "c60dedf0fbf55a7d3a748b1eb399e02c3c161be84f2ceb4457d9e75d684438fe"
+    },
+    {
+      "path": "tutorials/15-generics.md",
+      "before": "98ca241f7e1aa3219308e584eab2b3e8b86cea30ff6d11da0b59e1b8bbf1a5d4",
+      "after": "b3bd1949d7dfbef302acb7c4e25e5e25071e7e37b64e8959177daafa3dafa7ab"
+    },
+    {
+      "path": "tutorials/16-traits.md",
+      "before": "bb43583cacc2e4723d8b52edfee40b52e580c6244cd5be6a3d296732be0baba2",
+      "after": "27f9bdb59a205a1f9bcf1dc9f96daae5d0e532f67917a88585bd7b116869e82c"
+    },
+    {
+      "path": "tutorials/17-modules-and-visibility.md",
+      "before": "ba498a9185c8c8839817e1e536721d70cc7ea653a39735235007a63db9785d08",
+      "after": "6e02e501aff4f44cc6ebde6c5c74d5fb5c9bad0738d00a35d96db9939146586e"
+    },
+    {
+      "path": "tutorials/20-randomness.md",
+      "before": "a1fdd95485ec7ae45730e3989657054acbacfdbe624360daea61582dc4c58c3a",
+      "after": "06ffea2ec9b4b0fc7e2ccddf4db6106aa42b680ac5facdc93d5cbf3fa2f58140"
+    },
+    {
+      "path": "tutorials/25-tuples.md",
+      "before": "1ab01af548f4c5e47cb0db8e1741d93e0a5fdc8ad7769a5c95f54c00936e2cc7",
+      "after": "175d44308a1edf00a825df6adc518c9641fc1871bf578d61ede55cfc5dc62389"
+    },
+    {
+      "path": "tutorials/README.md",
+      "before": "5cb493361bb11628fa093ba7e31bcac7c06f105e9766a1f4626d0137e81a8ff6",
+      "after": "c0cd2ad33dd1132b97c420c7974febf86486d335c0cf65edad4826c5ae126a78"
+    },
+    {
+      "path": "work/2026-03-16-for-loops-and-methods.md",
+      "before": "1be31f50e8ceec6765b745b17812845d5ff4fbba7cde399dd698cab86ec17a43",
+      "after": "9c95421d89fce794cb8702c1fdc7b8838e9e6cd9f320ef9c55a27a7200cb8045"
+    },
+    {
+      "path": "work/2026-03-16-try-with-concurrency.md",
+      "before": "465e6568d438d5d5bfafd1c844bebd81d1494477f62d04c650a1a0ee32c30f07",
+      "after": "7910b2ee7ab8e679627f91159662ec8975fb99d9b4e283cdb035e543662cf9f8"
+    },
+    {
+      "path": "work/2026-03-23-free-function-borrow-parameters.md",
+      "before": "49073a3f0af391ea666a88e66fb6d7062994a73800aacb6abbca4892d0915ccc",
+      "after": "adb6ca37416e6cc4dd2c15a5e94d7021f1fc2bf285e8ef93041eed2019f0100d"
+    },
+    {
+      "path": "work/2026-03-23-generics-patterns-and-duration-fixes.md",
+      "before": "f5d12b723bd7197da45410d42ae40e3db21398b56caf2334a34a4f4e9356212a",
+      "after": "98c00e9560bb6b1a8adfa12ab69ebfcf72a8abfab02d6007af6865237ed2926f"
+    },
+    {
+      "path": "work/2026-03-24-direct-backend-full-surface.md",
+      "before": "62b9754cd6289fbefe0fe843dae751d90ddcfdd472bdcf958be03cb517e2a9f2",
+      "after": "96d12b7d7d24eb5e1f1d4b89da8a732197357f157ae85b0b95bc386bc8e1bfaf"
+    },
+    {
+      "path": "work/2026-03-27-module-trait-impls-eof-recovery-and-direct-spawn.md",
+      "before": "6250a168fa2c46e7ea6f8e78a2d21f5e67c0ed1ba9046d12fab7c0706a8d1033",
+      "after": "61c2145a2a55c1adec4fe6a85c8fc870d4dc908731104308853e23543016e699"
+    },
+    {
+      "path": "work/2026-03-27-regression-hardening-and-cli-stdin.md",
+      "before": "eae57728bd32f308d789df440ed900b9f1b2d7a436b4578386b0a3771e396a72",
+      "after": "d31a6a21a33238c79e76308728d5fa436fed3bfcad053134da6ba399495f25e8"
+    },
+    {
+      "path": "work/2026-03-27-spec-surface-alignment.md",
+      "before": "3064e8fc9eee44ae23cbb5c7b1f5e29863c891b9ff32ae226ce1156d0ae5ed60",
+      "after": "428293d24118894441850fcf5cae051e0234921efd8e544d8c9e24a96c4301f3"
+    },
+    {
+      "path": "work/2026-03-29-borrow-aliasing-and-float-match-build-fixes.md",
+      "before": "f22b2e2570105a0e26d210587c61a5601e26c21f2caa8e2f2f481ccd872040f8",
+      "after": "48dc75cc5773de6169fe628f10c21d995a15524baa7f13c271320f5b1f9c277d"
+    },
+    {
+      "path": "work/2026-03-29-borrow-syntax-cli-help-and-module-root-cleanup.md",
+      "before": "3d4c769efec294408cb873623ef0bfa1f03979f99c871c29e7351e055907792d",
+      "after": "f3bdcbd42144388040ede81f25d1c9740c18079eef8031d25ad4ff5c7c1444f1"
+    },
+    {
+      "path": "work/2026-03-29-vec-collections.md",
+      "before": "31ca7bba04f6c1b3f762b2836827474bc0168e1ce13d1511c88e7ff4b00f8781",
+      "after": "13a8cef7fd77affff99efede278e8b1683ea4056221bc905acfe1d11425ff8a7"
+    },
+    {
+      "path": "work/2026-04-15-coverage-to-100-session-3.md",
+      "before": "8867240a956525951e5eb8c700c2bce5ff5e3bd1326794a95e252857ad09b9f4",
+      "after": "538da142b7aedd57b1a600043d5d5b4c3878596058d239f5a453ef497802b33e"
+    },
+    {
+      "path": "work/2026-04-16-major-language-surface-pass.md",
+      "before": "bd5d578289992d4b6520465e17b3a56414bf96ff57ef0e7943d65a52c9c18d24",
+      "after": "57aae7afdca6bc70bd1113b509f491372a2c9146c9fe313e1172f50489206d74"
+    },
+    {
+      "path": "work/2026-04-20-fourth-review-fix-pass.md",
+      "before": "701f77c0e752d89bbcf9078c9527826ebaaaa6ec8d633ce7f27a58ee6797e02c",
+      "after": "04cb788a12ba0f4b5c3ac13bca9254c4e45b402ee8eaaad2bcd468d61fe6af8b"
+    },
+    {
+      "path": "work/2026-04-20-second-review-fix-pass.md",
+      "before": "5e2dc3222dcd71773b859da25e146a9b604be07230647a13c44402f923879fee",
+      "after": "f8f2e8d74a2d46978c38310996185d84a7063d1f2901aa4400d8144103a5db51"
+    },
+    {
+      "path": "work/2026-04-21-claude-review-validation.md",
+      "before": "8b07d70d015227af38e4fb5a9f3aad93a86a0ac1460e315e5051f079d1a472c0",
+      "after": "f27c4ef69fb7ec3d785d3113c70d6527e8e7faa5346417073d941b086b237f5c"
+    },
+    {
+      "path": "work/2026-04-21-fifth-pass-postfix-review.md",
+      "before": "338b220f57211e7f16193c84b979091ca0d84e30496d5d47d37fda4e2eb244c6",
+      "after": "6fc4cfd8a6e34cafb787228a890c07e52dc105463a3f6493e24eaab29decaf6b"
+    },
+    {
+      "path": "work/2026-04-21-fifth-review-fix-pass.md",
+      "before": "0f36ba900f6ff4fb902c443b035afb32d97046ee8b978dc6bd52fdaa23412b7a",
+      "after": "168984f0d6cf8ad56563cc7a62d03486dd1b920ac1b8678043ca49a4d963b32e"
+    },
+    {
+      "path": "work/2026-04-21-follow-up-fix-pass-2.md",
+      "before": "d08d09ee21be3288f16841966d58879555b30f8a0af5cf9f2ed5ffb84df45a6e",
+      "after": "e7b5a4e33cd46f8340190b0abaa0a15b00868142769efb6f18561723f894397a"
+    },
+    {
+      "path": "work/2026-04-21-follow-up-review.md",
+      "before": "c89e9281eae4a634826f6d44a084224abf82e045ca2dc59ffc023e7c4b609bd1",
+      "after": "ce7934d827ee85c0912714a3f24cc96f9c362f945f3f781df28b84fa0a57dd88"
+    },
+    {
+      "path": "work/2026-04-21-review-finding-fixes.md",
+      "before": "907fd5e1c10bac3b23c20e35122d8364cc24de3af577dd2b6258d81ec32e5b2a",
+      "after": "cb739927339a6041164ed996c6be515dfa75a3dd2c27cf239f7d32756fd31886"
+    },
+    {
+      "path": "work/2026-04-23-audit-hardening-fix-pass.md",
+      "before": "2f55a5e999d4c5a076edf01317a369a6846b779b17a996867dec74a47f111680",
+      "after": "022123f763d378398661dd8a2e7e41b647cf77c07cf892cdf0030d3708c87ce8"
+    },
+    {
+      "path": "work/2026-04-23-round7-review-fix-pass.md",
+      "before": "e74b8f8b3d7ccbab27e7bb336787fcb52aa46ecc0fb6c556507591bfd1ee735b",
+      "after": "75b4a239d571eac2cebbbe827277ef22e8e98f5dbc072c1503d9b53facd5eb86"
+    },
+    {
+      "path": "work/2026-04-24-book-review-correctness-pass.md",
+      "before": "d72714db334a68d99246c3e4c427ef88735f97f92c6e98d1b2cd0e6fb9401910",
+      "after": "d014b525ff86ded6778b6c2d9169a450fe2ee00b58ec9e276d344a87018719e5"
+    },
+    {
+      "path": "work/2026-05-18-v1-readiness-continuation.md",
+      "before": "10a6d1bef4f8e83f8d059236d46a9c828d2b5093ce6cf6b4b0e1e88796f2ac1d",
+      "after": "9b92ac64f6781fbf31cf411593b17c00cacf507a8a76abe38cb38d648f7242a1"
+    },
+    {
+      "path": "work/2026-07-13-phase1-5-semantic-redefaults.md",
+      "before": "f9887fd103fb7a88ac688f161d719dff57647353c4a52f8ddd455f6ea45a84d6",
+      "after": "06b5154fd644e84e245eaeba3a305b38c3d280bed865c2168c2f3c3b1da17352"
+    },
+    {
+      "path": "work/2026-07-14-batch1-reference-freeze.md",
+      "before": "df36e54b7b9d58bc8003e5d94a3facc14eb51a2f3cf0c1cbe96d9cda42066896",
+      "after": "d7a43ddbe870d9a483c34979a6d2b239bd37d155ddcf8bb250f19775051c23cb"
+    },
+    {
+      "path": "work/2026-07-22-batch2-resume.md",
+      "before": "1819b39a11cd93ea31cffad87e37fd8a737068d5a2d1174405b9d055e84993bb",
+      "after": "514a880da8fdb7073229290a7627d5148247b0491f4b81f613400c7fb54f8e33"
+    },
+    {
+      "path": "work/2026-07-24-phase35-conditional-expressions.md",
+      "before": "3b27c28e572a992c7e18b454d4b6d20f13a501b31ac3852e8aa261849ef86293",
+      "after": "249fb481da00fcebb34370f4520acdbf5c6c8d0be537bad0944904d76573df00"
+    },
+    {
+      "path": "work/2026-07-25-batch2-checkpoint-report.md",
+      "before": "8cddcf840f8f41f6e45c9c7d448389e8f6de315909f1a7efedd95d341cd0aaff",
+      "after": "413f0af373194f3d58c46ebea4a4ca00bb3ac5717fa8c8fa9624420a53ca2b7a"
+    },
+    {
+      "path": "work/2026-07-26-batch3-capability-syntax-migration.md",
+      "before": "1855296c288c52015bb5a6eed418b280771d83d07be3ee0ce83956cb9410e29a",
+      "after": "d4edea10b5455c81ac3e4e965498b733c9562b9a03c3a5c04cbc86830125a706"
+    },
+    {
+      "path": "work/task-board.md",
+      "before": "e4cd7b9f852a7fd3f32dba6686fc8bf3111c69c061843e92d60ced22b1ac5f5f",
+      "after": "b3cb4cd79318ff3bbd8110d3f2842f9f40c7962b59e4392a4af9cd1d192b22e0"
+    }
+  ]
+}

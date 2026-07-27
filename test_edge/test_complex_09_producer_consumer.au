@@ -20,7 +20,7 @@ def main() -> int32:
         while true:
             select:
                 case value = data.recv():
-                    match value:
+                    match own value:
                         case Option.Some(v):
                             total += v
                             received += 1

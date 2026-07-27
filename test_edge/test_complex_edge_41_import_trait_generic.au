@@ -2,7 +2,7 @@
 
 from modules.helpers.counter import Counter
 
-def double_read(c: borrow Counter) -> int32:
+def double_read(c: Counter) -> int32:
     return c.read() * 2
 
 def main() -> int32:

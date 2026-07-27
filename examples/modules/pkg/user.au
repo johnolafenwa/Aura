@@ -4,5 +4,5 @@ public class User:
     public label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()

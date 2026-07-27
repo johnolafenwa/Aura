@@ -5,10 +5,10 @@ class Pair[A, B]:
     first: A
     second: B
 
-    def get_first(borrow self) -> A:
+    def get_first(self) -> A:
         return self.first
 
-    def get_second(borrow self) -> B:
+    def get_second(self) -> B:
         return self.second
 
 # This fails: "cannot infer type parameter `B` for method `get_second`"

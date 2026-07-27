@@ -17,7 +17,7 @@ def safe_sqrt_approx(n: int32) -> Result[int32, String]:
 def main() -> int32:
     # Test Ok path
     r1 = parse_positive(42)
-    match r1:
+    match own r1:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
@@ -25,7 +25,7 @@ def main() -> int32:
 
     # Test Err path - negative
     r2 = parse_positive(-5)
-    match r2:
+    match own r2:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
@@ -33,7 +33,7 @@ def main() -> int32:
 
     # Test Err path - zero
     r3 = parse_positive(0)
-    match r3:
+    match own r3:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):

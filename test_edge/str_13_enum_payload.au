@@ -4,7 +4,7 @@ enum ParseResult:
     Success(int32)
     Failure(String)
 
-def parse(input: borrow str) -> ParseResult:
+def parse(input: str) -> ParseResult:
     if input == "42":
         return ParseResult.Success(42)
     return ParseResult.Failure(f"cannot parse: {input}")
@@ -13,13 +13,13 @@ def main() -> int32:
     r1 = parse("42")
     r2 = parse("abc")
 
-    match r1:
+    match own r1:
         case ParseResult.Success(v):
             print(v)
         case ParseResult.Failure(msg):
             print(msg)
 
-    match r2:
+    match own r2:
         case ParseResult.Success(v):
             print(v)
         case ParseResult.Failure(msg):

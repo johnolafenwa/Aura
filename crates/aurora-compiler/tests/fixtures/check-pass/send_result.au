@@ -3,11 +3,11 @@ def main() -> int32:
     jobs.close()
 
     send_result = jobs.put(7)
-    match send_result:
+    match own send_result:
         case Result.Ok(done):
             print("sent")
         case Result.Err(err):
-            match err:
+            match own err:
                 case SendError.Closed(value):
                     print(value)
                 case SendError.Cancelled(value):

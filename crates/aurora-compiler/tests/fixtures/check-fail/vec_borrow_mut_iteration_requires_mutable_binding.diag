@@ -1,5 +1,5 @@
-error[AU3002]: `for value in borrow mut ...:` requires a mutable `Vec[T]` place
- --> crates/aurora-compiler/tests/fixtures/check-fail/vec_borrow_mut_iteration_requires_mutable_binding.au:3:29
+error[AU3002]: `for value in mut ...:` requires a mutable `Vec[T]` place
+ --> crates/aurora-compiler/tests/fixtures/check-fail/vec_borrow_mut_iteration_requires_mutable_binding.au:3:22
   |
-3 |     for value in borrow mut values:
-  |                             ^
+3 |     for value in mut values:
+  |                      ^

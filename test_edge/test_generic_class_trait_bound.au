@@ -2,19 +2,19 @@
 # e.g., class Container[T: Printable]:
 
 trait Printable:
-    def to_string(borrow self) -> String
+    def to_string(self) -> String
 
 class Label:
     text: String
 
 impl Printable for Label:
-    def to_string(borrow self) -> String:
+    def to_string(self) -> String:
         return self.text
 
 class Container[T: Printable]:
     item: T
 
-    def display(borrow self):
+    def display(self):
         print(self.item.to_string())
 
 def main() -> int32:

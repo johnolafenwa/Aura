@@ -4,13 +4,13 @@
 class Inner[T]:
     val: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.val
 
 class Outer[T]:
     inner: Inner[T]
 
-    def get_inner_val(borrow self) -> T:
+    def get_inner_val(self) -> T:
         return self.inner.get()
 
 def main() -> int32:

@@ -17,7 +17,7 @@ def main() -> int32:
         while seen < 3:
             select:
                 case value = out.recv():
-                    match value:
+                    match own value:
                         case Option.Some(next):
                             total += next
                             seen += 1

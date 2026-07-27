@@ -13,7 +13,7 @@ def main() -> int32:
     # Positive value: outer Ok wrapping inner Ok
     match outer_op(5):
         case Result.Ok(inner):
-            match inner:
+            match own inner:
                 case Result.Ok(v):
                     print(v)
                 case Result.Err(e):
@@ -24,7 +24,7 @@ def main() -> int32:
     # Zero value: outer Ok wrapping inner Err
     match outer_op(0):
         case Result.Ok(inner):
-            match inner:
+            match own inner:
                 case Result.Ok(v):
                     print(v)
                 case Result.Err(e):
@@ -35,7 +35,7 @@ def main() -> int32:
     # Negative value: outer Err
     match outer_op(-1):
         case Result.Ok(inner):
-            match inner:
+            match own inner:
                 case Result.Ok(v):
                     print(v)
                 case Result.Err(e):

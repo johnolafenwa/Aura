@@ -3411,8 +3411,7 @@ fn format_param_hover(param: &Param, ty: &Type) -> String {
     let mode = match param.mode {
         ParamMode::Default => "",
         ParamMode::Own => "own ",
-        ParamMode::Borrow => "borrow ",
-        ParamMode::BorrowMut => "borrow mut ",
+        ParamMode::BorrowMut => "mut ",
     };
     format!("```aurora\nparam {}: {}{}\n```", param.name, mode, ty)
 }
@@ -3421,14 +3420,7 @@ fn format_param_decl(param: &Param) -> String {
     let mode = match param.mode {
         ParamMode::Default => String::new(),
         ParamMode::Own => "own ".to_string(),
-        ParamMode::Borrow => match param.borrow_label.as_deref() {
-            Some(label) => format!("borrow[{label}] "),
-            None => "borrow ".to_string(),
-        },
-        ParamMode::BorrowMut => match param.borrow_label.as_deref() {
-            Some(label) => format!("borrow mut[{label}] "),
-            None => "borrow mut ".to_string(),
-        },
+        ParamMode::BorrowMut => "mut ".to_string(),
     };
     let default = if param.default.is_some() {
         " = ..."
@@ -4138,7 +4130,7 @@ fn canonical_receiver_spelling(receiver: ReceiverKind) -> &'static str {
     match receiver {
         ReceiverKind::Value => "own self",
         ReceiverKind::Borrow => "self",
-        ReceiverKind::BorrowMut => "borrow mut self",
+        ReceiverKind::BorrowMut => "mut self",
     }
 }
 

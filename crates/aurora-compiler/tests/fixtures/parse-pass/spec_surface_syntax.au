@@ -11,7 +11,7 @@ class Box[T]:
     value: T
 
 def inspect(result: Result[int32, String]):
-    match borrow result:
+    match result:
         case Ok(value):
             print(f"value={value}")
         case Err(message):

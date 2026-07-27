@@ -1,8 +1,8 @@
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl[T] Describe for Task[T]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "task trait"
 
 def answer() -> int32:

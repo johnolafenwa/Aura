@@ -7,7 +7,7 @@ enum Shape:
     Dot(Point)
 
 def area_hint(s: own Shape) -> int32:
-    match s:
+    match own s:
         case Shape.Circle(r):
             return r * r
         case Shape.Dot(p):

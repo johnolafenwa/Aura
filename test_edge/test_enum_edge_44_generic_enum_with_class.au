@@ -8,7 +8,7 @@ enum Holder[T]:
     Nothing
 
 def show_item(h: own Holder[Item]) -> String:
-    match h:
+    match own h:
         case Holder.Holding(item):
             print(item.value)
             return item.name

@@ -4,7 +4,7 @@ class Point:
     x: int32
     y: int32
 
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"({self.x}, {self.y})"
 
 def add(a: int32, b: int32) -> int32:

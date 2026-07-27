@@ -17,7 +17,7 @@ def describe_flag(flag: bool) -> String:
             return "no"
 
 def describe_name(name: String) -> String:
-    match borrow name:
+    match name:
         case "aurora":
             return "repo"
         case _:

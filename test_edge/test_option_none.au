@@ -1,7 +1,7 @@
 # Test whether the built-in Option.None has the same generic unit variant bug
 def main() -> int32:
     m: Option[int32] = Option.None
-    match m:
+    match own m:
         case Option.Some(v):
             print(v)
         case Option.None:

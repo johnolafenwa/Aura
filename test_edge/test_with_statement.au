@@ -2,10 +2,10 @@
 class Resource:
     name: String
 
-    def use(borrow self) -> String:
+    def use(self) -> String:
         return "using " + self.name
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closing " + self.name)
 
 def work() -> Result[String, String]:

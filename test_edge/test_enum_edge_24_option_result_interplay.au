@@ -8,7 +8,7 @@ def find_item(id: int32) -> Option[String]:
 
 def process_item(id: int32) -> Result[String, String]:
     item = find_item(id)
-    match item:
+    match own item:
         case Option.Some(name):
             return Result.Ok("found: " + name)
         case Option.None:

@@ -13,9 +13,9 @@ Completed the requested language slice across the compiler, runtime, examples, t
 
 - Added member-target assignment in the AST and parser.
 - Added checker/runtime support for assignment through field paths such as `self.value = ...` and `self.value += ...`.
-- Made `borrow mut self` methods mutate the original receiver place instead of a throwaway copy.
+- Made `mut self` methods mutate the original receiver place instead of a throwaway copy.
 - Added `try expr` as a real expression that unwraps `Result.Ok(...)` and returns early on `Result.Err(...)`.
-- Added `with name = expr:` with deterministic cleanup through `close(borrow mut self)`.
+- Added `with name = expr:` with deterministic cleanup through `close(mut self)`.
 - Added built-in generic `Channel[T]` and `Task[T]` handling in the checker.
 - Added runtime support for:
   - `channel()`

@@ -2,10 +2,10 @@ copy class Counter:
     value: int32
 
 trait Touch:
-    def touch(borrow mut self, counter: borrow mut Counter) -> int32
+    def touch(mut self, counter: mut Counter) -> int32
 
 impl[T] Touch for Queue[T]:
-    def touch(borrow mut self, counter: borrow mut Counter) -> int32:
+    def touch(mut self, counter: mut Counter) -> int32:
         counter.value += 1
         return counter.value
 

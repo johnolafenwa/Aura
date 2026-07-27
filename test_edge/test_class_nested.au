@@ -7,7 +7,7 @@ class Shape:
     name: String
     color: Color
 
-    def describe(borrow self):
+    def describe(self):
         print(self.name)
         print(self.color.r)
         print(self.color.g)

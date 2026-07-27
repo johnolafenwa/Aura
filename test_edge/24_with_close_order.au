@@ -1,7 +1,7 @@
 class Res:
     id: int32
 
-    def close(borrow mut self):
+    def close(mut self):
         print(self.id)
 
 def test() -> Result[String, String]:

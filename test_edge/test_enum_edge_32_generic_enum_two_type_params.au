@@ -6,7 +6,7 @@ enum Pair[A, B]:
     Neither
 
 def show_pair(p: own Pair[int32, String]) -> String:
-    match p:
+    match own p:
         case Pair.Both(a):
             print(a)
             return "both"

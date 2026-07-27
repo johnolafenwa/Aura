@@ -2,10 +2,10 @@
 class Handle:
     name: String
 
-    def read(borrow self) -> String:
+    def read(self) -> String:
         return self.name
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closed " + self.name)
 
 def multi_resource() -> Result[String, String]:

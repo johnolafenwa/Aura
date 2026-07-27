@@ -4,7 +4,7 @@ def accepts(value: Option[int32]):
 def no_value() -> Option[int32]:
     return None
 
-def is_empty[T](value: borrow Option[T]) -> bool:
+def is_empty[T](value: Option[T]) -> bool:
     return value == None
 
 def main() -> int32:

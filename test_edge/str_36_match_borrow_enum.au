@@ -8,14 +8,14 @@ def main() -> int32:
     c = Container.Full("hello")
 
     # match borrow should not consume c
-    match borrow c:
+    match c:
         case Container.Full(s):
             print(s)
         case Container.Empty:
             print("empty")
 
     # c should still be usable after match borrow
-    match borrow c:
+    match c:
         case Container.Full(s):
             print(s)
         case Container.Empty:

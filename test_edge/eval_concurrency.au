@@ -13,7 +13,7 @@ def main() -> int32:
         
         v1 = out.recv()
         v2 = out.recv()
-        match v1:
+        match own v1:
             case Option.Some(v):
                 print(v)
             case Option.None:

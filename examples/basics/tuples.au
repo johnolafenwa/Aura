@@ -23,7 +23,7 @@ def main():
         print(f"{label}:{count}")
 
     nested = ((1, 2), true)
-    match nested:
+    match own nested:
         case ((left, right), flag):
             print(left + right)
             print(flag)

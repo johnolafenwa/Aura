@@ -1,17 +1,17 @@
 # Test trait with borrow mut self
 
 trait Incrementable:
-    def increment(borrow mut self)
-    def value(borrow self) -> int32
+    def increment(mut self)
+    def value(self) -> int32
 
 class Counter:
     count: int32
 
 impl Incrementable for Counter:
-    def increment(borrow mut self):
+    def increment(mut self):
         self.count += 1
 
-    def value(borrow self) -> int32:
+    def value(self) -> int32:
         return self.count
 
 def main() -> int32:

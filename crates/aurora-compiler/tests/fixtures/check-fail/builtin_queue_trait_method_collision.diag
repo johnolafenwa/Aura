@@ -1,6 +1,6 @@
 error[AU2006]: trait method `get` collides with builtin method `Queue.get`
  --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_queue_trait_method_collision.au:5:5
   |
-5 |     def get(borrow self) -> int64:
+5 |     def get(self) -> int64:
   |     ^
   = help: rename the trait method; builtin methods cannot be shadowed by trait implementations

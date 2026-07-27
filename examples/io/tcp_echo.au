@@ -5,7 +5,7 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
     with server = listener:
         with stream = try server.accept():
             message = try stream.read_line()
-            match message:
+            match own message:
                 case Option.Some(text):
                     try stream.write_all("echo:" + text)
                     try stream.flush()
@@ -15,12 +15,12 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
 
 def main() -> int32:
     with TaskGroup() as group:
-        match net.listen("127.0.0.1:0"):
+        match own net.listen("127.0.0.1:0"):
             case Result.Ok(listener):
-                match listener.local_addr():
+                match own listener.local_addr():
                     case Result.Ok(address):
                         server = group.start(serve, listener)
-                        match net.connect(address):
+                        match own net.connect(address):
                             case Result.Ok(client):
                                 with socket = client:
                                     match socket.write_all("ping\n"):
@@ -33,9 +33,9 @@ def main() -> int32:
                                             pass
                                         case Result.Err(_):
                                             return 1
-                                    match socket.read_line():
+                                    match own socket.read_line():
                                         case Result.Ok(message):
-                                            match message:
+                                            match own message:
                                                 case Option.Some(text):
                                                     print(text)
                                                 case Option.None:

@@ -1,10 +1,38 @@
 # ADR-0022: Implicit shared, `mut`, and `own` capability syntax
 
-- Status: Proposed; not ratified or implemented
+- Status: Accepted
 - Date: 2026-07-23
-- Intended implementation window: after the current Batch 2 checkpoint
-- Would amend: ADR-0005, ADR-0006, ADR-0013, ADR-0016, and ADR-0017
-- Requires a separate retain-or-supersede ruling: ADR-0009
+- Ratified: 2026-07-27, in Batch 3
+- Amends: ADR-0005, ADR-0006, ADR-0013, ADR-0016, and ADR-0017
+- Supersedes the syntax of: ADR-0009
+
+## Ratification
+
+All ten ratification questions were answered when this ADR was accepted. The
+answers are binding and are recorded with the questions at the end of this
+document. In summary:
+
+1. Universal logical sharing, including declaration-known copy types. The ABI
+   may pass copied bits; the source-level rules apply uniformly.
+2. Bare `match` is shared, `match mut` is mutable, `match own` consumes.
+3. Mutable-match writeback occurs on every exit path: normal arm exit,
+   `return`, `break`, `continue`, and error propagation.
+4. One atomic pre-1.0 flip, protected by a syntax-aware migrator.
+5. `borrow` stays a reserved retired keyword for one compatibility window,
+   parsed only far enough to emit exact replacement diagnostics.
+6. This ADR supersedes ADR-0009's syntax. Copy-valued borrowed returns become
+   ordinary owned returns and labels disappear; the containment semantics
+   survive as ordinary move rules.
+7. The keyword is removed; the word is not banned. Normative vocabulary is
+   shared access / mutable access / ownership transfer.
+8. Bare is the one canonical shared spelling. No `shared T` alias.
+9. One atomic migration across grammar, sema, MIR, direct, LSP, extension,
+   fixtures, examples, tutorials, and the Manual, with the cache schema bumped
+   so no pre-migration artifact survives.
+10. ADR-0013 is amended, not superseded.
+
+Additional ruling: range iteration rejects `mut` and `own` with a teaching
+diagnostic rather than accepting them as no-ops.
 
 ## Summary
 

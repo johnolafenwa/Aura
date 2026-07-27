@@ -1,5 +1,5 @@
 class Box:
     value: String
 
-def replace(value: borrow mut Box = Box(value="before")):
+def replace(value: mut Box = Box(value="before")):
     value.value = "after"

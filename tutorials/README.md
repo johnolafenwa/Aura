@@ -73,7 +73,7 @@ The current tutorial set covers:
   `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` all return
   `int64`, while still-`int32` range and Vec-index consumers require an
   explicit checked narrowing
-- `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
+- `with` using `close(mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation
 - arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons

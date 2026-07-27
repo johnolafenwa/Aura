@@ -118,7 +118,7 @@ fn dotted_import_supports_public_classes_and_methods() {
         r#"public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 "#,
     );
@@ -145,7 +145,7 @@ fn dotted_import_supports_namespace_qualified_type_annotations() {
         r#"public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 "#,
     );
@@ -170,7 +170,7 @@ fn nested_package_module_can_be_checked_and_analyzed_directly() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 "#,
     );
     let user_path = temp.write(
@@ -181,7 +181,7 @@ public class User:
     public label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 "#,
     );
@@ -323,7 +323,7 @@ fn imported_public_function_can_construct_public_class_and_call_method() {
         r#"public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 
 public def make() -> Counter:
@@ -449,7 +449,7 @@ fn imported_trait_impls_apply_across_module_boundaries() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 "#,
     );
     temp.write(
@@ -460,7 +460,7 @@ public class User:
     public label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 "#,
     );
@@ -520,10 +520,10 @@ fn calling_private_method_from_another_module_fails() {
         r#"public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 
-    def hidden(borrow self) -> int32:
+    def hidden(self) -> int32:
         return self.value
 "#,
     );

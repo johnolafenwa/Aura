@@ -2,14 +2,14 @@ def identity[T](value: own T) -> T:
     return value
 
 trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 impl Show for int32:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "int32"
 
 impl Show for int64:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "int64"
 
 def contextual[T: Show](value: own T) -> T:
@@ -23,7 +23,7 @@ def print_first(values: Vec[int32]):
     print(values[0])
 
 def print_optional(value: Option[int32]):
-    match value:
+    match own value:
         case Option.Some(inner):
             print(inner)
         case Option.None:

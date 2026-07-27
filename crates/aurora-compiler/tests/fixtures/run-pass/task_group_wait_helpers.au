@@ -17,7 +17,7 @@ def announce(queue: Queue[String]) -> None:
     queue.put("ready")
 
 def print_string_receive(value: own QueueReceive[String]):
-    match value:
+    match own value:
         case QueueReceive.Item(text):
             print(text)
         case QueueReceive.Closed:
@@ -28,7 +28,7 @@ def print_string_receive(value: own QueueReceive[String]):
             print("cancelled")
 
 def print_any(value: own WaitAny[int32]):
-    match value:
+    match own value:
         case WaitAny.Ready(index, result):
             print(index)
             print(result)
@@ -41,7 +41,7 @@ def print_any(value: own WaitAny[int32]):
             print("cancelled")
 
 def print_all(value: own WaitAll[int32]):
-    match value:
+    match own value:
         case WaitAll.Ready(results):
             for result in own results:
                 print(result)
@@ -54,7 +54,7 @@ def print_all(value: own WaitAll[int32]):
             print("cancelled")
 
 def print_task_result(value: own TaskResult[int32]):
-    match value:
+    match own value:
         case TaskResult.Ready(result):
             print(result)
         case TaskResult.Error(message):

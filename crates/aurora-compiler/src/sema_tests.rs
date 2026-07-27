@@ -227,7 +227,7 @@ def main():
         print(left + right)
 
     pair = (1, \"ready\")
-    match borrow pair:
+    match pair:
         case (number, text):
             print(number)
             print(text)
@@ -250,7 +250,7 @@ def main():
         "\
 def main():
     mut values = [(1, 2)]
-    for (left, right) in borrow mut values:
+    for (left, right) in mut values:
         pass
 ",
     )
@@ -258,7 +258,7 @@ def main():
     assert!(
         mutable
             .message
-            .contains("`borrow mut` tuple targets are not supported"),
+            .contains("`mut` tuple targets are not supported"),
         "{}",
         mutable.message
     );
@@ -267,12 +267,12 @@ def main():
         "\
 def main():
     mut pair = (1, 2)
-    match borrow mut pair:
+    match mut pair:
         case (left, right):
             pass
 ",
     )
-    .expect_err("match borrow mut tuple patterns are intentionally rejected");
+    .expect_err("match mut tuple patterns are intentionally rejected");
     assert!(match_mut
         .message
         .contains("does not support tuple patterns"));
@@ -1042,7 +1042,7 @@ fn retained_access_help_names_the_conflicting_access_kind() {
 def id_s(s: own String) -> String:
     return s
 
-def use_both(text: borrow String, owned: own String) -> None:
+def use_both(text: String, owned: own String) -> None:
     print(text)
     print(owned)
 
@@ -1053,23 +1053,29 @@ def main() -> None:
             "consumption",
         ),
         (
+            // An operator whose receiver is consumed, with the right operand
+            // reading a projection of that same place.
             r#"
+trait Add[Rhs, Out]:
+    def add(own self, rhs: own Rhs) -> Out
+
 class Box:
     value: int32
 
-def take(item: own Box, detail: int32):
-    print(item.value)
-    print(detail)
+impl Add[int32, Box] for Box:
+    def add(own self, rhs: own int32) -> Box:
+        return Box(value=self.value + rhs)
 
 def main():
     box = Box(value=1)
-    take(box, box.value)
+    result = box + box.value
+    print(result.value)
 "#,
             "read",
         ),
         (
             r#"
-def replace_and_return(value: borrow mut String) -> String:
+def replace_and_return(value: mut String) -> String:
     value = "B"
     return "C"
 
@@ -1156,7 +1162,7 @@ import random
 def main():
     mut generators = Vec[random.Rng]()
     generators.push(random.Rng(seed=7))
-    match generators.remove(0):
+    match own generators.remove(0):
         case Option.Some(chosen):
             mut taken = chosen
             print(taken.next_int(lo=1, hi=10))
@@ -1178,7 +1184,7 @@ class Holder:
 def main():
     mut holders = Map[String, Holder]()
     holders.set("a", Holder(generator=random.Rng(seed=7)))
-    match holders.remove("a"):
+    match own holders.remove("a"):
         case Option.Some(chosen):
             mut taken = chosen
             print(taken.generator.next_int(lo=1, hi=10))
@@ -1329,9 +1335,9 @@ def main():
             "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    for index, value in borrow enumerate(values):\n        print(index)\n",
+            "def main():\n    mut values = Vec[int32]()\n    for index, value in own enumerate(values):\n        print(index)\n",
             "AU3002",
-            "`enumerate` iterates over the bare-loop borrow default; write `for ... in enumerate(...):` without an ownership modifier",
+            "`enumerate` iterates over the bare-loop shared default; write `for ... in enumerate(...):` without an ownership modifier",
         ),
         (
             "def main():\n    mut values = Vec[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
@@ -1948,37 +1954,6 @@ def exercise(
 }
 
 #[test]
-fn conditional_borrowed_returns_require_one_compatible_source() {
-    crate::check_source(
-        r#"
-def choose(flag: bool, source: borrow[src] String) -> borrow[src] String:
-    return source if flag else source
-"#,
-    )
-    .expect("both conditional arms may return the same borrowed source");
-
-    let incompatible = crate::check_source(
-        r#"
-def choose(
-    flag: bool,
-    left: borrow[left] String,
-    right: borrow[right] String
-) -> borrow[left] String:
-    return left if flag else right
-"#,
-    )
-    .expect_err("a conditional borrowed return cannot switch between unrelated sources");
-    assert_eq!(incompatible.code, "AU3002");
-    assert!(
-        incompatible
-            .message
-            .contains("borrowed return expression must come from"),
-        "{}",
-        incompatible.message
-    );
-}
-
-#[test]
 fn conditional_operands_participate_in_retained_access_conflicts() {
     for (conditional, position) in [
         ("1 if consume_flag(box) else 0", "condition"),
@@ -1990,7 +1965,7 @@ fn conditional_operands_participate_in_retained_access_conflicts() {
 class Box:
     value: int32
 
-def inspect(value: borrow Box, result: int32):
+def inspect(value: Box, result: int32):
     pass
 
 def consume_flag(value: own Box) -> bool:
@@ -2026,7 +2001,7 @@ class Box:
     ready: bool
     value: int32
 
-def mutate(value: borrow mut Box, observed: int32):
+def mutate(value: mut Box, observed: int32):
     pass
 
 def exercise(flag: bool):
@@ -2198,7 +2173,7 @@ enum Maybe[T]:
     Some(T)
     None
 
-def modes(scalar: int32, text: String, copy_box: CopyBox, copy_enum: Maybe[int32], heap_enum: Maybe[String], owned: own String, shared: borrow int32, mutable: borrow mut int32):
+def modes(scalar: int32, text: String, copy_box: CopyBox, copy_enum: Maybe[int32], heap_enum: Maybe[String], owned: own String, shared: int32, mutable: mut int32):
     pass
 
 def generic[T](value: T):
@@ -2217,11 +2192,12 @@ def main() -> int32:
 
     assert_eq!(
         program.functions["modes"].signature.param_passings,
+        // ADR-0022 Q1: every bare parameter is shared, copy or not.
         vec![
-            ReceiverKind::Value,
             ReceiverKind::Borrow,
-            ReceiverKind::Value,
-            ReceiverKind::Value,
+            ReceiverKind::Borrow,
+            ReceiverKind::Borrow,
+            ReceiverKind::Borrow,
             ReceiverKind::Borrow,
             ReceiverKind::Value,
             ReceiverKind::Borrow,
@@ -2292,13 +2268,14 @@ def reuse(token: pkg.types.Token[int32], marker: pkg.types.Marker[int32]) -> int
     )
     .expect("qualified imported copy parameters should be movable and returnable");
 
+    // ADR-0022 Q1: a bare qualified copy parameter is shared like any other.
     assert_eq!(
         program.functions["return_token"].signature.param_passings,
-        vec![ReceiverKind::Value]
+        vec![ReceiverKind::Borrow]
     );
     assert_eq!(
         program.functions["return_marker"].signature.param_passings,
-        vec![ReceiverKind::Value]
+        vec![ReceiverKind::Borrow]
     );
 }
 
@@ -2354,7 +2331,7 @@ def main() -> int32:
 fn d6_parameter_defaults_allow_shared_and_owned_temporaries_but_reject_borrow_mut() {
     crate::check_source(
         r#"
-def shared(value: borrow String = "shared") -> String:
+def shared(value: String = "shared") -> String:
     return value.clone()
 
 def owned(value: own String = "owned") -> String:
@@ -2368,10 +2345,10 @@ def main() -> int32:
     )
     .expect("shared and owned defaults should remain valid");
 
-    let expected = "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result";
+    let expected = "`mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result";
     for source in [
-        "def invalid(value: borrow mut int32 = 1):\n    pass\n",
-        "def invalid(value: borrow mut String = \"lost\"):\n    pass\n",
+        "def invalid(value: mut int32 = 1):\n    pass\n",
+        "def invalid(value: mut String = \"lost\"):\n    pass\n",
     ] {
         let error = crate::check_source(source)
             .expect_err("borrow-mut defaults must be rejected for copy and non-copy types");
@@ -2422,7 +2399,7 @@ def main() -> int32:
         .contains("cannot move borrowed value `value`"));
 
     let expected = "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
-    for mode in ["own ", "borrow ", "borrow mut "] {
+    for mode in ["own ", "mut "] {
         let source = format!(
             "def main() -> int32:\n    jobs = Queue[int32]()\n    for item in {mode}jobs:\n        print(item)\n    return 0\n"
         );
@@ -2466,7 +2443,7 @@ def main() -> int32:
 
     let mutable_target = crate::check_source(
         r#"
-def worker(value: borrow mut String):
+def worker(value: mut String):
     pass
 
 def main() -> int32:
@@ -2504,7 +2481,7 @@ def keep_after_remove() -> int32:
     print(text)
     return 0
 
-def keep_after_write(file: borrow mut fs.File, text: String):
+def keep_after_write(file: mut fs.File, text: String):
     file.write_all(text)
     print(text)
 "#,
@@ -2535,7 +2512,7 @@ fn random_static_surface_supports_qualified_and_imported_rng_use() {
         r#"
 import random
 
-def sample(rng: borrow mut random.Rng, values: borrow mut Vec[String]) -> int64:
+def sample(rng: mut random.Rng, values: mut Vec[String]) -> int64:
     rng.shuffle(values=values)
     fraction: float64 = rng.next_float()
     print(fraction)
@@ -2668,10 +2645,10 @@ def main() -> int32:
 import random
 
 trait CounterfeitRandom:
-    def next_int(borrow mut self, lo: int64, hi: int64) -> int64
+    def next_int(mut self, lo: int64, hi: int64) -> int64
 
 impl CounterfeitRandom for random.Rng:
-    def next_int(borrow mut self, lo: int64, hi: int64) -> int64:
+    def next_int(mut self, lo: int64, hi: int64) -> int64:
         return lo
 "#,
     )
@@ -2684,23 +2661,23 @@ impl CounterfeitRandom for random.Rng:
 fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
     for (source, expected) in [
         (
-            "trait Sized:\n    def len(borrow self) -> int64\n\nimpl Sized for Vec[int32]:\n    def len(borrow self) -> int64:\n        return 99\n",
+            "trait Sized:\n    def len(self) -> int64\n\nimpl Sized for Vec[int32]:\n    def len(self) -> int64:\n        return 99\n",
             "Vec.len",
         ),
         (
-            "trait Probe:\n    def contains(borrow self, needle: String) -> bool\n\nimpl Probe for String:\n    def contains(borrow self, needle: String) -> bool:\n        return false\n",
+            "trait Probe:\n    def contains(self, needle: String) -> bool\n\nimpl Probe for String:\n    def contains(self, needle: String) -> bool:\n        return false\n",
             "String.contains",
         ),
         (
-            "trait Lookup:\n    def get(borrow self, key: String) -> Option[String]\n\nimpl Lookup for Map[String, String]:\n    def get(borrow self, key: String) -> Option[String]:\n        return Option.None\n",
+            "trait Lookup:\n    def get(self, key: String) -> Option[String]\n\nimpl Lookup for Map[String, String]:\n    def get(self, key: String) -> Option[String]:\n        return Option.None\n",
             "Map.get",
         ),
         (
-            "import fs\n\ntrait Closer:\n    def close(borrow self) -> int64\n\nimpl Closer for fs.File:\n    def close(borrow self) -> int64:\n        return 7\n",
+            "import fs\n\ntrait Closer:\n    def close(self) -> int64\n\nimpl Closer for fs.File:\n    def close(self) -> int64:\n        return 7\n",
             "fs.File.close",
         ),
         (
-            "trait Render:\n    def to_string(borrow self) -> String\n\nimpl Render for int32:\n    def to_string(borrow self) -> String:\n        return \"shadowed\"\n",
+            "trait Render:\n    def to_string(self) -> String\n\nimpl Render for int32:\n    def to_string(self) -> String:\n        return \"shadowed\"\n",
             "int32.to_string",
         ),
     ] {
@@ -2719,14 +2696,14 @@ fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
     let accepted = crate::run_source(
         r#"
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl Describe for Vec[int32]:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"vec of {self.len()}"
 
 impl Describe for String:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return f"text of {self.len()}"
 
 def main():
@@ -2825,27 +2802,27 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
     let cases = [
         (
             "Vec.get",
-            "import random\n\ndef observe(values: borrow Vec[random.Rng]):\n    print(values.get(0))\n",
+            "import random\n\ndef observe(values: Vec[random.Rng]):\n    print(values.get(0))\n",
         ),
         (
             "Map.get",
-            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.get(\"main\"))\n",
+            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.get(\"main\"))\n",
         ),
         (
             "Map.keys",
-            "import random\n\ndef observe(values: borrow Map[random.Rng, String]):\n    print(values.keys())\n",
+            "import random\n\ndef observe(values: Map[random.Rng, String]):\n    print(values.keys())\n",
         ),
         (
             "Map.values",
-            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.values())\n",
+            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.values())\n",
         ),
         (
             "Map.items",
-            "import random\n\ndef observe(values: borrow Map[String, random.Rng]):\n    print(values.items())\n",
+            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.items())\n",
         ),
         (
             "Map.entries",
-            "import random\n\ndef observe(values: borrow Map[random.Rng, String]):\n    print(values.entries())\n",
+            "import random\n\ndef observe(values: Map[random.Rng, String]):\n    print(values.entries())\n",
         ),
         (
             "Task.result",
@@ -2861,11 +2838,11 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
         ),
         (
             "wait_any",
-            "import random\n\ndef observe(tasks: borrow Vec[Task[random.Rng]]):\n    print(wait_any(tasks))\n",
+            "import random\n\ndef observe(tasks: Vec[Task[random.Rng]]):\n    print(wait_any(tasks))\n",
         ),
         (
             "wait_all",
-            "import random\n\ndef observe(tasks: borrow Vec[Task[random.Rng]]):\n    print(wait_all(tasks))\n",
+            "import random\n\ndef observe(tasks: Vec[Task[random.Rng]]):\n    print(wait_all(tasks))\n",
         ),
     ];
 
@@ -2886,7 +2863,7 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
 fn random_rng_clone_safety_defers_generic_obligations_to_use_sites() {
     crate::check_source(
         r#"
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
 def main() -> int32:
@@ -2904,7 +2881,7 @@ def main() -> int32:
             r#"
 import random
 
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
 def main() -> int32:
@@ -2919,10 +2896,10 @@ def main() -> int32:
             r#"
 import random
 
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
-def forward[T](values: borrow Vec[T]) -> Vec[T]:
+def forward[T](values: Vec[T]) -> Vec[T]:
     return duplicate(values)
 
 def main() -> int32:
@@ -2947,22 +2924,22 @@ def main() -> int32:
         r#"
 import random
 
-def clone_task_handles(values: borrow Vec[Task[random.Rng]]) -> Vec[Task[random.Rng]]:
+def clone_task_handles(values: Vec[Task[random.Rng]]) -> Vec[Task[random.Rng]]:
     return values.clone()
 
-def clone_queue_handles(values: borrow Vec[Queue[random.Rng]]) -> Vec[Queue[random.Rng]]:
+def clone_queue_handles(values: Vec[Queue[random.Rng]]) -> Vec[Queue[random.Rng]]:
     return values.clone()
 
-def pop_generator(values: borrow mut Vec[random.Rng]) -> Option[random.Rng]:
+def pop_generator(values: mut Vec[random.Rng]) -> Option[random.Rng]:
     return values.pop()
 
-def remove_generator(values: borrow mut Vec[random.Rng]) -> Option[random.Rng]:
+def remove_generator(values: mut Vec[random.Rng]) -> Option[random.Rng]:
     return values.remove(0)
 
-def remove_mapped_generator(values: borrow mut Map[String, random.Rng]) -> Option[random.Rng]:
+def remove_mapped_generator(values: mut Map[String, random.Rng]) -> Option[random.Rng]:
     return values.remove("main")
 
-def shuffle_generators(rng: borrow mut random.Rng, values: borrow mut Vec[random.Rng]):
+def shuffle_generators(rng: mut random.Rng, values: mut Vec[random.Rng]):
     rng.shuffle(values)
 "#,
     )
@@ -3023,7 +3000,7 @@ class Factory[T]:
 fn rng_clone_safety_trait_contracts_cover_direct_and_bound_dispatch() {
     let trait_surface = r#"
 trait Copier[Item]:
-    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
         return values.clone()
 
 class Wrapper[Element]:
@@ -3032,7 +3009,7 @@ class Wrapper[Element]:
 impl[Element] Copier[Element] for Wrapper[Element]:
     pass
 
-def through[Value, C: Copier[Value]](copier: borrow C, values: borrow Vec[Value]) -> Vec[Value]:
+def through[Value, C: Copier[Value]](copier: C, values: Vec[Value]) -> Vec[Value]:
     return copier.duplicate(values)
 "#;
 
@@ -3060,13 +3037,13 @@ def through[Value, C: Copier[Value]](copier: borrow C, values: borrow Vec[Value]
     let strengthened = crate::check_source(
         r#"
 trait Copier[T]:
-    def duplicate(borrow self) -> Vec[T]
+    def duplicate(self) -> Vec[T]
 
 class Wrapper[T]:
     values: Vec[T]
 
 impl[T] Copier[T] for Wrapper[T]:
-    def duplicate(borrow self) -> Vec[T]:
+    def duplicate(self) -> Vec[T]:
         return self.values.clone()
 "#,
     )
@@ -3079,7 +3056,7 @@ impl[T] Copier[T] for Wrapper[T]:
 fn rng_clone_safety_trait_method_generics_wait_for_call_inference() {
     let instance_surface = r#"
 trait Copier:
-    def duplicate[T](borrow self, values: borrow Vec[T]) -> Vec[T]:
+    def duplicate[T](self, values: Vec[T]) -> Vec[T]:
         return values.clone()
 
 class Marker:
@@ -3102,7 +3079,7 @@ impl Copier for Marker:
     assert!(instance_rng.message.contains("non-cloneable `random.Rng`"));
 
     let bound_rng = crate::check_source(&format!(
-        "import random\n{instance_surface}\ndef forward[T, U, C: Copier](marker: borrow C, values: borrow Vec[U]) -> Vec[U]:\n    return marker.duplicate(values)\n\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = forward[int64, random.Rng, Marker](marker, values)\n    print(copies)\n    return 0\n"
+        "import random\n{instance_surface}\ndef forward[T, U, C: Copier](marker: C, values: Vec[U]) -> Vec[U]:\n    return marker.duplicate(values)\n\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = forward[int64, random.Rng, Marker](marker, values)\n    print(copies)\n    return 0\n"
     ))
     .expect_err(
         "bound dispatch must propagate the inferred method obligation to the matching caller parameter",
@@ -3112,7 +3089,7 @@ impl Copier for Marker:
 
     let associated_surface = r#"
 trait Factory:
-    def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+    def duplicate[T](values: Vec[T]) -> Vec[T]:
         return values.clone()
 
 class Marker:
@@ -3141,16 +3118,16 @@ impl Factory for Marker:
 fn rng_clone_safety_method_inference_preserves_general_diagnostics() {
     let surface = r#"
 trait Display:
-    def text(borrow self) -> String
+    def text(self) -> String
 
 trait Factory:
-    def choose[T](borrow self, left: own T, right: own T) -> T:
+    def choose[T](self, left: own T, right: own T) -> T:
         return left
 
-    def empty[T](borrow self) -> Option[T]:
+    def empty[T](self) -> Option[T]:
         return Option.None
 
-    def display[T: Display](borrow self, value: own T) -> T:
+    def display[T: Display](self, value: own T) -> T:
         return value
 
 class Marker:
@@ -3209,9 +3186,9 @@ class Pair[A, B]:
     second: B
 
 trait Add[Rhs, Out]:
-    def add[T](borrow self, rhs: Pair[T, T]) -> Out
+    def add[T](self, rhs: Pair[T, T]) -> Out
 
-def combine[X: Add[Pair[int64, String], int64]](left: borrow X, right: Pair[int64, String]) -> int64:
+def combine[X: Add[Pair[int64, String], int64]](left: X, right: Pair[int64, String]) -> int64:
     return left + right
 "#,
     )
@@ -3228,9 +3205,9 @@ def combine[X: Add[Pair[int64, String], int64]](left: borrow X, right: Pair[int6
     let uninferred = crate::check_source(
         r#"
 trait Neg[Out]:
-    def neg[T](borrow self) -> Out
+    def neg[T](self) -> Out
 
-def invert[X: Neg[int64]](value: borrow X) -> int64:
+def invert[X: Neg[int64]](value: X) -> int64:
     return -value
 "#,
     )
@@ -3247,15 +3224,15 @@ def invert[X: Neg[int64]](value: borrow X) -> int64:
     let missing_bound = crate::check_source(
         r#"
 trait Display:
-    def text(borrow self) -> String
+    def text(self) -> String
 
 class Plain:
     value: int64
 
 trait Add[Rhs, Out]:
-    def add[T: Display](borrow self, rhs: T) -> Out
+    def add[T: Display](self, rhs: T) -> Out
 
-def combine[X: Add[Plain, int64]](left: borrow X, right: Plain) -> int64:
+def combine[X: Add[Plain, int64]](left: X, right: Plain) -> int64:
     return left + right
 "#,
     )
@@ -3424,17 +3401,17 @@ class Grow[T]:
     next: indirect Grow[Vec[T]]
     value: T
 
-def duplicate[T](values: borrow Vec[Grow[T]]) -> Vec[Grow[T]]:
+def duplicate[T](values: Vec[Grow[T]]) -> Vec[Grow[T]]:
     return values.clone()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept_safe(values: borrow Vec[Grow[int64]]) -> Vec[Grow[int64]]:\n    return duplicate(values)\n\ndef main() -> int32:\n    return 0\n"
+        "{surface}\ndef accept_safe(values: Vec[Grow[int64]]) -> Vec[Grow[int64]]:\n    return duplicate(values)\n\ndef main() -> int32:\n    return 0\n"
     ))
     .expect("an expanding recursive generic clone obligation should terminate and accept a safe concrete instantiation");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: borrow Vec[Grow[random.Rng]]) -> Vec[Grow[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: Vec[Grow[random.Rng]]) -> Vec[Grow[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("the recursive generic must still reject an Rng instantiation");
     assert_eq!(error.code, "AU3007");
@@ -3448,17 +3425,17 @@ enum Envelope[T]:
     Empty
     Value(T)
 
-def duplicate[T](values: borrow Vec[Envelope[T]]) -> Vec[Envelope[T]]:
+def duplicate[T](values: Vec[Envelope[T]]) -> Vec[Envelope[T]]:
     return values.clone()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept(values: borrow Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:\n    return duplicate(values)\n"
+        "{surface}\ndef accept(values: Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:\n    return duplicate(values)\n"
     ))
     .expect("an enum payload obligation should accept a clone-safe specialization");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: borrow Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("an enum payload obligation must reject an Rng specialization");
     assert_eq!(error.code, "AU3007");
@@ -3473,17 +3450,17 @@ enum Chain[T]:
     End(T)
     Link(indirect Chain[Vec[T]])
 
-def duplicate[T](values: borrow Vec[Chain[T]]) -> Vec[Chain[T]]:
+def duplicate[T](values: Vec[Chain[T]]) -> Vec[Chain[T]]:
     return values.clone()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept(values: borrow Vec[Chain[int64]]) -> Vec[Chain[int64]]:\n    return duplicate(values)\n"
+        "{surface}\ndef accept(values: Vec[Chain[int64]]) -> Vec[Chain[int64]]:\n    return duplicate(values)\n"
     ))
     .expect("a recursive enum obligation should terminate for a safe specialization");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: borrow Vec[Chain[random.Rng]]) -> Vec[Chain[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: Vec[Chain[random.Rng]]) -> Vec[Chain[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("a recursive enum obligation must terminate and reject an Rng specialization");
     assert_eq!(error.code, "AU3007");
@@ -3714,7 +3691,7 @@ impl Accepts[int64] for Accepted:
 fn rng_clone_safety_covers_associated_operator_and_specialized_trait_routes() {
     let associated = r#"
 trait Factory[Item]:
-    def duplicate(values: borrow Vec[Item]) -> Vec[Item]:
+    def duplicate(values: Vec[Item]) -> Vec[Item]:
         return values.clone()
 
 class Wrapper[Element]:
@@ -3736,7 +3713,7 @@ impl[Element] Factory[Element] for Wrapper[Element]:
     let specialized_safe = crate::check_source(
         r#"
 trait Copier[Item]:
-    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
         return values.clone()
 
 class Fixed:
@@ -3762,7 +3739,7 @@ def main() -> int32:
 import random
 
 trait Copier[Item]:
-    def duplicate(borrow self, values: borrow Vec[Item]) -> Vec[Item]:
+    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
         return values.clone()
 
 class Fixed:
@@ -3778,7 +3755,7 @@ impl Copier[random.Rng] for Fixed:
 
     let operator = r#"
 trait Add[Item, Out]:
-    def add(borrow self, rhs: own Item) -> Vec[Item]:
+    def add(self, rhs: own Item) -> Vec[Item]:
         values = [rhs]
         return values.clone()
 
@@ -3803,7 +3780,7 @@ impl[Element] Add[Element, Vec[Element]] for Wrapper[Element]:
 fn rng_clone_safety_operator_method_generics_bind_the_actual_rhs() {
     let surface = r#"
 trait Add[Rhs]:
-    def add[T](borrow self, rhs: own T):
+    def add[T](self, rhs: own T):
         values = [rhs]
         copies = values.clone()
         print(copies)
@@ -3814,7 +3791,7 @@ class Marker:
 impl[Rhs] Add[Rhs] for Marker:
     pass
 
-def combine[T, U](marker: borrow Marker, rhs: own U):
+def combine[T, U](marker: Marker, rhs: own U):
     marker + rhs
 "#;
 
@@ -3902,20 +3879,20 @@ fn user_defined_rng_class_does_not_acquire_random_module_semantics() {
 class Rng:
     value: int64
 
-    def next_int(borrow self, lo: int64, hi: int64) -> int64:
+    def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(borrow self) -> String:
+    def next_float(self) -> String:
         return "local"
 
-    def shuffle(borrow self, value: int64) -> int64:
+    def shuffle(self, value: int64) -> int64:
         return value
 
 trait LocalShuffle:
-    def rearrange(borrow self) -> String
+    def rearrange(self) -> String
 
 impl LocalShuffle for Rng:
-    def rearrange(borrow self) -> String:
+    def rearrange(self) -> String:
         return self.next_float()
 
 def main() -> int32:
@@ -4203,8 +4180,6 @@ fn function_decl(name: &str) -> FunctionDecl {
         type_param_bounds: BTreeMap::new(),
         receiver: None,
         params: Vec::new(),
-        return_passing: ReceiverKind::Value,
-        return_borrow_source: None,
         return_type: type_ref("None"),
         body: Vec::new(),
         span: Span::new(1, 1),
@@ -4228,8 +4203,6 @@ fn function_signature(params: Vec<Type>, return_type: Type) -> FunctionSignature
         params,
         param_passings,
         return_type,
-        return_passing: ReceiverKind::Value,
-        return_borrow_source: None,
         rng_clone_safe_type_params: BTreeSet::new(),
     }
 }
@@ -4400,10 +4373,10 @@ fn local_binding(
         managed_resource: false,
         passing,
         borrow_origin: None,
-        borrow_label: None,
         borrowed_at: None,
         match_borrow_mut_place: None,
         stale_match_borrow_mut_place: None,
+        shared_match_scrutinee: None,
         moved,
         moved_at: moved.then_some(Span::new(1, 1)),
         moved_fields: moved_fields
@@ -10793,10 +10766,10 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
-            borrow_label: None,
             borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
+            shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
@@ -10822,10 +10795,10 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             managed_resource: false,
             passing: ReceiverKind::Borrow,
             borrow_origin: Some("borrowed".to_string()),
-            borrow_label: None,
             borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
+            shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
@@ -10848,10 +10821,10 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
-            borrow_label: None,
             borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
+            shared_match_scrutinee: None,
             moved: true,
             moved_at: Some(span),
             moved_fields: BTreeMap::new(),
@@ -10990,7 +10963,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .consume_value_expr(
             &expr(ExprKind::Match {
                 scrutinee: Box::new(expr(ExprKind::Name("flag".to_string()))),
-                borrow_mode: None,
+                capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
                     pattern: Pattern::Wildcard(span),
                     value: expr(ExprKind::Name("owned".to_string())),
@@ -11556,7 +11529,6 @@ fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
     let param = Param {
         name: "timeout".to_string(),
         mode: ParamMode::Default,
-        borrow_label: None,
         ty: type_ref("Option"),
         default: Some(omitted.clone()),
         span: omitted.span,
@@ -11641,13 +11613,13 @@ fn floor_div_operator_dispatches_to_the_floor_div_trait_after_builtins() {
     crate::check_source(
         r#"
 trait FloorDiv[Rhs, Out]:
-    def floor_div(borrow self, rhs: Rhs) -> Out
+    def floor_div(self, rhs: Rhs) -> Out
 
 class Counter:
     value: int32
 
 impl FloorDiv[Counter, Counter] for Counter:
-    def floor_div(borrow self, rhs: Counter) -> Counter:
+    def floor_div(self, rhs: Counter) -> Counter:
         return Counter(value=self.value // rhs.value)
 
 def divide(left: Counter, right: Counter) -> Counter:
@@ -11661,243 +11633,9 @@ def main() -> int32:
 }
 
 #[test]
-fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
-    fn borrowed_param(name: &str, mode: ParamMode, label: Option<&str>) -> Param {
-        Param {
-            name: name.to_string(),
-            mode,
-            borrow_label: label.map(str::to_string),
-            ty: type_ref("String"),
-            default: None,
-            span: Span::new(1, 1),
-        }
-    }
-
-    let span = Span::new(1, 1);
-    assert_eq!(
-        resolve_return_borrow_source(None, &[], &[], ReceiverKind::Value, None, span)
-            .expect("owned returns do not need a borrow source"),
-        None
-    );
-    assert_eq!(
-        resolve_return_borrow_source(
-            Some(ReceiverKind::BorrowMut),
-            &[],
-            &[],
-            ReceiverKind::BorrowMut,
-            None,
-            span,
-        )
-        .expect("a borrowed receiver can infer self as source"),
-        Some("self".to_string())
-    );
-    assert_eq!(
-        resolve_return_borrow_source(
-            None,
-            &[borrowed_param("text", ParamMode::Borrow, None)],
-            &[ReceiverKind::Borrow],
-            ReceiverKind::Borrow,
-            None,
-            span,
-        )
-        .expect("a single borrowed parameter can be inferred"),
-        Some("text".to_string())
-    );
-
-    let missing = resolve_return_borrow_source(
-        None,
-        &[borrowed_param("text", ParamMode::Borrow, None)],
-        &[ReceiverKind::Borrow],
-        ReceiverKind::Borrow,
-        Some("other"),
-        span,
-    )
-    .expect_err("explicit sources must name a borrowed parameter");
-    assert!(missing.message.contains("must name a borrowed parameter"));
-
-    let immutable_for_mut = resolve_return_borrow_source(
-        None,
-        &[borrowed_param("text", ParamMode::Borrow, Some("src"))],
-        &[ReceiverKind::Borrow],
-        ReceiverKind::BorrowMut,
-        Some("src"),
-        span,
-    )
-    .expect_err("borrow mut returns only consider mutable sources");
-    assert!(immutable_for_mut
-        .message
-        .contains("must name a borrowed parameter"));
-
-    let none_available = resolve_return_borrow_source(
-        None,
-        &[borrowed_param("text", ParamMode::Own, None)],
-        &[ReceiverKind::Value],
-        ReceiverKind::Borrow,
-        None,
-        span,
-    )
-    .expect_err("borrowed returns require at least one borrowed source");
-    assert!(none_available
-        .message
-        .contains("require a borrowed parameter or receiver"));
-
-    let ambiguous_mut = resolve_return_borrow_source(
-        None,
-        &[
-            borrowed_param("left", ParamMode::BorrowMut, None),
-            borrowed_param("right", ParamMode::BorrowMut, None),
-        ],
-        &[ReceiverKind::BorrowMut, ReceiverKind::BorrowMut],
-        ReceiverKind::BorrowMut,
-        None,
-        span,
-    )
-    .expect_err("multiple mutable candidates need an explicit source");
-    assert!(ambiguous_mut.message.contains("-> borrow mut[left]"));
-}
-
-#[test]
-fn call_expr_borrow_info_covers_method_return_sources() {
-    let span = Span::new(1, 1);
-    let mut holder = class_info(
-        "Holder",
-        false,
-        vec![("value", Type::named("String"), false)],
-    );
-    holder.methods.insert(
-        "value_ref".to_string(),
-        MethodInfo {
-            decl: {
-                let mut decl = function_decl("value_ref");
-                decl.receiver = Some(ReceiverKind::Borrow);
-                decl.return_passing = ReceiverKind::Borrow;
-                decl.return_borrow_source = Some("self".to_string());
-                decl.return_type = type_ref("String");
-                decl
-            },
-            signature: FunctionSignature {
-                params: Vec::new(),
-                param_passings: Vec::new(),
-                return_type: Type::named("String"),
-                return_passing: ReceiverKind::Borrow,
-                return_borrow_source: Some("self".to_string()),
-                rng_clone_safe_type_params: BTreeSet::new(),
-            },
-            type_param_bounds: BTreeMap::new(),
-        },
-    );
-    holder.methods.insert(
-        "pick".to_string(),
-        MethodInfo {
-            decl: {
-                let mut decl = function_decl("pick");
-                decl.receiver = Some(ReceiverKind::Borrow);
-                decl.params = vec![Param {
-                    name: "source".to_string(),
-                    ty: type_ref("String"),
-                    mode: ParamMode::Borrow,
-                    borrow_label: None,
-                    default: None,
-                    span,
-                }];
-                decl.return_passing = ReceiverKind::Borrow;
-                decl.return_borrow_source = Some("source".to_string());
-                decl.return_type = type_ref("String");
-                decl
-            },
-            signature: FunctionSignature {
-                params: vec![Type::named("String")],
-                param_passings: vec![ReceiverKind::Borrow],
-                return_type: Type::named("String"),
-                return_passing: ReceiverKind::Borrow,
-                return_borrow_source: Some("source".to_string()),
-                rng_clone_safe_type_params: BTreeSet::new(),
-            },
-            type_param_bounds: BTreeMap::new(),
-        },
-    );
-
-    let type_names = BTreeMap::from([("Holder".to_string(), span)]);
-    let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
-    let classes = BTreeMap::from([("Holder".to_string(), holder)]);
-    let enums = BTreeMap::new();
-    let functions = BTreeMap::new();
-    let traits = BTreeMap::new();
-    let imported_modules = BTreeMap::new();
-    let module_registry = BTreeMap::new();
-    let checker = checker(
-        "<main>",
-        &type_names,
-        &type_arities,
-        &classes,
-        &enums,
-        &functions,
-        &traits,
-        &[],
-        &imported_modules,
-        &module_registry,
-    );
-    let mut locals = HashMap::from([
-        (
-            "holder".to_string(),
-            local_binding(
-                Type::named("Holder"),
-                true,
-                false,
-                ReceiverKind::Value,
-                false,
-                &[],
-            ),
-        ),
-        (
-            "text".to_string(),
-            local_binding(
-                Type::named("String"),
-                true,
-                false,
-                ReceiverKind::Value,
-                false,
-                &[],
-            ),
-        ),
-    ]);
-
-    let self_return = expr(ExprKind::Call {
-        callee: Box::new(expr(ExprKind::Member {
-            object: Box::new(expr(ExprKind::Name("holder".to_string()))),
-            field: "value_ref".to_string(),
-        })),
-        args: Vec::new(),
-    });
-    let self_info = checker
-        .expr_borrow_info(&self_return, &mut locals)
-        .expect("method self borrowed return should resolve")
-        .expect("borrow source should be present");
-    assert_eq!(self_info.origin, "holder");
-    assert_eq!(self_info.passing, ReceiverKind::Borrow);
-
-    let arg_return = expr(ExprKind::Call {
-        callee: Box::new(expr(ExprKind::Member {
-            object: Box::new(expr(ExprKind::Name("holder".to_string()))),
-            field: "pick".to_string(),
-        })),
-        args: vec![named_arg(
-            "source",
-            expr(ExprKind::Name("text".to_string())),
-        )],
-    });
-    let arg_info = checker
-        .expr_borrow_info(&arg_return, &mut locals)
-        .expect("method argument borrowed return should resolve")
-        .expect("borrow source should be present");
-    assert_eq!(arg_info.origin, "text");
-    assert_eq!(arg_info.passing, ReceiverKind::Borrow);
-}
-
-#[test]
 fn borrowed_copy_return_assignments_bind_as_plain_values() {
     crate::check_source(
-        "def id_ref(value: borrow[src] int32) -> borrow[src] int32:\n    return value\n\n\
+        "def id_ref(value: int32) -> int32:\n    return value\n\n\
 def main() -> int32:\n    value: int32 = 7\n    mirrored = id_ref(value)\n    return mirrored\n",
     )
     .expect("copy-typed borrowed returns should be bindable as plain values");
@@ -11994,7 +11732,7 @@ fn default_argument_reference_detection_walks_nested_expression_shapes() {
         default_argument_references_param(
             &expr(ExprKind::Match {
                 scrutinee: Box::new(unrelated.clone()),
-                borrow_mode: None,
+                capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
                     pattern: Pattern::Wildcard(Span::new(1, 1)),
                     value: name_right.clone(),
@@ -12089,19 +11827,19 @@ fn check_rejects_duplicate_ordinary_parameter_names() {
             "duplicate parameter `value` on function `choose`",
         ),
         (
-            "class Counter:\n    value: int32\n\n    def add(borrow self, amount: int32, amount: int32) -> int32:\n        return self.value + amount\n",
+            "class Counter:\n    value: int32\n\n    def add(self, amount: int32, amount: int32) -> int32:\n        return self.value + amount\n",
             "duplicate parameter `amount` on method `add`",
         ),
         (
-            "trait Combine:\n    def combine(borrow self, other: int32, other: int32) -> int32\n",
+            "trait Combine:\n    def combine(self, other: int32, other: int32) -> int32\n",
             "duplicate parameter `other` on trait method `combine`",
         ),
         (
-            "trait Combine:\n    def combine(borrow self, left: int32, right: int32) -> int32\n\nclass Counter:\n    value: int32\n\nimpl Combine for Counter:\n    def combine(borrow self, value: int32, value: int32) -> int32:\n        return self.value + value\n",
+            "trait Combine:\n    def combine(self, left: int32, right: int32) -> int32\n\nclass Counter:\n    value: int32\n\nimpl Combine for Counter:\n    def combine(self, value: int32, value: int32) -> int32:\n        return self.value + value\n",
             "duplicate parameter `value` on impl method `combine`",
         ),
         (
-            "class Counter:\n    value: int32\n\n    def add(borrow self, self: int32) -> int32:\n        return self\n",
+            "class Counter:\n    value: int32\n\n    def add(self, self: int32) -> int32:\n        return self\n",
             "parameter `self` conflicts with the receiver on method `add`",
         ),
     ];
@@ -12500,15 +12238,15 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
     for source in [
         "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in jobs:\n        pass\n",
         "def main() -> None:\n    jobs = Queue[int32]()\n    for job in jobs:\n        pass\n",
-        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs: Set[Job] = Set[Job]()\n    for job in borrow jobs:\n        pass\n",
+        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs: Set[Job] = Set[Job]()\n    for job in jobs:\n        pass\n",
     ] {
         crate::check_source(source).expect("supported loop source should type check");
     }
 
     for (source, expected) in [
             (
-                "def helper(value: borrow mut int32 = 1) -> None:\n    pass\n\ndef main() -> None:\n    pass\n",
-                "`borrow mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
+                "def helper(value: mut int32 = 1) -> None:\n    pass\n\ndef main() -> None:\n    pass\n",
+                "`mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result",
             ),
             (
                 "def helper(value: int32 = true) -> int32:\n    return value\n\ndef main() -> None:\n    pass\n",
@@ -12523,7 +12261,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 "function `helper` is missing a return",
             ),
             (
-                "class Counter:\n    def current(borrow self) -> int32:\n        pass\n",
+                "class Counter:\n    def current(self) -> int32:\n        pass\n",
                 "method `current` is missing a return",
             ),
             (
@@ -12535,12 +12273,12 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 "method `show` is missing a return",
             ),
             (
-                "def main() -> None:\n    values = Set{1}\n    for value in borrow mut values:\n        pass\n",
-                "`for value in borrow mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
+                "def main() -> None:\n    values = Set{1}\n    for value in mut values:\n        pass\n",
+                "`for value in mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
             ),
             (
-                "def main() -> None:\n    values = [1]\n    for value in borrow mut values:\n        pass\n",
-                "`for value in borrow mut ...:` requires a mutable `Vec[T]` place",
+                "def main() -> None:\n    values = [1]\n    for value in mut values:\n        pass\n",
+                "`for value in mut ...:` requires a mutable `Vec[T]` place",
             ),
             (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
@@ -12551,7 +12289,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 "loop binding `value` would shadow an existing name",
             ),
             (
-                "class Resource:\n    def close(borrow mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource()\n    with resource as resource:\n        pass\n",
+                "class Resource:\n    def close(mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource()\n    with resource as resource:\n        pass\n",
                 "with binding `resource` would shadow an existing name",
             ),
         ] {
@@ -12707,11 +12445,9 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         .message
         .contains("`continue` is only allowed inside a loop"));
 
-    let borrowed_return_checker = checker.with_return_type(
-        Type::named("String"),
-        ReceiverKind::Borrow,
-        Some("source".to_string()),
-    );
+    // ADR-0022 Q6 removed borrowed returns, so an owned local now returns
+    // cleanly where the borrowed-source check used to reject it.
+    let return_checker = checker.with_return_type(Type::named("String"));
     let mut owned_return_locals = HashMap::from([(
         "owned".to_string(),
         local_binding(
@@ -12723,7 +12459,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
             &[],
         ),
     )]);
-    let unborrowed_return = borrowed_return_checker
+    return_checker
         .check_block(
             &[Stmt::Return(ReturnStmt {
                 value: Some(expr(ExprKind::Name("owned".to_string()))),
@@ -12734,43 +12470,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
             0,
             true,
         )
-        .expect_err("borrowed returns should require a borrowed source expression");
-    assert!(unborrowed_return
-        .message
-        .contains("borrowed return expression must come from a borrowed parameter or receiver"));
-
-    let missing_source_checker =
-        checker.with_return_type(Type::named("String"), ReceiverKind::Borrow, None);
-    let mut borrowed_return_locals = HashMap::from([(
-        "source".to_string(),
-        LocalBinding {
-            passing: ReceiverKind::Borrow,
-            borrow_origin: Some("source".to_string()),
-            ..local_binding(
-                Type::named("String"),
-                true,
-                false,
-                ReceiverKind::Borrow,
-                false,
-                &[],
-            )
-        },
-    )]);
-    let missing_source = missing_source_checker
-        .check_block(
-            &[Stmt::Return(ReturnStmt {
-                value: Some(expr(ExprKind::Name("source".to_string()))),
-                span,
-            })],
-            &mut borrowed_return_locals,
-            &Type::named("String"),
-            0,
-            true,
-        )
-        .expect_err("borrowed return source should be resolved before block checking");
-    assert!(missing_source
-        .message
-        .contains("internal error: borrowed return source was not resolved"));
+        .expect("an owned local is an ordinary owned return");
 
     let mut function_ok = function_decl("helper");
     function_ok.return_type = type_ref("int32");
@@ -12872,7 +12572,6 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         name: "value".to_string(),
         ty: type_ref("int32"),
         mode: ParamMode::Default,
-        borrow_label: None,
         default: Some(expr(ExprKind::Int(1))),
         span,
     }];
@@ -13728,7 +13427,7 @@ fn checker_class_constructor_direct_errors_cover_field_binding_edges() {
 #[test]
 fn method_receiver_borrow_aliasing_checks_overlap_and_distinct_places() {
     let overlap = crate::check_source(
-            "class Acc:\n    value: int32\n\n    def add_from(borrow mut self, source: borrow mut Acc):\n        self.value += source.value\n\ndef main() -> int32:\n    mut acc = Acc(value=1)\n    acc.add_from(source=acc)\n    return 0\n",
+            "class Acc:\n    value: int32\n\n    def add_from(mut self, source: mut Acc):\n        self.value += source.value\n\ndef main() -> int32:\n    mut acc = Acc(value=1)\n    acc.add_from(source=acc)\n    return 0\n",
         )
         .expect_err("overlapping receiver and argument borrows should fail");
     assert!(overlap.message.contains(
@@ -13736,7 +13435,7 @@ fn method_receiver_borrow_aliasing_checks_overlap_and_distinct_places() {
         ));
 
     let distinct = crate::check_source(
-            "class Acc:\n    value: int32\n\n    def add_from(borrow mut self, source: borrow mut Acc):\n        self.value += source.value\n\ndef main() -> int32:\n    mut left = Acc(value=1)\n    mut right = Acc(value=2)\n    left.add_from(source=right)\n    return 0\n",
+            "class Acc:\n    value: int32\n\n    def add_from(mut self, source: mut Acc):\n        self.value += source.value\n\ndef main() -> int32:\n    mut left = Acc(value=1)\n    mut right = Acc(value=2)\n    left.add_from(source=right)\n    return 0\n",
         )
         .expect("distinct receiver and argument borrows should type check");
     assert!(distinct.functions.contains_key("main"));
@@ -13776,14 +13475,14 @@ fn shared_self_projection_mutations_and_mutable_borrow_then_consume_are_actionab
             diagnostic
                 .help
                 .iter()
-                .any(|help| help.contains("declare the receiver as `borrow mut self`")),
+                .any(|help| help.contains("declare the receiver as `mut self`")),
             "{operation}: {:?}",
             diagnostic.help
         );
     }
 
     let overlap = crate::check_source(
-        "class Box:\n    value: int32\n\ndef mutate_then_take(first: borrow mut Box, second: own Box):\n    first.value += second.value\n\ndef main() -> int32:\n    mut value = Box(value=1)\n    mutate_then_take(value, value)\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef mutate_then_take(first: mut Box, second: own Box):\n    first.value += second.value\n\ndef main() -> int32:\n    mut value = Box(value=1)\n    mutate_then_take(value, value)\n    return 0\n",
     )
     .expect_err("consuming a value while it is mutably borrowed should fail");
     assert_eq!(overlap.code, "AU3002");
@@ -13804,20 +13503,20 @@ fn shared_self_projection_mutations_and_mutable_borrow_then_consume_are_actionab
 fn match_borrow_mut_requires_a_mutable_place_scrutinee() {
     for (source, scrutinee_kind) in [
         (
-            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    match borrow mut Opt.Some(1):\n        case Some(value):\n            print(value)\n        case None:\n            pass\n    return 0\n",
+            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    match mut Opt.Some(1):\n        case Some(value):\n            print(value)\n        case None:\n            pass\n    return 0\n",
             "temporary enum value",
         ),
         (
-            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    value: Opt = Opt.Some(1)\n    match borrow mut value:\n        case Some(found):\n            print(found)\n        case None:\n            pass\n    return 0\n",
+            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    value: Opt = Opt.Some(1)\n    match mut value:\n        case Some(found):\n            print(found)\n        case None:\n            pass\n    return 0\n",
             "immutable local place",
         ),
     ] {
         let diagnostic = crate::check_source(source)
-            .expect_err("match borrow mut should require a mutable place scrutinee");
+            .expect_err("match mut should require a mutable place scrutinee");
         assert_eq!(diagnostic.code, "AU3002", "{scrutinee_kind}");
         assert_eq!(
             diagnostic.message,
-            "`match borrow mut` requires a mutable place scrutinee",
+            "`match mut` requires a mutable place scrutinee",
             "{scrutinee_kind}"
         );
         assert!(diagnostic.span.is_some(), "{scrutinee_kind}");
@@ -14040,16 +13739,16 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "builtin resource `net.TlsStream` must be created through its module functions",
             ),
             (
-                "class Resource[T]:\n    value: T\n\n    def close(borrow mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource[int32](value=1)\n    with resource as handle:\n        pass\n",
+                "class Resource[T]:\n    value: T\n\n    def close(mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource[int32](value=1)\n    with resource as handle:\n        pass\n",
                 "`with` does not yet support generic resource types",
             ),
             (
                 "class Resource:\n    value: int32\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
-                "does not define `close(borrow mut self)`",
+                "does not define `close(mut self)`",
             ),
             (
                 "class Resource:\n    value: int32\n\n    def close(self) -> int32:\n        return 0\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
-                "`with` resources must define `close(borrow mut self)` returning `None`",
+                "`with` resources must define `close(mut self)` returning `None`",
             ),
             (
                 "def make() -> Option[int32]:\n    return Option[int32].Missing()\n\ndef main():\n    pass\n",
@@ -14227,7 +13926,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
     )]);
     let empty_match_expr = expr(ExprKind::Match {
         scrutinee: Box::new(expr(ExprKind::Name("status".to_string()))),
-        borrow_mode: None,
+        capability: ReceiverKind::Borrow,
         arms: Vec::new(),
     });
     assert!(checker
@@ -14274,7 +13973,14 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
     ] {
         assert!(
             checker
-                .bind_pattern_locals(&pattern, &expected_ty, &mut locals, None, None)
+                .bind_pattern_locals(
+                    &pattern,
+                    &expected_ty,
+                    &mut locals,
+                    ReceiverKind::Borrow,
+                    None,
+                    None
+                )
                 .expect_err("direct pattern binding diagnostic should be reported")
                 .message
                 .contains(expected),
@@ -14284,7 +13990,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
 
     let empty_match = crate::ast::Stmt::Match(crate::ast::MatchStmt {
         scrutinee: expr(ExprKind::Name("status".to_string())),
-        borrow_mode: None,
+        capability: ReceiverKind::Borrow,
         arms: Vec::new(),
         span,
     });
@@ -14409,13 +14115,13 @@ fn operator_trait_and_bound_helpers_cover_checker_resolution_paths() {
     let bad_ord = crate::check_source(
         "\
 trait Ord[Rhs]:
-    def lt(borrow self, rhs: Rhs) -> Score
+    def lt(self, rhs: Rhs) -> Score
 
 class Score:
     value: int32
 
 impl Ord[Score] for Score:
-    def lt(borrow self, rhs: Score) -> Score:
+    def lt(self, rhs: Score) -> Score:
         return self
 
 def main() -> int32:
@@ -14434,13 +14140,13 @@ def main() -> int32:
     let program = crate::check_source(
         "\
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: own Rhs) -> Out
+    def add(self, rhs: own Rhs) -> Out
 
 trait Neg[Out]:
-    def neg(borrow self) -> Out
+    def neg(self) -> Out
 
 class User:
     label: String
@@ -14452,19 +14158,19 @@ class Box[T]:
     value: T
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 impl Add[Point, Point] for Point:
-    def add(borrow self, rhs: own Point) -> Point:
+    def add(self, rhs: own Point) -> Point:
         return Point(x=self.x + rhs.x)
 
 impl Neg[Point] for Point:
-    def neg(borrow self) -> Point:
+    def neg(self) -> Point:
         return Point(x=0 - self.x)
 
 impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
-    def add(borrow self, rhs: own Box[T]) -> Box[T]:
+    def add(self, rhs: own Box[T]) -> Box[T]:
         return rhs
 
 def main():
@@ -14813,18 +14519,18 @@ fn concrete_operator_trait_resolution_reports_ambiguity_for_equal_specificity_im
     let error = crate::check_source(
         "\
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
+    def add(self, rhs: Rhs) -> Out
 
 class Pair[A, B]:
     left: A
     right: B
 
 impl[T] Add[Pair[int32, T], Pair[int32, T]] for Pair[int32, T]:
-    def add(borrow self, rhs: Pair[int32, T]) -> Pair[int32, T]:
+    def add(self, rhs: Pair[int32, T]) -> Pair[int32, T]:
         return Pair(left=self.left + rhs.left, right=rhs.right)
 
 impl[T] Add[Pair[T, int32], Pair[T, int32]] for Pair[T, int32]:
-    def add(borrow self, rhs: Pair[T, int32]) -> Pair[T, int32]:
+    def add(self, rhs: Pair[T, int32]) -> Pair[T, int32]:
         return Pair(left=rhs.left, right=self.right + rhs.right)
 
 def main() -> int32:
@@ -14848,7 +14554,6 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
     add_decl.params = vec![Param {
         name: "rhs".to_string(),
         mode: ParamMode::Default,
-        borrow_label: None,
         ty: type_ref("Rhs"),
         default: None,
         span: Span::new(1, 1),
@@ -15499,7 +15204,6 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             name: "left".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
-            borrow_label: None,
             default: None,
             span,
         },
@@ -15507,7 +15211,6 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             name: "right".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
-            borrow_label: None,
             default: None,
             span,
         },
@@ -15520,8 +15223,6 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
                 params: vec![Type::named("Widget"), Type::named("Widget")],
                 param_passings: vec![ReceiverKind::BorrowMut, ReceiverKind::BorrowMut],
                 return_type: Type::Unit,
-                return_passing: ReceiverKind::Value,
-                return_borrow_source: None,
                 rng_clone_safe_type_params: BTreeSet::new(),
             },
             type_param_bounds: BTreeMap::new(),
@@ -16051,10 +15752,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 managed_resource: false,
                 passing: ReceiverKind::BorrowMut,
                 borrow_origin: Some("counter".to_string()),
-                borrow_label: None,
                 borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
+                shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::from([
@@ -16095,10 +15796,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 managed_resource: false,
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("borrowed".to_string()),
-                borrow_label: None,
                 borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
+                shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
@@ -16114,10 +15815,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 managed_resource: false,
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("self".to_string()),
-                borrow_label: None,
                 borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
+                shared_match_scrutinee: None,
                 moved: false,
                 moved_at: None,
                 moved_fields: BTreeMap::new(),
@@ -16260,10 +15961,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
-            borrow_label: None,
             borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
+            shared_match_scrutinee: None,
             moved: false,
             moved_at: None,
             moved_fields: BTreeMap::new(),
@@ -16327,7 +16028,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     let bad_with = checker
         .require_with_resource(&Type::named("BadResource"), span)
         .expect_err("bad close signature should fail");
-    assert!(bad_with.message.contains("close(borrow mut self)"));
+    assert!(bad_with.message.contains("close(mut self)"));
     let primitive_with = checker
         .require_with_resource(&Type::named("int32"), span)
         .expect_err("primitive values cannot be with resources");
@@ -16346,8 +16047,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[Param {
                 name: "value".to_string(),
                 ty: type_ref("String"),
-                mode: ParamMode::Borrow,
-                borrow_label: None,
+                mode: ParamMode::Default,
                 default: None,
                 span,
             }],
@@ -16362,7 +16062,6 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 name: "value".to_string(),
                 ty: type_ref("int32"),
                 mode: ParamMode::BorrowMut,
-                borrow_label: None,
                 default: None,
                 span,
             }],
@@ -16401,7 +16100,6 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[],
             &[],
             &Type::TypeParam("T".to_string()),
-            ReceiverKind::Value,
             &BTreeMap::new(),
             &BTreeSet::new(),
             &[],
@@ -16423,7 +16121,6 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[],
             &[],
             &Type::TypeParam("T".to_string()),
-            ReceiverKind::Value,
             &BTreeMap::new(),
             &BTreeSet::new(),
             &[],
@@ -16804,12 +16501,10 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
 
     for source in [
-        "trait Show:\n    def show(borrow self, text: borrow String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(borrow self, text: own String) -> int32:\n        return self.value\n",
-        "trait Named:\n    def name(borrow self) -> borrow String\n\nclass User:\n    name: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.name.clone()\n",
-        "trait Choose:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[left] String\n\nclass Picker:\n    value: int32\n\nimpl Choose for Picker:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[right] String:\n        return right\n",
+        "trait Show:\n    def show(self, text: String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own String) -> int32:\n        return self.value\n",
     ] {
         let error = crate::check_source(source)
-            .expect_err("trait impl passing and borrow-source mismatches should fail");
+            .expect_err("a trait impl passing mismatch should fail");
         assert!(
             error
                 .message
@@ -16820,9 +16515,9 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
     }
 
     crate::check_source(
-        "trait Identity:\n    def identity(borrow self, value: borrow[source] String) -> borrow[source] String\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(borrow self, renamed: borrow[origin] String) -> borrow[origin] String:\n        return renamed\n",
+        "trait Identity:\n    def identity(self, value: own String) -> String\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(self, renamed: own String) -> String:\n        return renamed\n",
     )
-    .expect("equivalent borrowed return sources may use different parameter names and labels");
+    .expect("a trait impl may rename its parameters");
 
     let missing_method = check(
             crate::parser::parse(
@@ -16906,10 +16601,6 @@ fn check_reports_top_level_lowering_errors_from_source() {
             "unknown type `Missing`",
         ),
         (
-            "trait Bad:\n    def value() -> borrow[missing] int32\n\ndef main():\n    pass\n",
-            "borrow source `missing` must name a borrowed parameter",
-        ),
-        (
             "trait Bad:\n    def value[T: Missing](value: T) -> T\n\ndef main():\n    pass\n",
             "unknown trait `Missing`",
         ),
@@ -16942,10 +16633,6 @@ fn check_reports_top_level_lowering_errors_from_source() {
             "unknown type `Missing`",
         ),
         (
-            "class Bad:\n    def value(self) -> borrow[missing] int32:\n        return 1\n\ndef main():\n    pass\n",
-            "borrow source `missing` must name a borrowed parameter",
-        ),
-        (
             "def value[T: Missing](value: T) -> T:\n    return value\n\ndef main():\n    pass\n",
             "unknown trait `Missing`",
         ),
@@ -16968,10 +16655,6 @@ fn check_reports_top_level_lowering_errors_from_source() {
         (
             "trait Show:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def render() -> Missing:\n        pass\n\ndef main():\n    pass\n",
             "unknown type `Missing`",
-        ),
-        (
-            "trait Ref:\n    def get(self) -> borrow[self] int32\n\nclass Box:\n    value: int32\n\nimpl Ref for Box:\n    def get(self) -> borrow[missing] int32:\n        return self.value\n\ndef main():\n    pass\n",
-            "borrow source `missing` must name a borrowed parameter",
         ),
     ] {
         let error = crate::check_source(source).expect_err("invalid program should fail checking");
@@ -17932,7 +17615,7 @@ class Box:
     value: int32
 
 impl Show for Box:
-    def render(borrow self) -> String:
+    def render(self) -> String:
         return \"x\"
 
 def main():
@@ -17986,4 +17669,53 @@ def main():
     assert!(trait_impl_missing_method
         .message
         .contains("is missing method `label`"));
+}
+
+#[test]
+fn moving_a_payload_out_of_a_bare_match_names_match_own() {
+    // ADR-0022 Q2: bare `match` is shared, so extracting a payload from one is
+    // rejected. The rejection must name the exact replacement rather than the
+    // generic borrowed-move wording, because `match own` is the only fix.
+    let rejected = crate::check_source(
+        r#"
+enum Packet:
+    Text(String)
+
+def unwrap(packet: own Packet) -> String:
+    match packet:
+        case Packet.Text(text):
+            return text
+
+def main():
+    print(unwrap(Packet.Text("hi")))
+"#,
+    )
+    .expect_err("a bare match cannot move its payload out");
+    assert_eq!(rejected.code, "AU3002");
+    assert_eq!(
+        rejected.message,
+        "cannot move `text` out of a shared match on `packet`"
+    );
+    assert_eq!(
+        rejected.help,
+        vec!["write `match own packet` to consume the scrutinee, or call `.clone()` to consume an independent copy"]
+    );
+
+    // The named replacement is what actually compiles and runs.
+    let consumed = crate::run_source(
+        r#"
+enum Packet:
+    Text(String)
+
+def unwrap(packet: own Packet) -> String:
+    match own packet:
+        case Packet.Text(text):
+            return text
+
+def main():
+    print(unwrap(Packet.Text("hi")))
+"#,
+    )
+    .expect("`match own` should consume the scrutinee");
+    assert_eq!(consumed.stdout, "hi\n");
 }

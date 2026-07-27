@@ -1,5 +1,5 @@
 class User:
     name: String
 
-def take_name(user: borrow User) -> String:
+def take_name(user: User) -> String:
     return user.name

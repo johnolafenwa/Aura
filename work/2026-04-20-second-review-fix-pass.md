@@ -11,7 +11,7 @@ Close the second-pass externally reviewed correctness, ownership, process, and r
 - Fixed MIR generic field arithmetic for generic-class field reads, so arithmetic on monomorphized fields lowers directly instead of crashing through an internal unsupported member-call path.
 - Restored the maintained recursion-depth contract to `256` for both MIR and direct runtime diagnostics and updated the maintained failing fixture accordingly.
 - Fixed imported-module parser/checker diagnostics so syntax errors in imported modules render against the imported file and source text instead of the root module.
-- Fixed `match borrow mut` writeback so mutating pattern bindings actually writes the updated value back into the borrowed scrutinee.
+- Fixed `match mut` writeback so mutating pattern bindings actually writes the updated value back into the borrowed scrutinee.
 - Fixed duplicate-arm checking for nested patterns under the same outer enum variant so payload-discriminated nested arms no longer collapse into false duplicate diagnostics.
 - Added direct-backend support for enum variants with multiple payloads and covered it with CLI regression tests.
 - Restricted `parse_float64(...)` to finite values and made builtin function names non-redefinable.

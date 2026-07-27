@@ -56,10 +56,10 @@ For classes, both the class itself and its fields/methods have independent visib
 public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 
-    def internal_reset(borrow mut self):
+    def internal_reset(mut self):
         self.value = 0
 ```
 

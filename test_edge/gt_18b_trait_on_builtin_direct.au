@@ -2,10 +2,10 @@
 ## Expects: "num"
 
 trait Describable:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 impl Describable for int32:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "num"
 
 def main() -> int32:

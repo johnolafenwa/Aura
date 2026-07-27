@@ -3,7 +3,7 @@ def main() -> int32:
 
     select:
         case send_result = ch.send(42):
-            match send_result:
+            match own send_result:
                 case Result.Ok(done):
                     print("sent")
                 case Result.Err(err):

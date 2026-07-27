@@ -1,4 +1,4 @@
-error[AU3002]: `match borrow mut` does not support tuple patterns; bind the tuple as one mutable name
+error[AU3002]: `match mut` does not support tuple patterns; bind the tuple as one mutable name
  --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_pattern_borrow_mut.au:4:14
   |
 4 |         case (left, right):

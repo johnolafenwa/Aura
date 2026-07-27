@@ -62,7 +62,7 @@ def main():
         case Option.None:
             print("not an array")
 
-    match json.into_object(json.Value.Object({"b": json.Value.Int(2), "a": json.Value.Int(1)})):
+    match own json.into_object(json.Value.Object({"b": json.Value.Int(2), "a": json.Value.Int(1)})):
         case Option.Some(object):
             print(object.len())
             print(json.dumps(json.Value.Object(object)))
@@ -89,9 +89,9 @@ def main():
         case Result.Err(error):
             print(error)
 
-    match json.parse("{\"b\":1,\"a\":2,\"b\":3}"):
+    match own json.parse("{\"b\":1,\"a\":2,\"b\":3}"):
         case Result.Ok(value):
-            match json.into_object(value):
+            match own json.into_object(value):
                 case Option.Some(object):
                     keys = object.keys()
                     for key in keys:
@@ -141,9 +141,9 @@ def main():
         case Result.Err(error):
             print(error)
 
-    match json.parse("{\"b\":1,\"a\":2,\"\\u0062\":3}"):
+    match own json.parse("{\"b\":1,\"a\":2,\"\\u0062\":3}"):
         case Result.Ok(value):
-            match json.into_object(value):
+            match own json.into_object(value):
                 case Option.Some(object):
                     print(object.len())
                     for key in object.keys():

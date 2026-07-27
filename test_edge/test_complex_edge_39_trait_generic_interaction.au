@@ -2,7 +2,7 @@
 # Plus using that trait in a generic function
 
 trait Summable:
-    def sum(borrow self) -> int32
+    def sum(self) -> int32
 
 class Pair[T]:
     first: T
@@ -10,7 +10,7 @@ class Pair[T]:
 
 # Implement for specialized Pair[int32]
 impl Summable for Pair[int32]:
-    def sum(borrow self) -> int32:
+    def sum(self) -> int32:
         return self.first + self.second
 
 # Generic function using trait bound

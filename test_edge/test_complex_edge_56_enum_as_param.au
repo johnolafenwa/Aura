@@ -12,7 +12,7 @@ def describe_status(s: Status) -> String:
             return "inactive"
 
 # Pass enum as borrow
-def is_active(s: borrow Status) -> bool:
+def is_active(s: Status) -> bool:
     match s:
         case Status.Active:
             return true

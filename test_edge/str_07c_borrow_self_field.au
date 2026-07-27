@@ -3,13 +3,13 @@
 class Holder:
     text: String
 
-    def get_text(borrow self) -> String:
+    def get_text(self) -> String:
         return self.text
 
-    def clone_text(borrow self) -> String:
+    def clone_text(self) -> String:
         return self.text.clone()
 
-    def print_text(borrow self):
+    def print_text(self):
         print(self.text)
 
 def main() -> int32:

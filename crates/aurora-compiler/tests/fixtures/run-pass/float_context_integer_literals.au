@@ -1,7 +1,7 @@
 class FloatBox[T]:
     value: T
 
-    def echo(borrow self, value: own T) -> T:
+    def echo(self, value: own T) -> T:
         return value
 
 def echo_float64(value: float64) -> float64:

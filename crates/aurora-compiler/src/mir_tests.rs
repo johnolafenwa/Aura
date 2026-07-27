@@ -328,7 +328,7 @@ fn consuming_bind_only_tuple_patterns_do_not_clone_elements_during_matching() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    match ("left", "right"):
+    match own ("left", "right"):
         case (left, right):
             print(left)
             print(right)
@@ -369,7 +369,7 @@ def main():
 fn consuming_mixed_tuple_patterns_take_owned_elements_and_copy_scalar_bindings() {
     let source = r#"
 def main():
-    match ("owned", 7, true):
+    match own ("owned", 7, true):
         case (text, number, true):
             print(f"{text}:{number}")
         case _:
@@ -671,7 +671,7 @@ fn nested_and_copy_tuple_patterns_preserve_binding_ownership() {
     let module = crate::lower_source_to_mir(
         r#"
 def nested():
-    match (("left", "right"), "tail"):
+    match own (("left", "right"), "tail"):
         case ((left, right), tail):
             print(left)
             print(right)
@@ -679,7 +679,7 @@ def nested():
 
 def copied():
     pair = (10, 20)
-    match pair:
+    match own pair:
         case (left, right):
             print(left + right)
     print(pair[0])
@@ -1212,7 +1212,7 @@ enum Packet:
     Text(String)
 
 def unwrap(packet: own Packet) -> String:
-    match packet:
+    match own packet:
         case Packet.Text(text):
             return text
 "#,
@@ -1856,7 +1856,7 @@ def main() -> int32:
 fn d6_mir_uses_declaration_resolved_parameter_conventions() {
     let module = crate::lower_source_to_mir(
         r#"
-def modes(copy_value: int32, inferred: String, owned: own String, shared: borrow String, mutable: borrow mut String):
+def modes(copy_value: int32, inferred: String, owned: own String, shared: String, mutable: mut String):
     pass
 
 def generic[T](value: T):
@@ -1880,8 +1880,10 @@ def main() -> int32:
             .iter()
             .map(|param| param.passing)
             .collect::<Vec<_>>(),
+        // ADR-0022 Q1: `copy_value: int32` is shared like every other bare
+        // parameter. Only `own` still passes by value.
         vec![
-            MirReceiverKind::Value,
+            MirReceiverKind::Borrow,
             MirReceiverKind::Borrow,
             MirReceiverKind::Value,
             MirReceiverKind::Borrow,
@@ -1901,7 +1903,7 @@ def main() -> int32:
 fn d6_shared_default_temporary_lives_through_the_call() {
     let module = crate::lower_source_to_mir(
         r#"
-def shared(value: borrow String = "shared") -> String:
+def shared(value: String = "shared") -> String:
     return value.clone()
 
 def owned(value: own String = "owned") -> String:
@@ -1981,7 +1983,7 @@ class Thing:
     def zero() -> Thing:
         return Thing(value=0)
 
-    def get(borrow self) -> int32:
+    def get(self) -> int32:
         return self.value
 
 enum Status:
@@ -1989,7 +1991,7 @@ enum Status:
     Value(int32)
 
 trait RemoteTrait:
-    def label(borrow self) -> String
+    def label(self) -> String
 
 def helper() -> int32:
     return 7
@@ -2089,16 +2091,16 @@ def helper() -> int32:
 fn trait_lowerer() -> Lowerer<'static> {
     let source = r#"
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: own Rhs) -> Out
+    def add(self, rhs: own Rhs) -> Out
 
 trait Neg[Out]:
-    def neg(borrow self) -> Out
+    def neg(self) -> Out
 
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 trait Reset:
-    def reset(borrow mut self)
+    def reset(mut self)
 
 class User:
     label: String
@@ -2106,7 +2108,7 @@ class User:
 class Counter:
     value: int32
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
 class Box[T]:
@@ -2119,23 +2121,23 @@ def make_flag() -> bool:
     return true
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 impl Reset for User:
-    def reset(borrow mut self):
+    def reset(mut self):
         self.label = ""
 
 impl Add[int32, bool] for User:
-    def add(borrow self, rhs: own int32) -> bool:
+    def add(self, rhs: own int32) -> bool:
         return rhs > 0
 
 impl Neg[String] for User:
-    def neg(borrow self) -> String:
+    def neg(self) -> String:
         return self.label.clone()
 
 impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
-    def add(borrow self, rhs: own Box[T]) -> Box[T]:
+    def add(self, rhs: own Box[T]) -> Box[T]:
         return rhs
 "#;
     let program = Box::leak(Box::new(checked_program(source)));
@@ -2836,13 +2838,13 @@ fn imported_trait_impl_collection_deduplicates_equivalent_impls() {
     let trait_program = checked_program(
         r#"
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 class User:
     label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 "#,
     );
@@ -3587,18 +3589,18 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
 fn lower_source_to_mir_covers_broad_control_flow_and_collection_surface() {
     let source = r#"
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 class User:
     label: String
 
 impl Named for User:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.label.clone()
 
 class Resource:
     closed: bool = false
-    def close(borrow mut self):
+    def close(mut self):
         self.closed = true
 
 class Counter:
@@ -3616,7 +3618,7 @@ def consume[T: Named](value: T) -> String:
 
 def first_mut(values: own Vec[int32]) -> int32:
     mut local = values
-    for item in borrow mut local:
+    for item in mut local:
         return item
     return 0
 
@@ -3665,7 +3667,7 @@ def main() -> int32:
     print(seen.contains("a"))
     print(counts.get("a"))
     mut boxed = Boxed.Filled(3)
-    counter.value += match borrow mut boxed:
+    counter.value += match mut boxed:
         case Filled(v): v + 1
         case Empty: 0
     counter.value += first_mut([4, 5])

@@ -3,7 +3,7 @@ enum Wrapper[T]:
 
 def main() -> int32:
     w: Wrapper[int32] = Wrapper.Item(42)
-    match borrow w:
+    match w:
         case Wrapper.Item(v):
             print(v)
     return 0

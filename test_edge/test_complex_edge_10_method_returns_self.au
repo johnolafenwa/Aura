@@ -4,13 +4,13 @@ copy class Vector2:
     x: int32
     y: int32
 
-    def add(borrow self, other: borrow Vector2) -> Vector2:
+    def add(self, other: Vector2) -> Vector2:
         return Vector2(x=self.x + other.x, y=self.y + other.y)
 
-    def scale(borrow self, factor: int32) -> Vector2:
+    def scale(self, factor: int32) -> Vector2:
         return Vector2(x=self.x * factor, y=self.y * factor)
 
-    def negate(borrow self) -> Vector2:
+    def negate(self) -> Vector2:
         return Vector2(x=0 - self.x, y=0 - self.y)
 
 def main() -> int32:

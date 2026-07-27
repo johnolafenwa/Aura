@@ -7,7 +7,7 @@ enum Inner:
     Y
 
 def nested_match(o: Outer, i: Inner) -> int32:
-    match o:
+    match own o:
         case Outer.A(val):
             match i:
                 case Inner.X:

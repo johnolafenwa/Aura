@@ -1,6 +1,6 @@
 trait CounterfeitReceive:
-    def get(borrow self) -> int64
+    def get(self) -> int64
 
 impl[T] CounterfeitReceive for Queue[T]:
-    def get(borrow self) -> int64:
+    def get(self) -> int64:
         return 99

@@ -1,2 +1,2 @@
-def increment(value: borrow mut int64 = 0):
+def increment(value: mut int64 = 0):
     value += 1

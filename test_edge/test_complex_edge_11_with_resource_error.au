@@ -3,12 +3,12 @@
 class Connection:
     name: String
 
-    def query(borrow self, q: int32) -> Result[int32, String]:
+    def query(self, q: int32) -> Result[int32, String]:
         if q < 0:
             return Result.Err("invalid query")
         return Result.Ok(q * 10)
 
-    def close(borrow mut self):
+    def close(mut self):
         print(f"closing {self.name}")
 
 def run_query(q: int32) -> Result[int32, String]:

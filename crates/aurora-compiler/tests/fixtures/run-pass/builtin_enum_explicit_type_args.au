@@ -2,13 +2,13 @@ def main() -> int32:
     wrapped = Result[int32, String].Ok(7)
     fallback = Result[int32, String].Err("bad")
 
-    match wrapped:
+    match own wrapped:
         case Ok(value):
             print(value)
         case Err(message):
             print(message)
 
-    match fallback:
+    match own fallback:
         case Ok(value):
             print(value)
         case Err(message):

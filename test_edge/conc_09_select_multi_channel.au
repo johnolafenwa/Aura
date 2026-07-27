@@ -18,7 +18,7 @@ def main() -> int32:
         case v = slow_ch.recv():
             print("slow first")
         case v = fast_ch.recv():
-            match v:
+            match own v:
                 case Option.Some(val):
                     print(val)
                 case Option.None:

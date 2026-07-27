@@ -3,8 +3,8 @@
 class Validated[T]:
     result: Result[T, String]
 
-    def is_valid(borrow self) -> bool:
-        match borrow self.result:
+    def is_valid(self) -> bool:
+        match self.result:
             case Ok(_):
                 return true
             case Err(_):

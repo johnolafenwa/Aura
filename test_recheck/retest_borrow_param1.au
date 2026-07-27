@@ -2,7 +2,7 @@ class Point:
     x: int32
     y: int32
 
-def show(borrow p: Point):
+def show(p: Point):
     print(p.x)
     print(p.y)
 

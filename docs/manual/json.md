@@ -54,10 +54,10 @@ Accessors never coerce between variants:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `json.is_null` | `is_null(value: borrow json.Value) -> bool` | `true` only for `Value.Null`. |
-| `json.as_bool` | `as_bool(value: borrow json.Value) -> Option[bool]` | The Bool payload or `None`. |
-| `json.as_int` | `as_int(value: borrow json.Value) -> Option[int64]` | The Int payload or `None`; Float is not converted. |
-| `json.as_float` | `as_float(value: borrow json.Value) -> Option[float64]` | The Float payload or `None`; Int is not converted. |
+| `json.is_null` | `is_null(value: json.Value) -> bool` | `true` only for `Value.Null`. |
+| `json.as_bool` | `as_bool(value: json.Value) -> Option[bool]` | The Bool payload or `None`. |
+| `json.as_int` | `as_int(value: json.Value) -> Option[int64]` | The Int payload or `None`; Float is not converted. |
+| `json.as_float` | `as_float(value: json.Value) -> Option[float64]` | The Float payload or `None`; Int is not converted. |
 | `json.into_string` | `into_string(value: own json.Value) -> Option[String]` | Consumes the value and returns its String payload or `None`. |
 | `json.into_array` | `into_array(value: own json.Value) -> Option[Vec[json.Value]]` | Consumes the value and returns its Array payload or `None`. |
 | `json.into_object` | `into_object(value: own json.Value) -> Option[Map[String, json.Value]]` | Consumes the value and returns its Object payload or `None`. |

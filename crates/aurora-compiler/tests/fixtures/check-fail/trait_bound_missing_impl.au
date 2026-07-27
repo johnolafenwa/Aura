@@ -1,5 +1,5 @@
 trait Greeter:
-    def greet(borrow self) -> String
+    def greet(self) -> String
 
 class User:
     name: String

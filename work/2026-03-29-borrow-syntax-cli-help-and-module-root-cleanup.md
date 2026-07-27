@@ -6,9 +6,9 @@ Remove the duplicate free-function borrow parameter spelling, fix direct nested-
 
 ## Work Completed
 
-- Added parser regression coverage for rejecting prefix ordinary borrowed parameters such as `borrow counter: Counter` and `borrow mut counter: Counter`.
-- Removed parser acceptance of the prefix spelling for ordinary parameters while preserving `borrow self` / `borrow mut self` receiver syntax.
-- Updated the maintained borrowed-parameter example and compiler pass fixtures to use only the canonical `name: borrow Type` form.
+- Added parser regression coverage for rejecting prefix ordinary borrowed parameters such as `counter: Counter` and `mut counter: Counter`.
+- Removed parser acceptance of the prefix spelling for ordinary parameters while preserving `self` / `mut self` receiver syntax.
+- Updated the maintained borrowed-parameter example and compiler pass fixtures to use only the canonical `name: Type` form.
 - Updated the JS fallback analysis parser so it no longer accepts the removed ordinary-parameter borrow spelling.
 - Added compiler and CLI regression coverage for directly checking and analyzing nested package modules.
 - Fixed package-root inference so direct entrypoints like `examples/modules/pkg/user.au` resolve imports from the nearest ancestor that satisfies the module imports, instead of always rooting at the file’s parent directory.

@@ -5,15 +5,15 @@ class UserProfile:
     email: String?
     age: int32?
 
-    def display_email(borrow self) -> String:
-        match borrow self.email:
+    def display_email(self) -> String:
+        match self.email:
             case Some(e):
                 return e.clone()
             case None:
                 return "no email"
 
-    def display_age(borrow self) -> String:
-        match borrow self.age:
+    def display_age(self) -> String:
+        match self.age:
             case Some(a):
                 return f"age {a}"
             case None:

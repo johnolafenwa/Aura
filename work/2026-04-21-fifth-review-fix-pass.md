@@ -4,8 +4,8 @@ Validate the fifth-pass externally reviewed defects, fix the confirmed compiler/
 
 ## Work Completed
 
-- Added failing-first compiler, runtime, and CLI regressions for the fifth-pass review defects around `match borrow mut` writeback suppression after dead-path scrutinee assignment, native direct-backend bare `None` matching, TLS accept-loop timeout skipping, HTTP `413`/`431` listener recovery, `Self` in trait/impl parameter positions, builtin-variant shadowing by user classes, and the expanded filesystem read-all cap.
-- Reworked MIR `match borrow mut` lowering so synthetic writebacks are suppressed only on executed scrutinee-write paths instead of any arm that merely contains a syntactic `x = ...`, which closes the broad silent-regression blast radius identified in the fifth pass.
+- Added failing-first compiler, runtime, and CLI regressions for the fifth-pass review defects around `match mut` writeback suppression after dead-path scrutinee assignment, native direct-backend bare `None` matching, TLS accept-loop timeout skipping, HTTP `413`/`431` listener recovery, `Self` in trait/impl parameter positions, builtin-variant shadowing by user classes, and the expanded filesystem read-all cap.
+- Reworked MIR `match mut` lowering so synthetic writebacks are suppressed only on executed scrutinee-write paths instead of any arm that merely contains a syntactic `x = ...`, which closes the broad silent-regression blast radius identified in the fifth pass.
 - Fixed direct-backend builtin enum coercion for bare `None` values so `Option[T] = None` round-trips through native pattern matching the same way it does through `aura run`.
 - Hardened the runtime listener paths by making TLS accepts discard timed-out handshakes internally, making HTTP accepts reject declared oversize bodies immediately, adding `431 Request Header Fields Too Large`, and continuing past per-connection `413`/`431` failures instead of surfacing them as listener failures.
 - Raised the shared read-all cap from `1 MiB` to `64 MiB`, updated the maintained documentation to match, and converted the limit regressions to sparse/chunked setups so they stay fast and stable.

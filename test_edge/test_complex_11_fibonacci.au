@@ -17,7 +17,7 @@ def fib(n: int32) -> int32:
 class FibComputer:
     n: int32
 
-    def compute(borrow self) -> int32:
+    def compute(self) -> int32:
         if self.n <= 0:
             return 0
         if self.n == 1:

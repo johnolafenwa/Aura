@@ -118,16 +118,16 @@ There are a few choices worth calling out because they affect later stages:
 
 - parameter and receiver passing modes
   The AST preserves whether an ordinary parameter was written with no
-  modifier, `own`, `borrow`, or `borrow mut`. That source mode is deliberately
+  modifier, `own`, ``, or `mut `. That source mode is deliberately
   separate from the resolved call ABI: an unmodified parameter resolves to a
   value for copy types and to a shared borrow for non-copy types. Receiver
-  syntax is normalized more aggressively: bare `self` and `borrow self`
+  syntax is normalized more aggressively: bare `self` and `self`
   become the shared receiver mode, `own self` becomes the value mode, and
-  `borrow mut self` becomes the exclusive mutable mode.
+  `mut self` becomes the exclusive mutable mode.
 - `return_passing` and `return_borrow_source`
   Function declarations carry borrowed-return metadata in the AST so the checker can validate it.
 - ownership modes on `match` and `for`
-  A `for` statement preserves its default, `own`, `borrow`, or `borrow mut`
+  A `for` statement preserves its default, `own`, ``, or `mut `
   spelling so collection-specific checking can resolve it. A `match`
   statement retains its explicit borrow mode; unlike `for`, an unmodified
   `match` still consumes a non-copy scrutinee.

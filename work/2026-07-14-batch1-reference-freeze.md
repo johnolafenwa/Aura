@@ -22,7 +22,7 @@ Complete P1-P5, introduce stable structured diagnostics and MIR runtime call/tas
 - Added the dedicated Python-migration fixture family covering all Batch 1
   hint categories. Lexer, parser, and checker diagnostics now pin each message
   and stable code, including the new double-quoted f-string and
-  `borrow mut self` guidance.
+  `mut self` guidance.
 - P1: implemented exact float-context typing for positive and negative
   unsuffixed integer literals in annotated bindings, binary operands, concrete
   call arguments, defaults, and returns. Inexact `float32`/`float64` cases are
@@ -37,7 +37,7 @@ Complete P1-P5, introduce stable structured diagnostics and MIR runtime call/tas
   distinct float32/float64 runtime entry points. The stdout audit corrected the
   baked-in rounded `2^63` cast oracle to `9.223372036854776e18`.
 - P3 preferred path: reproduced the confirmed divergence where semantic checking and direct execution accepted a user trait method on `Queue[T]` or `Task[T]`, but MIR runtime dispatch intercepted the call as a builtin-handle method and rejected the unknown member. Because lowered MIR already retained the static receiver type and the sema-resolved trait implementation, the fix remained contained to MIR runtime dispatch: non-builtin Queue/Task member names now fall back to that resolved user implementation, preserving builtin precedence and diagnostics. Added generic Queue and Task run-pass fixtures so both cases are automatically included in the forced MIR/direct parity matrix; no checker-rejection fallback was required.
-- P4: recorded the intentional ownership-spelling asymmetry in ADR-0006 and the normative Manual: parameters place `own` in the type position, parallel to `borrow`, while loops prefix the iterable because they have no type position.
+- P4: recorded the intentional ownership-spelling asymmetry in ADR-0006 and the normative Manual: parameters place `own` in the type position, parallel to ``, while loops prefix the iterable because they have no type position.
 - Completed the normative contract pass for CLI/tooling, control-plane, filesystem, standard I/O, networking, packages, and processes. Each feature page now has the required grammar, typing, runtime, ownership/evaluation, stable-diagnostic, backend, limit, and status sections; implemented behavior, known defects, host-defined limits, and unavailable future work are explicitly separated. Existing example fences were preserved unchanged. The pass also aligned the CLI analysis-field reference with the shared structured diagnostic schema.
 - Added MIR runtime trap backtraces. Each propagating diagnostic is annotated once with the innermost-first Aurora function chain and declaration spans; a failing structured child also carries its task entry plus exact spawning function/call-site ancestry. The diagnostic notes flow through structured output and human rendering. Native direct-backend frame capture is deliberately deferred to Batch 3, so the forced parity comparator temporarily removes only `Aurora call chain`, `Aurora task entry`, and `Aurora task ancestry` note lines while continuing to compare the complete primary trap code/message/span.
 - Corrected the diagnostics-band gap for invalid UTF-8 returned through `process.Completed.stdout()` or `stderr()`: both MIR and direct paths now construct `AU4005` explicitly rather than falling through to `AU2999`, with the existing message unchanged.
@@ -98,7 +98,7 @@ Complete P1-P5, introduce stable structured diagnostics and MIR runtime call/tas
   move. TaskGroup arguments retain their distinct outer value-capture boundary.
 - Applied the resolved receiver and right-parameter modes of user operator
   traits to unary, binary, and compound expressions. `own` operands move,
-  `borrow mut` receivers require mutable places and write back, shared copy
+  `mut ` receivers require mutable places and write back, shared copy
   receivers remain borrows, and legal value-mode copy receivers snapshot before
   later operand effects.
 - Extended retained indexed-assignment checking through both the key/index and

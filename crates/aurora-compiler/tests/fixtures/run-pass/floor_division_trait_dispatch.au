@@ -1,11 +1,11 @@
 trait FloorDiv[Rhs, Out]:
-    def floor_div(borrow self, rhs: Rhs) -> Out
+    def floor_div(self, rhs: Rhs) -> Out
 
 class Counter:
     value: int32
 
 impl FloorDiv[Counter, Counter] for Counter:
-    def floor_div(borrow self, rhs: Counter) -> Counter:
+    def floor_div(self, rhs: Counter) -> Counter:
         return Counter(value=self.value + rhs.value)
 
 def main() -> int32:

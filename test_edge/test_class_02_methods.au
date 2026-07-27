@@ -2,13 +2,13 @@ class Rectangle:
     width: float64
     height: float64
 
-    def area(borrow self) -> float64:
+    def area(self) -> float64:
         return self.width * self.height
 
-    def perimeter(borrow self) -> float64:
+    def perimeter(self) -> float64:
         return (self.width + self.height) * 2.0
 
-    def scale(borrow mut self, factor: float64):
+    def scale(mut self, factor: float64):
         self.width = self.width * factor
         self.height = self.height * factor
 

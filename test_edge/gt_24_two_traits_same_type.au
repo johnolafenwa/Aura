@@ -2,21 +2,21 @@
 ## Expects: "alice" then 30
 
 trait HasName:
-    def name(borrow self) -> String
+    def name(self) -> String
 
 trait HasAge:
-    def age(borrow self) -> int32
+    def age(self) -> int32
 
 class Person:
     n: String
     a: int32
 
 impl HasName for Person:
-    def name(borrow self) -> String:
+    def name(self) -> String:
         return self.n.clone()
 
 impl HasAge for Person:
-    def age(borrow self) -> int32:
+    def age(self) -> int32:
         return self.a
 
 def main() -> int32:

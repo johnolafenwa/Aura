@@ -3,10 +3,10 @@
 def consume_string(s: String):
     print(s)
 
-def borrow_string(s: borrow str):
+def borrow_string(s: str):
     print(s)
 
-def borrow_and_build(s: borrow str) -> String:
+def borrow_and_build(s: str) -> String:
     return f"Got: {s}"
 
 def main() -> int32:

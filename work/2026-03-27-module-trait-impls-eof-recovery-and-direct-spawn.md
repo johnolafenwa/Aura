@@ -12,7 +12,7 @@ Close the remaining cross-module trait impl gap, the EOF dangling-member tooling
   - EOF dangling-member recovery in compiler analysis, CLI, and compiler-backed LSP bridge tests
   - direct/native builds for `examples/classes/indirect_recursive.au`
   - direct/native builds for spawned functions that return plain-class values
-  - clearer diagnostics for unsupported `String(...)`, bare `Ok(...)`, `borrow` call arguments, and list literals
+  - clearer diagnostics for unsupported `String(...)`, bare `Ok(...)`, `` call arguments, and list literals
 - Exported/imported trait impl metadata through module namespaces and taught the checker, interpreter, MIR lowering, and compiler-backed analysis/completions to search imported module impls.
 - Lowered imported trait impl methods into MIR so `run-mir` and the direct backend keep parity with `run`.
 - Typed match payload bindings during MIR lowering and taught MIR/native type inference about runtime member returns like `Task.join()`, `Channel.recv()`, and related members.

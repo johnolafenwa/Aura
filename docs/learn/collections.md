@@ -142,21 +142,21 @@ for name in own names:
 # names is no longer available
 ```
 
-`for name in borrow names:` is the explicit shared spelling.
+`for name in names:` is the explicit shared spelling.
 
 When the loop body needs to mutate the elements, borrow mutably:
 
 ```python
 mut values = [1, 2, 3]
 
-for value in borrow mut values:
+for value in mut values:
     value += 10
 
-for value in borrow values:
+for value in values:
     print(value)
 ```
 
-`borrow mut` iteration requires a mutable binding.
+`mut ` iteration requires a mutable binding.
 
 ## `Map[K, V]`: Lookup Tables
 
@@ -229,14 +229,14 @@ if not users.insert("ada"):
     print("already present")
 ```
 
-Sets support bare/default shared iteration as well as explicit `borrow`:
+Sets support bare/default shared iteration as well as explicit ``:
 
 ```python
-for value in borrow users:
+for value in users:
     print(value)
 ```
 
-`for value in borrow mut set:` is not supported; modify sets with `insert` and `remove` instead.
+`for value in mut set:` is not supported; modify sets with `insert` and `remove` instead.
 
 ## Ownership Details That Matter
 
@@ -249,7 +249,7 @@ owns the key and value because it stores them. A lookup followed by insertion
 therefore needs no clone:
 
 ```python
-def bump(counts: borrow mut Map[String, int32], key: own String):
+def bump(counts: mut Map[String, int32], key: own String):
     match counts.get(key):
         case Some(count):
             counts.set(key, count + 1)
@@ -262,7 +262,7 @@ The lookup only lends `key`; the later `set` transfers it into the map.
 ### Borrow to inspect, move to transfer
 
 Helpers that need to read a collection may use the bare non-copy default or
-spell `borrow` explicitly. Helpers that take ownership use `own`. The compiler
+spell `` explicitly. Helpers that take ownership use `own`. The compiler
 enforces this boundary, so inspection and transfer remain visible.
 
 ## A Larger Example: Unique Count
@@ -270,7 +270,7 @@ enforces this boundary, so inspection and transfer remain visible.
 Put the pieces together. The helper below walks a vector of strings and reports how many unique values appear:
 
 ```python
-def unique_count(values: borrow Vec[String]) -> int64:
+def unique_count(values: Vec[String]) -> int64:
     mut seen = Set[String]()
 
     for value in values:
@@ -286,7 +286,7 @@ def unique_count(values: borrow Vec[String]) -> int64:
 A small word counter updates a caller-owned map:
 
 ```python
-def count_words(counts: borrow mut Map[String, int32], line: borrow String):
+def count_words(counts: mut Map[String, int32], line: String):
     words = line.split(" ")
 
     for word in own words:

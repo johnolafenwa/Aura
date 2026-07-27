@@ -8,7 +8,7 @@ def pack(text: own String) -> Container:
     return Container.Full(text)
 
 def unpack(c: own Container) -> String:
-    match c:
+    match own c:
         case Container.Full(s):
             return s
         case Container.Empty:
@@ -22,7 +22,7 @@ def main() -> int32:
 
     # Direct construction
     c2 = Container.Full("world")
-    match c2:
+    match own c2:
         case Container.Full(s):
             print(s)
         case Container.Empty:

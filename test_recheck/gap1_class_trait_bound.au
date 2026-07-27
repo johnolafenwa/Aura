@@ -1,5 +1,5 @@
 trait Printable:
-    def to_str(borrow self) -> String
+    def to_str(self) -> String
 
 class Container[T: Printable]:
     item: T

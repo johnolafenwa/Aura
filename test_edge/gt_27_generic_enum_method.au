@@ -5,7 +5,7 @@ enum Maybe[T]:
     Some(T)
     Nothing
 
-    def is_some(borrow self) -> int32:
+    def is_some(self) -> int32:
         match self:
             case Maybe.Some(_):
                 return 1

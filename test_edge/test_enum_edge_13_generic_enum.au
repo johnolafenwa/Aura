@@ -3,14 +3,14 @@ enum Maybe[T]:
     Nothing
 
 def unwrap_int(m: Maybe[int32], default_val: int32) -> int32:
-    match m:
+    match own m:
         case Maybe.Just(v):
             return v
         case Maybe.Nothing:
             return default_val
 
 def unwrap_str(m: own Maybe[String], default_val: own String) -> String:
-    match m:
+    match own m:
         case Maybe.Just(v):
             return v
         case Maybe.Nothing:
@@ -21,7 +21,7 @@ enum Either[A, B]:
     Right(B)
 
 def show_either(e: own Either[int32, String]) -> String:
-    match e:
+    match own e:
         case Either.Left(n):
             print(n)
             return "left"

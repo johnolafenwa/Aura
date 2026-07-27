@@ -1,7 +1,7 @@
 # Test: generic enum with trait-bounded type parameter
 
 trait Printable:
-    def to_str(borrow self) -> String
+    def to_str(self) -> String
 
 enum Holder[T: Printable]:
     Has(T)
@@ -11,13 +11,13 @@ class Label:
     text: String
 
 impl Printable for Label:
-    def to_str(borrow self) -> String:
+    def to_str(self) -> String:
         return self.text
 
 def main() -> int32:
     l = Label(text="test")
     h: Holder[Label] = Holder.Has(l)
-    match h:
+    match own h:
         case Holder.Has(v):
             print(v.to_str())
         case Holder.Empty:

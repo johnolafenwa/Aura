@@ -203,7 +203,7 @@ def classify(value: int32) -> String:
     else:
         return "large"
 
-def bump(counts: borrow mut Map[String, int32], key: own String):
+def bump(counts: mut Map[String, int32], key: own String):
     match counts.get(key):
         case Some(value):
             counts.set(key, value + 1)
@@ -223,7 +223,7 @@ for entry in counts.items():
 
 There are two details in `bump` worth slowing down for.
 
-`counts: borrow mut Map[String, int32]` says the helper will mutate a map owned by its caller. The parameter type is where the borrow is declared; the caller does not write `borrow` at the call site. Aurora supplies it from the signature.
+`counts: mut Map[String, int32]` says the helper will mutate a map owned by its caller. The parameter type is where the borrow is declared; the caller does not write `` at the call site. Aurora supplies it from the signature.
 
 `Map.get` borrows its key, so the same owned `key` can be moved into the later
 `counts.set`. The `own` annotation says `bump` takes responsibility for storing

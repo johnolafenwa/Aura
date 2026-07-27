@@ -33,14 +33,14 @@ def main() -> int32:
 
             select:
                 case val_a = ch_a.recv():
-                    match val_a:
+                    match own val_a:
                         case Option.Some(v):
                             print(f"A: {v}")
                             got_a = true
                         case Option.None:
                             got_a = true
                 case val_b = ch_b.recv():
-                    match val_b:
+                    match own val_b:
                         case Option.Some(v):
                             print(f"B: {v}")
                             got_b = true

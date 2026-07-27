@@ -1,5 +1,5 @@
-error[AU1101]: ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`
+error[AU1101]: expected identifier
  --> crates/aurora-compiler/tests/fixtures/parse-fail/prefix_borrow_mut_param_not_supported.au:1:10
   |
-1 | def bump(borrow mut counter: Counter):
+1 | def bump(mut counter: Counter):
   |          ^

@@ -18,11 +18,11 @@ def main() -> int32:
     print(n1.value)
 
     # Access second element
-    match n1.next:
+    match own n1.next:
         case Some(second):
             print(second.value)
             # Access third element
-            match second.next:
+            match own second.next:
                 case Some(third):
                     print(third.value)
                 case None:

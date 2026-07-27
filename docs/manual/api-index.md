@@ -70,7 +70,7 @@ algorithm, seed-42 vectors, ownership, secure-source boundary, and diagnostics.
 | `random.Rng` | `Rng(seed: int64) -> random.Rng` | Creates a move-only deterministic stream from the seed's exact two's-complement bit pattern. |
 | `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64` | Uniform half-open `[lo, hi)` integer; mutable receiver. |
 | `random.Rng.next_float` | `next_float() -> float64` | Uniform 53-bit binary64 value in `[0.0, 1.0)`; mutable receiver. |
-| `random.Rng.shuffle` | `shuffle[T](values: borrow mut Vec[T]) -> None` | Descending Fisher-Yates shuffle in place; mutable receiver and vector. |
+| `random.Rng.shuffle` | `shuffle[T](values: mut Vec[T]) -> None` | Descending Fisher-Yates shuffle in place; mutable receiver and vector. |
 | `random.secure_int` | `secure_int(lo: int64, hi: int64) -> int64` | OS-secure uniform half-open integer with no deterministic fallback. |
 | `random.secure_bytes` | `secure_bytes(n: int64) -> Vec[uint8]` | Exactly `n` OS-secure bytes for `0 <= n <= 2147483647`; zero skips entropy and larger counts trap with `AU4005` before allocation. |
 
@@ -231,10 +231,10 @@ See [Control-Plane Modules](/manual/control-plane).
 | `path.is_absolute` | `is_absolute(path: String) -> bool` |
 | `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |
 | `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` |
-| `json.is_null` | `is_null(value: borrow json.Value) -> bool` |
-| `json.as_bool` | `as_bool(value: borrow json.Value) -> Option[bool]` |
-| `json.as_int` | `as_int(value: borrow json.Value) -> Option[int64]` |
-| `json.as_float` | `as_float(value: borrow json.Value) -> Option[float64]` |
+| `json.is_null` | `is_null(value: json.Value) -> bool` |
+| `json.as_bool` | `as_bool(value: json.Value) -> Option[bool]` |
+| `json.as_int` | `as_int(value: json.Value) -> Option[int64]` |
+| `json.as_float` | `as_float(value: json.Value) -> Option[float64]` |
 | `json.into_string` | `into_string(value: own json.Value) -> Option[String]` |
 | `json.into_array` | `into_array(value: own json.Value) -> Option[Vec[json.Value]]` |
 | `json.into_object` | `into_object(value: own json.Value) -> Option[Map[String, json.Value]]` |

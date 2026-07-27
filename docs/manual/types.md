@@ -120,7 +120,7 @@ Move values transfer ownership:
 - `TaskGroup`
 - file, process, supervisor, and network resources
 
-Move values can still be shared through `borrow` and `borrow mut`, or duplicated explicitly through methods such as `.clone()` when the type supports cloning.
+Move values can still be shared through `` and `mut `, or duplicated explicitly through methods such as `.clone()` when the type supports cloning.
 
 `Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying the handle does not copy queued values or task results; it gives another reference to the same queue or task.
 
@@ -288,7 +288,7 @@ Traits define shared behavior:
 
 ```python
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 ```
 
 ## Recursive Fields
@@ -327,7 +327,7 @@ def parse_answer() -> Result[int32, String]:
 
 Type syntax consists of an identifier or module-qualified type path, optional
 bracketed type arguments, the optional marker `?`, and `indirect` in class-field
-position, as collected in [Grammar](/manual/grammar). `borrow`, `borrow mut`,
+position, as collected in [Grammar](/manual/grammar). ``, `mut `,
 and `own` on parameters and returns are passing contracts around a type; they
 do not construct separate runtime type values.
 

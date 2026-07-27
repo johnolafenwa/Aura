@@ -1,7 +1,7 @@
 class Label:
     text: String
 
-def combine(borrow a: Label, b: Label) -> String:
+def combine(a: Label, b: Label) -> String:
     return a.text + " " + b.text
 
 def main():

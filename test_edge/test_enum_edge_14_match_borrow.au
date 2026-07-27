@@ -7,14 +7,14 @@ def main() -> int32:
     box: Container[int32] = Container.Full(42)
 
     # First borrow match
-    match borrow box:
+    match box:
         case Container.Full(v):
             print(v)
         case Container.Empty:
             print("empty")
 
     # Use box again after borrow (should work because it wasn't consumed)
-    match borrow box:
+    match box:
         case Container.Full(v):
             print(v)
         case Container.Empty:
@@ -22,14 +22,14 @@ def main() -> int32:
 
     # Test with a more complex type
     msg: Container[String] = Container.Full("borrowed")
-    match borrow msg:
+    match msg:
         case Container.Full(s):
             print(s)
         case Container.Empty:
             print("empty")
 
     # Use msg again
-    match borrow msg:
+    match msg:
         case Container.Full(s):
             print(s)
         case Container.Empty:
@@ -37,14 +37,14 @@ def main() -> int32:
 
     # Test borrow on Empty variant
     none: Container[int32] = Container.Empty
-    match borrow none:
+    match none:
         case Container.Full(v):
             print(v)
         case Container.Empty:
             print("is empty")
 
     # Use none again
-    match borrow none:
+    match none:
         case Container.Full(v):
             print(v)
         case Container.Empty:

@@ -12,14 +12,14 @@ Keep pushing the bootstrap toward the frozen v1 surface by landing:
 - Added failing fixtures first for:
   - `for value in range(...)`
   - non-iterable `for` diagnostics
-  - class methods with `borrow self`
+  - class methods with `self`
   - associated methods called through the class name
 - Extended the compiler frontend for:
   - `for`
   - `in`
-  - `borrow`
+  - ``
   - class methods declared inside class bodies
-  - receiver syntax with `self`, `borrow self`, and `borrow mut self`
+  - receiver syntax with `self`, `self`, and `mut self`
 - Extended semantic checking for:
   - `range(...)` returning an internal `Range` iterable
   - loop binding scope

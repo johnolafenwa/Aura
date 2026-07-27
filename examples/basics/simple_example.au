@@ -11,7 +11,7 @@ def printPerson(person: Person):
     
     print(person.name)
     
-def incrementAge(person: borrow mut Person):
+def incrementAge(person: mut Person):
     
     person.age += 1
     

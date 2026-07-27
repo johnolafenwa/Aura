@@ -4,7 +4,7 @@ def find(x: int32) -> Option[int32]:
     return Option.None
 
 def transform(o: Option[int32]) -> Option[int32]:
-    match o:
+    match own o:
         case Option.Some(v):
             if v > 50:
                 return Option.Some(v + 1)

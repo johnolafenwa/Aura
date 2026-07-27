@@ -2,9 +2,9 @@ class Node:
     value: int32
     next: indirect Node?
 
-def print_list(node: borrow Node):
+def print_list(node: Node):
     print(node.value)
-    match borrow node.next:
+    match node.next:
         case Some(next):
             print_list(node=next)
         case None:

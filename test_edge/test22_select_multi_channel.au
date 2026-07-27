@@ -15,13 +15,13 @@ def main() -> int32:
 
     select:
         case va = ch_a.recv():
-            match va:
+            match own va:
                 case Option.Some(v):
                     print(v)
                 case Option.None:
                     print("none a")
         case vb = ch_b.recv():
-            match vb:
+            match own vb:
                 case Option.Some(v):
                     print(v)
                 case Option.None:

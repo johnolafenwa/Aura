@@ -10,6 +10,6 @@ def main() -> int32:
     mut rng = random.Rng(42)
     mut holder = Holder([Item("a"), Item("b"), Item("c"), Item("d"), Item("e"), Item("f")])
     rng.shuffle(holder.values)
-    for item in borrow holder.values:
+    for item in holder.values:
         print(item.label)
     return 0

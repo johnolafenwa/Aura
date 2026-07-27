@@ -10,7 +10,7 @@ class Outer:
 
 def main() -> int32:
     mut outer = Outer(inner=Inner(state=Opt.Some(10)))
-    match borrow mut outer.inner.state:
+    match mut outer.inner.state:
         case Some(v):
             outer.inner = Inner(state=Opt.Some(v))
             v = v + 1

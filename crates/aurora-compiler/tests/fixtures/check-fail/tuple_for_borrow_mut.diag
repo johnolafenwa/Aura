@@ -1,5 +1,5 @@
-error[AU3002]: `borrow mut` tuple targets are not supported; bind the tuple to one mutable name and update its elements explicitly
+error[AU3002]: `mut` tuple targets are not supported; bind the tuple to one mutable name and update its elements explicitly
  --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_for_borrow_mut.au:3:9
   |
-3 |     for left, right in borrow mut rows:
+3 |     for left, right in mut rows:
   |         ^

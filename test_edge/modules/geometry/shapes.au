@@ -1,18 +1,18 @@
 public copy class Circle:
     public radius: int32
 
-    public def area(borrow self) -> int32:
+    public def area(self) -> int32:
         return self.radius * self.radius * 3
 
-    public def describe(borrow self) -> String:
+    public def describe(self) -> String:
         return f"Circle(r={self.radius})"
 
 public copy class Rect:
     public width: int32
     public height: int32
 
-    public def area(borrow self) -> int32:
+    public def area(self) -> int32:
         return self.width * self.height
 
-    public def describe(borrow self) -> String:
+    public def describe(self) -> String:
         return f"Rect({self.width}x{self.height})"

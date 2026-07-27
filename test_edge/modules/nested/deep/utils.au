@@ -1,4 +1,4 @@
-public def greet(name: borrow str) -> String:
+public def greet(name: str) -> String:
     return "Hello, " + name
 
 public def square(n: int32) -> int32:

@@ -4,19 +4,19 @@ class Counter:
     value: int32
     label: String
 
-    def get_label(borrow self) -> String:
+    def get_label(self) -> String:
         return self.label.clone()
 
-    def get_value(borrow self) -> int32:
+    def get_value(self) -> int32:
         return self.value
 
-    def bump(borrow mut self):
+    def bump(mut self):
         self.value += 1
 
-    def relabel(borrow mut self, new_label: borrow str):
+    def relabel(mut self, new_label: str):
         self.label = new_label + "_updated"
 
-def read_value(c: borrow Counter) -> int32:
+def read_value(c: Counter) -> int32:
     return c.value
 
 def main() -> int32:

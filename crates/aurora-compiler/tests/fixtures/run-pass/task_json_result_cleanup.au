@@ -7,7 +7,7 @@ def make_unobserved_value() -> json.Value:
     return json.Value.Object({"items": json.Value.Array([json.Value.String("owned"), json.Value.Int(9)])})
 
 def print_task_result(result: own TaskResult[Result[json.Value, json.Error]]) -> int32:
-    match result:
+    match own result:
         case TaskResult.Ready(Result.Ok(value)):
             print(json.dumps(value))
         case TaskResult.Ready(Result.Err(error)):

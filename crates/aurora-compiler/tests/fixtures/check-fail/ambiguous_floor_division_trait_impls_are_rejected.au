@@ -1,16 +1,16 @@
 trait FloorDiv[Rhs, Out]:
-    def floor_div(borrow self, rhs: Rhs) -> Out
+    def floor_div(self, rhs: Rhs) -> Out
 
 class Pair[A, B]:
     left: A
     right: B
 
 impl[T] FloorDiv[Pair[int32, T], Pair[int32, T]] for Pair[int32, T]:
-    def floor_div(borrow self, rhs: Pair[int32, T]) -> Pair[int32, T]:
+    def floor_div(self, rhs: Pair[int32, T]) -> Pair[int32, T]:
         return rhs
 
 impl[T] FloorDiv[Pair[T, int32], Pair[T, int32]] for Pair[T, int32]:
-    def floor_div(borrow self, rhs: Pair[T, int32]) -> Pair[T, int32]:
+    def floor_div(self, rhs: Pair[T, int32]) -> Pair[T, int32]:
         return rhs
 
 def main() -> int32:

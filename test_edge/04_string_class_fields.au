@@ -2,14 +2,14 @@ class Person:
     name: String
     title: String
 
-    def full_title(borrow self) -> String:
+    def full_title(self) -> String:
         return self.title + " " + self.name
 
 class Config:
     host: String = "localhost"
     path: String = "/api"
 
-    def url(borrow self) -> String:
+    def url(self) -> String:
         return self.host + self.path
 
 def main() -> int32:

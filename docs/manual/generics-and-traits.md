@@ -25,7 +25,7 @@ Type parameter names must be unique within their declaration. `Self` is reserved
 Bounds follow a type parameter after `:`. `+` means every listed bound is required:
 
 ```python
-def use_value[T: Display + Score](value: borrow T) -> int32:
+def use_value[T: Display + Score](value: T) -> int32:
     print(value.display())
     return value.score()
 ```
@@ -97,16 +97,16 @@ A trait declares a nominal method contract:
 
 ```python
 trait Greeter:
-    def greet(borrow self) -> String
+    def greet(self) -> String
 ```
 
 Trait methods may be signature-only, ending at the newline, or may provide a default body after `:`:
 
 ```python
 trait Named:
-    def name(borrow self) -> String
+    def name(self) -> String
 
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "name=" + self.name()
 ```
 
@@ -121,7 +121,7 @@ Trait names and method names must be unique in their scopes. Trait type paramete
 
 ```python
 trait Mapper[T]:
-    def map(borrow self, value: own T) -> T
+    def map(self, value: own T) -> T
 ```
 
 Bounds may appear on a trait method's own generic parameters. Ordinary trait method parameters cannot have defaults.
@@ -139,7 +139,7 @@ A trait is private to its defining module unless declared `public trait`. Implem
 
 ```python
 trait Combine:
-    def combine(borrow self, other: borrow Self) -> Self
+    def combine(self, other: Self) -> Self
 ```
 
 `Self` takes no type arguments. It is not a global type and is unavailable in an unrelated top-level function. Inside a trait declaration it is initially a placeholder; inside an implementation it is substituted with the implementation target.
@@ -153,7 +153,7 @@ class Person:
     name: String
 
 impl Greeter for Person:
-    def greet(borrow self) -> String:
+    def greet(self) -> String:
         return "hello " + self.name
 ```
 
@@ -161,19 +161,19 @@ Generic and specialized implementations are supported:
 
 ```python
 impl Mapper[int32] for Doubler:
-    def map(borrow self, value: own int32) -> int32:
+    def map(self, value: own int32) -> int32:
         return value * self.factor
 ```
 
 ```python
 impl[T] Mapper[T] for Box[T]:
-    def map(borrow self, value: own T) -> T:
+    def map(self, value: own T) -> T:
         return value
 ```
 
 ```python
 impl Displayable for Box[String]:
-    def display(borrow self) -> String:
+    def display(self) -> String:
         return self.value.clone()
 ```
 
@@ -189,7 +189,7 @@ An implementation may define only methods belonging to the trait. It must provid
 
 For an explicitly implemented method, conformance compares:
 
-- receiver presence and passing mode (shared `self`/`borrow self`, consuming `own self`, `borrow mut self`, or none)
+- receiver presence and passing mode (shared `self`/`self`, consuming `own self`, `mut self`, or none)
 - ordinary parameter count and substituted types
 - each ordinary parameter's resolved owned/shared-borrow/mutable-borrow mode
 - return type and owned/shared-borrow/mutable-borrow mode
@@ -227,14 +227,14 @@ For a concrete value, member lookup considers inherent class methods and applica
 For a type parameter, only methods justified by declared bounds are available:
 
 ```python
-def say_hello[T: Greeter](value: borrow T):
+def say_hello[T: Greeter](value: T):
     print(value.greet())
 ```
 
 Specialized trait bounds provide their type arguments:
 
 ```python
-def apply[M: Mapper[int32]](mapper: borrow M, value: int32) -> int32:
+def apply[M: Mapper[int32]](mapper: M, value: int32) -> int32:
     return mapper.map(value)
 ```
 
@@ -262,7 +262,7 @@ A trait may require one or more supertraits:
 
 ```python
 trait Labelled: Named:
-    def label(borrow self) -> String:
+    def label(self) -> String:
         return "name=" + self.name()
 ```
 
@@ -300,19 +300,19 @@ The maintained generic shapes are illustrated by:
 
 ```python
 trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
+    def add(self, rhs: Rhs) -> Out
 
 trait FloorDiv[Rhs, Out]:
-    def floor_div(borrow self, rhs: Rhs) -> Out
+    def floor_div(self, rhs: Rhs) -> Out
 
 trait Neg[Out]:
-    def neg(borrow self) -> Out
+    def neg(self) -> Out
 
 trait Ord[Rhs]:
-    def lt(borrow self, rhs: Rhs) -> bool
-    def le(borrow self, rhs: Rhs) -> bool
-    def gt(borrow self, rhs: Rhs) -> bool
-    def ge(borrow self, rhs: Rhs) -> bool
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
 ```
 
 `Sub`, `Mul`, `Div`, and `Mod` follow the same binary `Rhs, Out` shape as
@@ -351,7 +351,7 @@ the conversion is accepted.
 - generic user classes cannot currently serve as `with` resources
 - generic task targets are permitted when their callable type arguments can be
   resolved; default/shared and `own` targets use task-owned captures, while
-  `borrow mut` targets are rejected
+  `mut ` targets are rejected
 - equal-specificity overlapping implementations remain an error at the use site
 - clone-safety obligations are inferred rather than written, and an explicit
   implementation cannot strengthen the contract inferred by its trait method
@@ -465,7 +465,7 @@ The following blocks pin the observable boundary. A generic clone helper is
 valid for a safe specialization:
 
 ```python
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
 def main() -> int32:
@@ -479,10 +479,10 @@ The same callable rejects an unsafe concrete specialization:
 ```python
 import random
 
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
-def reject(values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(values: Vec[random.Rng]) -> Vec[random.Rng]:
     return duplicate(values)
 ```
 
@@ -491,13 +491,13 @@ The requirement also survives a generic-to-generic call:
 ```python
 import random
 
-def duplicate[T](values: borrow Vec[T]) -> Vec[T]:
+def duplicate[T](values: Vec[T]) -> Vec[T]:
     return values.clone()
 
-def forward[T](values: borrow Vec[T]) -> Vec[T]:
+def forward[T](values: Vec[T]) -> Vec[T]:
     return duplicate(values)
 
-def reject(values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(values: Vec[random.Rng]) -> Vec[random.Rng]:
     return forward(values)
 ```
 
@@ -506,13 +506,13 @@ requirement:
 
 ```python
 trait Copier[T]:
-    def copy_values(borrow self) -> Vec[T]
+    def copy_values(self) -> Vec[T]
 
 class Wrapper[T]:
     values: Vec[T]
 
 impl[T] Copier[T] for Wrapper[T]:
-    def copy_values(borrow self) -> Vec[T]:
+    def copy_values(self) -> Vec[T]:
         return self.values.clone()
 ```
 
@@ -520,7 +520,7 @@ A trait default body can establish the requirement for safe specializations:
 
 ```python
 trait Duplicator[T]:
-    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+    def duplicate(self, values: Vec[T]) -> Vec[T]:
         return values.clone()
 
 class Marker[T]:
@@ -542,7 +542,7 @@ Its unsafe specialization is rejected through the same contract:
 import random
 
 trait Duplicator[T]:
-    def duplicate(borrow self, values: borrow Vec[T]) -> Vec[T]:
+    def duplicate(self, values: Vec[T]) -> Vec[T]:
         return values.clone()
 
 class Marker[T]:
@@ -551,6 +551,6 @@ class Marker[T]:
 impl[T] Duplicator[T] for Marker[T]:
     pass
 
-def reject(marker: borrow Marker[random.Rng], values: borrow Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(marker: Marker[random.Rng], values: Vec[random.Rng]) -> Vec[random.Rng]:
     return marker.duplicate(values)
 ```

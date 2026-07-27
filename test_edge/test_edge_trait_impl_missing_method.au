@@ -1,14 +1,14 @@
 # Test: implementing a trait but missing one method (should error)
 
 trait FullTrait:
-    def method_a(borrow self) -> int32
-    def method_b(borrow self) -> String
+    def method_a(self) -> int32
+    def method_b(self) -> String
 
 class Incomplete:
     value: int32
 
 impl FullTrait for Incomplete:
-    def method_a(borrow self) -> int32:
+    def method_a(self) -> int32:
         return self.value
 
 def main() -> int32:

@@ -1,7 +1,7 @@
 public class Counter:
     public value: int32
 
-    public def read(borrow self) -> int32:
+    public def read(self) -> int32:
         return self.value
 
 public enum Status:

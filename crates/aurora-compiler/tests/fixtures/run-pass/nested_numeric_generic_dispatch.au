@@ -1,5 +1,5 @@
 trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 class Box[T]:
     value: T
@@ -12,43 +12,43 @@ class Pair[T, U]:
     second: U
 
 impl Show for int32:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "int32"
 
 impl Show for int64:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "int64"
 
 impl Show for Box[int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "box-int32"
 
 impl Show for Box[int64]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "box-int64"
 
 impl Show for Marker[int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "marker-int32"
 
 impl Show for Marker[int64]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "marker-int64"
 
 impl Show for Option[int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "option-int32"
 
 impl[T] Show for Option[T]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "option-generic"
 
 impl[T] Show for Option[Vec[T]]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "option-vec"
 
 impl[T] Show for Pair[T, None]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return "pair-none"
 
 def render[T: Show](value: T) -> None:

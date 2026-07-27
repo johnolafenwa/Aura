@@ -7,7 +7,7 @@ enum Choice[T]:
 
 def main() -> int32:
     c: Choice[int32] = Choice.Yes(1)
-    match c:
+    match own c:
         case Choice.Yes(v):
             print(v)
     return 0

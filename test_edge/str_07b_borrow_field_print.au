@@ -5,16 +5,16 @@ class User:
     name: String
     age: int32
 
-def show_age(user: borrow User):
+def show_age(user: User):
     # int32 is copy, this should work
     print(user.age)
 
-def show_name_clone(user: borrow User):
+def show_name_clone(user: User):
     # Workaround: clone the field first
     n = user.name.clone()
     print(n)
 
-def show_name_fstring(user: borrow User):
+def show_name_fstring(user: User):
     # Workaround: use f-string
     print(f"{user.name}")
 

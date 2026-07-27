@@ -2,10 +2,10 @@ enum Envelope[T]:
     Empty
     Value(T)
 
-def duplicate[T](values: borrow Vec[Envelope[T]]) -> Vec[Envelope[T]]:
+def duplicate[T](values: Vec[Envelope[T]]) -> Vec[Envelope[T]]:
     return values.clone()
 
-def accept(values: borrow Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:
+def accept(values: Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:
     return duplicate(values)
 
 def main() -> int32:

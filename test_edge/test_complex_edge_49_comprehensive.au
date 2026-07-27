@@ -2,20 +2,20 @@
 # Traits + Generics + Enums + Classes + Error handling + Channels + Concurrency
 
 trait Processable:
-    def process(borrow self) -> int32
+    def process(self) -> int32
 
 copy class Temperature:
     celsius: int32
 
 impl Processable for Temperature:
-    def process(borrow self) -> int32:
+    def process(self) -> int32:
         return self.celsius * 9 // 5 + 32
 
 copy class Distance:
     meters: int32
 
 impl Processable for Distance:
-    def process(borrow self) -> int32:
+    def process(self) -> int32:
         return self.meters * 100
 
 enum Unit:
@@ -25,14 +25,14 @@ enum Unit:
 class Converter[T: Processable]:
     input: T
 
-    def convert(borrow self) -> Result[int32, String]:
+    def convert(self) -> Result[int32, String]:
         result = self.input.process()
         if result < 0:
             return Result.Err("negative result")
         return Result.Ok(result)
 
 def process_unit(unit: Unit) -> Result[int32, String]:
-    match unit:
+    match own unit:
         case Unit.Temp(t):
             converter = Converter(input=t)
             return converter.convert()

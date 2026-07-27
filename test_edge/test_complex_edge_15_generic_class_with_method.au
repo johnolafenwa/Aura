@@ -5,13 +5,13 @@ class Pair[T]:
     first: T
     second: T
 
-    def get_first(borrow self) -> T:
+    def get_first(self) -> T:
         return self.first
 
-    def get_second(borrow self) -> T:
+    def get_second(self) -> T:
         return self.second
 
-    def swap(borrow self) -> Pair[T]:
+    def swap(self) -> Pair[T]:
         return Pair(first=self.second, second=self.first)
 
 def main() -> int32:

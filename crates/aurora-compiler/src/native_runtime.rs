@@ -1071,13 +1071,19 @@ impl DirectHostArgBuffer {
         unsafe { with_value(handle, read) }
     }
 
+    /// Reads a copy-typed argument without taking ownership.
+    ///
+    /// ADR-0022 Q1 makes a bare parameter shared for every type, including
+    /// declaration-known copy types, so the declared passing this asserts is
+    /// `Borrow`. The ABI still hands over copied bits; what changed is the
+    /// source-level capability, not how the adapter reads the value.
     fn with_copy<T>(
         &self,
         name: &str,
         index: usize,
         read: impl FnOnce(&Value) -> std::result::Result<T, Diagnostic>,
     ) -> std::result::Result<T, Diagnostic> {
-        let handle = self.handle(name, index, ReceiverKind::Value)?;
+        let handle = self.handle(name, index, ReceiverKind::Borrow)?;
         unsafe { with_value(handle, read) }
     }
 

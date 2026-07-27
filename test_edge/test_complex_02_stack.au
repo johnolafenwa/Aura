@@ -12,13 +12,13 @@ class Stack:
     def new() -> Stack:
         return Stack(top=Option.None, size=0)
 
-    def push(borrow mut self, val: int32):
+    def push(mut self, val: int32):
         old_top = self.top
         new_node = StackNode(value=val, next=old_top)
         self.top = Option.Some(new_node)
         self.size += 1
 
-    def pop(borrow mut self) -> int32:
+    def pop(mut self) -> int32:
         match self.top:
             case Some(node):
                 self.top = node.next
@@ -27,14 +27,14 @@ class Stack:
             case None:
                 return -1
 
-    def peek(borrow self) -> int32:
-        match borrow self.top:
+    def peek(self) -> int32:
+        match own self.top:
             case Some(node):
                 return node.value
             case None:
                 return -1
 
-    def get_size(borrow self) -> int32:
+    def get_size(self) -> int32:
         return self.size
 
 def main() -> int32:

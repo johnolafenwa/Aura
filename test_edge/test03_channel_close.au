@@ -3,11 +3,11 @@ def main() -> int32:
     ch.close()
 
     send_result = ch.send(99)
-    match send_result:
+    match own send_result:
         case Result.Ok(done):
             print("error: send succeeded on closed channel")
         case Result.Err(err):
-            match err:
+            match own err:
                 case SendError.Closed(value):
                     print(value)
                     print("send correctly failed")

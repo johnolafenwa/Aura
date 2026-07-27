@@ -2656,12 +2656,12 @@ fn complete_stdin_includes_imported_trait_methods() {
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create package dir");
     fs::write(
         temp.path().join("pkg/named.au"),
-        "public trait Named:\n    def name(borrow self) -> String\n",
+        "public trait Named:\n    def name(self) -> String\n",
     )
     .expect("failed to write trait module");
     fs::write(
         temp.path().join("pkg/user.au"),
-        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n",
+        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n",
     )
     .expect("failed to write user module");
     let main_path = temp.path().join("main.au");
@@ -3448,14 +3448,14 @@ fn run_and_direct_backend_preserve_match_borrow_mut_writebacks_after_dead_branch
 
 def main() -> int32:
     mut x: Opt = Opt.Some(10)
-    match borrow mut x:
+    match mut x:
         case Some(v):
             v = v + 1
             if false:
                 x = Opt.Some(100)
         case None:
             pass
-    match borrow x:
+    match x:
         case Some(v):
             print(v)
         case None:
@@ -3737,13 +3737,12 @@ def main() -> int32:
 }
 
 #[test]
-fn mir_and_forced_direct_reject_noncopy_borrowed_return_calls() {
+fn mir_and_forced_direct_reject_noncopy_internal_exposure() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au"
     );
     let (temp, source_path) = write_temp_source("aurora-borrowed-return-containment", source);
-    let expected =
-        "produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely";
+    let expected = "cannot move non-copy field `name` out of borrowed value `user`";
 
     let mir = Command::new(aura_bin())
         .arg("run")
@@ -3837,7 +3836,7 @@ def main() -> int32:
 
 #[test]
 fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
-    let source = "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    mut x: Opt = Opt.Some(10)\n    match borrow mut x:\n        case Some(v):\n            x = Opt.Some(v)\n            v = v + 1\n        case None:\n            pass\n    return 0\n";
+    let source = "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    mut x: Opt = Opt.Some(10)\n    match mut x:\n        case Some(v):\n            x = Opt.Some(v)\n            v = v + 1\n        case None:\n            pass\n    return 0\n";
     let (_temp, source_path) = write_temp_source("aurora-stale-match-binding", source);
 
     let output = Command::new(aura_bin())
@@ -4054,7 +4053,7 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
 fn build_with_direct_backend_prefers_more_specific_trait_impls() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-trait-specificity",
-        "trait Show:\n    def show(borrow self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(borrow self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(borrow self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
+        "trait Show:\n    def show(self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
     );
 
     assert!(
@@ -4801,7 +4800,7 @@ fn build_with_direct_backend_supports_float_modulo() {
 fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-with-normal-exit",
-        "class Handle:\n    name: String\n\n    def close(borrow mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
+        "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
     );
 
     assert!(
@@ -4819,7 +4818,7 @@ fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
 fn build_with_direct_backend_preserves_scalar_return_values_through_with_cleanup() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-with-return",
-        "class Handle:\n    name: String\n\n    def close(borrow mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
+        "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
     );
 
     assert!(
@@ -4868,7 +4867,7 @@ fn build_with_direct_backend_rejects_narrow_integer_overflow_at_runtime() {
 fn build_with_direct_backend_supports_trait_impls_on_builtin_types() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-builtin-trait",
-        "trait Show:\n    def show(borrow self) -> String\n\nimpl Show for int32:\n    def show(borrow self) -> String:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
+        "trait Show:\n    def show(self) -> String\n\nimpl Show for int32:\n    def show(self) -> String:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
     );
 
     assert!(
@@ -5862,17 +5861,17 @@ fn build_produces_runnable_binary_for_program_with_local_modules() {
 #[test]
 fn build_executes_multiple_specialized_trait_impl_dispatch() {
     let source = r#"trait Show:
-    def show(borrow self) -> String
+    def show(self) -> String
 
 class Box[T]:
     value: T
 
 impl Show for Box[int32]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return f"{self.value}"
 
 impl Show for Box[String]:
-    def show(borrow self) -> String:
+    def show(self) -> String:
         return self.value.clone()
 
 def render[T: Show](value: T) -> None:
@@ -5915,17 +5914,17 @@ def main() -> int32:
 #[test]
 fn build_executes_nested_generic_trait_bound_dispatch() {
     let source = r#"trait Add2[Rhs, Out]:
-    def add2(borrow self, rhs: own Rhs) -> Out
+    def add2(self, rhs: own Rhs) -> Out
 
 class Box[T]:
     value: T
 
 impl Add2[int32, int32] for int32:
-    def add2(borrow self, rhs: own int32) -> int32:
+    def add2(self, rhs: own int32) -> int32:
         return self + rhs
 
 impl[T: Add2[T, T]] Add2[Box[T], Box[T]] for Box[T]:
-    def add2(borrow self, rhs: own Box[T]) -> Box[T]:
+    def add2(self, rhs: own Box[T]) -> Box[T]:
         return Box(value=self.value.add2(rhs=rhs.value))
 
 def main() -> int32:
@@ -6026,7 +6025,7 @@ import net
 
 def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with server_socket = socket:
-        match try server_socket.recv_from(1024, timeout=1s):
+        match own try server_socket.recv_from(1024, timeout=1s):
             case Option.Some(packet):
                 text = try packet.text()
                 try server_socket.send_text(packet.address(), "udp:" + text, timeout=1s)
@@ -6042,7 +6041,7 @@ def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
             path = request.path()
             body = try request.body_text()
             headers = request.headers()
-            match headers.get("X-Test"):
+            match own headers.get("X-Test"):
                 case Option.Some(test_header):
                     try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
@@ -6062,7 +6061,7 @@ def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
-            match try server_socket.recv_text(timeout=1s):
+            match own try server_socket.recv_text(timeout=1s):
                 case Option.Some(text):
                     try server_socket.send_text("ws:" + text, timeout=1s)
                     return Result.Ok(None)
@@ -6085,14 +6084,14 @@ def run() -> Result[None, io.Error]:
         udp_client = try net.udp_bind("127.0.0.1:0")
         with client_socket = udp_client:
             try client_socket.send_text(udp_addr, "ping", timeout=1s)
-            match try client_socket.recv_from(1024, timeout=1s):
+            match own try client_socket.recv_from(1024, timeout=1s):
                 case Option.Some(packet):
                     print(try packet.text())
                 case Option.None:
                     return Result.Ok(None)
-        match udp_task.result():
+        match own udp_task.result():
             case TaskResult.Ready(result):
-                match result:
+                match own result:
                     case Result.Ok(text):
                         print(text)
                     case Result.Err(error):
@@ -6112,7 +6111,7 @@ def run() -> Result[None, io.Error]:
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
-        match http_task.result():
+        match own http_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -6129,7 +6128,7 @@ def run() -> Result[None, io.Error]:
         with received_bytes = bytes_response:
             print(received_bytes.status())
             print(received_bytes.bytes().len())
-        match http_bytes_task.result():
+        match own http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -6145,12 +6144,12 @@ def run() -> Result[None, io.Error]:
         client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
         with ws_client = client:
             try ws_client.send_text("hi", timeout=1s)
-            match try ws_client.recv_text(timeout=1s):
+            match own try ws_client.recv_text(timeout=1s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match ws_task.result():
+        match own ws_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -6163,7 +6162,7 @@ def run() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run():
+    match own run():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -6786,7 +6785,7 @@ fn direct_backend_unwinds_with_resources_before_runtime_trap() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("close " + self.name)
 
 def main() -> int32:
@@ -6816,7 +6815,7 @@ fn direct_backend_unwinds_with_resources_when_callee_traps() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("close " + self.name)
 
 def boom() -> int32:
@@ -6853,7 +6852,7 @@ fn direct_backend_callee_trap_cleanup_uses_current_resource_state() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("close " + self.name)
 
 def boom() -> int32:
@@ -6886,7 +6885,7 @@ fn direct_backend_preserves_body_trap_when_cleanup_also_traps() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("close " + self.name)
         print(1 // 0)
 
@@ -6951,7 +6950,7 @@ def main() -> int32:
 fn direct_backend_recursion_with_with_frames_matches_run_cleanup_count() {
     let source = r#"
 class Resource:
-    def close(borrow mut self):
+    def close(mut self):
         print("CLOSE_REC")
 
 def recurse(value: int32) -> int32:
@@ -7020,7 +7019,7 @@ fn direct_backend_unwinds_with_resources_before_recursion_limit() {
 class Resource:
     name: String
 
-    def close(borrow mut self):
+    def close(mut self):
         print("close " + self.name)
 
 def recurse(value: int32) -> int32:
@@ -7441,7 +7440,7 @@ def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
-            match try server_stream.read_line(timeout=1s):
+            match own try server_stream.read_line(timeout=1s):
                 case Option.Some(text):
                     try server_stream.write_all("unix:" + text, timeout=1s)
                     return Result.Ok(None)
@@ -7452,7 +7451,7 @@ def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
-            match try server_stream.read_line(timeout=2s):
+            match own try server_stream.read_line(timeout=2s):
                 case Option.Some(text):
                     try server_stream.write_all("tls:" + text + "\n", timeout=2s)
                     return Result.Ok(None)
@@ -7466,12 +7465,12 @@ def run() -> Result[None, io.Error]:
         client = try net.unix_connect_timeout("{unix_path}", 1s)
         with unix_client = client:
             try unix_client.write_all("ping\n", timeout=1s)
-            match try unix_client.read_line(timeout=1s):
+            match own try unix_client.read_line(timeout=1s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match unix_task.result():
+        match own unix_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -7487,12 +7486,12 @@ def run() -> Result[None, io.Error]:
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
         with tls_client = stream:
             try tls_client.write_all("ping!\n", timeout=2s)
-            match try tls_client.read_line(timeout=2s):
+            match own try tls_client.read_line(timeout=2s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match tls_task.result():
+        match own tls_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -7505,7 +7504,7 @@ def run() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run():
+    match own run():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -7676,11 +7675,7 @@ fn check_and_direct_backend_preserve_d6_own_parameter_guidance() {
 fn check_and_direct_backend_reject_queue_iteration_modifiers() {
     let expected = "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
 
-    for (name, modifier) in [
-        ("own", "own "),
-        ("borrow", "borrow "),
-        ("borrow-mut", "borrow mut "),
-    ] {
+    for (name, modifier) in [("own", "own "), ("mut", "mut ")] {
         let source = format!(
             "def main() -> int32:\n    queue = Queue[int64]()\n    for item in {modifier}queue:\n        print(item)\n    return 0\n"
         );
@@ -7801,12 +7796,12 @@ def main():
     condition_calls: int32
     message_calls: int32
 
-    def condition(borrow mut self) -> bool:
+    def condition(mut self) -> bool:
         self.condition_calls += 1
         print(f"condition {self.condition_calls}")
         return false
 
-    def message(borrow mut self) -> String:
+    def message(mut self) -> String:
         self.message_calls += 1
         print(f"message {self.message_calls}")
         return "evaluated once"
@@ -7872,7 +7867,7 @@ def main():
 #[test]
 fn assertion_failure_remains_primary_when_cleanup_also_traps() {
     let source = r#"class Resource:
-    def close(borrow mut self):
+    def close(mut self):
         print("close")
         print(1 // 0)
 
@@ -7983,4 +7978,20 @@ fn aura_test_treats_file_level_assertions_as_test_results() {
     assert!(stderr.contains("FAILED"));
     assert!(stderr.contains("error[AU4001]: file-level assertion"));
     assert!(stderr.contains("assert false"));
+}
+
+#[test]
+fn native_cache_format_is_bumped_past_the_capability_migration() {
+    // ADR-0022 Q9 requires every Phase-4 artifact built from the old grammar
+    // to be invalidated, so the cache format string must have moved past the
+    // `v3` that pre-migration builds keyed on.
+    let main = include_str!("../src/main.rs");
+    assert!(
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v4";"#),
+        "native cache format must be v4 so pre-migration artifacts cannot be reused"
+    );
+    assert!(
+        !main.contains("aurora-native-cache-v3"),
+        "the retired v3 cache format must not linger in the key material"
+    );
 }

@@ -9,7 +9,7 @@ class Container[T]:
 
 def main() -> int32:
     c1: Container[int32] = Container(value=Maybe.Just(42))
-    match c1.value:
+    match own c1.value:
         case Maybe.Just(v):
             print(v)
         case Maybe.Nothing:

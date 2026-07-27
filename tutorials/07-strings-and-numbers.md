@@ -217,10 +217,10 @@ See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
 ## Borrowed String Parameters
 
-When a function takes a string it only reads, use `borrow str`:
+When a function takes a string it only reads, use `str`:
 
 ```python
-def greet(name: borrow str) -> String:
+def greet(name: str) -> String:
     return "Hello, " + name
 ```
 
@@ -291,9 +291,9 @@ See [examples/strings/string_methods.au](../examples/strings/string_methods.au) 
 
 Aurora provides parsing builtins that return `Result`:
 
-- `parse_int32(text: borrow str) -> Result[int32, String]`
-- `parse_int64(text: borrow str) -> Result[int64, String]`
-- `parse_float64(text: borrow str) -> Result[float64, String]`
+- `parse_int32(text: str) -> Result[int32, String]`
+- `parse_int64(text: str) -> Result[int64, String]`
+- `parse_float64(text: str) -> Result[float64, String]`
 
 Use `match` to handle success and failure:
 

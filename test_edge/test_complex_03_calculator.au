@@ -12,7 +12,7 @@ copy class Expr:
     op: Op
     right: int32
 
-def eval_op(op: borrow Op, a: int32, b: int32) -> Result[int32, String]:
+def eval_op(op: Op, a: int32, b: int32) -> Result[int32, String]:
     match op:
         case Op.Add:
             return Result.Ok(a + b)
@@ -25,7 +25,7 @@ def eval_op(op: borrow Op, a: int32, b: int32) -> Result[int32, String]:
                 return Result.Err("division by zero")
             return Result.Ok(a // b)
 
-def eval_expr(expr: borrow Expr) -> Result[int32, String]:
+def eval_expr(expr: Expr) -> Result[int32, String]:
     return eval_op(expr.op, expr.left, expr.right)
 
 def main() -> int32:

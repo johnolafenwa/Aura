@@ -189,28 +189,28 @@ for name in own names:
 # names is consumed -- cannot use it after this loop
 ```
 
-`for name in borrow names:` is the explicit spelling of shared iteration.
+`for name in names:` is the explicit spelling of shared iteration.
 
 **By mutable borrow** -- modifies elements in place. Requires a `mut` binding:
 
 ```python
 mut scores = [1, 2, 3]
-for item in borrow mut scores:
+for item in mut scores:
     item += 1
 # scores is now [2, 3, 4]
 ```
 
 Use bare `for x in collection` for ordinary reads, `for x in own collection`
-when you are done with it, and `for x in borrow mut collection` when you need
+when you are done with it, and `for x in mut collection` when you need
 to update vector elements.
 
 See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
-Sets support default shared, explicit `borrow`, and `own` iteration:
+Sets support default shared, explicit ``, and `own` iteration:
 
 ```python
 seen = {1, 2, 3}
-for value in borrow seen:
+for value in seen:
     print(value)
 ```
 
@@ -238,7 +238,7 @@ Both are `for` loop forms rather than values you can store, so writing
 `pairs = enumerate(hosts)` is rejected with guidance to use the loop spelling.
 Both read their operands by position, so each one must be a `Vec[T]` or a
 `Set[T]`, and both iterate over the bare-loop borrow default: no `own`,
-`borrow`, or `borrow mut` modifier, the operands stay borrowed for the whole
+``, or `mut ` modifier, the operands stay borrowed for the whole
 loop, and a non-copy element binding cannot be moved out.
 
 If you define your own `enumerate` or `zip` function, yours wins.
@@ -250,8 +250,8 @@ See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumer
 The current compiler supports `for` over:
 
 - `range(stop)` and `range(start, stop)` with named-argument forms
-- default/`borrow`/`own` `Vec[T]`, plus `borrow mut Vec[T]`
-- default/`borrow`/`own` `Set[T]`
+- default/``/`own` `Vec[T]`, plus `mut Vec[T]`
+- default/``/`own` `Set[T]`
 - `Queue[T]` (iterates until the queue closes)
 
 It also supports the `enumerate(seq)` and `zip(first, second)` loop forms over
@@ -261,9 +261,9 @@ Not yet supported:
 
 - user-defined iterable protocols
 - `enumerate` or `zip` over a `Range` or `Queue[T]`
-- `borrow mut Set[T]`
+- `mut Set[T]`
 - custom step values for `range`
 
 Queue iteration is different: it receives each item already owned, and the
-Queue handle is copyable. The explicit `own`, `borrow`, and `borrow mut` forms
+Queue handle is copyable. The explicit `own`, ``, and `mut ` forms
 are rejected for Queue; use `for item in queue:`.

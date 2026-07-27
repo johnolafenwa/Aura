@@ -2,21 +2,21 @@
 ## Expects: 15
 
 trait HasX:
-    def get_x(borrow self) -> int32
+    def get_x(self) -> int32
 
 trait HasY:
-    def get_y(borrow self) -> int32
+    def get_y(self) -> int32
 
 class Point:
     x: int32
     y: int32
 
 impl HasX for Point:
-    def get_x(borrow self) -> int32:
+    def get_x(self) -> int32:
         return self.x
 
 impl HasY for Point:
-    def get_y(borrow self) -> int32:
+    def get_y(self) -> int32:
         return self.y
 
 def sum_coords[T: HasX + HasY](p: T) -> int32:

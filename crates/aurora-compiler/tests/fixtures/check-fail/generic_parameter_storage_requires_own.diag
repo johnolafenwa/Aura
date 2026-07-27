@@ -3,5 +3,5 @@ error[AU3002]: parameter `value` is borrowed; declare it as `own T` to take owne
   |
 2 |     values.push(value)
   |                 ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au:1:41: parameter `value` is borrowed here
+  = related crates/aurora-compiler/tests/fixtures/check-fail/generic_parameter_storage_requires_own.au:1:34: parameter `value` is borrowed here
   = help: declare the parameter as `own T` when the function should consume this non-cloneable value

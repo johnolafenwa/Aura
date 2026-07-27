@@ -2,7 +2,7 @@
 class Acc:
     total: int32
 
-    def add(borrow mut self, n: int32):
+    def add(mut self, n: int32):
         self.total = self.total + n
 
 def main() -> int32:

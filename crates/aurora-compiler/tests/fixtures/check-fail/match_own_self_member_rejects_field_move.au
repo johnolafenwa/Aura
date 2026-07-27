@@ -1,8 +1,8 @@
 class EntryList:
     entries: Vec[String]
 
-    def has_entries(borrow self) -> bool:
-        match self.entries:
+    def has_entries(self) -> bool:
+        match own self.entries:
             case _:
                 return true
         return false

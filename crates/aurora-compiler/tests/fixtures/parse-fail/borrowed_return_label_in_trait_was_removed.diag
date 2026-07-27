@@ -1,0 +1,5 @@
+error[AU1101]: borrowed returns were removed; return an owned value instead
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/borrowed_return_label_in_trait_was_removed.au:2:54
+  |
+2 |     def choose(self, left: String, right: String) -> borrow[left] String
+  |                                                      ^

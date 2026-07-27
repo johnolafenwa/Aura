@@ -1,7 +1,7 @@
 class Box:
     value: String
 
-def store(values: borrow mut Vec[String], unique: borrow mut Set[String], labels: borrow mut Map[String, String], output: Queue[String], vec_value: own String, set_value: own String, map_key: own String, map_value: own String, queue_value: own String, field_value: own String) -> Box:
+def store(values: mut Vec[String], unique: mut Set[String], labels: mut Map[String, String], output: Queue[String], vec_value: own String, set_value: own String, map_key: own String, map_value: own String, queue_value: own String, field_value: own String) -> Box:
     values.push(vec_value)
     unique.insert(set_value)
     labels.set(map_key, map_value)

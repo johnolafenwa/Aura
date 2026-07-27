@@ -2,7 +2,7 @@
 ## Expects: Compile error about Gadget not implementing Speakable
 
 trait Speakable:
-    def speak(borrow self) -> String
+    def speak(self) -> String
 
 class Gadget:
     name: String

@@ -13,19 +13,19 @@ def main() -> int32:
     bad: Result[int32, String] = divide(8, 0)
     maybe: Option[int32] = first_value(true)
 
-    match good:
+    match own good:
         case Result.Ok(value):
             print(value)
         case Result.Err(message):
             print(message)
 
-    match bad:
+    match own bad:
         case Result.Ok(value):
             print(value)
         case Result.Err(message):
             print(message)
 
-    match maybe:
+    match own maybe:
         case Option.Some(value):
             print(value)
         case Option.None:

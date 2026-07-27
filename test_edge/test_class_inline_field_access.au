@@ -2,7 +2,7 @@ copy class Pair:
     a: int32
     b: int32
 
-    def swapped(borrow self) -> Pair:
+    def swapped(self) -> Pair:
         return Pair(a=self.b, b=self.a)
 
 def make_pair(x: int32, y: int32) -> Pair:

@@ -1,6 +1,6 @@
 def main() -> int32:
     x = Option.Some(5)
-    match x:
+    match own x:
         case Some(v):
             print(v)
         case None:

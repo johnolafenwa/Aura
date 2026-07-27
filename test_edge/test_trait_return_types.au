@@ -1,16 +1,16 @@
 # Test trait methods with various return types
 
 trait Stringifier:
-    def to_str(borrow self) -> String
+    def to_str(self) -> String
 
 trait Counter:
-    def count(borrow self) -> int32
+    def count(self) -> int32
 
 trait Scorer:
-    def score(borrow self) -> float64
+    def score(self) -> float64
 
 trait Checker:
-    def is_ok(borrow self) -> bool
+    def is_ok(self) -> bool
 
 class Item:
     name: String
@@ -19,19 +19,19 @@ class Item:
     active: bool
 
 impl Stringifier for Item:
-    def to_str(borrow self) -> String:
+    def to_str(self) -> String:
         return self.name
 
 impl Counter for Item:
-    def count(borrow self) -> int32:
+    def count(self) -> int32:
         return self.qty
 
 impl Scorer for Item:
-    def score(borrow self) -> float64:
+    def score(self) -> float64:
         return self.rating
 
 impl Checker for Item:
-    def is_ok(borrow self) -> bool:
+    def is_ok(self) -> bool:
         return self.active
 
 def print_str[T: Stringifier](item: T):

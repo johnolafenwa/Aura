@@ -3,10 +3,10 @@
 class MessageBus:
     ch: Channel[String]
 
-    def send_msg(borrow self, msg: String):
+    def send_msg(self, msg: String):
         self.ch.send(msg)
 
-    def close(borrow mut self):
+    def close(mut self):
         self.ch.close()
 
 def receiver(bus: MessageBus):

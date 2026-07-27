@@ -1,7 +1,7 @@
 class Data:
     value: int32
 
-def read_and_write(r: borrow Data, w: borrow mut Data):
+def read_and_write(r: Data, w: mut Data):
     w.value += r.value
 
 def main() -> int32:

@@ -5,7 +5,7 @@ enum Color:
     Red
     Blue
 
-    def name(borrow self) -> String:
+    def name(self) -> String:
         match self:
             case Color.Red:
                 return "red"

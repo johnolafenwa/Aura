@@ -56,21 +56,21 @@ copy type; use `value: own T` for an identity, storing, or consuming helper.
 
 When a function only needs to read a value, it should borrow rather than take ownership. This lets the caller keep using the value after the call. If you are new to borrowing, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full explanation.
 
-Use `borrow T` for read-only access:
+Use `T` for read-only access:
 
 ```python
-def read(counter: borrow Counter) -> int32:
+def read(counter: Counter) -> int32:
     return counter.value
 ```
 
-Use `borrow mut T` for mutable access -- the function can modify the value and changes persist back to the caller:
+Use `mut T` for mutable access -- the function can modify the value and changes persist back to the caller:
 
 ```python
-def bump(counter: borrow mut Counter):
+def bump(counter: mut Counter):
     counter.value += 1
 ```
 
-A `borrow mut` parameter requires a mutable binding at the call site:
+A `mut ` parameter requires a mutable binding at the call site:
 
 ```python
 mut counter = Counter(value=41)
@@ -78,7 +78,7 @@ bump(counter)
 print(counter.value)    # 42
 ```
 
-Aurora rejects overlapping arguments when `borrow mut` is involved. A mutable borrow must be exclusive -- no other borrow of the same value can exist in the same call:
+Aurora rejects overlapping arguments when `mut ` is involved. A mutable borrow must be exclusive -- no other borrow of the same value can exist in the same call:
 
 ```python
 # This would be rejected:
@@ -91,7 +91,7 @@ See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.
 
 Task targets may use bare/default, `own`, or explicit shared-borrow parameters.
 Arguments are moved or copied into task-owned capture storage before the child
-runs, and a shared target borrows that capture. `borrow mut` targets are
+runs, and a shared target borrows that capture. `mut ` targets are
 rejected.
 
 ## Calling Functions
@@ -128,7 +128,7 @@ greet(name="aurora")  # "hello aurora"
 Default values are evaluated on each call, in parameter order. They cannot
 reference other parameters, and are not allowed in trait or trait-impl method
 declarations. Bare/shared-borrow defaults are valid and the temporary lives
-through the call; `own` defaults are consumed. `borrow mut` defaults are
+through the call; `own` defaults are consumed. `mut ` defaults are
 rejected because mutations to a caller-invisible temporary would be lost.
 
 See [examples/basics/default_arguments.au](../examples/basics/default_arguments.au).
@@ -166,16 +166,16 @@ Copy-valued borrowed returns are supported when the source is explicit:
 class User:
     score: int32
 
-def score_ref(user: borrow User) -> borrow[user] int32:
+def score_ref(user: User) -> int32:
     return user.score
 ```
 
-The call materializes an ordinary `int32` copy. The same syntax works for methods as `-> borrow[self] T`.
+The call materializes an ordinary `int32` copy. The same syntax works for methods as `-> T`.
 
 When multiple borrowed parameters share the same lifetime, you can give them a shared borrow label and return that label explicitly:
 
 ```python
-def choose_positive(left: borrow[shared] int32, right: borrow[shared] int32) -> borrow[shared] int32:
+def choose_positive(left: int32, right: int32) -> int32:
     if left > 0:
         return left
     return right
@@ -200,6 +200,6 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 
 ## Current Limits
 
-- borrowed return values still require an explicit source or borrow label such as `borrow[self]`, `borrow[param]`, or `borrow[shared]`
+- borrowed return values still require an explicit source or borrow label such as ``, ``, or ``
 - borrowed-return calls currently require a copy result type
 - broader lifetime inference without an explicit source/label is still outside the bootstrap compiler

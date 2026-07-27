@@ -1,5 +1,5 @@
 def print_int_option(value: Option[int32]):
-    match value:
+    match own value:
         case Some(inner):
             print(inner)
         case None:

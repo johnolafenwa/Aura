@@ -7,14 +7,14 @@ enum Either[L, R]:
 
 def main() -> int32:
     e1: Either[int32, String] = Either.Left(42)
-    match e1:
+    match own e1:
         case Either.Left(v):
             print(v)
         case Either.Right(v):
             print(v)
 
     e2: Either[int32, String] = Either.Right("hello")
-    match e2:
+    match own e2:
         case Either.Left(v):
             print(v)
         case Either.Right(v):

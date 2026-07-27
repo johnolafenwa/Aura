@@ -149,24 +149,30 @@ Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) ar
 
 `copy class` declarations are allowed when all fields are copy types.
 
-Borrowing forms:
+Capability forms. Bare means shared access everywhere, `mut` means mutable
+access, and `own` means ownership transfer. There is one spelling per
+capability:
 
-- bare `value: T` -- by value for copy types, shared for non-copy types
-- `value: own T` -- explicit consuming parameter
-- `borrow T` -- shared, read-only parameter
-- `borrow mut T` -- exclusive, mutable parameter
-- `self` -- shared receiver and default spelling
-- `borrow self` -- explicit shared-receiver synonym
-- `borrow mut self` -- mutable receiver
-- `own self` -- by-value (consuming) receiver
-- `for x in collection:` -- default shared collection iteration
-- `for x in own collection:` -- consuming collection iteration
-- `for x in borrow collection:` -- shared borrow iteration
-- `for x in borrow mut collection:` -- mutable borrow iteration
-- `match borrow value:` -- shared borrow pattern matching
-- `match borrow mut value:` -- mutable borrow pattern matching
+- `value: T` -- shared parameter, for every type including copy types
+- `value: mut T` -- exclusive, mutable parameter
+- `value: own T` -- consuming parameter
+- `self` -- shared receiver
+- `mut self` -- mutable receiver
+- `own self` -- consuming receiver
+- `for x in collection:` -- shared collection iteration
+- `for x in mut collection:` -- mutable iteration with writeback
+- `for x in own collection:` -- consuming iteration
+- `match value:` -- shared pattern matching
+- `match mut value:` -- mutable pattern matching with writeback
+- `match own value:` -- consuming pattern matching
 
-Mutable borrow arguments must be mutable places. Overlapping `borrow mut` arguments with other borrows of the same value are rejected. Non-copy fields cannot be moved out of borrowed values.
+The `borrow` keyword is retired and reserved. Writing it produces a diagnostic
+naming the exact replacement, such as ``` `borrow mut T` was removed; write
+`mut T` ```.
+
+Mutable arguments must be mutable places. Overlapping `mut` arguments with
+other shared access to the same value are rejected. Non-copy fields cannot be
+moved out of a shared value.
 
 `.clone()` produces an explicit independent copy when the move type exposes
 clone and its stored values are clone-safe. `random.Rng`, and an ordinary value
@@ -262,12 +268,12 @@ Indexed expressions remain ordinary values after parsing. Copy-typed element rea
 Class methods currently support these receiver forms:
 
 - `self` for shared access
-- `borrow self`
+- `self`
 - `own self`
-- `borrow mut self`
+- `mut self`
 - no receiver for associated methods
 
-Bare `self` and `borrow self` have the same shared semantics. `self: Type` is
+Bare `self` and `self` have the same shared semantics. `self: Type` is
 not a receiver declaration and is rejected with guidance naming these forms.
 
 Ordinary functions, instance methods, and associated methods support:
@@ -276,15 +282,15 @@ Ordinary functions, instance methods, and associated methods support:
 - named arguments
 - mixed calls where positional arguments come first and named arguments come after
 - default parameter values on ordinary functions and class methods
-- ordinary default, `own`, `borrow`, and `borrow mut` parameters
+- ordinary default, `own`, ``, and `mut ` parameters
 - builtin named arguments for `print(value=...)`, `range(...)`, `wait_any(...)`, and `wait_all(...)`
 
 Bare non-copy parameters and unresolved generic parameters resolve to shared
 borrows at their declarations; the generic choice is stable after
 specialization. Task starts move/copy arguments into task-owned capture
-storage, then allow default/shared or `own` target parameters; `borrow mut`
+storage, then allow default/shared or `own` target parameters; `mut `
 targets are rejected.
-Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
+Calls also reject overlapping borrowed arguments whenever a `mut ` parameter participates, including a `mut self` receiver overlapping another borrowed argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
 Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = {}`, or you can use `Set[int32]()` explicitly.
@@ -626,8 +632,8 @@ The current compiler supports:
 - unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
 - literal patterns over `bool`, integer, and `String`
 - floating-point literal patterns
-- `match borrow value:`
-- `match borrow mut value:`
+- `match value:`
+- `match mut value:`
 - `case _:`
 - exhaustive statement-form `match`
 - expression-form `match` in return, binding, and argument positions
@@ -661,9 +667,9 @@ Current collection notes:
 - `range(...)` bounds and Vec indexes remain `int32`, so length-driven
   iteration narrows explicitly with the checked
   `range(values.len() as int32)` form
-- bare and explicit-`borrow` Vec iteration are shared; `for value in own vec:`
-  consumes; `for value in borrow mut vec:` supports writeback
-- `for value in borrow mut vec:` requires the iterable place itself to be mutable
+- bare and explicit-`` Vec iteration are shared; `for value in own vec:`
+  consumes; `for value in mut vec:` supports writeback
+- `for value in mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
@@ -677,8 +683,8 @@ Current collection notes:
 - `Map[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads only when `V` is copy, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`; non-copy reads use `get` for an explicit clone or `remove` for ownership transfer
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
 - `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
-- bare and explicit-`borrow` Set iteration are shared; `for value in own set:` consumes
-- `for value in borrow mut set:` is not currently supported
+- bare and explicit-`` Set iteration are shared; `for value in own set:` consumes
+- `for value in mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
@@ -752,4 +758,4 @@ Current expression/ergonomics limitations:
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not
-- borrowed return labels such as `borrow[shared]` are checked on declarations; copy-valued calls materialize copies, while non-copy borrowed-result calls are rejected until live aliases exist
+- borrowed return labels such as `` are checked on declarations; copy-valued calls materialize copies, while non-copy borrowed-result calls are rejected until live aliases exist

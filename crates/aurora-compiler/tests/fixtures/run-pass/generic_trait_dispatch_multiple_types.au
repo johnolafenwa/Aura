@@ -1,5 +1,5 @@
 trait Describe:
-    def describe(borrow self) -> String
+    def describe(self) -> String
 
 class Dog:
     name: String
@@ -8,11 +8,11 @@ class Cat:
     name: String
 
 impl Describe for Dog:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "dog:" + self.name
 
 impl Describe for Cat:
-    def describe(borrow self) -> String:
+    def describe(self) -> String:
         return "cat:" + self.name
 
 def show[T: Describe](animal: T):

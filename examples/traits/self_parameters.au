@@ -1,11 +1,11 @@
 trait Combine:
-    def combine(borrow self, other: borrow Self) -> Self
+    def combine(self, other: Self) -> Self
 
 class Counter:
     value: int32
 
 impl Combine for Counter:
-    def combine(borrow self, other: borrow Self) -> Self:
+    def combine(self, other: Self) -> Self:
         return Counter(value=self.value + other.value)
 
 def main() -> int32:

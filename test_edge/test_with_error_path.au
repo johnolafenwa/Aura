@@ -2,10 +2,10 @@
 class Connection:
     name: String
 
-    def query(borrow self) -> String:
+    def query(self) -> String:
         return self.name
 
-    def close(borrow mut self):
+    def close(mut self):
         print("closed " + self.name)
 
 def failing_op() -> Result[String, String]:

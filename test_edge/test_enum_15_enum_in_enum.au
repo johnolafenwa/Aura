@@ -7,9 +7,9 @@ enum Wrapper:
     Plain(int32)
 
 def describe(w: Wrapper) -> int32:
-    match w:
+    match own w:
         case Wrapper.Wrapped(inner):
-            match inner:
+            match own inner:
                 case Inner.A(v):
                     return v
                 case Inner.B:
