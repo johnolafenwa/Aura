@@ -68,15 +68,32 @@ Last updated: 2026-07-27
   a continuously yielding task from starving inbox, timer, or descriptor
   readiness. Reactor failures become scheduler diagnostics rather than false
   descriptor readiness.
-- Phase 5.1 verification so far: 956 compiler library tests, all 16 reactor
+- Phase 5.1 verification so far: 970 compiler library tests, all 22 reactor
   primitive tests, five adversarial scheduler models, the mixed-wakeup
   MIR/direct fixture, warning-denied product Clippy, reference integrity, docs
   build, and expanded fairness/cancellation/mixed scheduler stress are green.
   Audit regressions pin stale epochs, stale timer-heap compaction,
   transactional descriptor cleanup, source-subscription cleanup, wake
-  precedence, and continuously-ready fairness. The next action is the
-  contractual clean-tree after-reactor benchmark, followed by frozen coverage
-  and the exact full CI gate before the isolated Phase 5.1 sign-off commit.
+  precedence, and continuously-ready fairness. The accepted clean-tree
+  benchmark at `1de9cf7` passes every reactor-stage gate: 204,128,256-byte
+  worst sleeper RSS; 4-5 ms timer arm spans with 3-4 ms p99; and
+  0.000012315% worst idle CPU. A corrected-workload replay against the
+  pre-reactor binary measured 18 ms arm spans and 11-12 ms raw p99. Exact
+  provenance and report hashes are recorded in
+  `work/2026-07-27-phase5-runtime-benchmarks.md`. Frozen compiler coverage is
+  green at 65,732/68,369 lines (96.142989%), 4,333/4,472 functions
+  (96.891771%), and 97,052/102,827 regions (94.383771%), above the unchanged
+  96.13/96.89/94.35 floors. No synthetic test or coverage exclusion was added;
+  duplicated unreachable scheduler error closures were consolidated into the
+  tested reactor diagnostic helper. LSP coverage remains 100%. Exact
+  `npm run ci` is green: 275 CLI tests, 970 compiler library tests, forced
+  backend parity, 79 LSP tests, 13 extension tests, both coverage gates,
+  reference execution, docs, audits, warning-denied Clippy, and hygiene. The
+  affected native-build and scheduler test watchdogs were widened only after
+  isolated and CPU-saturated replays proved default-parallel cold compilation,
+  rather than product deadlock, caused the earlier expirations. The next action
+  is the isolated Phase 5.1 sign-off commit, followed by Phase 5.2
+  `yield_now()`.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions

@@ -1493,6 +1493,12 @@ fn runtime_scheduler() -> &'static Arc<RuntimeScheduler> {
     RUNTIME_SCHEDULER.get_or_init(RuntimeScheduler::start)
 }
 
+fn reactor_failure_diagnostic(operation: &str, error: io::Error) -> Diagnostic {
+    Diagnostic::new(format!(
+        "Aurora runtime reactor failed while {operation}: {error}"
+    ))
+}
+
 fn notify_runtime_scheduler_if_started() {
     if let Some(scheduler) = RUNTIME_SCHEDULER.get() {
         scheduler.notify();
@@ -2116,9 +2122,7 @@ impl LightweightTaskScheduler {
 
     fn record_reactor_failure(&mut self, operation: &str, error: io::Error) {
         if self.reactor_failure.is_none() {
-            self.reactor_failure = Some(Diagnostic::new(format!(
-                "Aurora runtime reactor failed while {operation}: {error}"
-            )));
+            self.reactor_failure = Some(reactor_failure_diagnostic(operation, error));
         }
     }
 
@@ -2185,21 +2189,16 @@ impl LightweightTaskScheduler {
                 if self.ready_turns_since_io_reactor_poll >= READY_TURNS_PER_IO_REACTOR_POLL {
                     self.ready_turns_since_local_reactor_poll = 0;
                     self.ready_turns_since_io_reactor_poll = 0;
-                    self.admit_reactor_events_nonblocking().map_err(|error| {
-                        Diagnostic::new(format!(
-                            "Aurora runtime reactor failed while admitting ready events: {error}"
-                        ))
-                    })?;
+                    if let Err(error) = self.admit_reactor_events_nonblocking() {
+                        return Err(reactor_failure_diagnostic("admitting ready events", error));
+                    }
                 } else if self.ready_turns_since_local_reactor_poll
                     >= READY_TURNS_PER_LOCAL_REACTOR_POLL
                 {
                     self.ready_turns_since_local_reactor_poll = 0;
-                    self.admit_local_reactor_events_nonblocking()
-                        .map_err(|error| {
-                            Diagnostic::new(format!(
-                                "Aurora runtime reactor failed while admitting local events: {error}"
-                            ))
-                        })?;
+                    if let Err(error) = self.admit_local_reactor_events_nonblocking() {
+                        return Err(reactor_failure_diagnostic("admitting local events", error));
+                    }
                 }
                 if let Some(diagnostic) = self.reactor_failure.take() {
                     return Err(diagnostic);
@@ -2213,11 +2212,9 @@ impl LightweightTaskScheduler {
 
             self.ready_turns_since_local_reactor_poll = 0;
             self.ready_turns_since_io_reactor_poll = 0;
-            self.wait_for_external_events().map_err(|error| {
-                Diagnostic::new(format!(
-                    "Aurora runtime reactor failed while waiting: {error}"
-                ))
-            })?;
+            if let Err(error) = self.wait_for_external_events() {
+                return Err(reactor_failure_diagnostic("waiting", error));
+            }
         }
     }
 

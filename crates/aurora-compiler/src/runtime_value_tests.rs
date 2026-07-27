@@ -1307,6 +1307,64 @@ fn cancellation_directly_wakes_unbounded_reactor_subscription() {
 }
 
 #[test]
+fn phase51_runtime_wake_signal_notifies_once_per_false_to_true_transition() {
+    let signal = super::RuntimeWakeSignal::new(false);
+    let mut reactor = RuntimeReactor::new().expect("test reactor should initialize");
+    let first = WaitKey(118, 1);
+    reactor
+        .begin_wait(first)
+        .expect("first signal wait should register");
+    signal.subscribe(&ReactorSubscription::new(first, reactor.handle()));
+
+    signal.store(false, Ordering::SeqCst);
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("unchanged false signal poll should succeed")
+            .is_empty(),
+        "storing false must not wake a signal subscriber"
+    );
+
+    signal.store(true, Ordering::SeqCst);
+    expect_reactor_wake(&mut reactor, first);
+
+    let second = WaitKey(119, 1);
+    reactor
+        .begin_wait(second)
+        .expect("second signal wait should register");
+    signal.subscribe(&ReactorSubscription::new(second, reactor.handle()));
+    signal.store(true, Ordering::SeqCst);
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("unchanged true signal poll should succeed")
+            .is_empty(),
+        "repeated true stores must not rebroadcast an already-raised signal"
+    );
+
+    signal.store(false, Ordering::SeqCst);
+    signal.store(true, Ordering::SeqCst);
+    expect_reactor_wake(&mut reactor, second);
+
+    let unsubscribed = WaitKey(120, 1);
+    reactor
+        .begin_wait(unsubscribed)
+        .expect("unsubscription probe wait should register");
+    let subscription = ReactorSubscription::new(unsubscribed, reactor.handle());
+    signal.subscribe(&subscription);
+    signal.unsubscribe(&subscription);
+    signal.store(false, Ordering::SeqCst);
+    signal.store(true, Ordering::SeqCst);
+    assert!(
+        reactor
+            .poll(Some(StdDuration::from_millis(25)))
+            .expect("unsubscribed signal poll should succeed")
+            .is_empty(),
+        "an unsubscribed wait must remain asleep across later signal transitions"
+    );
+}
+
+#[test]
 fn duplicate_reactor_subscriptions_and_wakes_produce_one_ready_key() {
     let channel = ChannelValue::new();
     let (mut reactor, key) = reactor_wait(107);
@@ -1327,6 +1385,106 @@ fn duplicate_reactor_subscriptions_and_wakes_produce_one_ready_key() {
             .expect("bounded post-wake poll should succeed")
             .is_empty(),
         "duplicate registrations and source notifications must not queue duplicate wakes"
+    );
+}
+
+#[test]
+fn phase51_scheduler_rearms_after_a_queue_wake_loses_the_readiness_race() {
+    let queue = ChannelValue::new();
+    let mut scheduler = super::LightweightTaskScheduler::new();
+    scheduler.arm_wait(
+        121,
+        super::TaskWaitRegistration {
+            recv_channels: vec![queue.clone()],
+            ignore_closed_recv_channels: false,
+            send_channels: Vec::new(),
+            task_waits: Vec::new(),
+            deadline: None,
+            cancellation: None,
+            fd_wait: None,
+        },
+    );
+    let first_key = scheduler
+        .waiting
+        .get(&121)
+        .expect("queue wait should be armed")
+        .key;
+
+    assert_eq!(queue.try_send(Value::Unit), super::TrySendResult::Sent);
+    assert_eq!(queue.try_recv(), TryRecvResult::Value(Value::Unit));
+    scheduler
+        .wait_for_external_events()
+        .expect("the stale queue notification should be admitted safely");
+
+    let rearmed_key = scheduler
+        .waiting
+        .get(&121)
+        .expect("a consumed queue notification must leave the task waiting")
+        .key;
+    assert_ne!(
+        rearmed_key, first_key,
+        "rearming must allocate a fresh epoch so late events cannot resume the new wait"
+    );
+    assert!(
+        scheduler.ready.is_empty(),
+        "a queue item consumed before admission must not spuriously resume the waiter"
+    );
+
+    scheduler.admit_reactor_keys(vec![WaitKey(999, 1), first_key]);
+    assert_eq!(
+        scheduler
+            .waiting
+            .get(&121)
+            .expect("unknown and stale keys must leave the active wait intact")
+            .key,
+        rearmed_key
+    );
+    assert!(
+        scheduler.ready.is_empty(),
+        "unknown task ids and prior wait epochs must not resume a task"
+    );
+
+    assert_eq!(
+        queue.try_send(Value::Bool(true)),
+        super::TrySendResult::Sent
+    );
+    scheduler
+        .wait_for_external_events()
+        .expect("a fresh queue transition should wake the rearmed wait");
+    assert_eq!(
+        scheduler.ready.pop_front(),
+        Some((121, super::RuntimeSchedulerWakeReason::Ready))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn phase51_unsupported_fd_interest_surfaces_the_reactor_registration_diagnostic() {
+    let error = run_lightweight_root_task(|| {
+        let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+            recv_channels: Vec::new(),
+            ignore_closed_recv_channels: false,
+            send_channels: Vec::new(),
+            task_waits: Vec::new(),
+            deadline: None,
+            cancellation: None,
+            fd_wait: Some(super::FdWaitRegistration { fd: -1, events: 0 }),
+        });
+        Ok(Value::Unit)
+    })
+    .expect_err("a descriptor wait without readable or writable interest must fail");
+
+    assert!(
+        error
+            .message
+            .contains("Aurora runtime reactor failed while registering a task wait"),
+        "the scheduler should identify the failed reactor operation: {error:?}"
+    );
+    assert!(
+        error
+            .message
+            .contains("descriptor wait has no supported interest"),
+        "the diagnostic should explain the invalid descriptor interest: {error:?}"
     );
 }
 
@@ -6324,6 +6482,17 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
     let error = super::parse_http_content_length(&conflict)
         .expect_err("direct conflicting content-length values should fail");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+    let invalid = vec![("Content-Length".to_string(), "not-a-number".to_string())];
+    let error = super::parse_http_content_length(&invalid)
+        .expect_err("direct invalid content-length values should fail");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error
+            .to_string()
+            .contains("invalid HTTP content length `not-a-number`"),
+        "the parser should preserve the rejected header value: {error}"
+    );
 
     let error = super::parse_http_response_head(
         b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n",

@@ -845,16 +845,76 @@ mod tests {
         let mut first_reactor = RuntimeReactor::new().unwrap();
         let second_reactor = RuntimeReactor::new().unwrap();
         let key = WaitKey(1, 1);
+        let other_key = WaitKey(2, 1);
         first_reactor.begin_wait(key).unwrap();
         let first = ReactorSubscription::new(key, first_reactor.handle());
         let duplicate = first.clone();
+        let different_wait = ReactorSubscription::new(other_key, first_reactor.handle());
         let other = ReactorSubscription::new(key, second_reactor.handle());
 
         assert!(first.same_wait(&duplicate));
+        assert!(!first.same_wait(&different_wait));
         assert!(!first.same_wait(&other));
         assert_eq!(first.key(), key);
         first.wake().unwrap();
         assert_eq!(first_reactor.poll(Some(Duration::ZERO)).unwrap(), vec![key]);
+    }
+
+    #[test]
+    fn subscription_cancellation_retires_queued_wake_and_deadline_sources() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let key = WaitKey(1, 1);
+        reactor.begin_wait(key).unwrap();
+        let subscription = ReactorSubscription::new(key, reactor.handle());
+
+        subscription.wake().unwrap();
+        reactor.handle().add_deadline(key, Instant::now()).unwrap();
+        subscription.cancel_wait().unwrap();
+
+        assert!(reactor.poll_local_nonblocking().unwrap().is_empty());
+        assert!(!reactor.is_waiting(key));
+        assert_eq!(reactor.next_deadline(), None);
+    }
+
+    #[test]
+    fn cancelling_a_stale_epoch_through_a_handle_preserves_the_current_wait() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let stale = WaitKey(1, 1);
+        let current = WaitKey(1, 2);
+        reactor.begin_wait(stale).unwrap();
+        reactor.begin_wait(current).unwrap();
+
+        reactor.handle().cancel_wait(stale).unwrap();
+
+        assert!(reactor.poll_local_nonblocking().unwrap().is_empty());
+        assert!(reactor.is_waiting(current));
+    }
+
+    #[test]
+    fn local_nonblocking_poll_admits_thread_wakes_and_expired_deadlines() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let notified = WaitKey(1, 1);
+        let expired = WaitKey(2, 1);
+        reactor.begin_wait(notified).unwrap();
+        reactor.begin_wait(expired).unwrap();
+        reactor.handle().wake(notified).unwrap();
+        reactor.add_deadline(expired, Instant::now()).unwrap();
+
+        assert_eq!(
+            reactor.poll_local_nonblocking().unwrap(),
+            vec![notified, expired]
+        );
+        assert!(reactor.poll_local_nonblocking().unwrap().is_empty());
+    }
+
+    #[test]
+    fn zero_duration_poll_returns_without_retiring_an_unready_wait() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let key = WaitKey(1, 1);
+        reactor.begin_wait(key).unwrap();
+
+        assert!(reactor.poll(Some(Duration::ZERO)).unwrap().is_empty());
+        assert!(reactor.is_waiting(key));
     }
 
     #[test]
@@ -953,6 +1013,49 @@ mod tests {
             assert_eq!(reactor.fd_token(fd), Some(token));
             reactor.cancel_wait(reader).unwrap();
             assert_eq!(reactor.fd_token(fd), None);
+        }
+
+        #[test]
+        fn inactive_and_invalid_descriptor_registrations_are_rejected_safely() {
+            let mut reactor = RuntimeReactor::new().unwrap();
+            let (stream, _peer) = UnixStream::pair().unwrap();
+            let fd = stream.as_raw_fd();
+            let inactive = WaitKey(1, 1);
+
+            reactor.add_fd(inactive, fd, IoInterest::READABLE).unwrap();
+            assert_eq!(reactor.fd_token(fd), None);
+
+            reactor.begin_wait(inactive).unwrap();
+            for interest in [IoInterest(0), IoInterest(0b100)] {
+                let error = reactor.add_fd(inactive, fd, interest).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                assert_eq!(
+                    error.to_string(),
+                    "runtime reactor requires readable and/or writable interest"
+                );
+            }
+            assert_eq!(reactor.fd_token(fd), None);
+        }
+
+        #[test]
+        fn descriptor_events_wake_only_waiters_with_matching_interests() {
+            let mut reactor = RuntimeReactor::new().unwrap();
+            let (stream, _peer) = UnixStream::pair().unwrap();
+            let fd = stream.as_raw_fd();
+            let reader = WaitKey(1, 1);
+            let writer = WaitKey(2, 1);
+            reactor.begin_wait(reader).unwrap();
+            reactor.begin_wait(writer).unwrap();
+            reactor.add_fd(reader, fd, IoInterest::READABLE).unwrap();
+            reactor.add_fd(writer, fd, IoInterest::WRITABLE).unwrap();
+            let token = reactor.fd_token(fd).unwrap();
+
+            reactor.dispatch_fd_event(token, true, false, false);
+            assert_eq!(reactor.take_ready(), vec![reader]);
+            assert!(reactor.is_waiting(writer));
+
+            reactor.dispatch_fd_event(token, false, true, false);
+            assert_eq!(reactor.take_ready(), vec![writer]);
         }
 
         #[test]

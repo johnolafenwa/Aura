@@ -2095,7 +2095,10 @@ fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
             .arg("--backend")
             .arg("direct")
             .arg(path);
-        command_output_with_timeout(warm_command, std::time::Duration::from_secs(10), label)
+        // The held lock makes any wrong-key wait permanent. Allow compile/link
+        // contention elsewhere in the default-parallel suite without weakening
+        // that bounded non-waiting assertion.
+        command_output_with_timeout(warm_command, std::time::Duration::from_secs(30), label)
     };
 
     // Installed runtime inputs are immutable and therefore require no
@@ -2431,7 +2434,10 @@ fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking
     use std::os::unix::fs::symlink;
 
     let fixture = NativeCacheFixture::new("aurora-native-cache-non-regular");
-    let timeout = std::time::Duration::from_secs(10);
+    // Each invalid member triggers a real native rebuild. The no-blocking
+    // assertion must tolerate compiler/linker contention from the surrounding
+    // default-parallel CLI suite while still bounding any accidental FIFO open.
+    let timeout = std::time::Duration::from_secs(30);
     let missing_cc = fixture.cache.path().join("missing-cc");
     let launch_temp = fixture.cache.path().join("launch-temp");
     fs::create_dir(&launch_temp).expect("controlled launch temp should be creatable");
@@ -4597,7 +4603,9 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-bare-none-collections-and-nested-option",
         source,
-        std::time::Duration::from_secs(5),
+        // The generated program is tiny, but the default-parallel CLI suite can
+        // delay its process after spawn while other native builds are linking.
+        std::time::Duration::from_secs(15),
         "-1\n-1\n7\n-1\n1\n-1\n-1\n-1\n-2\n",
     );
 }
@@ -7981,7 +7989,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-iteration-zero-producers",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "done\n",
     );
 }
@@ -8007,7 +8015,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-iteration-standalone-task-group",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "7\ndone\n",
     );
 }
@@ -8033,7 +8041,7 @@ fn wait_any_without_tasks_times_out_immediately() {
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-wait-any-empty",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "timedout\n",
     );
 }

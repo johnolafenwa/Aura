@@ -239,6 +239,17 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(slept);
         release(zero_duration);
 
+        let zero_duration = duration_value(0);
+        aurora_direct_sleep_value_void(zero_duration);
+        release(zero_duration);
+
+        let first_monotonic_ms = aurora_direct_monotonic_time_ms();
+        let second_monotonic_ms = aurora_direct_monotonic_time_ms();
+        assert!(
+            second_monotonic_ms >= first_monotonic_ms,
+            "the exported direct monotonic clock must not move backwards"
+        );
+
         let cast_target = "float64";
         let cast = aurora_direct_cast_value(int_value(5), cast_target.as_ptr(), cast_target.len());
         release(cast);

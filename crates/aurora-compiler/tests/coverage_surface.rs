@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_compiler::call::BuiltinMember;
 use aurora_compiler::diag::Span;
-use aurora_compiler::mir::{BasicBlock, MirFunction, MirModule, Terminator};
+use aurora_compiler::mir::{
+    BasicBlock, CallTarget, Instruction, MirArg, MirFunction, MirModule, Operand, Rvalue,
+    Terminator,
+};
 use aurora_compiler::sema::Type;
 use aurora_compiler::{
     analyze_path_source, analyze_source, check_path, check_source, complete_path_source,
@@ -361,6 +364,46 @@ fn public_native_codegen_rejects_invalid_mir_surface() {
     assert!(
         error.contains("does not yet support MIR terminator"),
         "unexpected native codegen error: {error}"
+    );
+
+    let mut invalid_monotonic_module = lower_source_to_mir(
+        r#"
+import sys
+
+def main() -> int32:
+    observed: int64 = sys.monotonic_time_ms()
+    return observed as int32
+"#,
+    )
+    .expect("valid monotonic clock source should lower to MIR");
+    let monotonic_args = invalid_monotonic_module
+        .functions
+        .iter_mut()
+        .flat_map(|function| function.blocks.iter_mut())
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                ..
+            } if name == "sys::monotonic_time_ms" => Some(args),
+            _ => None,
+        })
+        .expect("lowered source should contain the monotonic clock call");
+    monotonic_args.push(MirArg {
+        name: None,
+        value: Operand::Int(0),
+        writeback_place: None,
+    });
+
+    let error = emit_host_native_object(&invalid_monotonic_module)
+        .expect_err("monotonic clock calls with arguments should fail direct codegen");
+    assert_eq!(
+        error,
+        "direct backend expected `sys::monotonic_time_ms` to receive no arguments, found 1"
     );
 }
 

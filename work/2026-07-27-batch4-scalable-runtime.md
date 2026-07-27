@@ -67,8 +67,8 @@ B4.0 implementation and its repository gates are complete:
   non-cloneable `random.Rng` wording as a provisional diagnostic gap-fill.
 - B4.0-d gate-condition suite-count precision is committed at `5cb4476`.
 
-The Phase 5.1 reactor implementation is complete pending its contractual
-after-stage benchmark, frozen coverage gate, and exact full CI:
+The Phase 5.1 reactor implementation, contractual after-stage benchmark,
+frozen coverage gate, and exact full CI are complete:
 
 - `RuntimeReactor` owns one persistent `mio::Poll`, a durable command inbox
   and `Waker`, epoch-keyed readiness, a versioned and compacting deadline heap,
@@ -131,7 +131,7 @@ before-reactor baseline is recorded in
   retains the existing allowed `rustls-pemfile` unmaintained warning.
 - This checkpoint change lands B4.0-a/b and its behavior-focused coverage
   closure as one isolated commit family.
-- Phase 5.1 focused verification is green: 956 compiler library tests, all 16
+- Phase 5.1 focused verification is green: 970 compiler library tests, all 22
   reactor primitive tests, five adversarial scheduler-model tests, the exact
   mixed-wakeup run-pass fixture and MIR/direct parity probe, and the expanded
   fairness/cancellation/mixed stress runner. Product Clippy with warnings
@@ -149,10 +149,45 @@ before-reactor baseline is recorded in
   safepoints, smaller stacks, multicore, Transfer, typed select, configurable
   pool sizing, or native frames. All executable fence bytes and ordering are
   unchanged.
+- The first clean implementation benchmark at `7420bc2` exposed remaining
+  timer-path overhead and a worker-side formatting observer effect. The
+  performance closure `1de9cf7` coalesces reactor wakes, makes source
+  subscription and Queue-transition work bounded, removes duplicate fired-wait
+  cleanup, adds scalar direct clock/sleep ABIs, and moves benchmark formatting
+  after primitive observation and task-group join.
+- The corrected workload was replayed against the pre-reactor binary: all five
+  runs had 18 ms arm spans and raw p99 overshoot of 11-12 ms. The contractual
+  clean-tree after result passes every gate: 204,128,256-byte worst sleeper
+  RSS; 4-5 ms arm spans and 3-4 ms timer p99; and 0.000012315% worst idle CPU.
+  Both raw report hashes and full V6 observations are recorded in
+  `work/2026-07-27-phase5-runtime-benchmarks.md`.
+- Frozen compiler coverage passes at 65,732/68,369 lines
+  (96.142989%), 4,333/4,472 functions (96.891771%), and
+  97,052/102,827 regions (94.383771%), above the unchanged
+  96.13/96.89/94.35 floors. The closure contains only observable reactor,
+  scheduler, native-ABI, HTTP-diagnostic, and malformed-MIR diagnostic tests.
+  No synthetic test or coverage exclusion was added. The timer-sequence
+  exhaustion, descriptor-token exhaustion, poisoned-lock recovery, and
+  monotonic-clock `i64` overflow remain justified defensive branches: inducing
+  them would require corrupting private counters, poisoning an internal lock,
+  or waiting beyond a practical process lifetime. Three duplicated
+  scheduler-poll error closures were replaced by one tested diagnostic helper
+  instead of manufacturing unreachable failures.
+- Exact `npm run ci` is green on the Phase 5.1 closure tree: 275 CLI tests,
+  970 compiler library tests, the serialized forced-backend fixture matrix, 79
+  LSP tests, 13 extension tests, compiler and LSP coverage, reference
+  execution, all 683 migration manifests, docs build, npm and cargo audits,
+  warning-denied Clippy, and hygiene. The first two attempts exposed test
+  watchdogs that were too short under default-parallel cold native compilation:
+  isolated and CPU-saturated replays proved the programs and cache protocols
+  completed correctly, so the affected bounded watchdogs were raised while
+  preserving their ability to catch genuine lock waits and scheduler hangs.
+  Every formerly timing-sensitive test then passed both the normal and
+  instrumented CLI suites. Cargo audit retains only the repository's allowed
+  `rustls-pemfile` unmaintained warning.
 
 ## Follow-up
 
-Commit the verified implementation tree to establish clean benchmark
-provenance, record the contractual after-reactor measurements, then run frozen
-coverage and exact full CI. Only after the isolated Phase 5.1 commit family is
-green may work begin on the public `yield_now()` stage.
+Commit the exact Phase 5.1 closure tree, then begin the public `yield_now()`
+stage. Coverage floors remain frozen until the one-time Batch 4 sign-off
+re-ratchet.
