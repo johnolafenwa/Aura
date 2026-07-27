@@ -77,7 +77,7 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
         socket = try server_listener.accept()
         with server_stream = socket:
             line = try server_stream.read_line()
-            match line:
+            match own line:
                 case Option.Some(text):
                     try server_stream.write_all("echo:" + text)
                     try server_stream.flush()
@@ -100,7 +100,7 @@ def run() -> Result[None, io.Error]:
             try client_stream.flush()
             response = try client_stream.read_all()
             try io.write(response)
-        match server.result():
+        match own server.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -116,7 +116,7 @@ def run() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run():
+    match own run():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -146,7 +146,7 @@ def probe() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match probe():
+    match own probe():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -181,7 +181,7 @@ def touch_bytes(path: String) -> Result[Vec[uint8], io.Error]:
 
 def inspect_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with bound = socket:
-        match try bound.recv_from(1024, timeout=100ms):
+        match own try bound.recv_from(1024, timeout=100ms):
             case Option.Some(packet):
                 text = try packet.text()
                 bytes = packet.bytes()
@@ -209,7 +209,7 @@ def inspect_http_response(response: own net.HttpResponse) -> Result[String, io.E
         print(received.status())
         print(received.reason())
         headers = received.headers()
-        match headers.get("Content-Type"):
+        match own headers.get("Content-Type"):
             case Option.Some(content_type):
                 print(content_type)
             case Option.None:
@@ -222,12 +222,12 @@ def inspect_http_response(response: own net.HttpResponse) -> Result[String, io.E
 def inspect_websocket(listener: own net.WebSocketListener, client: own net.WebSocket) -> Result[None, io.Error]:
     with bound = listener:
         with accepted = try bound.accept(timeout=100ms):
-            match try accepted.recv_text(timeout=100ms):
+            match own try accepted.recv_text(timeout=100ms):
                 case Option.Some(text):
                     try accepted.send_text(text, timeout=100ms)
                 case Option.None:
                     pass
-            match try accepted.recv_bytes(timeout=100ms):
+            match own try accepted.recv_bytes(timeout=100ms):
                 case Option.Some(bytes):
                     try accepted.send_bytes(bytes, timeout=100ms)
                 case Option.None:
@@ -241,7 +241,7 @@ def inspect_unix(listener: own net.UnixListener, stream: own net.UnixStream) -> 
     with bound = listener:
         accepted = try bound.accept(timeout=100ms)
         with server_stream = accepted:
-            match try server_stream.read_line(timeout=100ms):
+            match own try server_stream.read_line(timeout=100ms):
                 case Option.Some(text):
                     try server_stream.write_all(text, timeout=100ms)
                 case Option.None:
@@ -257,7 +257,7 @@ def inspect_tls(listener: own net.TlsListener, stream: own net.TlsStream) -> Res
         print(try bound.local_addr())
         accepted = try bound.accept(timeout=100ms)
         with server_stream = accepted:
-            match try server_stream.read_line(timeout=100ms):
+            match own try server_stream.read_line(timeout=100ms):
                 case Option.Some(text):
                     try server_stream.write_all(text, timeout=100ms)
                 case Option.None:
@@ -305,7 +305,7 @@ import net
 
 def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
     with server_socket = socket:
-        match try server_socket.recv_from(1024, timeout=1s):
+        match own try server_socket.recv_from(1024, timeout=1s):
             case Option.Some(packet):
                 text = try packet.text()
                 try server_socket.send_text(packet.address(), "udp:" + text, timeout=1s)
@@ -321,7 +321,7 @@ def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
             path = request.path()
             body = try request.body_text()
             headers = request.headers()
-            match headers.get("X-Test"):
+            match own headers.get("X-Test"):
                 case Option.Some(test_header):
                     try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
@@ -340,7 +340,7 @@ def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
-            match try server_socket.recv_text(timeout=1s):
+            match own try server_socket.recv_text(timeout=1s):
                 case Option.Some(text):
                     try server_socket.send_text("ws:" + text, timeout=1s)
                     return Result.Ok(None)
@@ -363,12 +363,12 @@ def run() -> Result[None, io.Error]:
         udp_client = try net.udp_bind("127.0.0.1:0")
         with client_socket = udp_client:
             try client_socket.send_text(udp_addr, "ping", timeout=1s)
-            match try client_socket.recv_from(1024, timeout=1s):
+            match own try client_socket.recv_from(1024, timeout=1s):
                 case Option.Some(packet):
                     print(try packet.text())
                 case Option.None:
                     return Result.Ok(None)
-        match udp_task.result():
+        match own udp_task.result():
             case TaskResult.Ready(result):
                 print(try result)
             case TaskResult.Error(_message):
@@ -389,7 +389,7 @@ def run() -> Result[None, io.Error]:
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
-        match http_task.result():
+        match own http_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -409,7 +409,7 @@ def run() -> Result[None, io.Error]:
         with received_bytes = bytes_response:
             print(received_bytes.status())
             print(received_bytes.bytes().len())
-        match http_bytes_task.result():
+        match own http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -428,12 +428,12 @@ def run() -> Result[None, io.Error]:
         client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
         with ws_client = client:
             try ws_client.send_text("hi", timeout=1s)
-            match try ws_client.recv_text(timeout=1s):
+            match own try ws_client.recv_text(timeout=1s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match ws_task.result():
+        match own ws_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -449,7 +449,7 @@ def run() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run():
+    match own run():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -499,7 +499,7 @@ def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
-            match try server_stream.read_line(timeout=1s):
+            match own try server_stream.read_line(timeout=1s):
                 case Option.Some(text):
                     try server_stream.write_all("unix:" + text, timeout=1s)
                     return Result.Ok(None)
@@ -510,7 +510,7 @@ def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
-            match try server_stream.read_line(timeout=2s):
+            match own try server_stream.read_line(timeout=2s):
                 case Option.Some(text):
                     try server_stream.write_all("tls:" + text + "\n", timeout=2s)
                     return Result.Ok(None)
@@ -524,12 +524,12 @@ def run() -> Result[None, io.Error]:
         client = try net.unix_connect_timeout("{unix_path}", 1s)
         with unix_client = client:
             try unix_client.write_all("ping\n", timeout=1s)
-            match try unix_client.read_line(timeout=1s):
+            match own try unix_client.read_line(timeout=1s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match unix_task.result():
+        match own unix_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -548,12 +548,12 @@ def run() -> Result[None, io.Error]:
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
         with tls_client = stream:
             try tls_client.write_all("ping!\n", timeout=2s)
-            match try tls_client.read_line(timeout=2s):
+            match own try tls_client.read_line(timeout=2s):
                 case Option.Some(text):
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        match tls_task.result():
+        match own tls_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -569,7 +569,7 @@ def run() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run():
+    match own run():
         case Result.Ok(_):
             return 0
         case Result.Err(error):

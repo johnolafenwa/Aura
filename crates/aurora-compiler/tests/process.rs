@@ -76,18 +76,18 @@ fn builtin_process_module_type_checks_from_path_context() {
     let source = r#"import process
 
 def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error, supervisor: process.Supervisor, event: process.SupervisorEvent, supervisor_wait: process.SupervisorWait, restart: process.RestartPolicy) -> int32:
-    match child.stdin():
+    match own child.stdin():
         case Option.Some(stdin_pipe):
             print(stdin_pipe.write_all("hello\n", timeout=10ms))
             stdin_pipe.close()
         case Option.None:
             pass
-    match child.stdout():
+    match own child.stdout():
         case Option.Some(stdout_pipe):
             print(stdout_pipe.read_line(timeout=10ms))
         case Option.None:
             pass
-    match child.stderr():
+    match own child.stderr():
         case Option.Some(stderr_pipe):
             print(stderr_pipe.read_all())
         case Option.None:
@@ -146,7 +146,7 @@ def boot() -> Result[None, process.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match boot():
+    match own boot():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -185,7 +185,7 @@ def run_pwd(cwd: own String) -> Result[None, process.Error]:
 
 def echo_with_cat() -> Result[None, process.Error]:
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
-        match child.stdin():
+        match own child.stdin():
             case Option.Some(stdin_pipe):
                 try stdin_pipe.write_all("echo from cat\n", timeout=500ms)
                 try stdin_pipe.flush()
@@ -194,10 +194,10 @@ def echo_with_cat() -> Result[None, process.Error]:
                 print("missing stdin")
                 return Result.Ok(None)
 
-        match child.stdout():
+        match own child.stdout():
             case Option.Some(stdout_pipe):
                 line = try stdout_pipe.read_line(timeout=500ms)
-                match line:
+                match own line:
                     case Option.Some(text):
                         print(text)
                     case Option.None:
@@ -213,13 +213,13 @@ def echo_with_cat() -> Result[None, process.Error]:
 def supervise_flaky_process() -> Result[None, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
-        match try supervisor.wait_or_none(timeout=500ms):
+        match own try supervisor.wait_or_none(timeout=500ms):
             case Option.Some(event):
                 print(event)
             case Option.None:
                 print("missing first supervisor event")
                 return Result.Ok(None)
-        match try supervisor.wait_or_none(timeout=500ms):
+        match own try supervisor.wait_or_none(timeout=500ms):
             case Option.Some(event):
                 print(event)
             case Option.None:
@@ -233,42 +233,42 @@ def supervise_flaky_process() -> Result[None, process.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match run_env():
+    match own run_env():
         case Result.Ok(_):
             pass
         case Result.Err(error):
             print(error)
             return 1
 
-    match run_pwd("{cwd}"):
+    match own run_pwd("{cwd}"):
         case Result.Ok(_):
             pass
         case Result.Err(error):
             print(error)
             return 1
 
-    match run_checked_echo():
+    match own run_checked_echo():
         case Result.Ok(_):
             pass
         case Result.Err(error):
             print(error)
             return 1
 
-    match wait_for_sleep_timeout():
+    match own wait_for_sleep_timeout():
         case Result.Ok(_):
             pass
         case Result.Err(error):
             print(error)
             return 1
 
-    match echo_with_cat():
+    match own echo_with_cat():
         case Result.Ok(_):
             pass
         case Result.Err(error):
             print(error)
             return 1
 
-    match supervise_flaky_process():
+    match own supervise_flaky_process():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -308,7 +308,7 @@ fn zero_sized_process_pipe_read_returns_typed_invalid_input_without_consuming() 
 
 def probe() -> Result[None, process.Error]:
     with child = try process.start(["/bin/sh", "-c", "printf x"], stdin=process.null(), stdout=process.pipe(), stderr=process.null()):
-        match child.stdout():
+        match own child.stdout():
             case Option.Some(pipe):
                 with output = pipe:
                     print(output.read_bytes(0, timeout=1s))
@@ -318,7 +318,7 @@ def probe() -> Result[None, process.Error]:
     return Result.Ok(None)
 
 def main() -> int32:
-    match probe():
+    match own probe():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -376,7 +376,7 @@ def run_group_cleanup() -> Result[None, process.Error]:
         return Result.Ok(None)
 
 def main() -> int32:
-    match run_group_cleanup():
+    match own run_group_cleanup():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
@@ -425,7 +425,7 @@ fn supervisor_duplicate_name_does_not_leave_unmanaged_child_running() {
 def run_duplicate(first_pid: String, second_pid: String) -> Result[None, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + first_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true)
-        match supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + second_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true):
+        match own supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + second_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true):
             case Result.Ok(_):
                 print("unexpected duplicate success")
             case Result.Err(_):
@@ -434,7 +434,7 @@ def run_duplicate(first_pid: String, second_pid: String) -> Result[None, process
     return Result.Ok(None)
 
 def main() -> int32:
-    match run_duplicate("{first_pid}", "{second_pid}"):
+    match own run_duplicate("{first_pid}", "{second_pid}"):
         case Result.Ok(_):
             return 0
         case Result.Err(error):
