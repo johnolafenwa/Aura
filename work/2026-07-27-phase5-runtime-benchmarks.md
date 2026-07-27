@@ -56,7 +56,9 @@ invalid timer overlap invalidates that sample.
 
 Runtime source checkpoint: `665d540`.
 
-Pending the first quiet-machine run of:
+Benchmark harness checkpoint: `850e906`.
+
+The first contractual quiet-machine run used:
 
 ```bash
 cargo build --release -p aura
@@ -70,4 +72,29 @@ npm run bench:scalable-runtime -- \
   --json /tmp/aurora-phase51-before.json
 ```
 
-No Phase 5.1 runtime implementation change may precede this baseline.
+The report records an empty process inventory both before workload builds and
+immediately before timing, a clean repository at `850e906`, and
+`contractual: true`. The measured release `aura 0.1.0` binary is 12,052,208
+bytes with SHA-256
+`5fedd7bb82f5a2f60ffb1e40cf066460f85ac7b8cfaf0080662a8acc7f85c625`.
+The raw report is `/tmp/aurora-phase51-before.json`, SHA-256
+`6bbe066ebcf49ac4a2a67f05578eb841e0e9a83490e52077ad671cac4d787bf8`.
+
+| Workload | Repetitions | Before-reactor result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | peak RSS 189.641 MiB worst; individual peaks 189.641, 189.453, 189.391 MiB | PASS, at most 512 MiB |
+| 1,000 timers | 5 | all runs invalid for overlap; arm spans 15, 14, 14, 14, 13 ms; raw per-run p99 overshoot 10, 9, 8, 9, 8 ms | FAIL, no valid-overlap p99 and arm span exceeds 10 ms |
+| 10 idle tasks | 3 | CPU 0.018459%, 0.018552%, 0.018886%; worst 0.018886% | PASS, less than 2% |
+| V6 int32 loop | 7 plus warmup | median 32.734250 ms; MAD 0.093291 ms; p95 45.655833 ms; best 32.629417 ms | baseline evidence |
+| V6 int64 loop | 7 plus warmup | median 10.248625 ms; MAD 0.103334 ms; p95 12.658583 ms; best 10.145166 ms | baseline evidence |
+
+The timer failure is the intended pre-reactor finding, not a harness failure.
+All five complete raw sample sets are retained. Because none armed within the
+10 ms overlap bound, the runner correctly refuses to manufacture a contractual
+p99 from them; the 8–10 ms figures above remain diagnostic raw observations.
+The sleeper and idle workloads completed naturally with exact `DONE` lines,
+zero exit status, empty standard error, and no sampling errors.
+
+The required before-reactor evidence is now complete. Phase 5.1 may begin with
+failing reactor lifecycle tests; no runtime implementation changed before this
+measurement.

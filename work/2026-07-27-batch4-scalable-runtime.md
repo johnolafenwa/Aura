@@ -67,7 +67,9 @@ B4.0 implementation and its repository gates are complete:
   non-cloneable `random.Rng` wording as a provisional diagnostic gap-fill.
 - B4.0-d gate-condition suite-count precision is committed at `5cb4476`.
 
-Phase 5 implementation has not started.
+The Phase 5.1 runtime implementation has not started. The dedicated benchmark
+harness is committed at `850e906`, and the contractual before-reactor baseline
+is recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`.
 
 ## Verification
 
@@ -115,6 +117,6 @@ Phase 5 implementation has not started.
 
 ## Follow-up
 
-Establish the before-reactor benchmark baseline, then begin reactor work. Every
-Phase 5 stage must land independently with behavior, parity, reference,
-benchmark, coverage, and cleanup evidence appropriate to that stage.
+Begin the reactor stage with failing lifecycle/model tests. Every Phase 5 stage
+must land independently with behavior, parity, reference, benchmark, coverage,
+and cleanup evidence appropriate to that stage.

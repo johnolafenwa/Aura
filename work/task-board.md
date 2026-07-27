@@ -51,9 +51,16 @@ Last updated: 2026-07-27
   action is the before-reactor benchmark baseline.
 - Benchmark host: Mac14,9 Apple M2 Pro, 10 logical CPUs, 16 GiB RAM, macOS
   26.5.2 (25F84). Contractual measurements require the dedicated quiet-machine
-  protocol and per-stage before/after evidence. B4.0 is committed at `665d540`;
-  the dedicated runner and workloads for the before-reactor baseline are now in
-  progress, with no Phase 5.1 runtime production edit started.
+  protocol and per-stage before/after evidence. B4.0 is committed at `665d540`,
+  and the dedicated harness is committed at `850e906`. The contractual
+  before-reactor baseline is complete from a clean tree with both process
+  inventories empty: 10,000 sleepers pass at 189.641 MiB worst peak RSS; idle
+  passes at 0.018886% worst CPU; all five timer runs fail the overlap gate at
+  13–15 ms arm spans with diagnostic raw p99 overshoot of 8–10 ms; V6 medians
+  are 32.734250 ms for int32 and 10.248625 ms for int64. Raw JSON and hashes are
+  recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`. No Phase 5.1
+  runtime implementation edit preceded the baseline; failing reactor tests are
+  next.
 - Standing rules: behavior-focused coverage only; floors remain frozen through
   the batch; one truncated re-ratchet at sign-off; contained semantic
   gap-fills may proceed provisionally, but larger language/runtime questions
