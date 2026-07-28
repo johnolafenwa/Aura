@@ -305,13 +305,13 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
         message: secondary.label
       }));
     }
-    if (diagnostic.notes || diagnostic.help || diagnostic.edits) {
-      result.data = {
-        notes: diagnostic.notes || [],
-        help: diagnostic.help || [],
-        edits: diagnostic.edits || []
-      };
-    }
+    result.data = {
+      notes: diagnostic.notes || [],
+      help: diagnostic.help || [],
+      edits: diagnostic.edits || [],
+      call_frames: diagnostic.call_frames || [],
+      task_ancestry: diagnostic.task_ancestry || []
+    };
     return result;
   });
 }

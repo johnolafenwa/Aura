@@ -46,9 +46,15 @@ This page documents known current limits of the Aurora compiler and runtime.
 
 ## Runtime
 
-- MIR runtime traps include Aurora function names and source spans in an innermost-first call-chain note. A trap escaping a structured child task also includes the child entry and its spawn ancestry.
-- Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.
-- Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to that Batch 4 native-frames stage; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
+- MIR and native direct-backend traps carry the same typed Aurora call frames
+  and task ancestry. Call frames are innermost first, task ancestry is youngest
+  first, and every frame retains its own defining or spawning source path.
+- Human diagnostics synthesize the compact call-chain, task-entry, and
+  task-ancestry note lines. Structured schema-version-1 diagnostics expose
+  `call_frames` and `task_ancestry` arrays instead; generated frame prose is
+  not duplicated in `notes`.
+- Aurora does not expose host Rust/Cranelift backtraces, debugger stack
+  reflection, exception catching, or a standalone-binary JSON switch.
 - Aurora task code executes on pinned cooperative scheduler workers. The
   default count is the available parallelism reported by the host; the
   `AURORA_WORKERS=<positive integer>` override selects an explicit count.

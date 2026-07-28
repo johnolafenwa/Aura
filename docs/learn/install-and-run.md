@@ -134,7 +134,9 @@ spans, guidance, and safe source edits follow when available. A program with a
 checker error will not run; a program with a runtime error prints the
 diagnostic and exits with a non-zero status. Use `--format json` with `check`,
 `run`, or `build` when a tool needs the same fields without parsing this human
-layout.
+layout. Runtime diagnostics also carry typed `call_frames` (innermost first)
+and `task_ancestry` (youngest child first); both arrays are present in every
+schema-version-1 diagnostic, including as `[]` when no runtime frames apply.
 
 ## Next
 

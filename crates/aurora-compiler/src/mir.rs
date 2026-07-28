@@ -250,6 +250,8 @@ pub struct MirModule {
 pub struct MirFunction {
     pub name: String,
     pub module_name: String,
+    #[serde(default)]
+    pub source_path: Option<String>,
     pub span: crate::diag::Span,
     pub receiver: Option<MirReceiverKind>,
     pub params: Vec<MirParam>,
@@ -1381,6 +1383,21 @@ impl<'a> Lowerer<'a> {
         MirFunction {
             name: spec.name,
             module_name: self.module_name.to_string(),
+            source_path: if self.module_name == self.program.module_name {
+                self.program.source_path.clone()
+            } else {
+                self.program
+                    .module_registry
+                    .get(self.module_name)
+                    .and_then(|namespace| namespace.source_path.clone())
+                    .or_else(|| {
+                        self.program
+                            .imported_modules
+                            .values()
+                            .find(|namespace| namespace.path == self.module_name)
+                            .and_then(|namespace| namespace.source_path.clone())
+                    })
+            },
             span: spec.span,
             receiver: spec.receiver,
             params: spec.params,

@@ -5149,6 +5149,62 @@ fn lower_path_to_mir_covers_imported_module_surface() {
 }
 
 #[test]
+fn mir_functions_preserve_defining_paths_with_source_only_fallback_remaining_absent() {
+    let source_only = crate::lower_source_to_mir(
+        "def helper() -> int32:\n    return 1\n\ndef main() -> int32:\n    return helper()\n",
+    )
+    .expect("source-only program should lower");
+    assert!(
+        source_only
+            .functions
+            .iter()
+            .all(|function| function.source_path.is_none()),
+        "source-only lowering should leave frame paths for the runtime caller to supply"
+    );
+
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("compiler crate should live under repo root")
+        .parent()
+        .expect("compiler crate should live under repo root")
+        .to_path_buf();
+    let entry_path = repo_root.join("examples/modules/trait_impl_imports.au");
+    let imported_path = repo_root.join("examples/modules/pkg/user.au");
+    let module = crate::lower_path_to_mir(&entry_path).expect("module program should lower");
+
+    for name in ["show", "main"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("entry function should lower");
+        assert_eq!(
+            function.source_path.as_deref(),
+            Some(entry_path.to_string_lossy().as_ref())
+        );
+    }
+    let imported_methods = module
+        .functions
+        .iter()
+        .filter(|function| {
+            function.source_path.as_deref() == Some(imported_path.to_string_lossy().as_ref())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        imported_methods
+            .iter()
+            .any(|function| function.name.ends_with("name")),
+        "an imported User.name method should retain `{}`; lowered functions were {:?}",
+        imported_path.display(),
+        module
+            .functions
+            .iter()
+            .map(|function| (&function.name, &function.module_name, &function.source_path))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn imported_generic_rng_holders_keep_distinct_canonical_mir_identities() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/run-pass/imported_same_leaf_class_identity.au");

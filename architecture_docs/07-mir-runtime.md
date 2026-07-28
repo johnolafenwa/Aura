@@ -48,6 +48,13 @@ Aurora's MIR runtime centers around:
 | `CallOutcome` | Function result plus mutable receiver/parameter writebacks |
 | `Value` | Concrete runtime values defined in `runtime_value.rs` |
 
+Each MIR function also carries its owning source path. When execution traps,
+the runtime snapshots `RuntimeCallFrame` records innermost first and
+`RuntimeTaskFrame` records youngest first into the compiler diagnostic before
+cleanup changes the active environment or task context. An explicit captured
+marker makes that operation once-only even when both arrays are legitimately
+empty.
+
 ## How execution starts
 
 `run(module)` does not execute directly on the caller's thread. It starts a dedicated runtime thread with a large stack:

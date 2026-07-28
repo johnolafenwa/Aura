@@ -386,6 +386,10 @@ waking on a periodic tick.
 Queue and Task handles are the maintained cross-worker channels. Every other
 task capture and result stays owned and share-nothing through structural
 `Transfer`. Cancellation and diagnostic context remain isolated per task.
+If a child traps, its diagnostic preserves typed Aurora call frames and a
+youngest-first ancestry chain naming the task entry and parent spawn site.
+Both maintained backends render the same human call/task notes, and tooling
+receives the same records without parsing those notes.
 Scheduling, independent completion, and printed-output order are unspecified,
 and Aurora exposes no worker-index or affinity-introspection API. Pinned
 workers enable multicore task execution; they do not promise work stealing,

@@ -3,3 +3,4 @@ error[AU4003]: vector index `-4` is out of bounds for length `3`
   |
 3 |     print(values[-4])
   |                  ^
+  = note: Aurora call chain (innermost first): main at 1:1

@@ -42,4 +42,4 @@ test locations that must prove completion.
 33. [ADR-0033: Structural Transfer and task-result consumption](0033-structural-transfer-and-task-results.md) — implemented provisionally in Phase 5.6, pending checkpoint ratification
 34. [ADR-0034: Typed heterogeneous `select`](0034-typed-heterogeneous-select.md) — implemented provisionally in Phase 5.8, pending checkpoint ratification
 35. [ADR-0035: Configurable blocking-I/O pool](0035-configurable-blocking-io-pool.md) — implemented provisionally in Phase 5.9, pending checkpoint ratification
-36. [ADR-0036: Native structured runtime frames](0036-native-structured-runtime-frames.md) — proposed provisionally for Phase 5.10
+36. [ADR-0036: Native structured runtime frames](0036-native-structured-runtime-frames.md) — implemented provisionally in Phase 5.10, pending Batch 4 checkpoint ratification

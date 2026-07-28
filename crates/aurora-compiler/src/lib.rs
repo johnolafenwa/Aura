@@ -28,7 +28,11 @@ pub use analysis::{
     analyze_path_source, analyze_program, analyze_source, complete_path_source, complete_source,
     AnalysisCompletion, AnalysisOutput,
 };
-pub use diag::{Diagnostic, Result, Span};
+pub use diag::{
+    Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
+    StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame, StructuredRuntimeSourceSpan,
+    StructuredRuntimeTaskFrame, StructuredSpan,
+};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
     run as run_mir, run_entry_with_stdout_sink_and_program_args as run_mir_entry,
@@ -40,6 +44,15 @@ pub use native_codegen::{
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
 };
 pub use runtime_value::{RunOutput, Value};
+
+#[doc(hidden)]
+pub const INTERNAL_DIAGNOSTIC_FD_ENV: &str = "AURORA_INTERNAL_DIAGNOSTIC_FD";
+#[doc(hidden)]
+pub const INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV: &str = "AURORA_INTERNAL_DIAGNOSTIC_SIGNAL_FD";
+#[doc(hidden)]
+pub const INTERNAL_DIAGNOSTIC_SIGNAL_MARKER: u8 = 0x01;
+#[doc(hidden)]
+pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 
 /// Version of the compiler's exported semantic interface.
 ///

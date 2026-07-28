@@ -5,7 +5,7 @@ use super::{
     result_ok, run_serialized_mir, send_error_closed, task_result_ready, write_stream,
     CancellationContext, Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
 };
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm,
@@ -41,6 +41,70 @@ fn test_runtime() -> MirRuntime {
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
     )
+}
+
+#[test]
+fn mir_runtime_captures_typed_frames_once_in_contract_order() {
+    let mut runtime = test_runtime();
+    runtime.call_stack = vec![
+        RuntimeCallFrame {
+            function: "main".to_string(),
+            span: RuntimeSourceSpan::point(Some("/workspace/main.au".to_string()), Span::new(8, 1)),
+        },
+        RuntimeCallFrame {
+            function: "child".to_string(),
+            span: RuntimeSourceSpan::point(
+                Some("/workspace/worker.au".to_string()),
+                Span::new(1, 1),
+            ),
+        },
+    ];
+    runtime.task_ancestry = vec![
+        RuntimeTaskFrame {
+            task_function: "parent".to_string(),
+            task_entry_span: RuntimeSourceSpan::point(None, Span::new(4, 1)),
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan::point(None, Span::new(10, 9)),
+        },
+        RuntimeTaskFrame {
+            task_function: "child".to_string(),
+            task_entry_span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+            parent_function: "parent".to_string(),
+            spawn_span: RuntimeSourceSpan::point(None, Span::new(6, 13)),
+        },
+    ];
+    let captured = runtime.annotate_runtime_trap_once(
+        Diagnostic::coded_at("AU4003", Span::new(3, 18), "out of bounds")
+            .with_note("semantic note"),
+    );
+    assert_eq!(
+        captured
+            .call_frames
+            .iter()
+            .map(|frame| frame.function.as_str())
+            .collect::<Vec<_>>(),
+        vec!["child", "main"]
+    );
+    assert_eq!(
+        captured
+            .task_ancestry
+            .iter()
+            .map(|frame| frame.task_function.as_str())
+            .collect::<Vec<_>>(),
+        vec!["child", "parent"]
+    );
+    assert_eq!(captured.notes, ["semantic note"]);
+
+    runtime.call_stack = vec![RuntimeCallFrame {
+        function: "observer".to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(99, 1)),
+    }];
+    runtime.task_ancestry.clear();
+    let propagated = runtime.annotate_runtime_trap_once(captured.clone());
+    assert_eq!(
+        propagated, captured,
+        "an observer must not append its frames"
+    );
 }
 
 #[test]
@@ -5518,6 +5582,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5535,6 +5600,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5629,6 +5695,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     let make_function = |name: &str, instructions: Vec<Instruction>| MirFunction {
         name: name.to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -5811,6 +5878,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     let by_value = MirFunction {
         name: "work".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: vec![MirParam {
@@ -8000,6 +8068,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         MirFunction {
             name: "widget_render".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
@@ -8018,6 +8087,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         MirFunction {
             name: "status_label".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
@@ -8800,6 +8870,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         MirFunction {
             name: "counter_replace".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
             params: vec![MirParam {
@@ -8831,6 +8902,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         MirFunction {
             name: "counter_borrow_only".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
@@ -8849,6 +8921,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         MirFunction {
             name: "status_mark".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
             params: vec![MirParam {
@@ -8874,6 +8947,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         MirFunction {
             name: "status_borrow_only".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
@@ -9365,6 +9439,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     let from_function = MirFunction {
         name: "from_int_error".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: vec![MirParam {
@@ -13620,6 +13695,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let missing_receiver = MirFunction {
         name: "touch".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(crate::mir::MirReceiverKind::Borrow),
         params: Vec::new(),
@@ -13641,6 +13717,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let borrow_mut = MirFunction {
         name: "mutate".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
         params: vec![MirParam {
@@ -13735,6 +13812,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let bad_entry = MirFunction {
         name: "broken".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -13757,6 +13835,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let cleanup_function = MirFunction {
         name: "cleanup".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -13859,6 +13938,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let close_fn = MirFunction {
         name: "close_managed".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
         params: Vec::new(),
@@ -13874,6 +13954,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let close_borrow_fn = MirFunction {
         name: "close_borrow_managed".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(crate::mir::MirReceiverKind::Borrow),
         params: Vec::new(),
@@ -14412,6 +14493,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             functions: vec![MirFunction {
                 name: "main".to_string(),
                 module_name: "<test>".to_string(),
+                source_path: None,
                 span: Span::new(1, 1),
                 receiver: None,
                 params: Vec::new(),
@@ -14457,6 +14539,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             functions: vec![MirFunction {
                 name: "update".to_string(),
                 module_name: "<test>".to_string(),
+                source_path: None,
                 span: Span::new(1, 1),
                 receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
                 params: Vec::new(),
@@ -14505,6 +14588,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             top_level: Some(MirFunction {
                 name: "<top-level>".to_string(),
                 module_name: "<test>".to_string(),
+                source_path: None,
                 span: Span::new(1, 1),
                 receiver: None,
                 params: Vec::new(),

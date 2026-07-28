@@ -17,7 +17,7 @@ use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item,
     ParamMode, PassStmt, ReceiverKind, ReturnStmt, TypeRef, VariantPattern,
 };
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::sema::{
     ClassInfo, EnumInfo, EnumVariantInfo, FieldInfo, FunctionSignature, MethodInfo, TraitBound,
     Type,
@@ -846,9 +846,112 @@ fn machine_readable_analysis_reports_diagnostics() {
     assert!(analysis.diagnostics[0].notes.is_empty());
     assert!(analysis.diagnostics[0].help.is_empty());
     assert!(analysis.diagnostics[0].edits.is_empty());
+    assert!(analysis.diagnostics[0].call_frames.is_empty());
+    assert!(analysis.diagnostics[0].task_ancestry.is_empty());
     assert!(analysis.diagnostics[0]
         .message
         .contains("unknown name `total`"));
+
+    let serialized = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(
+        serialized["diagnostics"][0]["call_frames"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        serialized["diagnostics"][0]["task_ancestry"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn machine_readable_analysis_preserves_zero_based_runtime_frames() {
+    let mut diagnostic =
+        Diagnostic::coded_at("AU4003", Span::new(9, 18), "vector index is out of bounds");
+    assert!(diagnostic.capture_runtime_frames_once(
+        vec![
+            RuntimeCallFrame {
+                function: "worker.child".to_string(),
+                span: RuntimeSourceSpan::point(
+                    Some("/workspace/worker.au".to_string()),
+                    Span::new(3, 5),
+                ),
+            },
+            RuntimeCallFrame {
+                function: "source_only".to_string(),
+                span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+            },
+        ],
+        vec![RuntimeTaskFrame {
+            task_function: "worker.child".to_string(),
+            task_entry_span: RuntimeSourceSpan::point(
+                Some("/workspace/worker.au".to_string()),
+                Span::new(3, 5),
+            ),
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan::point(
+                Some("/workspace/main.au".to_string()),
+                Span::new(8, 15),
+            ),
+        }],
+    ));
+
+    let analysis = analysis_diagnostic(&diagnostic);
+    assert_eq!(analysis.call_frames.len(), 2);
+    assert_eq!(analysis.call_frames[0].function, "worker.child");
+    assert_eq!(
+        (
+            analysis.call_frames[0].span.file_path.as_deref(),
+            analysis.call_frames[0].span.line,
+            analysis.call_frames[0].span.start_character,
+            analysis.call_frames[0].span.end_character,
+        ),
+        (Some("/workspace/worker.au"), 2, 4, 5)
+    );
+    assert_eq!(analysis.call_frames[1].function, "source_only");
+    assert_eq!(analysis.call_frames[1].span.file_path, None);
+    assert_eq!(
+        (
+            analysis.call_frames[1].span.line,
+            analysis.call_frames[1].span.start_character,
+            analysis.call_frames[1].span.end_character,
+        ),
+        (0, 0, 1)
+    );
+
+    assert_eq!(analysis.task_ancestry.len(), 1);
+    let task = &analysis.task_ancestry[0];
+    assert_eq!(task.task_function, "worker.child");
+    assert_eq!(task.parent_function, "main");
+    assert_eq!(
+        (
+            task.task_entry_span.file_path.as_deref(),
+            task.task_entry_span.line,
+            task.task_entry_span.start_character,
+            task.task_entry_span.end_character,
+        ),
+        (Some("/workspace/worker.au"), 2, 4, 5)
+    );
+    assert_eq!(
+        (
+            task.spawn_span.file_path.as_deref(),
+            task.spawn_span.line,
+            task.spawn_span.start_character,
+            task.spawn_span.end_character,
+        ),
+        (Some("/workspace/main.au"), 7, 14, 15)
+    );
+
+    let cloned = analysis.clone();
+    assert_eq!(cloned, analysis);
+    let serialized = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(
+        serialized["call_frames"][0]["span"]["file_path"],
+        "/workspace/worker.au"
+    );
+    assert_eq!(
+        serialized["task_ancestry"][0]["spawn_span"]["line"],
+        serde_json::json!(7)
+    );
 }
 
 #[test]

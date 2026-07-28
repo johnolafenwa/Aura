@@ -9,7 +9,7 @@ use aurora_compiler::{
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
     parse_source, run_path, run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir, Diagnostic,
-    MirModule, Value,
+    MirModule, StructuredDiagnostic, Value,
 };
 use serde_json::Value as JsonValue;
 
@@ -98,6 +98,7 @@ fn main() {
                     program_args,
                     run_backend,
                     diagnostic_format == DiagnosticFormat::Human,
+                    diagnostic_format == DiagnosticFormat::Json,
                     &mut native_progress,
                 ) {
                     NativeRunOutcome::Ran(code) => {
@@ -122,6 +123,21 @@ fn main() {
                             }
                         }
                         emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
+                        process::exit(1);
+                    }
+                    NativeRunOutcome::Diagnostic(mut error) => {
+                        if diagnostic_format == DiagnosticFormat::Json {
+                            for progress in native_progress {
+                                error = error.with_note(progress);
+                            }
+                        }
+                        emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
+                        process::exit(1);
+                    }
+                    NativeRunOutcome::StructuredDiagnostic(mut error) => {
+                        debug_assert_eq!(diagnostic_format, DiagnosticFormat::Json);
+                        error.notes.extend(native_progress);
+                        emit_structured_diagnostic(error);
                         process::exit(1);
                     }
                     NativeRunOutcome::FellBack(reason) => {
@@ -908,6 +924,12 @@ enum RunBackend {
 enum NativeRunOutcome {
     /// The native binary ran to completion with this exit code.
     Ran(i32),
+    /// The Aurora program could not be lowered. Keep the compiler diagnostic
+    /// intact rather than degrading it into a host-backend message.
+    Diagnostic(Diagnostic),
+    /// The native runtime reported an Aurora trap over the private structured
+    /// channel used by JSON-mode `aura run`.
+    StructuredDiagnostic(StructuredDiagnostic),
     /// The requested backend could not produce a binary.
     Failed(String),
     /// `auto` could not use the direct backend and the MIR runtime should run.
@@ -918,6 +940,7 @@ enum NativeRunOutcome {
 struct VerifiedNativeLaunchError {
     message: String,
     invalidates_cache: bool,
+    post_launch: bool,
 }
 
 impl VerifiedNativeLaunchError {
@@ -925,17 +948,27 @@ impl VerifiedNativeLaunchError {
         Self {
             message,
             invalidates_cache: false,
+            post_launch: false,
         }
     }
 
     fn launch(binary: &Path, error: io::Error) -> Self {
         Self {
             invalidates_cache: native_launch_error_invalidates_cache(&error),
+            post_launch: false,
             message: format!(
                 "failed to execute the verified direct binary `{}`: {}",
                 binary.display(),
                 error
             ),
+        }
+    }
+
+    fn after_launch(message: String) -> Self {
+        Self {
+            message,
+            invalidates_cache: false,
+            post_launch: true,
         }
     }
 }
@@ -984,6 +1017,7 @@ fn run_through_native_backend(
     program_args: &[String],
     backend: RunBackend,
     report_progress: bool,
+    capture_structured_diagnostics: bool,
     progress: &mut Vec<String>,
 ) -> NativeRunOutcome {
     let mir = if input.from_stdin {
@@ -995,7 +1029,7 @@ fn run_through_native_backend(
         Ok(mir) => mir,
         // A compile failure is the program's, not the backend's, so it is
         // reported the same way whichever backend was requested.
-        Err(error) => return NativeRunOutcome::Failed(error.message),
+        Err(error) => return NativeRunOutcome::Diagnostic(error),
     };
 
     let caching_available = native_cache_root().is_some();
@@ -1021,13 +1055,17 @@ fn run_through_native_backend(
                 .as_deref()
                 .and_then(peek_cached_native_binary)
             {
-                match launch_verified_native_binary(&cached, program_args) {
-                    Ok(code) => return NativeRunOutcome::Ran(code),
+                match launch_verified_native_binary(
+                    &cached,
+                    program_args,
+                    capture_structured_diagnostics,
+                ) {
+                    Ok(outcome) => return native_execution_outcome(outcome),
                     Err(error) if error.invalidates_cache => {
                         launch_invalidated_entry = Some(cached);
                     }
                     Err(error) => {
-                        return native_backend_failure(backend, error.message);
+                        return verified_native_execution_failure(backend, error);
                     }
                 }
             }
@@ -1108,14 +1146,18 @@ fn run_through_native_backend(
             // populating the cache after these bytes have been privately staged.
             drop(runtime_lock);
             drop(cache_lock);
-            match launch_verified_native_binary(&cached, program_args) {
-                Ok(code) => return NativeRunOutcome::Ran(code),
+            match launch_verified_native_binary(
+                &cached,
+                program_args,
+                capture_structured_diagnostics,
+            ) {
+                Ok(outcome) => return native_execution_outcome(outcome),
                 Err(error) if error.invalidates_cache => {
                     launch_invalidated_entry = Some(cached);
                     continue;
                 }
                 Err(error) => {
-                    return native_backend_failure(backend, error.message);
+                    return verified_native_execution_failure(backend, error);
                 }
             }
         }
@@ -1156,9 +1198,11 @@ fn run_through_native_backend(
         // Release before executing arbitrary user code.
         drop(cache_lock);
         let outcome = match build {
-            Ok(()) => launch_native_binary(&output_path, program_args)
-                .map(NativeRunOutcome::Ran)
-                .unwrap_or_else(|reason| native_backend_failure(backend, reason)),
+            Ok(()) => {
+                launch_native_binary(&output_path, program_args, capture_structured_diagnostics)
+                    .map(native_execution_outcome)
+                    .unwrap_or_else(|error| native_execution_failure(backend, error))
+            }
             Err(reason) => native_backend_failure(backend, reason),
         };
         let _ = fs::remove_file(&output_path);
@@ -1207,30 +1251,82 @@ fn native_backend_failure(backend: RunBackend, reason: String) -> NativeRunOutco
     }
 }
 
+struct NativeExecutionError {
+    message: String,
+    post_launch: bool,
+}
+
+fn native_execution_failure(backend: RunBackend, error: NativeExecutionError) -> NativeRunOutcome {
+    if error.post_launch {
+        NativeRunOutcome::Failed(error.message)
+    } else {
+        native_backend_failure(backend, error.message)
+    }
+}
+
+fn verified_native_execution_failure(
+    backend: RunBackend,
+    error: VerifiedNativeLaunchError,
+) -> NativeRunOutcome {
+    if error.post_launch {
+        NativeRunOutcome::Failed(error.message)
+    } else {
+        native_backend_failure(backend, error.message)
+    }
+}
+
+fn native_execution_outcome(outcome: NativeExecutionOutcome) -> NativeRunOutcome {
+    match outcome {
+        NativeExecutionOutcome::Exited(code) => NativeRunOutcome::Ran(code),
+        NativeExecutionOutcome::Trapped(diagnostic) => {
+            NativeRunOutcome::StructuredDiagnostic(*diagnostic)
+        }
+    }
+}
+
+#[derive(Debug)]
+enum NativeExecutionOutcome {
+    Exited(i32),
+    Trapped(Box<StructuredDiagnostic>),
+}
+
+struct SpawnedNativeBinary {
+    child: process::Child,
+    #[cfg(unix)]
+    diagnostic_reader: Option<fs::File>,
+    #[cfg(unix)]
+    diagnostic_signal_reader: Option<fs::File>,
+}
+
 fn launch_native_binary(
     binary: &Path,
     program_args: &[String],
-) -> std::result::Result<i32, String> {
-    launch_native_binary_without_shell_fallback(binary, program_args)
-        .map(|status| status.code().unwrap_or(1))
-        .map_err(|error| {
-            format!(
-                "failed to execute the direct binary `{}`: {}",
-                binary.display(),
-                error
-            )
-        })
+    capture_structured_diagnostics: bool,
+) -> std::result::Result<NativeExecutionOutcome, NativeExecutionError> {
+    let spawned = spawn_native_binary_with_diagnostic_mode(
+        binary,
+        program_args,
+        capture_structured_diagnostics,
+    )
+    .map_err(|error| NativeExecutionError {
+        message: format!(
+            "failed to execute the direct binary `{}`: {}",
+            binary.display(),
+            error
+        ),
+        post_launch: false,
+    })?;
+    wait_for_native_binary(spawned).map_err(|error| NativeExecutionError {
+        message: format!(
+            "failed to collect the direct binary `{}`: {}",
+            binary.display(),
+            error
+        ),
+        post_launch: true,
+    })
 }
 
-#[cfg(unix)]
-fn spawn_native_binary_without_shell_fallback(
-    binary: &Path,
-    program_args: &[String],
-) -> io::Result<process::Child> {
-    spawn_unix_native_binary_without_shell_fallback(binary, program_args, None)
-}
-
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn spawn_verified_native_binary_with_lease(
     binary: &Path,
     program_args: &[String],
@@ -1238,7 +1334,44 @@ fn spawn_verified_native_binary_with_lease(
 ) -> io::Result<process::Child> {
     use std::os::fd::AsRawFd;
 
-    spawn_unix_native_binary_without_shell_fallback(binary, program_args, Some(lease.as_raw_fd()))
+    spawn_unix_native_binary_without_shell_fallback(
+        binary,
+        program_args,
+        Some(lease.as_raw_fd()),
+        false,
+    )
+    .map(|spawned| spawned.child)
+}
+
+#[cfg(unix)]
+fn spawn_native_binary_with_diagnostic_mode(
+    binary: &Path,
+    program_args: &[String],
+    capture_structured_diagnostics: bool,
+) -> io::Result<SpawnedNativeBinary> {
+    spawn_unix_native_binary_without_shell_fallback(
+        binary,
+        program_args,
+        None,
+        capture_structured_diagnostics,
+    )
+}
+
+#[cfg(unix)]
+fn spawn_verified_native_binary_with_diagnostic_mode(
+    binary: &Path,
+    program_args: &[String],
+    lease: &fs::File,
+    capture_structured_diagnostics: bool,
+) -> io::Result<SpawnedNativeBinary> {
+    use std::os::fd::AsRawFd;
+
+    spawn_unix_native_binary_without_shell_fallback(
+        binary,
+        program_args,
+        Some(lease.as_raw_fd()),
+        capture_structured_diagnostics,
+    )
 }
 
 #[cfg(unix)]
@@ -1246,10 +1379,32 @@ fn spawn_unix_native_binary_without_shell_fallback(
     binary: &Path,
     program_args: &[String],
     inherited_lease_fd: Option<std::os::fd::RawFd>,
-) -> io::Result<process::Child> {
+    capture_structured_diagnostics: bool,
+) -> io::Result<SpawnedNativeBinary> {
     use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
+
+    fn cloexec_pipe() -> io::Result<(fs::File, fs::File)> {
+        let mut file_descriptors = [-1; 2];
+        // SAFETY: `pipe` initializes both descriptors on success.
+        if unsafe { libc::pipe(file_descriptors.as_mut_ptr()) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: both descriptors were returned by the successful `pipe`.
+        let reader = unsafe { fs::File::from_raw_fd(file_descriptors[0]) };
+        let writer = unsafe { fs::File::from_raw_fd(file_descriptors[1]) };
+        for fd in [reader.as_raw_fd(), writer.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok((reader, writer))
+    }
 
     let executable = CString::new(binary.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "executable path contains NUL"))?;
@@ -1269,28 +1424,108 @@ fn spawn_unix_native_binary_without_shell_fallback(
         .collect::<Vec<_>>();
     argument_pointers.push(0);
 
+    let diagnostic_pipe = if capture_structured_diagnostics {
+        Some(cloexec_pipe()?)
+    } else {
+        None
+    };
+    let diagnostic_signal_pipe = if capture_structured_diagnostics {
+        Some(cloexec_pipe()?)
+    } else {
+        None
+    };
+    let inherited_diagnostic_fd = diagnostic_pipe
+        .as_ref()
+        .map(|(_, writer)| writer.as_raw_fd());
+    let inherited_diagnostic_signal_fd = diagnostic_signal_pipe
+        .as_ref()
+        .map(|(_, writer)| writer.as_raw_fd());
+
+    // Build the exact environment used by `execve` in the parent. In
+    // particular, strip any caller-supplied value for the private channel so a
+    // normal/human launch cannot be tricked into writing to an unrelated fd.
+    let internal_data_key = aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV.as_bytes();
+    let internal_signal_key = aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV.as_bytes();
+    let mut environment = std::env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.as_os_str().as_bytes();
+            if key == internal_data_key || key == internal_signal_key {
+                return None;
+            }
+            let mut entry = Vec::with_capacity(key.len() + value.as_os_str().as_bytes().len() + 1);
+            entry.extend_from_slice(key);
+            entry.push(b'=');
+            entry.extend_from_slice(value.as_os_str().as_bytes());
+            CString::new(entry).ok()
+        })
+        .collect::<Vec<_>>();
+    if let Some(fd) = inherited_diagnostic_fd {
+        environment.push(
+            CString::new(format!(
+                "{}={fd}",
+                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
+            ))
+            .expect("the internal diagnostic fd environment entry cannot contain NUL"),
+        );
+    }
+    if let Some(fd) = inherited_diagnostic_signal_fd {
+        environment.push(
+            CString::new(format!(
+                "{}={fd}",
+                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
+            ))
+            .expect("the internal diagnostic signal fd environment entry cannot contain NUL"),
+        );
+    }
+    let mut environment_pointers = environment
+        .iter()
+        .map(|entry| entry.as_ptr() as usize)
+        .collect::<Vec<_>>();
+    environment_pointers.push(0);
+
     let mut command = process::Command::new(binary);
     // SAFETY: after fork the closure calls only async-signal-safe `fcntl`,
-    // `execv`, and `last_os_error`; all strings and pointer storage were
-    // allocated before `pre_exec`. `execv`, unlike `execvp`, never interprets
+    // `execve`, and `last_os_error`; all strings and pointer storage were
+    // allocated before `pre_exec`. `execve`, unlike `execvp`, never interprets
     // ENOEXEC bytes as a shell script.
     unsafe {
         command.pre_exec(move || {
             let _keep_arguments_alive = &arguments;
+            let _keep_environment_alive = &environment;
             if let Some(fd) = inherited_lease_fd {
                 let flags = libc::fcntl(fd, libc::F_GETFD);
                 if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
                     return Err(io::Error::last_os_error());
                 }
             }
-            libc::execv(
+            if let Some(fd) = inherited_diagnostic_fd {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            if let Some(fd) = inherited_diagnostic_signal_fd {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            libc::execve(
                 executable.as_ptr(),
                 argument_pointers.as_ptr().cast::<*const libc::c_char>(),
+                environment_pointers.as_ptr().cast::<*const libc::c_char>(),
             );
             Err(io::Error::last_os_error())
         });
     }
-    command.spawn()
+    let child = command.spawn()?;
+    let diagnostic_reader = diagnostic_pipe.map(|(reader, _writer)| reader);
+    let diagnostic_signal_reader = diagnostic_signal_pipe.map(|(reader, _writer)| reader);
+    Ok(SpawnedNativeBinary {
+        child,
+        diagnostic_reader,
+        diagnostic_signal_reader,
+    })
 }
 
 #[cfg(not(unix))]
@@ -1301,11 +1536,126 @@ fn spawn_native_binary_without_shell_fallback(
     process::Command::new(binary).args(program_args).spawn()
 }
 
-fn launch_native_binary_without_shell_fallback(
+#[cfg(not(unix))]
+fn spawn_native_binary_with_diagnostic_mode(
     binary: &Path,
     program_args: &[String],
-) -> io::Result<process::ExitStatus> {
-    spawn_native_binary_without_shell_fallback(binary, program_args)?.wait()
+    _capture_structured_diagnostics: bool,
+) -> io::Result<SpawnedNativeBinary> {
+    spawn_native_binary_without_shell_fallback(binary, program_args)
+        .map(|child| SpawnedNativeBinary { child })
+}
+
+fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<NativeExecutionOutcome> {
+    #[cfg(unix)]
+    let diagnostic_reader = spawned.diagnostic_reader.take().map(|reader| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            reader
+                .take(
+                    u64::try_from(aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                )
+                .read_to_end(&mut bytes)?;
+            Ok::<_, io::Error>(bytes)
+        })
+    });
+    #[cfg(unix)]
+    let diagnostic_signal_reader = spawned.diagnostic_signal_reader.take().map(|reader| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            reader.take(2).read_to_end(&mut bytes)?;
+            Ok::<_, io::Error>(bytes)
+        })
+    });
+
+    let status = spawned.child.wait()?;
+
+    #[cfg(unix)]
+    {
+        let diagnostic_bytes = match diagnostic_reader {
+            Some(reader) => reader
+                .join()
+                .map_err(|_| io::Error::other("the native diagnostic-channel reader panicked"))??,
+            None => Vec::new(),
+        };
+        let signal_bytes = match diagnostic_signal_reader {
+            Some(reader) => reader.join().map_err(|_| {
+                io::Error::other("the native diagnostic signal-channel reader panicked")
+            })??,
+            None => Vec::new(),
+        };
+        if status.code().is_none() {
+            return Err(io::Error::other(
+                "native program terminated by a host signal",
+            ));
+        }
+        if signal_bytes.len() > 1
+            || signal_bytes
+                .first()
+                .is_some_and(|marker| *marker != aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid native diagnostic trap-intent marker",
+            ));
+        }
+        let trap_intended = !signal_bytes.is_empty();
+        if diagnostic_bytes.len() > aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "native diagnostic-channel record exceeded the {}-byte limit",
+                    aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
+                ),
+            ));
+        }
+        if status.success() && (trap_intended || !diagnostic_bytes.is_empty()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native diagnostic channel was used during a successful exit",
+            ));
+        }
+        if !trap_intended && diagnostic_bytes.is_empty() {
+            return Ok(NativeExecutionOutcome::Exited(
+                status.code().expect("signal exits were rejected above"),
+            ));
+        }
+        if trap_intended && diagnostic_bytes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native runtime signaled a trap without a diagnostic record",
+            ));
+        }
+        if !trap_intended {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native runtime emitted a diagnostic record without signaling a trap",
+            ));
+        }
+        let diagnostic = serde_json::from_slice::<StructuredDiagnostic>(&diagnostic_bytes)
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid native diagnostic-channel record: {error}"),
+                )
+            })?;
+        Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
+    }
+
+    #[cfg(not(unix))]
+    {
+        if status.code().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "native program terminated without an exit status",
+            ));
+        }
+        Ok(NativeExecutionOutcome::Exited(
+            status.code().expect("missing statuses were rejected above"),
+        ))
+    }
 }
 
 fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
@@ -2086,7 +2436,8 @@ fn parse_native_cache_digest(contents: &[u8]) -> Option<&str> {
 fn launch_verified_native_binary(
     verified: &VerifiedNativeBinary,
     program_args: &[String],
-) -> std::result::Result<i32, VerifiedNativeLaunchError> {
+    capture_structured_diagnostics: bool,
+) -> std::result::Result<NativeExecutionOutcome, VerifiedNativeLaunchError> {
     let launch_root = std::env::temp_dir();
     cleanup_stale_verified_native_directories(&launch_root);
     let directory = launch_root.join(format!(
@@ -2127,14 +2478,23 @@ fn launch_verified_native_binary(
     let child_result = {
         #[cfg(unix)]
         {
-            spawn_verified_native_binary_with_lease(&private_binary, program_args, &launch_lease)
+            spawn_verified_native_binary_with_diagnostic_mode(
+                &private_binary,
+                program_args,
+                &launch_lease,
+                capture_structured_diagnostics,
+            )
         }
         #[cfg(not(unix))]
         {
-            spawn_native_binary_without_shell_fallback(&private_binary, program_args)
+            spawn_native_binary_with_diagnostic_mode(
+                &private_binary,
+                program_args,
+                capture_structured_diagnostics,
+            )
         }
     };
-    let mut child = match child_result {
+    let child = match child_result {
         Ok(child) => child,
         Err(error) => {
             remove_private_native_launch(&private_binary, &directory);
@@ -2142,12 +2502,12 @@ fn launch_verified_native_binary(
         }
     };
 
-    let status = match child.wait() {
-        Ok(status) => status,
+    let outcome = match wait_for_native_binary(child) {
+        Ok(outcome) => outcome,
         Err(error) => {
             // A failed wait is not proof that the child stopped. Leave the
             // directory and its inherited lease for a later safe collector.
-            return Err(VerifiedNativeLaunchError::environment(format!(
+            return Err(VerifiedNativeLaunchError::after_launch(format!(
                 "failed to wait for verified direct binary `{}`: {}",
                 private_binary.display(),
                 error
@@ -2161,7 +2521,7 @@ fn launch_verified_native_binary(
     // verified run.
     remove_private_native_launch(&private_binary, &directory);
 
-    Ok(status.code().unwrap_or(1))
+    Ok(outcome)
 }
 
 fn create_private_directory(path: &Path) -> io::Result<()> {
@@ -2673,6 +3033,14 @@ fn emit_diagnostic(format: DiagnosticFormat, path: &str, source: &str, error: &D
             eprintln!("{}", report);
         }
     }
+}
+
+fn emit_structured_diagnostic(error: StructuredDiagnostic) {
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "diagnostics": [error],
+    });
+    eprintln!("{}", report);
 }
 
 fn render_error(path: &str, source: &str, error: &Diagnostic) -> String {
@@ -3419,18 +3787,21 @@ mod tests {
     #[cfg(unix)]
     use super::{
         acquire_native_build_lock_at, create_private_directory,
-        create_verified_native_launch_lease, spawn_verified_native_binary_with_lease,
+        create_verified_native_launch_lease, spawn_native_binary_with_diagnostic_mode,
+        spawn_verified_native_binary_with_lease, wait_for_native_binary, NativeExecutionOutcome,
     };
     use super::{
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
         configure_native_runtime_cargo, create_private_cache_directory_all, lsp_response_for_line,
-        native_cache_key, native_cache_key_for_semantic_schema,
+        native_cache_key, native_cache_key_for_semantic_schema, native_execution_failure,
         native_launch_error_invalidates_cache, native_runtime_identity_material, parse_run_backend,
         parse_static_library_artifact_path, remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
         runtime_archive_memo_stamp, select_build_backend, select_run_outcome,
-        write_unique_temp_file, write_unique_temp_file_with_writer, BuildBackend, NativeRunOutcome,
-        NativeRuntimeIdentity, RunBackend, SelectedBuildBackend, NATIVE_CACHE_ENTRY_ID,
+        verified_native_execution_failure, write_unique_temp_file,
+        write_unique_temp_file_with_writer, BuildBackend, NativeExecutionError, NativeRunOutcome,
+        NativeRuntimeIdentity, RunBackend, SelectedBuildBackend, VerifiedNativeLaunchError,
+        NATIVE_CACHE_ENTRY_ID,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -3722,6 +4093,206 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_native_diagnostic_channel_distinguishes_status_from_a_trap() {
+        let ordinary = spawn_native_binary_with_diagnostic_mode(
+            PathBuf::from("/bin/sh").as_path(),
+            &["-c".to_string(), "exit 1".to_string()],
+            true,
+        )
+        .expect("ordinary nonzero native child should start");
+        assert!(matches!(
+            wait_for_native_binary(ordinary).expect("ordinary status should collect"),
+            NativeExecutionOutcome::Exited(1)
+        ));
+
+        let record = r#"{"code":"AU4001","severity":"error","message":"native trap","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#;
+        let script = format!(
+            "eval \"printf '\\\\001' >&${}\"; \
+             eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+            aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+            aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+        );
+        let trapped = spawn_native_binary_with_diagnostic_mode(
+            PathBuf::from("/bin/sh").as_path(),
+            &[
+                "-c".to_string(),
+                script,
+                "aurora-channel-test".to_string(),
+                record.to_string(),
+            ],
+            true,
+        )
+        .expect("diagnostic-writing native child should start");
+        match wait_for_native_binary(trapped).expect("valid trap record should collect") {
+            NativeExecutionOutcome::Trapped(diagnostic) => {
+                assert_eq!(diagnostic.code, "AU4001");
+                assert_eq!(diagnostic.message, "native trap");
+            }
+            NativeExecutionOutcome::Exited(code) => {
+                panic!("a valid record must not be mistaken for ordinary status {code}")
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_native_diagnostic_channel_rejects_malformed_multiple_and_oversized_records() {
+        let malformed_cases = [
+            ("malformed", "not-json".to_string()),
+            (
+                "multiple",
+                concat!(
+                    r#"{"code":"AU4001","severity":"error","message":"first","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#,
+                    r#"{"code":"AU4001","severity":"error","message":"second","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#
+                )
+                .to_string(),
+            ),
+        ];
+        for (label, record) in malformed_cases {
+            let script = format!(
+                "eval \"printf '\\\\001' >&${}\"; \
+                 eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            );
+            let spawned = spawn_native_binary_with_diagnostic_mode(
+                PathBuf::from("/bin/sh").as_path(),
+                &[
+                    "-c".to_string(),
+                    script,
+                    "aurora-channel-test".to_string(),
+                    record,
+                ],
+                true,
+            )
+            .unwrap_or_else(|error| panic!("{label} native child should start: {error}"));
+            let error = wait_for_native_binary(spawned)
+                .err()
+                .unwrap_or_else(|| panic!("{label} record must be rejected"));
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{label}");
+        }
+
+        let script = format!(
+            "eval \"printf '\\\\001' >&${}\"; \
+             eval \"dd if=/dev/zero bs={} count=1 2>/dev/null >&${}\"; exit 1",
+            aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+            aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES + 1,
+            aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+        );
+        let spawned = spawn_native_binary_with_diagnostic_mode(
+            PathBuf::from("/bin/sh").as_path(),
+            &["-c".to_string(), script],
+            true,
+        )
+        .expect("oversized-record native child should start");
+        let error = wait_for_native_binary(spawned)
+            .err()
+            .expect("oversized record must be rejected before JSON decoding");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("exceeded"),
+            "oversized-record error should identify the bound: {error}"
+        );
+
+        for (label, script) in [
+            (
+                "missing data after trap intent",
+                format!(
+                    "eval \"printf '\\\\001' >&${}\"; exit 1",
+                    aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
+                ),
+            ),
+            (
+                "data without trap intent",
+                format!(
+                    "eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+                    aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
+                ),
+            ),
+        ] {
+            let spawned = spawn_native_binary_with_diagnostic_mode(
+                PathBuf::from("/bin/sh").as_path(),
+                &[
+                    "-c".to_string(),
+                    script,
+                    "aurora-channel-test".to_string(),
+                    r#"{"code":"AU4001","severity":"error","message":"trap","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#.to_string(),
+                ],
+                true,
+            )
+            .unwrap_or_else(|error| panic!("{label} child should start: {error}"));
+            let error = wait_for_native_binary(spawned)
+                .err()
+                .unwrap_or_else(|| panic!("{label} must be rejected"));
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{label}");
+            assert!(matches!(
+                native_execution_failure(
+                    RunBackend::Auto,
+                    NativeExecutionError {
+                        message: error.to_string(),
+                        post_launch: true,
+                    },
+                ),
+                NativeRunOutcome::Failed(_)
+            ));
+        }
+
+        let record = r#"{"code":"AU4001","severity":"error","message":"trap","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#;
+        for (label, marker, exit_status) in [
+            ("record with successful exit", "\\001", 0),
+            ("invalid trap marker", "X", 1),
+            ("multiple trap markers", "\\001\\001", 1),
+        ] {
+            let script = format!(
+                "eval \"printf '{marker}' >&${}\"; \
+                 eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit {exit_status}",
+                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            );
+            let spawned = spawn_native_binary_with_diagnostic_mode(
+                PathBuf::from("/bin/sh").as_path(),
+                &[
+                    "-c".to_string(),
+                    script,
+                    "aurora-channel-test".to_string(),
+                    record.to_string(),
+                ],
+                true,
+            )
+            .unwrap_or_else(|error| panic!("{label} child should start: {error}"));
+            let error = wait_for_native_binary(spawned)
+                .err()
+                .unwrap_or_else(|| panic!("{label} must be rejected"));
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{label}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_signal_termination_is_a_hard_post_launch_failure() {
+        let spawned = spawn_native_binary_with_diagnostic_mode(
+            PathBuf::from("/bin/sh").as_path(),
+            &["-c".to_string(), "kill -TERM $$".to_string()],
+            true,
+        )
+        .expect("signal-terminating native child should start");
+        let error =
+            wait_for_native_binary(spawned).expect_err("a signal exit is not an Aurora status");
+        assert!(error.to_string().contains("host signal"));
+        assert!(matches!(
+            native_execution_failure(
+                RunBackend::Auto,
+                NativeExecutionError {
+                    message: error.to_string(),
+                    post_launch: true,
+                },
+            ),
+            NativeRunOutcome::Failed(_)
+        ));
+    }
+
     #[test]
     fn cache_invalidation_does_not_delete_a_replacement_entry() {
         let root = unique_temp_dir("conditional-cache-invalidation");
@@ -3948,6 +4519,27 @@ mod tests {
         assert!(matches!(
             select_run_outcome(RunBackend::Direct, || Ok(()), || Ok(7)),
             NativeRunOutcome::Ran(7)
+        ));
+
+        // Once a child has launched, wait and channel failures are execution
+        // failures. `auto` must never rerun the Aurora program through MIR,
+        // whether the child came from a fresh build or a verified cache hit.
+        assert!(matches!(
+            native_execution_failure(
+                RunBackend::Auto,
+                NativeExecutionError {
+                    message: "malformed channel".to_string(),
+                    post_launch: true,
+                },
+            ),
+            NativeRunOutcome::Failed(reason) if reason == "malformed channel"
+        ));
+        assert!(matches!(
+            verified_native_execution_failure(
+                RunBackend::Auto,
+                VerifiedNativeLaunchError::after_launch("missing record".to_string()),
+            ),
+            NativeRunOutcome::Failed(reason) if reason == "missing record"
         ));
     }
 

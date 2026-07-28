@@ -12,7 +12,9 @@ use std::time::{Duration as StdDuration, Instant};
 use crate::ast::UnaryOp;
 use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
-use crate::diag::{Diagnostic, Result, Span};
+use crate::diag::{
+    Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
+};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::json_codec;
 use crate::mir::{
@@ -455,23 +457,9 @@ struct MirRuntime {
     cancellation: CancellationContext,
     program_args: Arc<Vec<String>>,
     call_depth: usize,
-    call_stack: Vec<AuroraCallFrame>,
-    task_ancestry: Vec<AuroraTaskSpawn>,
+    call_stack: Vec<RuntimeCallFrame>,
+    task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
-}
-
-#[derive(Clone)]
-struct AuroraCallFrame {
-    function: String,
-    span: Span,
-}
-
-#[derive(Clone)]
-struct AuroraTaskSpawn {
-    task_function: String,
-    task_entry_span: Span,
-    parent_function: String,
-    spawn_span: Span,
 }
 
 struct CallOutcome {
@@ -1329,49 +1317,10 @@ impl MirRuntime {
     }
 
     fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
-        if error
-            .notes
-            .iter()
-            .any(|note| note.starts_with("Aurora call chain"))
-        {
-            return error;
-        }
-
-        if !self.call_stack.is_empty() {
-            let frames = self
-                .call_stack
-                .iter()
-                .rev()
-                .map(|frame| format!("{} at {}", frame.function, frame.span))
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            error
-                .notes
-                .push(format!("Aurora call chain (innermost first): {frames}"));
-        }
-
-        if let Some(task) = self.task_ancestry.last() {
-            error.notes.push(format!(
-                "Aurora task entry: {} at {}",
-                task.task_function, task.task_entry_span
-            ));
-            let ancestry = self
-                .task_ancestry
-                .iter()
-                .rev()
-                .map(|spawn| {
-                    format!(
-                        "{} spawned from {} at {}",
-                        spawn.task_function, spawn.parent_function, spawn.spawn_span
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            error
-                .notes
-                .push(format!("Aurora task ancestry (youngest first): {ancestry}"));
-        }
-
+        error.capture_runtime_frames_once(
+            self.call_stack.iter().rev().cloned().collect(),
+            self.task_ancestry.iter().rev().cloned().collect(),
+        );
         error
     }
 
@@ -1902,9 +1851,9 @@ impl MirRuntime {
                 ),
             ));
         }
-        self.call_stack.push(AuroraCallFrame {
+        self.call_stack.push(RuntimeCallFrame {
             function: function.name.clone(),
-            span: function.span,
+            span: RuntimeSourceSpan::point(function.source_path.clone(), function.span),
         });
         self.call_depth += 1;
         let outcome = (|| {
@@ -2025,6 +1974,7 @@ impl MirRuntime {
                     }
                     Ok(None) => {}
                     Err(error) => {
+                        let error = self.annotate_runtime_trap_once(error);
                         let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
                         return Err(error);
                     }
@@ -2040,6 +1990,7 @@ impl MirRuntime {
             ) {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    let error = self.annotate_runtime_trap_once(error);
                     let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
                     return Err(error);
                 }
@@ -3620,17 +3571,15 @@ impl MirRuntime {
         let program_args = self.program_args.clone();
         let function_for_task = function.clone();
         let mut task_ancestry = self.task_ancestry.clone();
-        let parent_function = self
+        let parent_frame = self
             .call_stack
             .last()
-            .expect("task starts only while an Aurora call frame is active")
-            .function
-            .clone();
-        task_ancestry.push(AuroraTaskSpawn {
+            .expect("task starts only while an Aurora call frame is active");
+        task_ancestry.push(RuntimeTaskFrame {
             task_function: function.name.clone(),
-            task_entry_span: function.span,
-            parent_function,
-            spawn_span,
+            task_entry_span: RuntimeSourceSpan::point(function.source_path.clone(), function.span),
+            parent_function: parent_frame.function.clone(),
+            spawn_span: RuntimeSourceSpan::point(parent_frame.span.path.clone(), spawn_span),
         });
         let entry = move || {
             let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(

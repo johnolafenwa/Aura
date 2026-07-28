@@ -152,8 +152,8 @@ fn run_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_primary_runtime_diagnostic(&rendered),
-            normalize_primary_runtime_diagnostic(&expected),
+            normalize_newlines(&rendered),
+            normalize_newlines(&expected),
             "unexpected runtime diagnostic for {}",
             fixture.display()
         );
@@ -210,25 +210,6 @@ fn normalize_workspace_path(text: &str) -> String {
         std::path::MAIN_SEPARATOR
     );
     text.replace(&prefix, "")
-}
-
-fn normalize_primary_runtime_diagnostic(text: &str) -> String {
-    // Full MIR backtraces are pinned in `mir_backtraces.rs`. Legacy runtime
-    // fixture oracles continue to pin the primary trap while the native
-    // backend waits for Batch 3 frame capture.
-    normalize_newlines(text)
-        .lines()
-        .filter(|line| !is_supplemental_mir_backtrace_note(line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn is_supplemental_mir_backtrace_note(line: &str) -> bool {
-    let line = line.trim_start();
-    let line = line.strip_prefix("= ").unwrap_or(line);
-    line.starts_with("note: Aurora call chain")
-        || line.starts_with("note: Aurora task entry")
-        || line.starts_with("note: Aurora task ancestry")
 }
 
 fn run_path_on_large_stack(path: PathBuf) -> aurora_compiler::Result<aurora_compiler::RunOutput> {

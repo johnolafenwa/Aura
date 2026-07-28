@@ -856,6 +856,9 @@ Current module/import limitations:
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls
+- MIR and direct-native runtime failures preserve matching typed Aurora call
+  frames and child-task ancestry; JSON tooling receives them as always-present
+  `call_frames` and `task_ancestry` arrays
 - package manifests, local path dependencies, and git dependencies are now implemented
 
 Current expression/ergonomics limitations:

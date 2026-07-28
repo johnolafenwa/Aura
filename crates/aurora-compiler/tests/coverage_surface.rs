@@ -343,6 +343,7 @@ fn public_native_codegen_rejects_invalid_mir_surface() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),

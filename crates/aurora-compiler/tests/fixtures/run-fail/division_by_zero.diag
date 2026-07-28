@@ -3,3 +3,4 @@ error[AU4004]: division by zero
   |
 2 |     value: int32 = 10 // 0
   |                    ^
+  = note: Aurora call chain (innermost first): main at 1:1

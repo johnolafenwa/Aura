@@ -55,7 +55,9 @@ These commands are for debugging and understanding your code:
 
 `check`, `run`, and `build` accept `--format human|json` for diagnostics. The
 JSON form is schema-versioned and preserves the compiler's stable `AU####`
-code, primary and related spans, notes, help, and machine-applicable edits.
+code, primary and related spans, notes, help, machine-applicable edits, and
+typed runtime `call_frames` and `task_ancestry`. The two frame arrays are
+always present and are empty for diagnostics without runtime frames.
 
 ```bash
 cargo run -p aura -- ast examples/classes/point_distance.au

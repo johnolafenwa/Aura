@@ -3,3 +3,4 @@ error[AU4001]: assertion failed
   |
 1 | assert false
   | ^
+  = note: Aurora call chain (innermost first): __script at 1:1

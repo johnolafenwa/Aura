@@ -129,6 +129,8 @@ A diagnostic contains all of the following fields:
 | `notes` | contextual facts that do not prescribe a change |
 | `help` | actionable human guidance |
 | `edits` | source replacements with an applicability classification |
+| `call_frames` | Aurora call frames, ordered innermost first |
+| `task_ancestry` | structured task parentage, ordered youngest first |
 
 The current compiler emits errors; the additional severity values are reserved
 by the shared schema. A machine-applicable edit is safe for a tool to offer as
@@ -193,7 +195,9 @@ contains no additional errors.
       "secondary_spans": [],
       "notes": [],
       "help": [],
-      "edits": []
+      "edits": [],
+      "call_frames": [],
+      "task_ancestry": []
     }
   ]
 }
@@ -213,6 +217,18 @@ successfully, the same document contains
 then fails, its progress and direct failure are retained as notes in the one
 diagnostic document.
 
+Every diagnostic entry contains both frame arrays, including compile-time and
+pre-user-code failures where they are empty. A call-frame record contains
+`function` and a `span`. A task-ancestry record contains `task_function`,
+`task_entry_span`, `parent_function`, and `spawn_span`. Each frame span carries
+its own `path`, `start`, and `end`, so a frame defined or spawned in an
+imported module is never mislabeled with the entry module's path.
+
+The arrays are an additive schema-version-1 extension. Schema-version-1
+readers MUST ignore unrecognized object members while continuing to validate
+the fields they use. The compiler-service semantic-interface version remains
+`2`: adding diagnostic metadata does not change checked-source meaning.
+
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
 human renderer.
@@ -220,10 +236,12 @@ human renderer.
 ## LSP Contract
 
 The compiler service owns editor diagnostics. Its analysis record carries the
-same code, severity, message, secondary spans, notes, help, and edits. The
+same code, severity, message, secondary spans, notes, help, edits, call frames,
+and task ancestry. Frame spans use zero-based `file_path`, `line`,
+`start_character`, and `end_character` coordinates in this editor shape. The
 JavaScript language-server bridge maps the primary span to the LSP range, maps
 secondary spans to `relatedInformation`, places the code in `Diagnostic.code`,
-and preserves notes, help, and edits in `Diagnostic.data`.
+and preserves the remaining metadata in `Diagnostic.data`.
 
 There is no independent semantic-diagnostic implementation in the language
 server. If the compiler service is unavailable, lexical recovery may keep basic
@@ -298,21 +316,33 @@ evaluating the condition or message remains primary. Active cleanup still
 runs, but a cleanup failure cannot replace an already established assertion
 diagnostic.
 
-The MIR runtime attaches the Aurora call chain to every trap. Frames name the
-Aurora function and its source span, ordered innermost first. If the trap occurs
-in a task, notes also identify that task's entry and its ancestry, including the
-source location from which each task was started. These are Aurora frames, not
-host Rust frames.
+The MIR and direct runtimes attach the same typed Aurora frames to every trap.
+Call frames name the Aurora function and its defining source span, ordered
+innermost first. If the trap occurs in a task, task-ancestry records also
+identify that task's entry, its parent function, and the exact source location
+from which each task was started, ordered youngest first. These are Aurora
+frames, not host Rust, Cranelift, scheduler, or service-worker frames.
 
-Structured output currently transports the Aurora call chain, task entry, and
-task ancestry as flat prose strings in `notes`. Dedicated structured frame
-lists are deferred to the later native-frames stage of the Batch 4 runtime work; tools MUST treat these
-notes as prose rather than parse them.
+Frame records are captured once when the primary trap is established, before
+cleanup or task-state reset. Propagation through callers, Task results, task
+groups, or workers does not append observer frames. A child starts a new call
+chain; its relationship to the parent is represented by task ancestry.
 
-Native-backend Aurora backtraces are deferred to that Batch 4 native-frames stage. Until
-then, native execution preserves the same primary trap code, message, and source
-location but may omit the supplemental Aurora frame and task-ancestry notes;
-this temporary difference is recorded in Current Limits.
+Human rendering synthesizes the established `Aurora call chain`, `Aurora task
+entry`, and `Aurora task ancestry` note lines from the typed records after
+ordinary notes. Those generated strings are not stored in structured `notes`,
+so JSON and LSP clients consume the frame arrays without parsing or
+deduplicating prose.
+
+JSON-mode direct runs transport a native trap to the `aura` parent through a
+private fixed-marker pipe and a separate bounded JSON-data pipe. Native
+initialization hides and marks both descriptors close-on-exec before user code.
+The parent emits one schema-version-1 document, including any buffered
+native-build progress in ordinary `notes`. An Aurora trap is distinct from a
+successful `main() -> int32` returning a nonzero status; a signalled
+missing/malformed record is a host failure, and `auto` never falls back to MIR
+after launch. Human-mode direct runs and standalone direct binaries continue
+to render the complete diagnostic themselves.
 
 Checked overflow, zero division, bounds failure, recursion-depth failure, and
 an explicitly trapping invalid runtime state are diagnostics. File, process,

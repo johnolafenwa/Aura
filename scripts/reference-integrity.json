@@ -407,7 +407,7 @@
       "reason": "Operational launch examples that require the surrounding worker source or built artifact."
     },
     "docs/manual/diagnostics.md#json-1": {
-      "sha256": "ee60b57fcfccdc681f58892e31875022f5b8d5d2fe4dfdcd00f3e3b3320b56fe",
+      "sha256": "e7ce6de41151ab983812acfeedf01012017e657ad420b790b29ef62420f1dce3",
       "mode": "illustrative",
       "reason": "Synthetic JSON diagnostic-schema example, not an executable request."
     },

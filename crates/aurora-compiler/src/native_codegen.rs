@@ -206,6 +206,16 @@ struct TaskStartMode {
     result_is_copy: bool,
 }
 
+struct TaskStart<'a> {
+    mode: TaskStartMode,
+    stack_size: Option<&'a Operand>,
+    task_group: &'a Operand,
+    function: &'a str,
+    args: &'a [MirArg],
+    spawn_span: Span,
+    target: &'a DirectType,
+}
+
 struct NativeCodegen<'a> {
     module: &'a MirModule,
     safepoints_enabled: bool,
@@ -704,7 +714,7 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             runtime_init => ("aurora_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
             run_root => ("aurora_direct_run_root", [types::I64], Some(types::I32)),
-            enter_call => ("aurora_direct_enter_call", [types::I64, types::I64, types::I64, types::I64], None),
+            enter_call => ("aurora_direct_enter_call_with_frame", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             exit_call => ("aurora_direct_exit_call", [], None),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
             print_u64 => ("aurora_direct_print_u64", [types::I64], None),
@@ -1005,7 +1015,7 @@ impl<'a> NativeCodegen<'a> {
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
             yield_now => ("aurora_direct_yield_now", [], None),
             sleep_value_void => ("aurora_direct_sleep_value_void", [types::I64], None),
-            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            start_task_call => ("aurora_direct_start_task_call_with_frames", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
         let mut functions = HashMap::new();
@@ -1482,9 +1492,20 @@ impl<'a> NativeCodegen<'a> {
             &mut builder,
             function.name.as_bytes(),
         )?;
-        builder
-            .ins()
-            .call(enter_call, &[line, column, function_ptr, function_len]);
+        let function_path = function
+            .source_path
+            .as_deref()
+            .unwrap_or(&self.program_path);
+        let (path_ptr, path_len) = declare_string_constant(
+            &mut self.object,
+            &mut self.string_data,
+            &mut builder,
+            function_path.as_bytes(),
+        )?;
+        builder.ins().call(
+            enter_call,
+            &[line, column, path_ptr, path_len, function_ptr, function_len],
+        );
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -2566,6 +2587,29 @@ impl<'a> NativeCodegen<'a> {
         let start_task_call = self
             .object
             .declare_func_in_func(self.start_task_call, builder.func);
+        let function_frame_metadata = self
+            .module
+            .functions
+            .iter()
+            .chain(self.module.top_level.iter())
+            .map(|candidate| {
+                (
+                    candidate.name.clone(),
+                    (
+                        candidate
+                            .source_path
+                            .clone()
+                            .unwrap_or_else(|| self.program_path.clone()),
+                        candidate.span,
+                    ),
+                )
+            })
+            .collect();
+        let current_function_name = function.name.clone();
+        let current_function_path = function
+            .source_path
+            .clone()
+            .unwrap_or_else(|| self.program_path.clone());
 
         let mut compiler = FunctionCompiler {
             builder,
@@ -2579,6 +2623,9 @@ impl<'a> NativeCodegen<'a> {
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
             function_writeback_types: self.function_writeback_types.clone(),
+            function_frame_metadata,
+            current_function_name,
+            current_function_path,
             writeback_locals,
             classes: self.classes.clone(),
             trait_impls: self.trait_impls.clone(),
@@ -3251,6 +3298,9 @@ struct FunctionCompiler<'a> {
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
+    function_frame_metadata: HashMap<String, (String, Span)>,
+    current_function_name: String,
+    current_function_path: String,
     writeback_locals: Vec<(String, DirectType)>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
@@ -4023,18 +4073,19 @@ impl<'a> FunctionCompiler<'a> {
                 task_group,
                 function,
                 args,
-                ..
-            } => self.compile_start_task(
-                TaskStartMode {
+                span,
+            } => self.compile_start_task(TaskStart {
+                mode: TaskStartMode {
                     returns_handle: *returns_handle,
                     result_is_copy: *result_is_copy,
                 },
-                stack_size.as_ref(),
+                stack_size: stack_size.as_ref(),
                 task_group,
                 function,
                 args,
+                spawn_span: *span,
                 target,
-            ),
+            }),
             Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
     }
@@ -11526,15 +11577,16 @@ impl<'a> FunctionCompiler<'a> {
         Ok(current)
     }
 
-    fn compile_start_task(
-        &mut self,
-        mode: TaskStartMode,
-        stack_size: Option<&Operand>,
-        task_group: &Operand,
-        function: &str,
-        args: &[MirArg],
-        target: &DirectType,
-    ) -> std::result::Result<ValueRef, String> {
+    fn compile_start_task(&mut self, task: TaskStart<'_>) -> std::result::Result<ValueRef, String> {
+        let TaskStart {
+            mode,
+            stack_size,
+            task_group,
+            function,
+            args,
+            spawn_span,
+            target,
+        } = task;
         let thunk_ref = *self.function_thunk_refs.get(function).ok_or({
             format!(
                 "direct backend does not know task-start thunk for `{}`",
@@ -11597,6 +11649,37 @@ impl<'a> FunctionCompiler<'a> {
         let group = self.load_operand(task_group)?;
         let group = self.ensure_opaque(group)?;
         let task_group_value = group.values[0];
+        let (task_path, task_entry_span) =
+            self.function_frame_metadata.get(function).cloned().ok_or({
+                format!(
+                    "direct backend does not know task-frame metadata for `{}`",
+                    function
+                )
+            })?;
+        let (task_function_ptr, task_function_len) = self.string_constant(function.as_bytes())?;
+        let (task_path_ptr, task_path_len) = self.string_constant(task_path.as_bytes())?;
+        let task_line = self
+            .builder
+            .ins()
+            .iconst(types::I64, task_entry_span.line as i64);
+        let task_column = self
+            .builder
+            .ins()
+            .iconst(types::I64, task_entry_span.column as i64);
+        let current_function_name = self.current_function_name.clone();
+        let current_function_path = self.current_function_path.clone();
+        let (parent_function_ptr, parent_function_len) =
+            self.string_constant(current_function_name.as_bytes())?;
+        let (spawn_path_ptr, spawn_path_len) =
+            self.string_constant(current_function_path.as_bytes())?;
+        let spawn_line = self
+            .builder
+            .ins()
+            .iconst(types::I64, spawn_span.line as i64);
+        let spawn_column = self
+            .builder
+            .ins()
+            .iconst(types::I64, spawn_span.column as i64);
         let call = self.builder.ins().call(
             self.start_task_call,
             &[
@@ -11608,6 +11691,18 @@ impl<'a> FunctionCompiler<'a> {
                 result_is_copy_value,
                 stack_size_present_value,
                 stack_size_value,
+                task_function_ptr,
+                task_function_len,
+                task_path_ptr,
+                task_path_len,
+                task_line,
+                task_column,
+                parent_function_ptr,
+                parent_function_len,
+                spawn_path_ptr,
+                spawn_path_len,
+                spawn_line,
+                spawn_column,
             ],
         );
         // MIR checking/lowering has already assigned every handle-returning

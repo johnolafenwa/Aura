@@ -3,3 +3,4 @@ error[AU4002]: integer value `9007199254740993` cannot be represented exactly as
   |
 3 |     value: float64 = source as float64
   |                      ^
+  = note: Aurora call chain (innermost first): main at 1:1

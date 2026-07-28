@@ -11,7 +11,7 @@ use crate::call::{
     BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
     ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
 };
-use crate::diag::{Diagnostic, Result, Span};
+use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
     builtin_duration_binary_result, substitute_trait_bound, ClassInfo, EnumInfo, FunctionInfo,
@@ -37,6 +37,8 @@ pub struct AnalysisDiagnostic {
     pub notes: Vec<String>,
     pub help: Vec<String>,
     pub edits: Vec<AnalysisDiagnosticEdit>,
+    pub call_frames: Vec<AnalysisRuntimeCallFrame>,
+    pub task_ancestry: Vec<AnalysisRuntimeTaskFrame>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -54,6 +56,28 @@ pub struct AnalysisDiagnosticEdit {
     pub end_character: usize,
     pub replacement: String,
     pub applicability: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisFrameSpan {
+    pub file_path: Option<String>,
+    pub line: usize,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisRuntimeCallFrame {
+    pub function: String,
+    pub span: AnalysisFrameSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisRuntimeTaskFrame {
+    pub task_function: String,
+    pub task_entry_span: AnalysisFrameSpan,
+    pub parent_function: String,
+    pub spawn_span: AnalysisFrameSpan,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -3327,6 +3351,33 @@ fn analysis_diagnostic(error: &Diagnostic) -> AnalysisDiagnostic {
                 applicability: edit.applicability.clone(),
             })
             .collect(),
+        call_frames: error
+            .call_frames
+            .iter()
+            .map(|frame| AnalysisRuntimeCallFrame {
+                function: frame.function.clone(),
+                span: analysis_frame_span(&frame.span),
+            })
+            .collect(),
+        task_ancestry: error
+            .task_ancestry
+            .iter()
+            .map(|frame| AnalysisRuntimeTaskFrame {
+                task_function: frame.task_function.clone(),
+                task_entry_span: analysis_frame_span(&frame.task_entry_span),
+                parent_function: frame.parent_function.clone(),
+                spawn_span: analysis_frame_span(&frame.spawn_span),
+            })
+            .collect(),
+    }
+}
+
+fn analysis_frame_span(span: &RuntimeSourceSpan) -> AnalysisFrameSpan {
+    AnalysisFrameSpan {
+        file_path: span.path.clone(),
+        line: span.start.line.saturating_sub(1),
+        start_character: span.start.column.saturating_sub(1),
+        end_character: span.end.column.saturating_sub(1),
     }
 }
 

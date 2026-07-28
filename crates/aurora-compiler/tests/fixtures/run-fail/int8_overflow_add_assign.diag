@@ -3,3 +3,4 @@ error[AU4002]: integer value `128` does not fit in `int8`
   |
 3 |     value += 1
   |     ^
+  = note: Aurora call chain (innermost first): main at 1:1

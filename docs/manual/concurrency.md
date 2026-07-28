@@ -560,11 +560,12 @@ units of function-local fuel between yields when sibling tasks are possible
 and elides the check when the program proves that no sibling task can exist.
 Builtin handle member names
 retain builtin dispatch on both backends. The scheduler/runtime surface and
-primary diagnostics are parity-pinned. Both backends therefore share the
+complete diagnostics are parity-pinned. Both backends therefore share the
 persistent reactor, timer heap, and direct runtime-event notification behavior.
-MIR traps include Aurora call-chain and task-ancestry notes; direct native
-traps may omit only those supplemental notes until the later Batch 4
-native-frames stage.
+MIR and direct-native traps capture the same typed Aurora call frames and task
+ancestry once, before cleanup resets task-local state. Human output derives
+call-chain and parent-task notes from those records, while JSON and the LSP
+preserve the frame arrays directly.
 
 ## Limits And Implementation-Defined Behavior
 
@@ -638,8 +639,8 @@ Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
 `select(source, ...)` builtin on both backends, using the shared persistent
 wait machinery for atomic registration, deterministic one-winner arbitration,
 cross-worker wakeups, and loser cleanup. It adds no statement syntax.
-Preemptive scheduling, `mut` task targets, native frame parity, and detached
-task syntax are unavailable. On the clean Mac14,9 Phase 5.9 measurement,
+Preemptive scheduling, `mut` task targets, and detached task syntax are
+unavailable. On the clean Mac14,9 Phase 5.9 measurement,
 10,000 parked sleepers used 206,962,688 bytes of worst whole-process RSS and
 198,492,160 bytes above their same-process pre-spawn baseline.
 

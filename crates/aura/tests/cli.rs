@@ -2808,6 +2808,11 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
         assert!(diagnostic["notes"].is_array());
         assert!(diagnostic["help"].is_array());
         assert!(diagnostic["edits"].is_array());
+        assert_eq!(diagnostic["call_frames"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            diagnostic["task_ancestry"].as_array().map(Vec::len),
+            Some(0)
+        );
     }
 }
 
@@ -2824,11 +2829,22 @@ struct NativeCacheFixture {
 #[cfg(unix)]
 impl NativeCacheFixture {
     fn new(prefix: &str) -> Self {
-        let cache = TempDir::new(&format!("{prefix}-cache"));
-        let (source, source_path) = write_temp_source(
-            &format!("{prefix}-source"),
+        Self::new_with_program(
+            prefix,
             "def main() -> int32:\n    print(\"cached\")\n    return 0\n",
-        );
+            Some(0),
+            "cached\n",
+        )
+    }
+
+    fn new_with_program(
+        prefix: &str,
+        program: &str,
+        expected_status: Option<i32>,
+        expected_stdout: &str,
+    ) -> Self {
+        let cache = TempDir::new(&format!("{prefix}-cache"));
+        let (source, source_path) = write_temp_source(&format!("{prefix}-source"), program);
 
         let run = |cache_path: &std::path::Path| {
             Command::new(aura_bin())
@@ -2842,12 +2858,13 @@ impl NativeCacheFixture {
         };
 
         let cold = run(cache.path());
-        assert!(
-            cold.status.success(),
-            "native-cache cold run failed, stderr was:\n{}",
-            String::from_utf8_lossy(&cold.stderr)
+        assert_eq!(
+            cold.status.code(),
+            expected_status,
+            "native-cache cold run had the wrong status, stderr was:\n{}",
+            String::from_utf8_lossy(&cold.stderr),
         );
-        assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
+        assert_eq!(String::from_utf8_lossy(&cold.stdout), expected_stdout);
 
         // Timed cache-member checks must measure cache inspection, not
         // unrelated source-checkout tests contending on the shared Cargo
@@ -2892,12 +2909,16 @@ impl NativeCacheFixture {
             .arg(&source_path)
             .output()
             .expect("failed to populate the installed native cache");
-        assert!(
-            installed_cold.status.success(),
-            "installed native-cache cold run failed, stderr was:\n{}",
-            String::from_utf8_lossy(&installed_cold.stderr)
+        assert_eq!(
+            installed_cold.status.code(),
+            expected_status,
+            "installed native-cache cold run had the wrong status, stderr was:\n{}",
+            String::from_utf8_lossy(&installed_cold.stderr),
         );
-        assert_eq!(String::from_utf8_lossy(&installed_cold.stdout), "cached\n");
+        assert_eq!(
+            String::from_utf8_lossy(&installed_cold.stdout),
+            expected_stdout
+        );
 
         let mut entries = fs::read_dir(cache.path().join("programs"))
             .expect("installed program cache should exist")
@@ -3684,12 +3705,249 @@ fn direct_run_json_failure_remains_one_document_when_a_rebuild_is_needed() {
     );
 }
 
+fn parse_single_json_stderr(output: &std::process::Output, context: &str) -> serde_json::Value {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "{context} must emit exactly one JSON document, stderr was:\n{stderr}"
+    );
+    serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+        panic!("{context} must emit valid JSON: {error}; stderr was:\n{stderr}")
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
+    let cache = TempDir::new("aurora-native-json-runtime-trap");
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-json-runtime-trap-source",
+        "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
+    );
+
+    let run = |backend: &str| {
+        Command::new(aura_bin())
+            .env("AURORA_CACHE_DIR", cache.path())
+            .args(["run", "--format", "json", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run {backend} JSON trap: {error}"))
+    };
+
+    let cold = run("direct");
+    assert_eq!(
+        cold.status.code(),
+        Some(1),
+        "cold direct runtime trap should exit 1"
+    );
+    let cold_report = parse_single_json_stderr(&cold, "cold direct runtime trap");
+    assert_eq!(cold_report["schema_version"], 1);
+    assert!(
+        cold_report["diagnostics"]
+            .as_array()
+            .is_some_and(|items| items.len() == 1),
+        "cold direct trap must carry one diagnostic: {cold_report}"
+    );
+    assert_eq!(cold_report["diagnostics"][0]["code"], "AU4003");
+    assert!(
+        cold_report["diagnostics"][0]["call_frames"]
+            .as_array()
+            .is_some_and(|frames| !frames.is_empty()),
+        "cold direct trap must carry typed call frames: {cold_report}"
+    );
+    assert!(
+        cold_report["diagnostics"][0]["notes"]
+            .as_array()
+            .is_some_and(|notes| notes
+                .iter()
+                .any(|note| note == "aura: rebuilding native runtime...")),
+        "cold direct trap must retain rebuild progress in non-frame notes: {cold_report}"
+    );
+
+    let warm = run("direct");
+    assert_eq!(
+        warm.status.code(),
+        Some(1),
+        "warm direct runtime trap should exit 1"
+    );
+    let warm_report = parse_single_json_stderr(&warm, "warm direct runtime trap");
+    assert_eq!(
+        warm_report["diagnostics"][0]["call_frames"], cold_report["diagnostics"][0]["call_frames"],
+        "cold and verified-hit launches must transport identical frames"
+    );
+    assert!(
+        warm_report.get("fallback").is_none(),
+        "forced direct runtime traps cannot carry fallback metadata: {warm_report}"
+    );
+
+    let automatic = run("auto");
+    assert_eq!(
+        automatic.status.code(),
+        Some(1),
+        "automatic direct runtime trap should exit 1"
+    );
+    let automatic_report = parse_single_json_stderr(&automatic, "automatic direct runtime trap");
+    assert_eq!(
+        automatic_report["diagnostics"][0]["call_frames"],
+        warm_report["diagnostics"][0]["call_frames"]
+    );
+    assert!(
+        automatic_report.get("fallback").is_none(),
+        "an Aurora program trap is not a backend failure and must not fall back: {automatic_report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap() {
+    let cache = TempDir::new("aurora-native-json-normal-nonzero");
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-json-normal-nonzero-source",
+        "def main() -> int32:\n    return 1\n",
+    );
+    let run = || {
+        Command::new(aura_bin())
+            .env("AURORA_CACHE_DIR", cache.path())
+            .args(["run", "--format", "json", "--backend", "direct"])
+            .arg(&source_path)
+            .output()
+            .expect("failed to run normal nonzero direct program")
+    };
+
+    let cold = run();
+    assert_eq!(cold.status.code(), Some(1));
+    let cold_report = parse_single_json_stderr(&cold, "cold normal nonzero direct run");
+    assert!(
+        cold_report.get("diagnostics").is_none(),
+        "ordinary status 1 must not be classified as a diagnostic: {cold_report}"
+    );
+    assert!(
+        cold_report["progress"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "the cold run should retain its native-build progress: {cold_report}"
+    );
+
+    let warm = run();
+    assert_eq!(warm.status.code(), Some(1));
+    assert!(
+        warm.stderr.is_empty(),
+        "a warm normal status 1 needs neither a diagnostic nor a progress document: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_json_channel_is_private_and_does_not_wait_for_a_grandchild() {
+    let cache = TempDir::new("aurora-native-json-grandchild");
+    let source = r#"import process
+import sys
+
+def internal_env_visible() -> bool:
+    match sys.env("AURORA_INTERNAL_DIAGNOSTIC_FD"):
+        case Option.Some(_):
+            return true
+        case Option.None:
+            pass
+    match sys.env("AURORA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
+        case Option.Some(_):
+            return true
+        case Option.None:
+            return false
+
+def run() -> Result[int32, process.Error]:
+    if internal_env_visible():
+        return Result.Ok(11)
+    environment = try process.run(["/usr/bin/env"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
+    child_environment = environment.stdout()
+    if child_environment.contains("AURORA_INTERNAL_DIAGNOSTIC_FD") or child_environment.contains("AURORA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
+        return Result.Ok(12)
+    try process.run(["/bin/sh", "-c", "sleep 10 &"], stdout=process.null(), stderr=process.null(), timeout=2s)
+    values: Vec[int32] = [1, 2]
+    return Result.Ok(values[9])
+
+def main() -> int32:
+    match own run():
+        case Result.Ok(code):
+            return code
+        case Result.Err(_):
+            return 13
+"#;
+    let (_source, source_path) = write_temp_source("aurora-native-json-grandchild-source", source);
+
+    // Populate the program cache without installing the private JSON channel.
+    let cold = Command::new(aura_bin())
+        .env("AURORA_CACHE_DIR", cache.path())
+        .args(["run", "--backend", "direct"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to populate grandchild regression cache");
+    assert_eq!(
+        cold.status.code(),
+        Some(1),
+        "the human-mode population run should reach the body trap: {}",
+        String::from_utf8_lossy(&cold.stderr)
+    );
+
+    let mut command = Command::new(aura_bin());
+    command
+        .env("AURORA_CACHE_DIR", cache.path())
+        .args(["run", "--format", "json", "--backend", "direct"])
+        .arg(&source_path);
+    let output = command_output_with_timeout(
+        command,
+        std::time::Duration::from_secs(5),
+        "direct JSON grandchild fd-isolation run",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the JSON run must reach the trap, not an environment-leak status: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_single_json_stderr(&output, "direct JSON grandchild fd-isolation run");
+    assert_eq!(report["diagnostics"][0]["code"], "AU4003");
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_direct_json_preserves_the_original_lowering_diagnostic() {
+    let (_source, source_path) = write_temp_source(
+        "aurora-native-json-lowering-diagnostic",
+        "def main() -> int32:\n    return missing\n",
+    );
+    let output = Command::new(aura_bin())
+        .args(["run", "--format", "json", "--backend", "direct"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to run forced-direct lowering failure");
+    assert_eq!(output.status.code(), Some(1));
+    let report = parse_single_json_stderr(&output, "forced-direct lowering failure");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "AU2001");
+    assert_eq!(diagnostic["message"], "unknown name `missing`");
+    assert_eq!(diagnostic["primary_span"]["start"]["line"], 2);
+    assert!(
+        diagnostic["primary_span"]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/main.au")),
+        "the original lowering path must survive native backend selection: {report}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_run_json_buffers_wait_progress_into_one_document() {
     use std::os::fd::AsRawFd;
 
-    let fixture = NativeCacheFixture::new("aurora-native-json-wait");
+    let fixture = NativeCacheFixture::new_with_program(
+        "aurora-native-json-wait",
+        "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
+        Some(1),
+        "",
+    );
     let key = fixture
         .entry
         .file_name()
@@ -3779,12 +4037,13 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
         .read_to_end(&mut stderr)
         .expect("JSON wait stderr should be readable");
 
-    assert!(
-        status.success(),
-        "JSON-mode direct run should succeed after the lock release; stderr was:\n{}",
-        String::from_utf8_lossy(&stderr)
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "JSON-mode direct trap should be reported after the lock release; stderr was:\n{}",
+        String::from_utf8_lossy(&stderr),
     );
-    assert_eq!(String::from_utf8_lossy(&stdout), "cached\n");
+    assert!(stdout.is_empty(), "the trapping program should not print");
     let stderr_text = String::from_utf8(stderr).expect("JSON-mode stderr should be UTF-8");
     assert_eq!(
         stderr_text.lines().count(),
@@ -3798,9 +4057,16 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
         )
     });
     assert_eq!(report["schema_version"], 1);
-    let progress = report["progress"]
+    assert_eq!(report["diagnostics"][0]["code"], "AU4003");
+    assert!(
+        report["diagnostics"][0]["call_frames"]
+            .as_array()
+            .is_some_and(|frames| !frames.is_empty()),
+        "the waiting launch must preserve the native trap frames: {report}"
+    );
+    let progress = report["diagnostics"][0]["notes"]
         .as_array()
-        .unwrap_or_else(|| panic!("JSON wait report should contain progress: {report}"));
+        .unwrap_or_else(|| panic!("JSON trap should contain buffered progress notes: {report}"));
     assert_eq!(
         progress
             .iter()

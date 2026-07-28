@@ -29,6 +29,7 @@ diagnostic document's numeric schema version. The transport rejects and
 disposes a compiler with a missing or different semantic identity, invalidates
 all cached document analysis, and uses lexical recovery for the failed request;
 pre-migration ownership metadata therefore cannot survive a compiler upgrade.
+Responses remain bounded to 16 MiB.
 With a matching compiler, the server caches analysis per document version,
 debounces changes, cancels obsolete completion work, guards asynchronous
 responses by document version, and invalidates only changed documents and their
@@ -37,6 +38,15 @@ dependents.
 Compiler diagnostics keep the stable `AU####` code, related source spans,
 notes, help, and machine-applicable edits through the LSP mapping. The bridge
 does not classify or recreate semantic diagnostics independently.
+`Diagnostic.data` also preserves the compiler-owned `call_frames` and
+`task_ancestry` arrays. Their frame spans use zero-based `line`,
+`start_character`, and `end_character` coordinates and retain each frame's
+optional `file_path`; the bridge neither parses human backtrace notes nor
+reconstructs paths or ancestry. Updated compiler responses always include both
+arrays. Records from an older compatible semantic-interface-v2 compiler that
+omit the additive fields are treated as empty arrays. Compile-time diagnostics
+normally carry empty frame arrays today, while the populated shape is ready for
+editor workflows that present runtime diagnostics.
 
 If the compiler process cannot be started, the lexical recovery layer provides only:
 

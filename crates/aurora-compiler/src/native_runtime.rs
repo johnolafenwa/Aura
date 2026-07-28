@@ -7,6 +7,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::mem;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::process;
 use std::slice;
 use std::str;
@@ -18,7 +20,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
@@ -93,6 +95,8 @@ struct DirectTaskRuntimeState {
     cleanup_draining: bool,
     primary_runtime_diagnostic: Option<Diagnostic>,
     call_depth: usize,
+    call_frames: Vec<RuntimeCallFrame>,
+    task_ancestry: Vec<RuntimeTaskFrame>,
     fallback_cancellation: CancellationContext,
 }
 
@@ -107,6 +111,8 @@ impl Default for DirectTaskRuntimeState {
             cleanup_draining: false,
             primary_runtime_diagnostic: None,
             call_depth: 0,
+            call_frames: Vec::new(),
+            task_ancestry: Vec::new(),
             fallback_cancellation: CancellationContext::default(),
         }
     }
@@ -264,14 +270,35 @@ impl Drop for DirectTaskRuntimeScopeGuard {
 }
 
 fn with_direct_task_runtime_scope<T>(work: impl FnOnce() -> T) -> T {
+    with_direct_task_runtime_scope_with_ancestry(Vec::new(), work)
+}
+
+fn with_direct_task_runtime_scope_with_ancestry<T>(
+    task_ancestry: Vec<RuntimeTaskFrame>,
+    work: impl FnOnce() -> T,
+) -> T {
     let key = direct_task_runtime_key();
     let state = DirectTaskRuntimeState {
         ownership_tracking_active: true,
+        task_ancestry,
         ..DirectTaskRuntimeState::default()
     };
     let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().insert(key, state));
     let _guard = DirectTaskRuntimeScopeGuard { key, previous };
     work()
+}
+
+fn direct_runtime_call_frames() -> Vec<RuntimeCallFrame> {
+    with_direct_task_runtime_state(|state| state.call_frames.iter().rev().cloned().collect())
+}
+
+fn direct_runtime_task_ancestry() -> Vec<RuntimeTaskFrame> {
+    with_direct_task_runtime_state(|state| state.task_ancestry.clone())
+}
+
+fn capture_direct_runtime_frames_once(diagnostic: &mut Diagnostic) {
+    diagnostic
+        .capture_runtime_frames_once(direct_runtime_call_frames(), direct_runtime_task_ancestry());
 }
 
 fn clear_direct_task_runtime_states() {
@@ -525,6 +552,93 @@ struct ProgramSourceContext {
 }
 
 static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
+
+#[cfg(unix)]
+struct InternalDiagnosticChannels {
+    data: Option<std::fs::File>,
+    signal: Option<std::fs::File>,
+}
+
+#[cfg(unix)]
+static INTERNAL_DIAGNOSTIC_CHANNELS: std::sync::Mutex<Option<InternalDiagnosticChannels>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(unix)]
+fn lock_internal_diagnostic_channels(
+) -> std::sync::MutexGuard<'static, Option<InternalDiagnosticChannels>> {
+    INTERNAL_DIAGNOSTIC_CHANNELS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(unix)]
+fn inherited_internal_diagnostic_file(fd: RawFd) -> Option<std::fs::File> {
+    if fd < 0 {
+        return None;
+    }
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return None;
+    }
+    // SAFETY: the private ABI transfers ownership of each inherited
+    // descriptor to the runtime during initialization. `F_GETFD` above also
+    // rejects stale or otherwise invalid numbers before ownership is assumed.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return None;
+    }
+    Some(file)
+}
+
+#[cfg(unix)]
+fn install_internal_diagnostic_channels(data_fd: RawFd, signal_fd: RawFd) {
+    let channels = if data_fd == signal_fd {
+        // Never construct two `File` owners for one descriptor. Treat a
+        // malformed pair as unavailable while still taking and closing it.
+        let _ = inherited_internal_diagnostic_file(data_fd);
+        InternalDiagnosticChannels {
+            data: None,
+            signal: None,
+        }
+    } else {
+        InternalDiagnosticChannels {
+            data: inherited_internal_diagnostic_file(data_fd),
+            signal: inherited_internal_diagnostic_file(signal_fd),
+        }
+    };
+    *lock_internal_diagnostic_channels() = Some(channels);
+}
+
+#[cfg(unix)]
+fn initialize_internal_diagnostic_channels() {
+    let data = std::env::var_os(crate::INTERNAL_DIAGNOSTIC_FD_ENV);
+    let signal = std::env::var_os(crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV);
+    // SAFETY: generated direct programs initialize the runtime before starting
+    // any Aurora tasks or user code, so no concurrent environment access has
+    // begun. Hiding both private keys also prevents `sys.env` and spawned
+    // descendants from observing the control channel.
+    unsafe {
+        std::env::remove_var(crate::INTERNAL_DIAGNOSTIC_FD_ENV);
+        std::env::remove_var(crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV);
+    }
+    if data.is_none() && signal.is_none() {
+        return;
+    }
+    let parse_fd = |value: Option<std::ffi::OsString>| {
+        value
+            .and_then(|value| value.into_string().ok())
+            .and_then(|value| value.parse::<RawFd>().ok())
+            .unwrap_or(-1)
+    };
+    install_internal_diagnostic_channels(parse_fd(data), parse_fd(signal));
+}
+
+#[cfg(not(unix))]
+fn initialize_internal_diagnostic_channels() {
+    // The direct structured-diagnostic transport is Unix-only. Keep the
+    // initialization call unconditional so generated entry behavior is
+    // platform-independent.
+}
 
 fn current_cancellation() -> CancellationContext {
     if let Some(cancellation) = current_lightweight_task_cancellation() {
@@ -1798,16 +1912,85 @@ fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     if direct_runtime_error_capture_enabled() {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
     }
-    let _ = writeln!(
-        io::stderr().lock(),
-        "{}",
-        render_runtime_diagnostic(diagnostic)
-    );
+    if matches!(
+        try_emit_internal_structured_diagnostic(&diagnostic),
+        InternalDiagnosticEmission::NoChannel
+    ) {
+        let _ = writeln!(
+            io::stderr().lock(),
+            "{}",
+            render_runtime_diagnostic(diagnostic)
+        );
+    }
     process::exit(1);
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InternalDiagnosticEmission {
+    /// No usable marker reached the parent, so human stderr remains the only
+    /// reliable diagnostic path.
+    NoChannel,
+    /// The marker and complete structured record were emitted.
+    Emitted,
+    /// The marker reached the parent but the record failed. The parent owns
+    /// reporting this as one JSON host error; human stderr must stay silent.
+    SignaledWithoutRecord,
+}
+
+#[cfg(unix)]
+fn write_internal_structured_diagnostic_to_fd(
+    diagnostic: &Diagnostic,
+    channel: &mut std::fs::File,
+) -> io::Result<()> {
+    let fallback_path = DIRECT_PROGRAM_SOURCE
+        .get()
+        .map(|context| context.path.as_str())
+        .unwrap_or("<direct>");
+    let encoded = serde_json::to_vec(&diagnostic.structured(fallback_path))
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if encoded.len() > crate::MAX_INTERNAL_DIAGNOSTIC_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "structured native diagnostic exceeds the internal 1 MiB limit",
+        ));
+    }
+    channel.write_all(&encoded)?;
+    channel.flush()
+}
+
+fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalDiagnosticEmission {
+    #[cfg(unix)]
+    {
+        let Some(mut channels) = lock_internal_diagnostic_channels().take() else {
+            return InternalDiagnosticEmission::NoChannel;
+        };
+        let (Some(mut data), Some(mut signal)) = (channels.data.take(), channels.signal.take())
+        else {
+            return InternalDiagnosticEmission::NoChannel;
+        };
+        if signal
+            .write_all(&[crate::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER])
+            .and_then(|()| signal.flush())
+            .is_err()
+        {
+            return InternalDiagnosticEmission::NoChannel;
+        }
+        if write_internal_structured_diagnostic_to_fd(diagnostic, &mut data).is_ok() {
+            InternalDiagnosticEmission::Emitted
+        } else {
+            InternalDiagnosticEmission::SignaledWithoutRecord
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = diagnostic;
+        InternalDiagnosticEmission::NoChannel
+    }
+}
+
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    let diagnostic = diagnostic.into_runtime_trap();
+    let mut diagnostic = diagnostic.into_runtime_trap();
+    capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
         emit_runtime_diagnostic_error(direct_primary_runtime_diagnostic().unwrap_or(diagnostic));
     }
@@ -1858,7 +2041,8 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
-                let diagnostic = signal.0;
+                let mut diagnostic = signal.0;
+                capture_direct_runtime_frames_once(&mut diagnostic);
                 // A trapping cleanup must not replace the failure that caused this
                 // boundary to drain the remaining task-local cleanup registrations.
                 let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
@@ -2213,6 +2397,7 @@ pub extern "C-unwind" fn aurora_direct_runtime_init(
     source_ptr: *const u8,
     source_len: usize,
 ) {
+    initialize_internal_diagnostic_channels();
     task_runtime_boundary(|| {
         clear_direct_task_runtime_states();
         let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
@@ -2298,17 +2483,54 @@ pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
     function_ptr: *const u8,
     function_len: usize,
 ) {
+    unsafe {
+        aurora_direct_enter_call_with_frame(
+            line,
+            column,
+            std::ptr::null(),
+            0,
+            function_ptr,
+            function_len,
+        );
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aurora_direct_enter_call_with_frame(
+    line: i64,
+    column: i64,
+    path_ptr: *const u8,
+    path_len: usize,
+    function_ptr: *const u8,
+    function_len: usize,
+) {
     task_runtime_boundary(|| {
+        let function = decode_bytes(function_ptr, function_len);
+        let path = if path_ptr.is_null() || path_len == 0 {
+            DIRECT_PROGRAM_SOURCE
+                .get()
+                .map(|context| context.path.clone())
+        } else {
+            Some(decode_bytes(path_ptr, path_len))
+        };
+        let start = Span::new(
+            usize::try_from(line).unwrap_or_default(),
+            usize::try_from(column).unwrap_or_default(),
+        );
+        let frame = RuntimeCallFrame {
+            function: function.clone(),
+            span: RuntimeSourceSpan::point(path, start),
+        };
         let depth_exceeded = with_direct_task_runtime_state(|state| {
             if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
                 true
             } else {
                 state.call_depth += 1;
+                state.call_frames.push(frame);
                 false
             }
         });
         if depth_exceeded {
-            let function = decode_bytes(function_ptr, function_len);
             let message = format!(
                 "maximum call depth of {} exceeded while calling `{}`",
                 DIRECT_MAX_CALL_DEPTH, function
@@ -2327,6 +2549,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
         with_direct_task_runtime_state(|state| {
             if state.call_depth > 0 {
                 state.call_depth -= 1;
+                let _ = state.call_frames.pop();
             }
         });
     })
@@ -8785,6 +9008,7 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     }
 }
 
+#[cfg(test)]
 unsafe fn spawn_direct_task_with_external_state<R>(
     cancellation: CancellationContext,
     thunk: NativeThunk,
@@ -8797,6 +9021,48 @@ unsafe fn spawn_direct_task_with_external_state<R>(
 where
     R: FnOnce(&TaskValue),
 {
+    unsafe {
+        spawn_direct_task_with_external_state_and_ancestry(
+            DirectTaskSpawn {
+                cancellation,
+                thunk,
+                args_address,
+                claim_flag_address,
+                result_is_copy,
+                stack_size,
+                task_ancestry: Vec::new(),
+            },
+            register_before_submit,
+        )
+    }
+}
+
+struct DirectTaskSpawn {
+    cancellation: CancellationContext,
+    thunk: NativeThunk,
+    args_address: usize,
+    claim_flag_address: usize,
+    result_is_copy: bool,
+    stack_size: Option<usize>,
+    task_ancestry: Vec<RuntimeTaskFrame>,
+}
+
+unsafe fn spawn_direct_task_with_external_state_and_ancestry<R>(
+    spawn: DirectTaskSpawn,
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    R: FnOnce(&TaskValue),
+{
+    let DirectTaskSpawn {
+        cancellation,
+        thunk,
+        args_address,
+        claim_flag_address,
+        result_is_copy,
+        stack_size,
+        task_ancestry,
+    } = spawn;
     let entry = move || {
         // This guard is created on the coroutine stack rather than captured by
         // the force-reset closure. Normal return and ordinary Rust unwinding
@@ -8807,7 +9073,7 @@ where
             args_address,
             claim_flag_address,
         };
-        with_direct_task_runtime_scope(|| {
+        with_direct_task_runtime_scope_with_ancestry(task_ancestry, || {
             Ok(with_task_runtime_error_capture(|| {
                 unsafe {
                     let args = &*(args_address as *const Vec<i64>);
@@ -8857,6 +9123,117 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     stack_size_present: i64,
     stack_size: i64,
 ) -> *mut OpaqueValue {
+    unsafe {
+        start_direct_task_call(DirectTaskCall {
+            thunk_ptr,
+            args_ptr,
+            arg_count,
+            returns_handle,
+            task_group,
+            result_is_copy,
+            stack_size_present,
+            stack_size,
+            task_ancestry: Vec::new(),
+        })
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aurora_direct_start_task_call_with_frames(
+    thunk_ptr: i64,
+    args_ptr: *const i64,
+    arg_count: i64,
+    returns_handle: i64,
+    task_group: *mut OpaqueValue,
+    result_is_copy: i64,
+    stack_size_present: i64,
+    stack_size: i64,
+    task_function_ptr: *const u8,
+    task_function_len: usize,
+    task_path_ptr: *const u8,
+    task_path_len: usize,
+    task_line: i64,
+    task_column: i64,
+    parent_function_ptr: *const u8,
+    parent_function_len: usize,
+    spawn_path_ptr: *const u8,
+    spawn_path_len: usize,
+    spawn_line: i64,
+    spawn_column: i64,
+) -> *mut OpaqueValue {
+    let task_function = decode_bytes(task_function_ptr, task_function_len);
+    let parent_function = decode_bytes(parent_function_ptr, parent_function_len);
+    let task_path = if task_path_ptr.is_null() || task_path_len == 0 {
+        None
+    } else {
+        Some(decode_bytes(task_path_ptr, task_path_len))
+    };
+    let spawn_path = if spawn_path_ptr.is_null() || spawn_path_len == 0 {
+        None
+    } else {
+        Some(decode_bytes(spawn_path_ptr, spawn_path_len))
+    };
+    let mut task_ancestry = direct_runtime_task_ancestry();
+    task_ancestry.insert(
+        0,
+        RuntimeTaskFrame {
+            task_function,
+            task_entry_span: RuntimeSourceSpan::point(
+                task_path,
+                Span::new(
+                    usize::try_from(task_line).unwrap_or_default(),
+                    usize::try_from(task_column).unwrap_or_default(),
+                ),
+            ),
+            parent_function,
+            spawn_span: RuntimeSourceSpan::point(
+                spawn_path,
+                Span::new(
+                    usize::try_from(spawn_line).unwrap_or_default(),
+                    usize::try_from(spawn_column).unwrap_or_default(),
+                ),
+            ),
+        },
+    );
+    unsafe {
+        start_direct_task_call(DirectTaskCall {
+            thunk_ptr,
+            args_ptr,
+            arg_count,
+            returns_handle,
+            task_group,
+            result_is_copy,
+            stack_size_present,
+            stack_size,
+            task_ancestry,
+        })
+    }
+}
+
+struct DirectTaskCall {
+    thunk_ptr: i64,
+    args_ptr: *const i64,
+    arg_count: i64,
+    returns_handle: i64,
+    task_group: *mut OpaqueValue,
+    result_is_copy: i64,
+    stack_size_present: i64,
+    stack_size: i64,
+    task_ancestry: Vec<RuntimeTaskFrame>,
+}
+
+unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
+    let DirectTaskCall {
+        thunk_ptr,
+        args_ptr,
+        arg_count,
+        returns_handle,
+        task_group,
+        result_is_copy,
+        stack_size_present,
+        stack_size,
+        task_ancestry,
+    } = call;
     task_runtime_boundary(|| {
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
         let arg_count = match usize::try_from(arg_count) {
@@ -8931,13 +9308,16 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
         // state. The spawn helper releases it itself when scheduling fails.
         std::mem::forget(external_state_guard);
         let task = unsafe {
-            spawn_direct_task_with_external_state(
-                cancellation,
-                thunk,
-                args_address,
-                claim_flag_address,
-                result_is_copy != 0,
-                stack_size,
+            spawn_direct_task_with_external_state_and_ancestry(
+                DirectTaskSpawn {
+                    cancellation,
+                    thunk,
+                    args_address,
+                    claim_flag_address,
+                    result_is_copy: result_is_copy != 0,
+                    stack_size,
+                    task_ancestry,
+                },
                 |task| {
                     group.register_task(task.clone());
                     for queue in &queue_producers {

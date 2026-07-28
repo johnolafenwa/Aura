@@ -191,6 +191,10 @@ aura deps update util
   - the CLI now tolerates the common incomplete-editor state where the buffer currently contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including at EOF
   - local imported modules now participate in compiler-backed completions for both file-backed and stdin-backed buffers, including imported trait methods
 - built binaries now preserve file, line, and caret context for arithmetic runtime failures such as division by zero
+- MIR and directly generated native failures preserve the same typed Aurora
+  call frames and child-task ancestry. Human output renders those records as
+  call-chain/task notes; JSON output exposes `call_frames` and
+  `task_ancestry` arrays without requiring tools to parse prose.
 
 ## Stdin Mode
 
@@ -223,7 +227,20 @@ When a compiler-facing command fails, the default human renderer prints:
 `aura check --format json` emits `{"schema_version":1,"diagnostics":[...]}`.
 `run` and `build` use the same structure for failures. Each diagnostic carries
 its code, severity, message, primary and secondary spans, notes, help, and
-edits; editor tooling consumes the same compiler-owned fields.
+edits, plus `call_frames` in innermost-first order and `task_ancestry` in
+youngest-first order. The frame arrays are always present, including when
+empty. Editor tooling consumes the same compiler-owned fields.
+
+For `aura run --format json --backend direct`, the CLI gives the native child a
+private trap-signal pipe and a separate bounded diagnostic-data pipe. The
+child signals and writes one compiler-owned JSON record only when Aurora
+traps; ordinary nonzero `main` results write neither. Native initialization
+hides both internal descriptors from user code and marks them close-on-exec.
+This lets JSON mode distinguish a program returning status `1` from an
+`AU####` runtime failure without scraping human stderr, and a signalled
+missing/malformed record becomes a hard post-launch failure rather than an
+`auto` fallback. Human direct runs create no private channel and retain the
+native renderer.
 
 ## Current Limitation
 

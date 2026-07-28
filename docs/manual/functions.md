@@ -359,8 +359,8 @@ call specialization would duplicate non-cloneable `random.Rng` state or could
 not satisfy a callable clone-safety obligation. `AU4001` means a
 call-depth or general call trap. A callee's `AU4002` means arithmetic overflow
 or underflow, `AU4003` means bounds or lookup violation, `AU4004` means zero divisor, and
-`AU4005` means a trapping resource or I/O failure; each retains its MIR
-backtrace notes.
+`AU4005` means a trapping resource or I/O failure; each retains the same typed
+Aurora call frames and task ancestry on MIR and direct-native execution.
 
 ## Backend Support
 

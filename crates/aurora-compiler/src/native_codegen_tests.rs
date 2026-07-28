@@ -199,6 +199,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -951,10 +952,78 @@ def main() -> int32:
 }
 
 #[test]
+fn native_codegen_forwards_exact_call_and_task_frame_metadata_to_runtime_abis() {
+    let source = r#"
+def child() -> int32:
+    return 7
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(child)
+        match task.result():
+            case TaskResult.Ready(value):
+                return value
+            case _:
+                return 0
+"#;
+    let mut mir = lower_source_to_mir(source).expect("task-frame source should lower");
+    let child = mir
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "child")
+        .expect("child should lower");
+    child.source_path = Some("/workspace/pkg/child.au".to_string());
+    let main = mir
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    main.source_path = Some("/workspace/app/main.au".to_string());
+
+    let object = emit_host_object_with_metadata(&mir, "/workspace/app/main.au", source)
+        .expect("frame-aware task source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_enter_call_with_frame")),
+        "generated function entry must use the complete frame ABI: {referenced:?}"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_start_task_call_with_frames")),
+        "generated task start must use the ancestry-carrying ABI: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.ends_with("aurora_direct_start_task_call")),
+        "generated code must not silently fall back to the metadata-free task ABI"
+    );
+
+    let parsed = cranelift_object::object::File::parse(object.as_slice())
+        .expect("frame-aware output should be a readable host object");
+    let data_contains = |needle: &[u8]| {
+        parsed.sections().any(|section| {
+            section
+                .data()
+                .ok()
+                .is_some_and(|data| data.windows(needle.len()).any(|window| window == needle))
+        })
+    };
+    assert!(data_contains(b"/workspace/pkg/child.au"));
+    assert!(data_contains(b"/workspace/app/main.au"));
+    assert!(data_contains(b"child"));
+    assert!(data_contains(b"main"));
+}
+
+#[test]
 fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
     let function = MirFunction {
         name: "main".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -991,6 +1060,7 @@ fn handbuilt_mir_safepoint_does_not_mask_a_malformed_terminator() {
     let function = MirFunction {
         name: "main".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -1709,6 +1779,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -1762,6 +1833,7 @@ fn module_with_main_member_call_result_type(
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -1981,6 +2053,7 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5096,6 +5169,7 @@ fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5152,6 +5226,7 @@ fn direct_backend_entry_thunk_handles_unit_parameters() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: vec![MirParam {
@@ -5796,6 +5871,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5851,6 +5927,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5891,6 +5968,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5926,6 +6004,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -5970,6 +6049,7 @@ fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -6926,6 +7006,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -6968,6 +7049,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -7009,6 +7091,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -7044,6 +7127,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -7174,6 +7258,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -7231,6 +7316,7 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -7281,6 +7367,7 @@ fn native_codegen_rejects_try_between_non_result_types() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -8743,6 +8830,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     let function = MirFunction {
         name: "main".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -8835,6 +8923,7 @@ fn native_codegen_receiver_and_type_param_helpers_cover_missing_receiver_and_ter
     let function = MirFunction {
         name: "Widget.read".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(MirReceiverKind::Borrow),
         params: Vec::new(),
@@ -8881,6 +8970,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     let function = MirFunction {
         name: "demo".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: crate::diag::Span::new(1, 1),
         receiver: Some(MirReceiverKind::Borrow),
         params: vec![crate::mir::MirParam {
@@ -8976,6 +9066,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
     let function = MirFunction {
         name: "cleanup_demo".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(MirReceiverKind::BorrowMut),
         params: vec![MirParam {
@@ -9814,6 +9905,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -11026,6 +11118,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
     let function = MirFunction {
         name: "main".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: vec![MirParam {
@@ -11087,6 +11180,7 @@ fn native_codegen_constructor_initializes_runtime_function_surface() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),
@@ -11249,6 +11343,7 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
     MirFunction {
         name: "main".to_string(),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
@@ -11296,6 +11391,7 @@ fn close_function(class_name: &str) -> MirFunction {
     MirFunction {
         name: format!("{class_name}.close"),
         module_name: "<test>".to_string(),
+        source_path: None,
         span: Span::new(1, 1),
         receiver: Some(MirReceiverKind::BorrowMut),
         params: Vec::new(),
@@ -11525,6 +11621,7 @@ fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
+            source_path: None,
             span: Span::new(1, 1),
             receiver: None,
             params: Vec::new(),

@@ -86,8 +86,15 @@ The direct runtime is Aurora's native ABI layer. It is responsible for:
 - queue/task operations
 - direct file and networking builtins
 - runtime diagnostics with source context
+- once-only typed call-frame and task-ancestry capture
 
 Aurora uses explicit retain/release helpers because generated code may pass opaque pointers around independently of Rust's normal ownership system.
+
+Generated functions publish static frame metadata and push/pop native call
+records around Aurora calls. Direct task state also owns the task-entry and
+parent-spawn records needed to reconstruct ancestry. A trap captures both
+lists before generated cleanup or forced stack reset, using the same
+compiler-owned diagnostic types and ordering as the MIR runtime.
 
 ## `OpaqueValue` and refcounting
 
@@ -180,6 +187,14 @@ They both depend on the same language-level concepts:
 - task/queue behavior
 - file and networking behavior
 - numeric overflow and division diagnostics
+
+They also produce the same complete structured diagnostics. Native execution
+does not reconstruct frames from human stderr: when launched by `aura` on a
+maintained Unix host, the runtime can write one bounded JSON diagnostic to a
+private inherited file descriptor. The channel is used only for Aurora traps;
+ordinary nonzero program returns leave it empty. A successful structured write
+suppresses duplicate human stderr, while a failed write retains the human
+diagnostic.
 
 ## Generated task exit and scheduler teardown
 

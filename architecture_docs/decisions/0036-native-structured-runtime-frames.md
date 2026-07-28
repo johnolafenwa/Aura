@@ -260,18 +260,28 @@ single-document progress and fallback shapes remain unchanged.
 
 ### JSON-mode native diagnostic channel
 
-A CLI-managed direct run in JSON mode establishes one private inherited
-diagnostic channel before launching either a newly built or a verified cached
-binary. On an Aurora runtime trap, the native runtime writes one bounded,
-compiler-owned structured diagnostic record to that channel instead of
-rendering human diagnostic text on the child's standard error. The `aura`
-parent validates that record and emits the one public schema-version-1
-document.
+A CLI-managed direct run in JSON mode establishes one private diagnostic
+protocol before launching either a newly built or a verified cached binary.
+The protocol uses a one-byte trap-signal pipe and a separate data pipe. On an
+Aurora runtime trap, the native runtime first writes the fixed signal byte,
+then writes one bounded, EOF-delimited compiler-owned structured diagnostic
+JSON record to the data pipe instead of rendering human diagnostic text on the
+child's standard error. Separating the signal from the data keeps the record
+itself exact JSON while letting the parent distinguish a missing trap record
+from an ordinary `main() -> int32` result of `1`.
 
-The channel is an internal execution mechanism, not a public environment,
-foreign-function, or file-format API. Human-mode `aura run` does not require
-it. A standalone built program without the channel continues to render its
-human diagnostic directly to standard error.
+Native initialization consumes both inherited descriptors before user code,
+marks them close-on-exec, and removes both internal environment entries. A
+subprocess started by the Aurora program therefore cannot observe the private
+names or keep either pipe alive after the Aurora child exits. The `aura`
+parent reads both pipes concurrently, validates the marker and record, and
+emits the one public schema-version-1 document.
+
+The protocol is an internal execution mechanism, not a public environment,
+foreign-function, or file-format API. Caller-supplied values for either
+internal descriptor name are stripped before launch. Human-mode `aura run`
+does not require the protocol. A standalone built program without it continues
+to render its human diagnostic directly to standard error.
 
 Native execution has three distinct outcomes:
 
@@ -342,9 +352,12 @@ must be released with the same exact-once task-state containment as cleanup
 and diagnostic state.
 
 The JSON-only channel adds a private parent/child protocol and failure mode.
-Malformed, oversized, missing, or multiply emitted records are host execution
-failures; they may not be accepted as a partial Aurora diagnostic or confused
-with an ordinary nonzero result.
+A missing/invalid marker, malformed, oversized, missing, or multiply emitted
+record after a trap marker, a record accompanying successful completion, or a
+signal-terminated child is a host execution failure. Post-launch execution and
+channel failures are hard failures even under `auto`; only build or launch
+unavailability may fall back to MIR. None of these failures may be accepted as
+a partial Aurora diagnostic or confused with an ordinary nonzero result.
 
 This decision does not add source syntax, user-visible reflection over call
 stacks, host backtraces, debugger APIs, exception catching, or a public
@@ -362,7 +375,8 @@ standalone-binary JSON switch. Those require separate decisions.
 | Direct call state | Native-runtime unit tests pin enter/push, exit/pop, depth rejection, cleanup preservation, forced reset, and task-local frame isolation across many suspended tasks sharing workers. |
 | Direct ancestry | Native codegen and runtime tests prove that task-start metadata is not dropped, nested children inherit ancestry once, cross-worker submission preserves it, and retirement releases it exactly once. |
 | Trap versus status | A normal `main` returning `1` emits no diagnostic, while a native trap carrying status `1` transports the exact diagnostic and never triggers `auto` fallback. |
-| Native JSON transport | Cold build, verified cache hit, concurrent-build wait, malformed/missing/oversized channel record, and trap-with-progress cases preserve one JSON document and unchanged program stdout. |
+| Native JSON transport | Cold build, verified cache hit, concurrent-build wait, malformed/missing/oversized channel record, signal termination, and trap-with-progress cases preserve one JSON document and unchanged program stdout; `auto` never falls back after launch. |
+| Channel containment | Native initialization hides both internal names and marks both owned descriptors close-on-exec; a longer-lived subprocess cannot observe them or delay EOF after the Aurora child returns or traps. |
 | Standalone behavior | A directly built binary without the private channel renders the same complete human call/task frames as MIR and performs the same cleanup. |
 | CLI structured parity | Forced MIR and direct nested-call and nested-task traps produce byte-equivalent codes/messages/spans/non-frame notes and structurally equal frame arrays, including imported paths. |
 | LSP bridge | Compiler analysis pins empty arrays; bridge tests pin populated zero-based frame metadata, missing-field compatibility, and preservation in `Diagnostic.data` while the semantic-interface handshake stays at version `2`. |

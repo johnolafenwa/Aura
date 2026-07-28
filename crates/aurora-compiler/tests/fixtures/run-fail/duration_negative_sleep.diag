@@ -1,2 +1,3 @@
 error[AU4001]: sleep(...) must be non-negative
  --> crates/aurora-compiler/tests/fixtures/run-fail/duration_negative_sleep.au
+  = note: Aurora call chain (innermost first): main at 1:1

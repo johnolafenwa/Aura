@@ -62,35 +62,6 @@ fn normalize(text: &[u8]) -> String {
         .to_string()
 }
 
-fn normalize_primary_runtime_diagnostic(text: &[u8]) -> String {
-    // Batch 1 permits MIR-only Aurora frames until native frame capture lands
-    // in Batch 3. Keep this exception limited to the three supplemental note
-    // families; the primary diagnostic and every other note remain parity-gated.
-    normalize(text)
-        .lines()
-        .filter(|line| !is_supplemental_mir_backtrace_note(line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn is_supplemental_mir_backtrace_note(line: &str) -> bool {
-    let line = line.trim_start();
-    let line = line.strip_prefix("= ").unwrap_or(line);
-    line.starts_with("note: Aurora call chain")
-        || line.starts_with("note: Aurora task entry")
-        || line.starts_with("note: Aurora task ancestry")
-}
-
-#[test]
-fn primary_runtime_diagnostic_normalization_ignores_only_deferred_mir_backtrace_notes() {
-    let rendered = b"error[AU4004]: division by zero\n  = note: keep this semantic note\n  = note: Aurora call chain (innermost first): main at 1:1\n  = note: Aurora task entry: child at 2:1\n  = note: Aurora task ancestry (youngest first): child spawned from main at 6:15\n";
-
-    assert_eq!(
-        normalize_primary_runtime_diagnostic(rendered),
-        "error[AU4004]: division by zero\n  = note: keep this semantic note"
-    );
-}
-
 fn command_output_with_timeout(mut command: Command, timeout: Duration) -> std::process::Output {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().expect("parity command should start");
@@ -256,8 +227,8 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
         let expected = fs::read(fixture.with_extension("diag"))
             .expect("run-fail fixture should have expected diagnostic");
         assert_eq!(
-            normalize_primary_runtime_diagnostic(&mir.stderr),
-            normalize_primary_runtime_diagnostic(&expected),
+            normalize(&mir.stderr),
+            normalize(&expected),
             "forced MIR diagnostic and fixture oracle diverged for {}",
             relative.display()
         );
@@ -287,8 +258,8 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
             relative.display()
         );
         assert_eq!(
-            normalize_primary_runtime_diagnostic(&direct.stderr),
-            normalize_primary_runtime_diagnostic(&expected),
+            normalize(&direct.stderr),
+            normalize(&expected),
             "forced MIR/direct diagnostic diverged for {}",
             relative.display()
         );

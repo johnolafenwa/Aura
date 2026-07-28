@@ -3,3 +3,4 @@ error[AU4002]: integer value `-1` does not fit in `uint64`
   |
 3 |     value: uint64 = source as uint64
   |                     ^
+  = note: Aurora call chain (innermost first): main at 1:1

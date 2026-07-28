@@ -40,10 +40,11 @@ aura build --backend direct -o ./app app.au
 
 ## Runtime Diagnostics
 
-Built binaries embed enough source context to render runtime failures with file, line, and caret:
+Built binaries embed source and frame metadata for runtime failures. A simple
+failure at minimum renders its stable code, file, line, and caret:
 
 ```
-error: vector index `10` is out of bounds for length `3`
+error[AU4003]: vector index `10` is out of bounds for length `3`
  --> app.au:5:20
   |
 5 |     x: int32 = values[10]
@@ -51,6 +52,16 @@ error: vector index `10` is out of bounds for length `3`
 ```
 
 Arithmetic traps, vector bounds errors, recursion-limit failures, and resource cleanup paths are expected to behave identically between `aura run` and the native binary. If you observe a difference, it is a bug worth reporting.
+
+The frame data is captured once at the trap site, before runtime cleanup can
+discard the active call/task state. Human output synthesizes readable
+call-chain and, for child failures, task-ancestry notes from those typed
+records. When `aura run
+--backend direct --format json` launches the binary, a private bounded channel
+returns the same schema-version-1 diagnostic to the CLI; tools never need to
+parse the human text. The internal transport uses a separate trap marker so a
+missing record is not confused with `main` returning status `1`; its
+descriptors are hidden and close-on-exec before user code starts.
 
 ## A Checklist Before Shipping
 

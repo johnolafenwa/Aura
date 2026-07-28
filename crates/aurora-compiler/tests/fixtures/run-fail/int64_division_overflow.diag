@@ -3,3 +3,4 @@ error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
   |
 4 |     print(minimum // negative_one)
   |           ^
+  = note: Aurora call chain (innermost first): main at 1:1

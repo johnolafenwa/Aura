@@ -3,3 +3,4 @@ error[AU4001]: custom failure
   |
 2 |     assert false, "custom failure"
   |     ^
+  = note: Aurora call chain (innermost first): main at 1:1

@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 
-use super::{Diagnostic, DiagnosticSeverity, Span, DIAGNOSTIC_CODE_REGISTRY};
+use super::{
+    Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
+    DIAGNOSTIC_CODE_REGISTRY,
+};
 
 #[test]
 fn renders_annotated_diagnostics_with_source_context() {
@@ -135,4 +138,138 @@ fn runtime_boundary_normalization_keeps_runtime_diagnostics_in_the_runtime_band(
     .into_runtime_trap();
     assert_eq!(precise.code, "AU4003");
     assert_eq!(precise.span, Some(Span::new(3, 8)));
+}
+
+#[test]
+fn structured_diagnostics_always_serialize_typed_runtime_frame_arrays() {
+    let diagnostic = Diagnostic::coded_at("AU4003", Span::new(3, 18), "out of bounds");
+    let mut json = serde_json::to_value(diagnostic.structured("/workspace/main.au"))
+        .expect("structured runtime diagnostic should serialize");
+
+    assert_eq!(json["call_frames"], serde_json::json!([]));
+    assert_eq!(json["task_ancestry"], serde_json::json!([]));
+
+    let object = json
+        .as_object_mut()
+        .expect("structured diagnostic should serialize as an object");
+    object.remove("call_frames");
+    object.remove("task_ancestry");
+    let legacy: super::StructuredDiagnostic = serde_json::from_value(json)
+        .expect("records from before structured runtime frames should remain readable");
+    assert!(legacy.call_frames.is_empty());
+    assert!(legacy.task_ancestry.is_empty());
+}
+
+#[test]
+fn runtime_frames_capture_once_clone_and_render_without_polluting_notes() {
+    let mut diagnostic = Diagnostic::coded_at("AU4003", Span::new(3, 18), "out of bounds")
+        .with_note("semantic note")
+        .with_help("check the collection length")
+        .with_edit(Span::new(3, 18), Span::new(3, 19), "0");
+    let first_call_frames = vec![
+        RuntimeCallFrame {
+            function: "child".to_string(),
+            span: RuntimeSourceSpan::point(
+                Some("/workspace/worker.au".to_string()),
+                Span::new(1, 1),
+            ),
+        },
+        RuntimeCallFrame {
+            function: "main".to_string(),
+            span: RuntimeSourceSpan::point(Some("/workspace/main.au".to_string()), Span::new(6, 1)),
+        },
+    ];
+    let first_ancestry = vec![RuntimeTaskFrame {
+        task_function: "child".to_string(),
+        task_entry_span: RuntimeSourceSpan::point(
+            Some("/workspace/worker.au".to_string()),
+            Span::new(1, 1),
+        ),
+        parent_function: "main".to_string(),
+        spawn_span: RuntimeSourceSpan::point(
+            Some("/workspace/main.au".to_string()),
+            Span::new(8, 15),
+        ),
+    }];
+    assert!(
+        diagnostic.capture_runtime_frames_once(first_call_frames.clone(), first_ancestry.clone())
+    );
+    assert!(!diagnostic.capture_runtime_frames_once(
+        vec![RuntimeCallFrame {
+            function: "observer".to_string(),
+            span: RuntimeSourceSpan::point(None, Span::new(99, 1)),
+        }],
+        Vec::new(),
+    ));
+    assert_eq!(diagnostic.call_frames, first_call_frames);
+    assert_eq!(diagnostic.task_ancestry, first_ancestry);
+    assert_eq!(diagnostic.notes, ["semantic note"]);
+    assert_eq!(diagnostic.clone(), diagnostic);
+
+    let structured = diagnostic.structured("/fallback.au");
+    assert_eq!(structured.call_frames[0].span.path, "/workspace/worker.au");
+    assert_eq!(
+        structured.task_ancestry[0].spawn_span.path,
+        "/workspace/main.au"
+    );
+    let json = serde_json::to_value(&structured).expect("typed frames should serialize");
+    assert_eq!(json["call_frames"][0]["function"], "child");
+    assert_eq!(
+        json["task_ancestry"][0]["task_entry_span"]["end"]["column"],
+        2
+    );
+    assert_eq!(json["notes"], serde_json::json!(["semantic note"]));
+    let round_trip: super::StructuredDiagnostic = serde_json::from_value(json)
+        .expect("the compiler-owned structured diagnostic wire record should round trip");
+    assert_eq!(round_trip, structured);
+
+    let rendered = diagnostic.render_with_source("/fallback.au", "pass\n");
+    let semantic_note = rendered
+        .find("note: semantic note")
+        .expect("semantic note should render");
+    let call_chain = rendered
+        .find("note: Aurora call chain (innermost first): child at 1:1 -> main at 6:1")
+        .expect("call chain should be synthesized");
+    let task_entry = rendered
+        .find("note: Aurora task entry: child at 1:1")
+        .expect("task entry should be synthesized");
+    let ancestry = rendered
+        .find("note: Aurora task ancestry (youngest first): child spawned from main at 8:15")
+        .expect("task ancestry should be synthesized");
+    let help = rendered
+        .find("help: check the collection length")
+        .expect("help should render");
+    let edit = rendered
+        .find("fix: replace /fallback.au:3:18-3:19 with `0`")
+        .expect("edit should render");
+    assert!(
+        semantic_note < call_chain
+            && call_chain < task_entry
+            && task_entry < ancestry
+            && ancestry < help
+            && help < edit
+    );
+    assert_eq!(rendered.matches("Aurora call chain").count(), 1);
+}
+
+#[test]
+fn an_empty_runtime_frame_snapshot_is_still_complete() {
+    let uncaptured = Diagnostic::coded("AU4006", "runtime configuration failed");
+    let mut diagnostic = uncaptured.clone();
+    assert!(diagnostic.capture_runtime_frames_once(Vec::new(), Vec::new()));
+    assert_ne!(
+        diagnostic, uncaptured,
+        "the private capture marker participates in equality because an empty completed snapshot \
+         must not be confused with an uncaptured diagnostic during propagation"
+    );
+    assert_eq!(diagnostic.clone(), diagnostic);
+    assert!(!diagnostic.capture_runtime_frames_once(
+        vec![RuntimeCallFrame {
+            function: "late observer".to_string(),
+            span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+        }],
+        Vec::new(),
+    ));
+    assert!(diagnostic.call_frames.is_empty());
+    assert!(diagnostic.task_ancestry.is_empty());
 }

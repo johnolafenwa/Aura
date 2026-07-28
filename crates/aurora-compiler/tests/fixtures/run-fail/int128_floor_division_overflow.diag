@@ -3,3 +3,4 @@ error[AU4002]: integer value `170141183460469231731687303715884105728` does not 
   |
 5 |     print(minimum // negative_one)
   |           ^
+  = note: Aurora call chain (innermost first): main at 1:1

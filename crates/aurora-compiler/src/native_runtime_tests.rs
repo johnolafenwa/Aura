@@ -9,7 +9,9 @@ use super::{
     value_type_name, with_cancellation_scope, OpaqueValue,
 };
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{
+    Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span, StructuredDiagnostic,
+};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
@@ -12431,7 +12433,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
         let release = ChannelValue::new();
         let mut tasks = Vec::with_capacity(TASK_COUNT);
 
-        for _ in 0..TASK_COUNT {
+        for index in 0..TASK_COUNT {
             let task_ready = ready.clone();
             let task_release = release.clone();
             tasks.push(spawn_lightweight_task(move || {
@@ -12440,15 +12442,27 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
                         task_ready
                             .send(Value::Unit)
                             .expect("ready channel should remain open");
+                        let function = format!("suspended_{index}");
+                        let path = format!("/workspace/task_{index}.au");
                         unsafe {
-                            super::aurora_direct_enter_call(
+                            super::aurora_direct_enter_call_with_frame(
+                                index as i64 + 1,
                                 1,
-                                1,
-                                b"suspended".as_ptr(),
-                                b"suspended".len(),
+                                path.as_ptr(),
+                                path.len(),
+                                function.as_ptr(),
+                                function.len(),
                             );
                         }
                         let _ = task_release.recv_with_cancellation(None, None);
+                        assert_eq!(
+                            super::direct_runtime_call_frames(),
+                            vec![RuntimeCallFrame {
+                                function,
+                                span: runtime_source_span(&path, index + 1, 1),
+                            }],
+                            "a pinned worker must restore frame state by task identity after suspension"
+                        );
                         unsafe {
                             super::aurora_direct_exit_call();
                         }
@@ -12486,6 +12500,444 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
     assert_eq!(
         result.expect("1,000 suspended direct tasks should have independent call depth"),
         Value::Unit
+    );
+}
+
+fn runtime_source_span(path: &str, line: usize, column: usize) -> RuntimeSourceSpan {
+    RuntimeSourceSpan {
+        path: Some(path.to_string()),
+        start: Span::new(line, column),
+        end: Span::new(line, column.saturating_add(1)),
+    }
+}
+
+#[test]
+fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
+    super::with_direct_task_runtime_scope(|| {
+        unsafe {
+            super::aurora_direct_enter_call_with_frame(
+                2,
+                3,
+                b"/workspace/main.au".as_ptr(),
+                b"/workspace/main.au".len(),
+                b"main".as_ptr(),
+                b"main".len(),
+            );
+            super::aurora_direct_enter_call_with_frame(
+                8,
+                5,
+                b"/workspace/lib.au".as_ptr(),
+                b"/workspace/lib.au".len(),
+                b"pkg.lib.work".as_ptr(),
+                b"pkg.lib.work".len(),
+            );
+        }
+
+        let first = capture_runtime_diagnostic(|| {
+            super::runtime_error_at(Span::new(9, 7), "body failed");
+        });
+        assert_eq!(
+            first.call_frames,
+            vec![
+                RuntimeCallFrame {
+                    function: "pkg.lib.work".to_string(),
+                    span: runtime_source_span("/workspace/lib.au", 8, 5),
+                },
+                RuntimeCallFrame {
+                    function: "main".to_string(),
+                    span: runtime_source_span("/workspace/main.au", 2, 3),
+                },
+            ]
+        );
+
+        // Propagation through an observer with a different active frame must
+        // preserve the first completed snapshot byte-for-byte.
+        unsafe {
+            super::aurora_direct_exit_call();
+            super::aurora_direct_enter_call_with_frame(
+                20,
+                1,
+                b"/workspace/observer.au".as_ptr(),
+                b"/workspace/observer.au".len(),
+                b"observe".as_ptr(),
+                b"observe".len(),
+            );
+        }
+        let propagated = capture_runtime_diagnostic(|| {
+            super::runtime_diagnostic_error(first.clone());
+        });
+        assert_eq!(propagated.call_frames, first.call_frames);
+        assert_eq!(propagated.task_ancestry, first.task_ancestry);
+
+        unsafe {
+            super::aurora_direct_exit_call();
+            super::aurora_direct_exit_call();
+        }
+        assert!(super::direct_runtime_call_frames().is_empty());
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("call-frame probe should complete");
+}
+
+#[test]
+fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                for index in 0..super::DIRECT_MAX_CALL_DEPTH {
+                    let function = format!("accepted_{index}");
+                    unsafe {
+                        super::aurora_direct_enter_call_with_frame(
+                            index as i64 + 1,
+                            1,
+                            b"/workspace/depth.au".as_ptr(),
+                            b"/workspace/depth.au".len(),
+                            function.as_ptr(),
+                            function.len(),
+                        );
+                    }
+                }
+                let attempted = b"rejected";
+                unsafe {
+                    super::aurora_direct_enter_call_with_frame(
+                        400,
+                        9,
+                        b"/workspace/depth.au".as_ptr(),
+                        b"/workspace/depth.au".len(),
+                        attempted.as_ptr(),
+                        attempted.len(),
+                    );
+                }
+                #[allow(unreachable_code)]
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("the rejected call should fail at the scheduler boundary");
+    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(
+        diagnostic
+            .call_frames
+            .first()
+            .map(|frame| frame.function.as_str()),
+        Some("accepted_255")
+    );
+    assert!(
+        diagnostic
+            .call_frames
+            .iter()
+            .all(|frame| frame.function != "rejected"),
+        "the rejected attempted callee was never active"
+    );
+}
+
+#[test]
+fn native_runtime_child_task_inherits_youngest_first_ancestry_and_starts_a_new_call_chain() {
+    let parent_ancestry = vec![RuntimeTaskFrame {
+        task_function: "parent".to_string(),
+        task_entry_span: runtime_source_span("/workspace/parent.au", 3, 1),
+        parent_function: "main".to_string(),
+        spawn_span: runtime_source_span("/workspace/main.au", 10, 7),
+    }];
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope_with_ancestry(parent_ancestry, || {
+            unsafe {
+                super::aurora_direct_enter_call_with_frame(
+                    5,
+                    1,
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                );
+            }
+            let args = super::aurora_direct_arg_buffer_new(0);
+            let group = super::aurora_direct_task_group_new();
+            let task_ptr = unsafe {
+                super::aurora_direct_start_task_call_with_frames(
+                    direct_task_frame_trap as *const () as usize as i64,
+                    args,
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"child".as_ptr(),
+                    b"child".len(),
+                    b"/workspace/child.au".as_ptr(),
+                    b"/workspace/child.au".len(),
+                    2,
+                    1,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    12,
+                    9,
+                )
+            };
+            let task = unsafe {
+                match value_ref(task_ptr) {
+                    Value::Task(task) => task.clone(),
+                    other => panic!("expected Task handle, found {other:?}"),
+                }
+            };
+            let diagnostic = match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(5)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Ready(Err(error)) => error,
+                other => panic!("expected failing direct child, got {other:?}"),
+            };
+            assert_eq!(
+                diagnostic.call_frames,
+                vec![RuntimeCallFrame {
+                    function: "child".to_string(),
+                    span: runtime_source_span("/workspace/child.au", 2, 1),
+                }]
+            );
+            assert_eq!(
+                diagnostic.task_ancestry,
+                vec![
+                    RuntimeTaskFrame {
+                        task_function: "child".to_string(),
+                        task_entry_span: runtime_source_span("/workspace/child.au", 2, 1),
+                        parent_function: "parent".to_string(),
+                        spawn_span: runtime_source_span("/workspace/parent.au", 12, 9),
+                    },
+                    RuntimeTaskFrame {
+                        task_function: "parent".to_string(),
+                        task_entry_span: runtime_source_span("/workspace/parent.au", 3, 1),
+                        parent_function: "main".to_string(),
+                        spawn_span: runtime_source_span("/workspace/main.au", 10, 7),
+                    },
+                ]
+            );
+            unsafe {
+                release_value(task_ptr);
+                release_value(group);
+                super::aurora_direct_exit_call();
+            }
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("direct child ancestry probe should complete"),
+        Value::Unit
+    );
+}
+
+unsafe extern "C-unwind" fn direct_task_frame_trap(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    unsafe {
+        super::aurora_direct_enter_call_with_frame(
+            2,
+            1,
+            b"/workspace/child.au".as_ptr(),
+            b"/workspace/child.au".len(),
+            b"child".as_ptr(),
+            b"child".len(),
+        );
+    }
+    super::runtime_error_at(Span::new(4, 11), "child frame trap")
+}
+
+#[cfg(unix)]
+#[test]
+fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot() {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+
+    const HELPER_ENV: &str = "AURORA_INTERNAL_DIAGNOSTIC_CHANNEL_TEST_HELPER";
+    if std::env::var(HELPER_ENV).as_deref() == Ok("1") {
+        let data_fd = std::env::var(crate::INTERNAL_DIAGNOSTIC_FD_ENV)
+            .expect("helper data descriptor should be present")
+            .parse::<i32>()
+            .expect("helper data descriptor should be numeric");
+        let signal_fd = std::env::var(crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV)
+            .expect("helper signal descriptor should be present")
+            .parse::<i32>()
+            .expect("helper signal descriptor should be numeric");
+        super::initialize_internal_diagnostic_channels();
+        assert!(
+            std::env::var_os(crate::INTERNAL_DIAGNOSTIC_FD_ENV).is_none(),
+            "the private data descriptor must be hidden from Aurora env access and child processes"
+        );
+        assert!(
+            std::env::var_os(crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV).is_none(),
+            "the private signal descriptor must be hidden from Aurora env access and child processes"
+        );
+        for fd in [data_fd, signal_fd] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert_ne!(flags, -1);
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "captured private descriptors must not leak through user process spawns"
+            );
+        }
+
+        let mut diagnostic =
+            Diagnostic::coded_at("AU4003", Span::new(4, 11), "structured channel failure");
+        diagnostic.capture_runtime_frames_once(
+            vec![RuntimeCallFrame {
+                function: "child".to_string(),
+                span: runtime_source_span("/workspace/child.au", 2, 1),
+            }],
+            vec![RuntimeTaskFrame {
+                task_function: "child".to_string(),
+                task_entry_span: runtime_source_span("/workspace/child.au", 2, 1),
+                parent_function: "main".to_string(),
+                spawn_span: runtime_source_span("/workspace/main.au", 8, 7),
+            }],
+        );
+        assert_eq!(
+            super::try_emit_internal_structured_diagnostic(&diagnostic),
+            super::InternalDiagnosticEmission::Emitted,
+            "the signal marker and structured record should both be written",
+        );
+        assert_eq!(
+            super::try_emit_internal_structured_diagnostic(&diagnostic),
+            super::InternalDiagnosticEmission::NoChannel,
+            "the inherited channel is a consumed one-shot",
+        );
+        return;
+    }
+
+    let mut diagnostic_descriptors = [0; 2];
+    let mut signal_descriptors = [0; 2];
+    assert_eq!(
+        unsafe { libc::pipe(diagnostic_descriptors.as_mut_ptr()) },
+        0
+    );
+    assert_eq!(unsafe { libc::pipe(signal_descriptors.as_mut_ptr()) }, 0);
+    let diagnostic_reader = unsafe { std::fs::File::from_raw_fd(diagnostic_descriptors[0]) };
+    let diagnostic_writer = unsafe { std::fs::File::from_raw_fd(diagnostic_descriptors[1]) };
+    let signal_reader = unsafe { std::fs::File::from_raw_fd(signal_descriptors[0]) };
+    let signal_writer = unsafe { std::fs::File::from_raw_fd(signal_descriptors[1]) };
+    for fd in [
+        diagnostic_reader.as_raw_fd(),
+        diagnostic_writer.as_raw_fd(),
+        signal_reader.as_raw_fd(),
+        signal_writer.as_raw_fd(),
+    ] {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert_ne!(flags, -1);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    let inherited_data_fd = diagnostic_writer.as_raw_fd();
+    let inherited_signal_fd = signal_writer.as_raw_fd();
+    let mut command = Command::new(std::env::current_exe().expect("test binary should exist"));
+    command
+        .arg("--exact")
+        .arg(
+            "native_runtime::tests::native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot",
+        )
+        .arg("--nocapture")
+        .env(HELPER_ENV, "1")
+        .env(
+            crate::INTERNAL_DIAGNOSTIC_FD_ENV,
+            inherited_data_fd.to_string(),
+        )
+        .env(
+            crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+            inherited_signal_fd.to_string(),
+        );
+    unsafe {
+        command.pre_exec(move || {
+            for fd in [inherited_data_fd, inherited_signal_fd] {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .expect("private-channel helper process should start");
+    drop(diagnostic_writer);
+    drop(signal_writer);
+
+    let mut signal = Vec::new();
+    signal_reader
+        .take(crate::MAX_INTERNAL_DIAGNOSTIC_BYTES as u64 + 1)
+        .read_to_end(&mut signal)
+        .expect("signal reader should observe EOF after the marker");
+    let mut bytes = Vec::new();
+    diagnostic_reader
+        .take(crate::MAX_INTERNAL_DIAGNOSTIC_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .expect("reader should observe EOF after the one record");
+    let status = child
+        .wait()
+        .expect("private-channel helper process should exit");
+    assert!(status.success(), "private-channel helper should pass");
+
+    assert_eq!(
+        signal,
+        [crate::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER],
+        "a trapped native program must emit exactly one intent marker before its record"
+    );
+    let structured: StructuredDiagnostic =
+        serde_json::from_slice(&bytes).expect("channel should carry one structured diagnostic");
+    assert_eq!(structured.message, "structured channel failure");
+    assert_eq!(structured.call_frames.len(), 1);
+    assert_eq!(structured.call_frames[0].span.path, "/workspace/child.au");
+    assert_eq!(structured.task_ancestry.len(), 1);
+    assert_eq!(
+        structured.task_ancestry[0].spawn_span.path,
+        "/workspace/main.au"
+    );
+    assert!(
+        bytes.len() <= crate::MAX_INTERNAL_DIAGNOSTIC_BYTES,
+        "writer must enforce the same bounded record contract as its reader"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_runtime_internal_diagnostic_signal_precedes_failed_record_encoding() {
+    use std::os::fd::FromRawFd;
+
+    let mut diagnostic_descriptors = [0; 2];
+    let mut signal_descriptors = [0; 2];
+    assert_eq!(
+        unsafe { libc::pipe(diagnostic_descriptors.as_mut_ptr()) },
+        0
+    );
+    assert_eq!(unsafe { libc::pipe(signal_descriptors.as_mut_ptr()) }, 0);
+    super::install_internal_diagnostic_channels(diagnostic_descriptors[1], signal_descriptors[1]);
+
+    let oversized = Diagnostic::new("x".repeat(crate::MAX_INTERNAL_DIAGNOSTIC_BYTES + 1));
+    assert_eq!(
+        super::try_emit_internal_structured_diagnostic(&oversized),
+        super::InternalDiagnosticEmission::SignaledWithoutRecord,
+        "an oversized record must preserve the parent-owned JSON failure path",
+    );
+    let mut signal = Vec::new();
+    unsafe { std::fs::File::from_raw_fd(signal_descriptors[0]) }
+        .read_to_end(&mut signal)
+        .expect("signal reader should observe EOF");
+    assert_eq!(
+        signal,
+        [crate::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER],
+        "trap intent must be observable even when the data record cannot be encoded"
+    );
+    let mut bytes = Vec::new();
+    unsafe { std::fs::File::from_raw_fd(diagnostic_descriptors[0]) }
+        .read_to_end(&mut bytes)
+        .expect("data reader should observe EOF");
+    assert!(
+        bytes.is_empty(),
+        "failed record encoding must not emit a partial JSON object"
     );
 }
 
@@ -12692,17 +13144,37 @@ fn native_runtime_direct_forced_exit_runs_external_cleanup() {
             crate::runtime_value::spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
                 CancellationContext::default(),
                 || {
-                    super::with_direct_task_runtime_scope(|| {
-                        super::with_task_runtime_error_capture(|| {
-                            super::task_runtime_boundary(|| {
-                                std::panic::panic_any(LightweightTaskFailureSignal(
-                                    Diagnostic::new("direct task failure"),
-                                ));
-                            });
-                            #[allow(unreachable_code)]
-                            Ok(Value::Unit)
-                        })
-                    })
+                    super::with_direct_task_runtime_scope_with_ancestry(
+                        vec![RuntimeTaskFrame {
+                            task_function: "failing_child".to_string(),
+                            task_entry_span: runtime_source_span(
+                                "/workspace/failing_child.au",
+                                2,
+                                1,
+                            ),
+                            parent_function: "main".to_string(),
+                            spawn_span: runtime_source_span("/workspace/main.au", 9, 5),
+                        }],
+                        || {
+                            super::aurora_direct_enter_call_with_frame(
+                                2,
+                                1,
+                                b"/workspace/failing_child.au".as_ptr(),
+                                b"/workspace/failing_child.au".len(),
+                                b"failing_child".as_ptr(),
+                                b"failing_child".len(),
+                            );
+                            super::with_task_runtime_error_capture(|| {
+                                super::task_runtime_boundary(|| {
+                                    std::panic::panic_any(LightweightTaskFailureSignal(
+                                        Diagnostic::new("direct task failure"),
+                                    ));
+                                });
+                                #[allow(unreachable_code)]
+                                Ok(Value::Unit)
+                            })
+                        },
+                    )
                 },
                 move || {
                     super::discard_current_direct_task_runtime_state();
@@ -12722,7 +13194,25 @@ fn native_runtime_direct_forced_exit_runs_external_cleanup() {
             ));
         }
         match status {
-            TaskWaitStatus::Ready(Err(error)) if error.message == "direct task failure" => {
+            TaskWaitStatus::Ready(Err(error))
+                if error.message == "direct task failure"
+                    && error.call_frames
+                        == vec![RuntimeCallFrame {
+                            function: "failing_child".to_string(),
+                            span: runtime_source_span("/workspace/failing_child.au", 2, 1),
+                        }]
+                    && error.task_ancestry
+                        == vec![RuntimeTaskFrame {
+                            task_function: "failing_child".to_string(),
+                            task_entry_span: runtime_source_span(
+                                "/workspace/failing_child.au",
+                                2,
+                                1,
+                            ),
+                            parent_function: "main".to_string(),
+                            spawn_span: runtime_source_span("/workspace/main.au", 9, 5),
+                        }] =>
+            {
                 Ok(Value::Unit)
             }
             other => Err(Diagnostic::new(format!(
@@ -13632,24 +14122,153 @@ fn native_assert_failure_remains_primary_when_cleanup_traps() {
         _args: *const i64,
         _arg_count: usize,
     ) -> *mut OpaqueValue {
+        unsafe {
+            super::aurora_direct_enter_call_with_frame(
+                20,
+                1,
+                b"/workspace/cleanup.au".as_ptr(),
+                b"/workspace/cleanup.au".len(),
+                b"Resource.close".as_ptr(),
+                b"Resource.close".len(),
+            );
+        }
         super::runtime_error("cleanup failed")
     }
 
     let diagnostic = run_lightweight_root_task(|| {
-        super::with_task_runtime_error_capture(|| {
-            let args = super::aurora_direct_arg_buffer_new(0);
-            super::aurora_direct_register_cleanup(
-                failing_cleanup as *const () as usize as i64,
-                args,
-                0,
-            );
-            super::aurora_direct_assert_fail(0, 12, 5);
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                unsafe {
+                    super::aurora_direct_enter_call_with_frame(
+                        1,
+                        1,
+                        b"/workspace/main.au".as_ptr(),
+                        b"/workspace/main.au".len(),
+                        b"main".as_ptr(),
+                        b"main".len(),
+                    );
+                }
+                let args = super::aurora_direct_arg_buffer_new(0);
+                super::aurora_direct_register_cleanup(
+                    failing_cleanup as *const () as usize as i64,
+                    args,
+                    0,
+                );
+                super::aurora_direct_assert_fail(0, 12, 5);
+            }))
         })
     })
     .expect_err("assert failure should fail the active lightweight task");
     assert_eq!(diagnostic.code, "AU4001");
     assert_eq!(diagnostic.message, "assertion failed");
     assert_eq!(diagnostic.span, Some(Span::new(12, 5)));
+    assert_eq!(
+        diagnostic.call_frames,
+        vec![RuntimeCallFrame {
+            function: "main".to_string(),
+            span: runtime_source_span("/workspace/main.au", 1, 1),
+        }],
+        "cleanup frames must not replace the body-primary snapshot"
+    );
+}
+
+#[test]
+fn native_cleanup_primary_trap_captures_the_cleanup_call_chain() {
+    unsafe extern "C-unwind" fn failing_cleanup(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        unsafe {
+            super::aurora_direct_enter_call_with_frame(
+                20,
+                1,
+                b"/workspace/resource.au".as_ptr(),
+                b"/workspace/resource.au".len(),
+                b"Resource.close".as_ptr(),
+                b"Resource.close".len(),
+            );
+        }
+        super::runtime_error_at(Span::new(21, 9), "cleanup primary")
+    }
+
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                unsafe {
+                    super::aurora_direct_enter_call_with_frame(
+                        1,
+                        1,
+                        b"/workspace/main.au".as_ptr(),
+                        b"/workspace/main.au".len(),
+                        b"main".as_ptr(),
+                        b"main".len(),
+                    );
+                }
+                let args = super::aurora_direct_arg_buffer_new(0);
+                super::aurora_direct_register_cleanup(
+                    failing_cleanup as *const () as usize as i64,
+                    args,
+                    0,
+                );
+                super::drain_direct_cleanup_stack();
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("a cleanup-primary trap should fail the active lightweight task");
+    assert_eq!(diagnostic.message, "cleanup primary");
+    assert_eq!(diagnostic.span, Some(Span::new(21, 9)));
+    assert_eq!(
+        diagnostic.call_frames,
+        vec![
+            RuntimeCallFrame {
+                function: "Resource.close".to_string(),
+                span: runtime_source_span("/workspace/resource.au", 20, 1),
+            },
+            RuntimeCallFrame {
+                function: "main".to_string(),
+                span: runtime_source_span("/workspace/main.au", 1, 1),
+            },
+        ],
+        "when cleanup is the primary trap its own active frame must be the innermost frame"
+    );
+}
+
+#[test]
+fn native_runtime_discarded_frame_state_is_absent_when_the_same_task_key_is_reused() {
+    let inherited = RuntimeTaskFrame {
+        task_function: "old_child".to_string(),
+        task_entry_span: runtime_source_span("/workspace/old_child.au", 3, 1),
+        parent_function: "old_parent".to_string(),
+        spawn_span: runtime_source_span("/workspace/old_parent.au", 7, 5),
+    };
+
+    super::with_direct_task_runtime_scope_with_ancestry(vec![inherited], || {
+        unsafe {
+            super::aurora_direct_enter_call_with_frame(
+                3,
+                1,
+                b"/workspace/old_child.au".as_ptr(),
+                b"/workspace/old_child.au".len(),
+                b"old_child".as_ptr(),
+                b"old_child".len(),
+            );
+        }
+        assert_eq!(super::direct_runtime_call_frames().len(), 1);
+        assert_eq!(super::direct_runtime_task_ancestry().len(), 1);
+
+        super::discard_current_direct_task_runtime_state();
+        super::with_direct_task_runtime_scope(|| {
+            assert!(
+                super::direct_runtime_call_frames().is_empty(),
+                "a reused task identity must start with no retired call frames"
+            );
+            assert!(
+                super::direct_runtime_task_ancestry().is_empty(),
+                "a reused task identity must start with no retired ancestry"
+            );
+        });
+    });
 }
 
 #[test]

@@ -14,16 +14,31 @@ Last updated: 2026-07-28
   worktree opened from that clean checkpoint with compiler coverage floors
   frozen at `96.13/96.89/94.35`; see
   `work/2026-07-27-batch4-scalable-runtime.md`.
-- Current stage: Phase 5.8 typed heterogeneous select is complete at
-  implementation commit `3e15b8a`; focused review, the completion matrix,
-  frozen compiler coverage, exact full CI, and clean-tree contractual
-  benchmark are green under the standing massive-RSS escape hatch. Phase 5.9
-  configurable blocking-pool implementation, product-path parity, saturation
-  matrix, independent audit, frozen coverage, exact full CI, and clean-tree
-  contractual benchmark are complete. Its provisional contract landed alone
-  as ADR-0035 at `cc450c9`, and implementation landed at `d921313`. Phase 5.10
-  native structured frames is next; no implementation begins before its
-  provisional ADR lands.
+- Current stage: Phase 5.10 native structured frames is in final verification
+  after provisional ADR-0036 landed independently at `ad6bef6`. Phase 5.8 is
+  complete at implementation commit `3e15b8a`, and Phase 5.9 is complete at
+  implementation commit `d921313` after its provisional ADR-0035 landed at
+  `cc450c9`; both stages have green focused review, coverage, exact CI, and
+  clean-tree contractual benchmarks. Phase 5.10's compiler diagnostic model,
+  MIR capture,
+  native task-local stacks and ancestry, codegen/runtime ABI, two-pipe direct
+  JSON transport, analysis/LSP forwarding, and maintained documentation are
+  implemented. Both diagnostic-note parity masks are removed and all 53
+  maintained run-fail oracles pin their full Aurora call chains. The compiler
+  library passes all 1,144 tests; focused MIR/native/CLI checks pass; all 90
+  LSP tests pass at 100% coverage; reference integrity and the documentation
+  build are green. Three independently found transport defects are fixed and
+  regression-tested: post-launch automatic fallback, descendant
+  descriptor/environment leakage, and child human output after a signalled
+  record failure. The complete serialized forced-backend matrix passes in
+  669.49 seconds across 239 run-pass and 53 run-fail fixtures. Frozen-floor
+  coverage passes at 70,931/73,779 lines (96.139822984860189%),
+  4,718/4,869 functions (96.898747176011497%), and 104,201/110,309 regions
+  (94.462827149190005%). Exact CI passes every product gate; its final hygiene
+  check reports only whitespace in the excluded user-owned
+  `personal/file_ops.au`. A clean detached-commit CI replay, contractual
+  benchmark, one-time Batch 4 coverage re-ratchet, and checkpoint report
+  remain.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -410,6 +425,33 @@ Last updated: 2026-07-28
   `/private/tmp/aurora-phase59-after-configurable-blocking-pool.json`, SHA-256
   `d9947ddc4c65c7ff7f592585d85530f92f10045b73fa66f25dfd5a1b2dabf21a`.
   Phase 5.9 is complete.
+- Phase 5.10's provisional ADR-0036 is committed independently at `ad6bef6`.
+  Its implementation adds typed, always-present `call_frames` and
+  `task_ancestry` arrays with innermost-first call order, youngest-first task
+  order, exact per-frame paths, and once-only capture before cleanup or task
+  state reset. MIR and direct execution share the model; native JSON runs use
+  an exact trap-intent marker plus a separate bounded structured-record pipe,
+  while ordinary nonzero program statuses stay ordinary and no post-launch
+  protocol outcome may trigger automatic fallback. Compiler analysis and the
+  LSP forward the additive records without changing semantic interface
+  version 2. Both diagnostic-note parity normalizers are gone. All 53
+  maintained run-fail oracles pin a full call chain: 47 were regenerated and
+  the 6 already framed remain exact. Maintained README, tutorial, Manual,
+  architecture, changelog, ADR-index, and reference-integrity surfaces are
+  updated. Independent audit defects covering post-launch fallback,
+  inherited internal descriptors/environment variables, and child human
+  output after a signalled record failure are fixed and regression-tested.
+  Focused verification is green for all 1,144 compiler-library tests, 7
+  compiler MIR backtrace tests, 6 CLI backtrace tests, the 4 direct JSON
+  cold/warm/wait/auto cases, all 90 LSP tests at 100% coverage, all 53
+  run-fail oracles, reference integrity, docs, formatting, and checks. The
+  full serialized parity matrix passes in 669.49 seconds across 239 run-pass
+  and 53 run-fail fixtures. Frozen-floor exact CI, the clean-commit
+  contractual benchmark, final coverage measurement, and Batch 4 checkpoint
+  remain. Frozen-floor coverage passes at 70,931/73,779 lines
+  (96.139822984860189%), 4,718/4,869 functions (96.898747176011497%), and
+  104,201/110,309 regions (94.462827149190005%). No synthetic coverage test
+  or exclusion was added and the floors remain frozen.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

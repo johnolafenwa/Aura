@@ -495,8 +495,20 @@ grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0031-cli-backend-de
 grep -Fq '0031-cli-backend-defaults.md' architecture_docs/decisions/README.md
 grep -Fq '`aura run --backend mir` executes the lowered MIR and is the default.' docs/manual/cli-and-tooling.md
 grep -Fq 'run_backend_parsing_defaults_to_mir_and_accepts_every_selector' crates/aura/src/main.rs
-grep -Fq 'Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.' docs/manual/current-limits.md
-grep -Fq 'notes as prose rather than parse them.' docs/manual/diagnostics.md
+grep -Fq 'MIR and native direct-backend traps carry the same typed Aurora call frames' docs/manual/current-limits.md
+grep -Fq 'Those generated strings are not stored in structured `notes`' docs/manual/diagnostics.md
+grep -Fq '"call_frames": []' docs/manual/diagnostics.md
+grep -Fq '"task_ancestry": []' docs/manual/diagnostics.md
+grep -Fq 'MIR-specific frame-note masking.' docs/manual/cli-and-tooling.md
+if rg -n \
+  'Structured frame-list fields are deferred|Native-backend Aurora backtraces are deferred|direct native traps may omit|native frame parity.*unavailable|three-note parity carve-out' \
+  README.md crates/aura/README.md docs/manual docs/learn tutorials \
+  architecture_docs/07-mir-runtime.md \
+  architecture_docs/08-native-codegen-and-runtime.md \
+  architecture_docs/10-cli-and-build-tools.md; then
+  echo 'maintained documentation reintroduced a stale deferred native-frame or parity-mask claim' >&2
+  exit 1
+fi
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0014-map-literals-and-indexing.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0015-explicit-and-default-argument-order.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0016-retained-noncopy-expression-borrows.md

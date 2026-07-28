@@ -3,3 +3,4 @@ error[AU4002]: integer value `2147483648` does not fit in `int32`
   |
 3 |     value: int32 = source as int32
   |                    ^
+  = note: Aurora call chain (innermost first): main at 1:1

@@ -101,7 +101,9 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
       data: {
         notes: ["names are lexically scoped"],
         help: ["declare the name before using it"],
-        edits: []
+        edits: [],
+        call_frames: [],
+        task_ancestry: []
       }
     }
   ]);
@@ -301,7 +303,7 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
   assert.equal(compilerDefinitionAtPosition("file:///workspace/main.au", { occurrences: [] }, 9, 9), null);
 });
 
-test("compiler bridge keeps diagnostic metadata optional across compiler schema versions", () => {
+test("compiler bridge defaults metadata omitted by older compatible records", () => {
   const diagnostic = {
     code: "AU3001",
     severity: 1,
@@ -313,21 +315,134 @@ test("compiler bridge keeps diagnostic metadata optional across compiler schema 
   const convert = (metadata) =>
     compilerDiagnosticsToLsp({ diagnostics: [{ ...diagnostic, ...metadata }] })[0];
 
-  assert.equal(convert({}).data, undefined);
+  assert.deepEqual(convert({}).data, {
+    notes: [],
+    help: [],
+    edits: [],
+    call_frames: [],
+    task_ancestry: []
+  });
   assert.deepEqual(convert({ notes: ["one owner"] }).data, {
     notes: ["one owner"],
     help: [],
-    edits: []
+    edits: [],
+    call_frames: [],
+    task_ancestry: []
   });
   assert.deepEqual(convert({ help: ["borrow or clone"] }).data, {
     notes: [],
     help: ["borrow or clone"],
-    edits: []
+    edits: [],
+    call_frames: [],
+    task_ancestry: []
   });
   assert.deepEqual(convert({ edits: [{ replacement: ".clone()" }] }).data, {
     notes: [],
     help: [],
-    edits: [{ replacement: ".clone()" }]
+    edits: [{ replacement: ".clone()" }],
+    call_frames: [],
+    task_ancestry: []
+  });
+});
+
+test("compiler bridge preserves populated runtime frame metadata without rewriting it", () => {
+  const diagnostic = compilerDiagnosticsToLsp({
+    diagnostics: [
+      {
+        code: "AU4003",
+        severity: 1,
+        line: 8,
+        start_character: 17,
+        end_character: 18,
+        message: "vector index is out of bounds",
+        secondary_spans: [],
+        notes: [],
+        help: [],
+        edits: [],
+        call_frames: [
+          {
+            function: "worker.child",
+            span: {
+              file_path: "/workspace/worker.au",
+              line: 2,
+              start_character: 4,
+              end_character: 5
+            }
+          },
+          {
+            function: "worker.outer",
+            span: {
+              file_path: "/workspace/worker.au",
+              line: 0,
+              start_character: 0,
+              end_character: 1
+            }
+          }
+        ],
+        task_ancestry: [
+          {
+            task_function: "worker.child",
+            task_entry_span: {
+              file_path: "/workspace/worker.au",
+              line: 2,
+              start_character: 4,
+              end_character: 5
+            },
+            parent_function: "main",
+            spawn_span: {
+              file_path: "/workspace/main.au",
+              line: 7,
+              start_character: 14,
+              end_character: 15
+            }
+          }
+        ]
+      }
+    ]
+  }).at(0);
+
+  assert.deepEqual(diagnostic.data, {
+    notes: [],
+    help: [],
+    edits: [],
+    call_frames: [
+      {
+        function: "worker.child",
+        span: {
+          file_path: "/workspace/worker.au",
+          line: 2,
+          start_character: 4,
+          end_character: 5
+        }
+      },
+      {
+        function: "worker.outer",
+        span: {
+          file_path: "/workspace/worker.au",
+          line: 0,
+          start_character: 0,
+          end_character: 1
+        }
+      }
+    ],
+    task_ancestry: [
+      {
+        task_function: "worker.child",
+        task_entry_span: {
+          file_path: "/workspace/worker.au",
+          line: 2,
+          start_character: 4,
+          end_character: 5
+        },
+        parent_function: "main",
+        spawn_span: {
+          file_path: "/workspace/main.au",
+          line: 7,
+          start_character: 14,
+          end_character: 15
+        }
+      }
+    ]
   });
 });
 
@@ -526,6 +641,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 2);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -545,6 +661,7 @@ test("persistent compiler service sends and accepts the current semantic schema"
     args: ["-e", script],
     cwd: repoRoot
   });
+  assert.equal(service.responseLimitBytes, 16 * 1024 * 1024);
 
   assert.deepEqual(await service.request("analyze", {}), {
     received_schema: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
@@ -1160,6 +1277,8 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
 
     assert.ok(analysis);
     assert.equal(analysis.diagnostics.length, 1);
+    assert.deepEqual(analysis.diagnostics[0].call_frames, []);
+    assert.deepEqual(analysis.diagnostics[0].task_ancestry, []);
     const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
     assert.equal(diagnostic.code, "AU2002");
     assert.equal(
@@ -4231,7 +4350,9 @@ test("compiler bridge maps non-copy tuple index diagnostics", async () => {
       notes: [],
       secondary_spans: [],
       severity: 1,
-      start_character: 10
+      start_character: 10,
+      call_frames: [],
+      task_ancestry: []
     });
 
     const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);

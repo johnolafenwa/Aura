@@ -3,3 +3,4 @@ error[AU4002]: duration overflow
   |
 3 |     print(minimum // -1)
   |           ^
+  = note: Aurora call chain (innermost first): main at 1:1

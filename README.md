@@ -199,7 +199,9 @@ Current compiler workflow:
 - `cargo run -p aura -- analyze examples/classes/point_distance.au`
   - print machine-readable compiler analysis for diagnostics, symbols, hover, and definition
 - `cargo run -p aura -- check --format json examples/classes/point_distance.au`
-  - emit the stable, schema-versioned compiler diagnostic document used by CLI tooling; `run` and `build` accept the same diagnostic format
+  - emit the stable, schema-versioned compiler diagnostic document used by CLI
+    tooling; `run` and `build` accept the same format, including typed
+    `call_frames` and `task_ancestry` arrays for runtime failures
 - `cargo run -p aura -- help`
   - print CLI usage and exit successfully
 - `cargo run -p aura -- --version`
@@ -264,7 +266,8 @@ Current `build` status:
 - `direct` now performs true low-level native code generation for the full currently implemented Aurora language surface
 - the built binary no longer reparses source or compiles a generated Rust runner at build time
 - the built binary no longer depends on the original `.au` source files at runtime
-- built binaries now render arithmetic runtime failures with file, line, and caret context from embedded source
+- built binaries now render runtime failures with file, line, caret, typed
+  Aurora call-chain, and child-task ancestry context from embedded source
 - release archives include the Aurora native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
@@ -368,8 +371,9 @@ AURORA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aurora-project
 ```
 
 Compiler diagnostics retain their stable `AU####` code, related spans, notes,
-help, and edits through the LSP bridge instead of being reimplemented in
-JavaScript. If the compiler process is unavailable, a small lexical recovery
-layer provides basic declarations and top-level completions.
+help, edits, typed call frames, and task ancestry through the LSP bridge
+instead of being reimplemented in JavaScript. If the compiler process is
+unavailable, a small lexical recovery layer provides basic declarations and
+top-level completions.
 
 Full extension install and packaging steps are documented in [tools/vscode-aurora/INSTALL.md](tools/vscode-aurora/INSTALL.md).

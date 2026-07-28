@@ -126,7 +126,15 @@ Stdin analysis and completion do not mutate package lockfiles.
 - hover information
 - definition targets
 
-The output is one JSON object with `diagnostics`, `symbols`, and `occurrences` arrays. Positions are zero-based. Diagnostics contain `code`, `line`, `start_character`, `end_character`, `message`, numeric `severity`, `secondary_spans`, `notes`, `help`, and `edits`; symbols contain `name`, `kind`, `detail`, and recursive `children`; occurrences contain `hover` and an optional `definition` range, whose `file_path` may identify another module. An edit includes its range, replacement text, and applicability.
+The output is one JSON object with `diagnostics`, `symbols`, and `occurrences`
+arrays. Positions are zero-based. Diagnostics contain `code`, `line`,
+`start_character`, `end_character`, `message`, numeric `severity`,
+`secondary_spans`, `notes`, `help`, `edits`, and always-present `call_frames`
+and `task_ancestry` arrays. Analysis frame spans use zero-based coordinates and
+an optional `file_path`; symbols contain `name`, `kind`, `detail`, and
+recursive `children`; occurrences contain `hover` and an optional `definition`
+range, whose `file_path` may identify another module. An edit includes its
+range, replacement text, and applicability.
 
 `analyze` exits successfully even when the JSON contains source diagnostics: the request itself succeeded and the diagnostics are data. The language server prefers this compiler-backed analysis when it succeeds.
 
@@ -251,7 +259,7 @@ Aurora source accepted by these commands is governed by the [Grammar](/manual/gr
 
 `check`, `run`, and `build` use the same package resolver, parser, static checker, and ownership checker. A program that fails those stages is not executed or emitted. `analyze` exposes the same semantic model in a recoverable editor-oriented report, and `complete` queries completion at a zero-based source position. Inspection commands expose intermediate compiler data but do not define additional source types.
 
-For `check`, `run`, and `build`, JSON diagnostic mode has schema version `1` and contains a `diagnostics` array. The current compile pipeline stops at its first failure, so a failed invocation contains exactly one diagnostic and a successful `check` contains none; tools must not treat that cap as proof that the rest of an invalid source file has no errors. Each diagnostic carries its stable code, severity, message, optional primary span, secondary spans, notes, help, and machine-applicable edits. The `analyze` and persistent-service representations carry the same semantic diagnostic information in their documented editor-coordinate shapes.
+For `check`, `run`, and `build`, JSON diagnostic mode has schema version `1` and contains a `diagnostics` array. The current compile pipeline stops at its first failure, so a failed invocation contains exactly one diagnostic and a successful `check` contains none; tools must not treat that cap as proof that the rest of an invalid source file has no errors. Each diagnostic carries its stable code, severity, message, optional primary span, secondary spans, notes, help, machine-applicable edits, `call_frames`, and `task_ancestry`. The frame arrays are always present. Call frames are ordered innermost first; task ancestry is ordered youngest first. Every public schema-version-1 frame span owns a required `path` and its coordinates, so multi-file failures do not rely on the primary span's path. The `analyze` and persistent-service representations carry the same semantic diagnostic information in their documented zero-based editor-coordinate shapes, where `file_path` is optional only for source-only analysis.
 
 ## Runtime Semantics
 
@@ -269,11 +277,21 @@ Tool-side mutations are explicit: `fmt` without `--check`, `deps update`, and su
 
 Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means focused migration guidance; `AU2006` means a builtin handle method collision; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; `AU3004` means an invalid ownership mode; `AU3005` means a non-copy indexed read; `AU3006` means a non-copy indexed compound assignment; and `AU3007` means an attempt to duplicate a value that contains non-cloneable `random.Rng` state. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; and `AU4005` means a trapping resource or I/O failure. The structured schema is defined in [Diagnostics](/manual/diagnostics).
 
-Human diagnostics render as `error[AU####]` with source context when a span is available. `--format json` emits the schema-version-1 report on standard error for a failing `check`, `run`, or `build`. Usage errors, missing command-line operands, and host failures that prevent the tool itself from starting are CLI errors rather than Aurora-language diagnostics; they print usage or a tool error and have no `AU####` code.
+Human diagnostics render as `error[AU####]` with source context when a span is
+available. Ordinary notes are followed by readable call-chain and task-entry
+notes synthesized from the typed frame arrays; those generated lines are not
+duplicated in the structured `notes` field. `--format json` emits the
+schema-version-1 report on standard error for a failing `check`, `run`, or
+`build`. Usage errors, missing command-line operands, and host failures that
+prevent the tool itself from starting are CLI errors rather than
+Aurora-language diagnostics; they print usage or a tool error and have no
+`AU####` code.
 
 ## Backend Support
 
-The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run --backend mir` executes the lowered MIR and is the default. `aura run --backend direct` builds a native binary with the direct backend and executes it, reporting a build or launch failure as an error. `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime. Human mode prints the reason on standard error before the fallback program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, and exit code.
+The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run --backend mir` executes the lowered MIR and is the default. `aura run --backend direct` builds a native binary with the direct backend and executes it, reporting a build or launch failure as an error. For `--format json` on maintained Unix hosts, the CLI supplies a private trap-signal pipe plus a separate diagnostic-data pipe bounded to 1,048,576 bytes. A native child signals a trap and writes exactly one EOF-delimited compiler-owned diagnostic JSON record, suppressing human stderr only after that write succeeds. Native initialization owns both descriptors, marks them close-on-exec, and removes their internal environment entries before user code, so an Aurora-started subprocess cannot observe them or delay EOF. No signal or record is written for a normal `main` result, including status `1`, so the CLI does not infer a trap from a process status or parse human text. A trap signal without one valid record is a hard host execution failure. Human direct runs create no private protocol; the child renders its complete human diagnostic.
+
+`aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aurora trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
 The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v4`, compiler-owned semantic-interface schema version `2`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aurora quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aurora preserves the entry and reports or falls back according to the selected backend.
 
@@ -285,7 +303,11 @@ In human mode, a process flushes the exact line `aura: waiting for a concurrent 
 
 ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. The Phase 4 measurements put a cold miss at about 1.3 seconds and a first touch of a fresh binary at about 0.8 seconds because a direct hello-world executable is roughly 57 MB of statically linked runtime. Per-hit integrity verification now also reads, hashes, and privately materializes the artifact, so the earlier resident-cache measurement is historical rather than a current latency guarantee. Workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `2`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached ownership metadata cannot cross a compiler migration. The lexical fallback is recovery-only and is not a second language implementation.
 
-Backend parity is a release gate. A construct accepted by one maintained execution backend must have the same observable result or diagnostic in the other, subject only to the platform limits documented below.
+Backend parity is a release gate. A construct accepted by one maintained
+execution backend must have the same observable result or complete diagnostic
+in the other, including frame records and their source paths, subject only to
+the platform limits documented below. The parity harness performs no
+MIR-specific frame-note masking.
 
 ## Limits And Implementation-Defined Behavior
 

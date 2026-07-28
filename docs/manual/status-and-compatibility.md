@@ -128,6 +128,15 @@ of preemption, work stealing, worker introspection, detached tasks, or parallel
 speedup for every program. See [Execution Model](/manual/execution-model) and
 [Current Limits](/manual/current-limits).
 
+Provisional ADR-0036 defines complete typed runtime frames on both maintained
+backends. Diagnostics carry innermost-first Aurora call frames and
+youngest-first task ancestry. Each public schema-version-1 frame span has its
+own required source `path`; the analysis/LSP editor shape permits an optional
+`file_path` for source-only analysis. The public diagnostic schema remains
+version `1` because the always-present arrays are an additive extension;
+compiler-service/editor transport remains semantic schema version `2` and
+forwards the same records.
+
 ## Platform And Distribution Support
 
 Release archives target glibc Linux x86-64 and macOS x86-64/Apple silicon. Each archive includes the native runtime and linker manifest used by `aura build`; Cargo and the Aurora source checkout are not runtime dependencies of an installed archive. A host C compiler is still required.

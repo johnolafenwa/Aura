@@ -68,7 +68,7 @@ The important architectural point is that diagnostics come from the compiler
 library, not from ad-hoc CLI-specific parsing code. `check`, `run`, and `build`
 select the renderer with `--format human|json`; both forms retain the stable
 `AU####` code, and the structured form also retains related spans, notes, help,
-and edits for downstream tools.
+edits, typed call frames, and typed task ancestry for downstream tools.
 
 ## How `run` works
 
@@ -130,6 +130,19 @@ This fallback is implemented through `build_mir_runtime_binary` in the CLI.
 ## Why the CLI embeds source in built binaries
 
 Aurora preserves source path and source text metadata in build artifacts so runtime diagnostics can still render file, line, and caret context even after compilation.
+
+JSON-mode direct `run` adds a private two-pipe Unix child protocol for
+structured runtime traps. One pipe carries a fixed trap marker; the other
+carries at most one compiler-owned JSON record under the shared 1 MiB bound.
+Native initialization owns both write endpoints, marks them close-on-exec, and
+removes the internal environment entries before user code. A longer-lived
+program subprocess therefore cannot retain the descriptors and delay EOF.
+Because normal program status writes neither marker nor record, `main`
+returning `1` cannot be confused with an Aurora trap; marker-without-record is
+instead a hard transport failure. The CLI uses the record to emit the public
+JSON document. Human direct runs and standalone binaries create no private
+channel and render their own complete diagnostic. Post-launch wait, signal,
+and protocol failures never trigger an `auto` fallback.
 
 That is a very user-visible product decision.
 

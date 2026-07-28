@@ -43,9 +43,12 @@ pub struct DiagnosticDetails {
     pub notes: Vec<String>,
     pub help: Vec<String>,
     pub edits: Vec<DiagnosticEdit>,
+    pub call_frames: Vec<RuntimeCallFrame>,
+    pub task_ancestry: Vec<RuntimeTaskFrame>,
     pub render_path: Option<String>,
     pub render_source: Option<String>,
     pub partial_stdout: Option<String>,
+    runtime_frames_captured: bool,
 }
 
 impl Deref for Diagnostic {
@@ -227,7 +230,40 @@ pub struct DiagnosticEdit {
     pub applicability: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeSourceSpan {
+    /// Absent only for internal source-only execution. Public structured
+    /// diagnostics replace it with their caller-provided fallback path.
+    pub path: Option<String>,
+    pub start: Span,
+    pub end: Span,
+}
+
+impl RuntimeSourceSpan {
+    pub fn point(path: Option<String>, start: Span) -> Self {
+        Self {
+            path,
+            start,
+            end: Span::new(start.line, start.column.saturating_add(1)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeCallFrame {
+    pub function: String,
+    pub span: RuntimeSourceSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeTaskFrame {
+    pub task_function: String,
+    pub task_entry_span: RuntimeSourceSpan,
+    pub parent_function: String,
+    pub spawn_span: RuntimeSourceSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StructuredSpan {
     pub path: String,
     pub start: Span,
@@ -236,7 +272,7 @@ pub struct StructuredSpan {
     pub label: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StructuredEdit {
     pub path: String,
     pub start: Span,
@@ -245,7 +281,41 @@ pub struct StructuredEdit {
     pub applicability: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StructuredRuntimeCallFrame {
+    pub function: String,
+    pub span: StructuredRuntimeSourceSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StructuredRuntimeTaskFrame {
+    pub task_function: String,
+    pub task_entry_span: StructuredRuntimeSourceSpan,
+    pub parent_function: String,
+    pub spawn_span: StructuredRuntimeSourceSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StructuredRuntimeSourceSpan {
+    pub path: String,
+    pub start: Span,
+    pub end: Span,
+}
+
+impl RuntimeSourceSpan {
+    fn structured(&self, fallback_path: &str) -> StructuredRuntimeSourceSpan {
+        StructuredRuntimeSourceSpan {
+            path: self
+                .path
+                .clone()
+                .unwrap_or_else(|| fallback_path.to_string()),
+            start: self.start,
+            end: self.end,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StructuredDiagnostic {
     pub code: String,
     pub severity: DiagnosticSeverity,
@@ -255,6 +325,10 @@ pub struct StructuredDiagnostic {
     pub notes: Vec<String>,
     pub help: Vec<String>,
     pub edits: Vec<StructuredEdit>,
+    #[serde(default)]
+    pub call_frames: Vec<StructuredRuntimeCallFrame>,
+    #[serde(default)]
+    pub task_ancestry: Vec<StructuredRuntimeTaskFrame>,
 }
 
 impl Diagnostic {
@@ -271,9 +345,12 @@ impl Diagnostic {
                 notes: Vec::new(),
                 help: Vec::new(),
                 edits: Vec::new(),
+                call_frames: Vec::new(),
+                task_ancestry: Vec::new(),
                 render_path: None,
                 render_source: None,
                 partial_stdout: None,
+                runtime_frames_captured: false,
             }),
         }
     }
@@ -342,6 +419,23 @@ impl Diagnostic {
         self
     }
 
+    /// Snapshots Aurora runtime frames exactly once. Empty vectors are a valid
+    /// completed snapshot, so callers must use the private marker rather than
+    /// emptiness to decide whether propagation has already captured state.
+    pub fn capture_runtime_frames_once(
+        &mut self,
+        call_frames: Vec<RuntimeCallFrame>,
+        task_ancestry: Vec<RuntimeTaskFrame>,
+    ) -> bool {
+        if self.details.runtime_frames_captured {
+            return false;
+        }
+        self.call_frames = call_frames;
+        self.task_ancestry = task_ancestry;
+        self.details.runtime_frames_captured = true;
+        true
+    }
+
     pub fn structured(&self, path: &str) -> StructuredDiagnostic {
         let path = self.render_path.as_deref().unwrap_or(path).to_string();
         StructuredDiagnostic {
@@ -375,6 +469,24 @@ impl Diagnostic {
                     end: edit.end,
                     replacement: edit.replacement.clone(),
                     applicability: edit.applicability.clone(),
+                })
+                .collect(),
+            call_frames: self
+                .call_frames
+                .iter()
+                .map(|frame| StructuredRuntimeCallFrame {
+                    function: frame.function.clone(),
+                    span: frame.span.structured(&path),
+                })
+                .collect(),
+            task_ancestry: self
+                .task_ancestry
+                .iter()
+                .map(|frame| StructuredRuntimeTaskFrame {
+                    task_function: frame.task_function.clone(),
+                    task_entry_span: frame.task_entry_span.structured(&path),
+                    parent_function: frame.parent_function.clone(),
+                    spawn_span: frame.spawn_span.structured(&path),
                 })
                 .collect(),
         }
@@ -418,6 +530,37 @@ impl Diagnostic {
         }
         for note in &self.notes {
             rendered.push_str(&format!("\n  = note: {}", note));
+        }
+        if !self.call_frames.is_empty() {
+            let frames = self
+                .call_frames
+                .iter()
+                .map(|frame| format!("{} at {}", frame.function, frame.span.start))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            rendered.push_str(&format!(
+                "\n  = note: Aurora call chain (innermost first): {frames}"
+            ));
+        }
+        if let Some(task) = self.task_ancestry.first() {
+            rendered.push_str(&format!(
+                "\n  = note: Aurora task entry: {} at {}",
+                task.task_function, task.task_entry_span.start
+            ));
+            let ancestry = self
+                .task_ancestry
+                .iter()
+                .map(|frame| {
+                    format!(
+                        "{} spawned from {} at {}",
+                        frame.task_function, frame.parent_function, frame.spawn_span.start
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            rendered.push_str(&format!(
+                "\n  = note: Aurora task ancestry (youngest first): {ancestry}"
+            ));
         }
         for help in &self.help {
             rendered.push_str(&format!("\n  = help: {}", help));
