@@ -1,0 +1,5 @@
+error[AU1101]: expected Newline
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au:3:11
+  |
+3 |     select:
+  |           ^

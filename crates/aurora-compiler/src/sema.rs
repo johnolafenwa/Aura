@@ -953,6 +953,7 @@ fn type_is_copy_in_context_inner(
         {
             false
         }
+        Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => false,
         Type::Named(name, args) => {
             let key = ty.to_string();
             if !visiting.insert(key.clone()) {
@@ -2550,6 +2551,16 @@ fn lower_type_with_self(
         return Ok(Type::Named(type_name.to_string(), args));
     }
 
+    if type_name == "SelectOutcome" {
+        if args.len() != 2 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`SelectOutcome` expects exactly two type arguments",
+            ));
+        }
+        return Ok(Type::Named(type_name.to_string(), args));
+    }
+
     if type_name == "Map" {
         if args.len() != 2 {
             return Err(Diagnostic::at(
@@ -3370,6 +3381,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "TaskResult"
             | "WaitAny"
             | "WaitAll"
+            | "SelectOutcome"
             | "TaskGroup"
             | "Duration"
     )
@@ -4092,6 +4104,22 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
+            Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => {
+                let mut result = Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("queue payload of `{ty}`"),
+                );
+                if result.failure.is_none() {
+                    Self::merge_transfer_summary(
+                        &mut result,
+                        Self::prefix_transfer_summary(
+                            self.transfer_shape(&args[1], formals, summaries),
+                            &format!("task payload of `{ty}`"),
+                        ),
+                    );
+                }
+                result
+            }
             Type::Named(name, args) if name == "random.Rng" && args.is_empty() => TransferSummary {
                 failure: Some(
                     "`random.Rng` is a stateful generator and is not Transfer".to_string(),
@@ -4522,6 +4550,7 @@ impl<'a> FunctionChecker<'a> {
                         | "TaskResult"
                         | "WaitAny"
                         | "WaitAll"
+                        | "SelectOutcome"
                 ) =>
             {
                 let mut result = TaskObservationSummary::default();
@@ -4761,7 +4790,12 @@ impl<'a> FunctionChecker<'a> {
         // Transfer at all.
         let transfers_unique_task_result = matches!(
             operation,
-            "Task.result" | "Task.result_or_none" | "Task.result_or" | "wait_any" | "wait_all"
+            "Task.result"
+                | "Task.result_or_none"
+                | "Task.result_or"
+                | "wait_any"
+                | "wait_all"
+                | "select"
         );
         let operation = if operation.contains('`') {
             operation.to_string()
@@ -8651,6 +8685,7 @@ impl<'a> FunctionChecker<'a> {
                                 | "TaskResult"
                                 | "WaitAny"
                                 | "WaitAll"
+                                | "SelectOutcome"
                         ) =>
                     {
                         self.explicit_builtin_type(name, &lowered, expr.span)
@@ -10633,6 +10668,140 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Ok(Type::Unit)
+                    }
+                    BuiltinFunction::Select => {
+                        let mut queue_payload: Option<Type> = None;
+                        let mut task_result: Option<Type> = None;
+                        let mut nonrepeatable_tasks = Vec::new();
+
+                        for (index, argument) in args.iter().enumerate() {
+                            let source_ty = self.type_of_expr(&argument.value, locals)?;
+                            match &source_ty {
+                                Type::Named(name, source_args)
+                                    if name == "Queue" && source_args.len() == 1 =>
+                                {
+                                    if let Some(expected) = queue_payload.as_ref() {
+                                        if expected != &source_args[0] {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU2002",
+                                                argument.span,
+                                                format!(
+                                                    "all Queue sources in one `select` call must have the same payload type `{expected}`, found `Queue[{}]` at source {index}",
+                                                    source_args[0]
+                                                ),
+                                            )
+                                            .with_help(
+                                                "wrap heterogeneous queue payloads in one explicit enum before selecting",
+                                            ));
+                                        }
+                                    } else {
+                                        queue_payload = Some(source_args[0].clone());
+                                    }
+                                }
+                                Type::Named(name, source_args)
+                                    if name == "Task" && source_args.len() == 1 =>
+                                {
+                                    if let Some(expected) = task_result.as_ref() {
+                                        if expected != &source_args[0] {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU2002",
+                                                argument.span,
+                                                format!(
+                                                    "all Task sources in one `select` call must have the same result type `{expected}`, found `Task[{}]` at source {index}",
+                                                    source_args[0]
+                                                ),
+                                            )
+                                            .with_help(
+                                                "wrap heterogeneous task results in one explicit enum before selecting",
+                                            ));
+                                        }
+                                    } else {
+                                        task_result = Some(source_args[0].clone());
+                                    }
+                                    self.reject_rng_duplication(
+                                        "select",
+                                        &source_args[0],
+                                        argument.span,
+                                    )?;
+                                    if !self.is_copy_type(&source_ty) {
+                                        nonrepeatable_tasks.push((
+                                            argument,
+                                            source_args[0].clone(),
+                                            self.borrow_call_place(&argument.value),
+                                        ));
+                                    }
+                                }
+                                Type::Named(name, source_args)
+                                    if name == "Duration" && source_args.is_empty() => {}
+                                _ => {
+                                    return Err(Diagnostic::coded_at(
+                                        "AU2002",
+                                        argument.span,
+                                        format!(
+                                            "`select` sources must be `Queue[Q]`, `Task[T]`, or `Duration`; found `{source_ty}` at source {index}"
+                                        ),
+                                    )
+                                    .with_help(
+                                        "pass one or more queue handles, task handles, or relative Duration values as positional sources",
+                                    ));
+                                }
+                            }
+                        }
+
+                        for current in 0..nonrepeatable_tasks.len() {
+                            let Some(current_place) = nonrepeatable_tasks[current].2.as_ref()
+                            else {
+                                continue;
+                            };
+                            if nonrepeatable_tasks[..current]
+                                .iter()
+                                .filter_map(|(_, _, place)| place.as_ref())
+                                .any(|prior_place| prior_place == current_place)
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3009",
+                                    nonrepeatable_tasks[current].0.span,
+                                    format!(
+                                        "one `select` call cannot use the same non-repeatable Task source `{}` more than once",
+                                        self.render_place_expr(
+                                            &nonrepeatable_tasks[current].0.value
+                                        )
+                                    ),
+                                )
+                                .with_help(
+                                    "`select` consumes every non-repeatable Task source at call entry and abandons losing observation rights; pass each unique handle once",
+                                ));
+                            }
+                        }
+
+                        for (argument, result_ty, _) in nonrepeatable_tasks {
+                            if let Err(mut diagnostic) = self.consume_task_observation_right(
+                                &argument.value,
+                                &result_ty,
+                                "select",
+                                locals,
+                            ) {
+                                if diagnostic.code == "AU3002" {
+                                    diagnostic.message = format!(
+                                        "`select` consumes every non-repeatable Task source at call entry, but `{}` is available only through shared access",
+                                        self.render_place_expr(&argument.value)
+                                    );
+                                    diagnostic.help = vec![
+                                        "pass the Task through owned access; losing observation rights are deliberately abandoned and cannot be cloned"
+                                            .to_string(),
+                                    ];
+                                }
+                                return Err(diagnostic);
+                            }
+                        }
+
+                        Ok(Type::Named(
+                            "SelectOutcome".to_string(),
+                            vec![
+                                queue_payload.unwrap_or(Type::Unit),
+                                task_result.unwrap_or(Type::Unit),
+                            ],
+                        ))
                     }
                     BuiltinFunction::WaitAny | BuiltinFunction::WaitAll => {
                         let tasks_arg = required_ordered_arg(
@@ -15619,6 +15788,7 @@ impl<'a> FunctionChecker<'a> {
                 | ("TaskResult", "TimedOut" | "Cancelled")
                 | ("WaitAny", "TimedOut" | "Cancelled")
                 | ("WaitAll", "TimedOut" | "Cancelled")
+                | ("SelectOutcome", "Cancelled")
         )
     }
 
@@ -15673,6 +15843,7 @@ impl<'a> FunctionChecker<'a> {
                         | "TaskResult"
                         | "WaitAny"
                         | "WaitAll"
+                        | "SelectOutcome"
                 ) || self.resolve_enum_info(name).is_some()
             }
             _ => self
@@ -19006,6 +19177,24 @@ impl<'a> FunctionChecker<'a> {
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
             ]),
+            Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => Some(vec![
+                (
+                    "Queue".to_string(),
+                    vec![
+                        Type::named("int32"),
+                        Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
+                    ],
+                ),
+                (
+                    "Task".to_string(),
+                    vec![
+                        Type::named("int32"),
+                        Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
+                    ],
+                ),
+                ("Deadline".to_string(), vec![Type::named("int32")]),
+                ("Cancelled".to_string(), Vec::new()),
+            ]),
             Type::Named(name, args) => self.resolve_enum_info(name).map(|enum_info| {
                 let substitutions =
                     substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
@@ -19065,6 +19254,16 @@ impl<'a> FunctionChecker<'a> {
             ("WaitAll", "Ready", [values]) => Some(vec![values.clone()]),
             ("WaitAll", "Error", [_]) => Some(vec![Type::named("int32"), Type::named("String")]),
             ("WaitAll", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
+            ("SelectOutcome", "Queue", [queue, _]) => Some(vec![
+                Type::named("int32"),
+                Type::Named("QueueReceive".to_string(), vec![queue.clone()]),
+            ]),
+            ("SelectOutcome", "Task", [_, task]) => Some(vec![
+                Type::named("int32"),
+                Type::Named("TaskResult".to_string(), vec![task.clone()]),
+            ]),
+            ("SelectOutcome", "Deadline", [_, _]) => Some(vec![Type::named("int32")]),
+            ("SelectOutcome", "Cancelled", [_, _]) => Some(Vec::new()),
             _ => None,
         }
     }
@@ -19083,6 +19282,7 @@ impl<'a> FunctionChecker<'a> {
             "TaskResult" => 1,
             "WaitAny" => 1,
             "WaitAll" => 1,
+            "SelectOutcome" => 2,
             _ => return Err(Diagnostic::at(span, format!("unknown name `{}`", name))),
         };
         if explicit_args.len() != expected_len {
@@ -19123,6 +19323,7 @@ impl<'a> FunctionChecker<'a> {
                     | "TaskResult"
                     | "WaitAny"
                     | "WaitAll"
+                    | "SelectOutcome"
             ),
             ExprKind::Specialize { expr, .. } => self.is_builtin_enum_constructor_expr(expr),
             ExprKind::Group(inner) => self.is_builtin_enum_constructor_expr(inner),

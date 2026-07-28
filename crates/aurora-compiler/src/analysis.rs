@@ -2429,6 +2429,34 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
+            "SelectOutcome" if field == "Queue" => Some(ResolvedMember {
+                hover: format_variant_hover_payloads(
+                    "SelectOutcome",
+                    field,
+                    ["own int32".to_string(), "own QueueReceive[Q]".to_string()],
+                ),
+                definition: None,
+                ty: Some(Type::named("SelectOutcome")),
+            }),
+            "SelectOutcome" if field == "Task" => Some(ResolvedMember {
+                hover: format_variant_hover_payloads(
+                    "SelectOutcome",
+                    field,
+                    ["own int32".to_string(), "own TaskResult[T]".to_string()],
+                ),
+                definition: None,
+                ty: Some(Type::named("SelectOutcome")),
+            }),
+            "SelectOutcome" if field == "Deadline" => Some(ResolvedMember {
+                hover: format_variant_hover("SelectOutcome", field, Some(&Type::named("int32"))),
+                definition: None,
+                ty: Some(Type::named("SelectOutcome")),
+            }),
+            "SelectOutcome" if field == "Cancelled" => Some(ResolvedMember {
+                hover: format_variant_hover("SelectOutcome", field, None),
+                definition: None,
+                ty: Some(Type::named("SelectOutcome")),
+            }),
             _ => None,
         }
     }
@@ -2620,6 +2648,7 @@ impl<'a> AnalysisBuilder<'a> {
                             | "TaskResult"
                             | "WaitAny"
                             | "WaitAll"
+                            | "SelectOutcome"
                             | "Queue"
                             | "TaskGroup"
                     )
@@ -2769,6 +2798,51 @@ impl<'a> AnalysisBuilder<'a> {
                     BuiltinFunction::Sqrt => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    BuiltinFunction::Select => {
+                        if args.iter().any(|argument| argument.name.is_some()) {
+                            return None;
+                        }
+                        let mut queue_payload = None;
+                        let mut task_result = None;
+                        for argument in args {
+                            match self.infer_expr_type(&argument.value, scope)? {
+                                Type::Named(name, source_args)
+                                    if name == "Queue" && source_args.len() == 1 =>
+                                {
+                                    if queue_payload
+                                        .as_ref()
+                                        .is_some_and(|expected| expected != &source_args[0])
+                                    {
+                                        return None;
+                                    }
+                                    queue_payload.get_or_insert_with(|| source_args[0].clone());
+                                }
+                                Type::Named(name, source_args)
+                                    if name == "Task" && source_args.len() == 1 =>
+                                {
+                                    if task_result
+                                        .as_ref()
+                                        .is_some_and(|expected| expected != &source_args[0])
+                                    {
+                                        return None;
+                                    }
+                                    task_result.get_or_insert_with(|| source_args[0].clone());
+                                }
+                                Type::Named(name, source_args)
+                                    if name == "Duration" && source_args.is_empty() => {}
+                                _ => return None,
+                            }
+                        }
+                        (!args.is_empty()).then(|| {
+                            Type::Named(
+                                "SelectOutcome".to_string(),
+                                vec![
+                                    queue_payload.unwrap_or(Type::Unit),
+                                    task_result.unwrap_or(Type::Unit),
+                                ],
+                            )
+                        })
+                    }
                     BuiltinFunction::WaitAny => args.first().and_then(|arg| {
                         let task_list = self.infer_expr_type(&arg.value, scope)?;
                         match task_list {
@@ -3613,6 +3687,10 @@ const BUILTIN_ENUM_COMPLETIONS: &[CompletionMeta] = &[
         name: "WaitAll",
         detail: "enum WaitAll[T]",
     },
+    CompletionMeta {
+        name: "SelectOutcome",
+        detail: "enum SelectOutcome[Q, T]",
+    },
 ];
 
 fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> {
@@ -3749,6 +3827,28 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> WaitAll".to_string(),
+            },
+        ],
+        "SelectOutcome" => vec![
+            AnalysisCompletion {
+                name: "Queue".to_string(),
+                kind: "variant".to_string(),
+                detail: "Queue(own int32, own QueueReceive[Q]) -> SelectOutcome".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Task".to_string(),
+                kind: "variant".to_string(),
+                detail: "Task(own int32, own TaskResult[T]) -> SelectOutcome".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Deadline".to_string(),
+                kind: "variant".to_string(),
+                detail: "Deadline(own int32) -> SelectOutcome".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled -> SelectOutcome".to_string(),
             },
         ],
         _ => Vec::new(),
@@ -4091,6 +4191,7 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
         BuiltinFunction::YieldNow => Some(Type::Unit),
         BuiltinFunction::Sleep => Some(Type::Unit),
+        BuiltinFunction::Select => None,
         BuiltinFunction::WaitAny => None,
         BuiltinFunction::WaitAll => None,
         BuiltinFunction::Len => Some(Type::named("int64")),

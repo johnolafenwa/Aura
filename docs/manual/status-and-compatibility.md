@@ -13,9 +13,14 @@ The maintained language contract consists of:
 
 The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
-design history. Features mentioned only there—including `Channel`, `select`,
-detached spawn, attributes, and registry publishing—are not part of Aurora
-0.1. Adding `len` and `str` to the maintained builtin functions also reserves both
+design history. Features mentioned only there—including `Channel`,
+statement-form `select`, detached spawn, attributes, and registry
+publishing—are not part of Aurora 0.1. Provisional ADR-0034 instead adds the
+ordinary builtin call `select(source, ...)`; it adds no statement syntax.
+That addition reserves both the builtin function name `select` and builtin
+enum name `SelectOutcome`; existing user declarations with either name must
+be renamed.
+Adding `len` and `str` to the maintained builtin functions also reserves both
 names: a program that previously declared its own `def len(...)` or
 `def str(...)` is now rejected, the same way redefining `print` or `abs` is.
 ADR-0030 is Accepted with the B3.0-d length-unification amendment:
@@ -69,9 +74,12 @@ Aurora 0.1 uses structured concurrency:
   from the measured-shallow-task 256 KiB minimum through 64 MiB
 - `Queue[T]` provides bounded or unbounded task-aware communication
 - `yield_now()` provides an explicit cooperative scheduling point
+- `select(...)` provides a typed heterogeneous Queue/Task/deadline wait under
+  Provisional ADR-0034
 - `wait_any(...)` and `wait_all(...)` coordinate task completion
 
-There is no `Channel`, language-level `select`, bare `spawn`, or detached task.
+There is no `Channel`, statement-form `select`, bare `spawn`, or detached
+task. `select(...)` is an ordinary builtin call; it does not add branch syntax.
 
 Task bodies execute on pinned cooperative scheduler workers on both maintained
 backends. The default worker count is the available parallelism reported by

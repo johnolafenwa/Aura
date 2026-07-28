@@ -14,8 +14,12 @@ Last updated: 2026-07-28
   worktree opened from that clean checkpoint with compiler coverage floors
   frozen at `96.13/96.89/94.35`; see
   `work/2026-07-27-batch4-scalable-runtime.md`.
-- Current stage: B4.0 implementation and its exact repository gates are
-  complete. Cross-process runtime-identity and per-content-key locks now give
+- Current stage: Phase 5.8 typed heterogeneous select has cleared focused
+  implementation review, its completion matrix, the frozen compiler-coverage
+  gate, and exact full CI. The isolated implementation commit and clean-tree
+  contractual benchmark remain before Phase 5.9.
+  Earlier B4.0 implementation and its exact repository gates are complete.
+  Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
   blocking established warm hits. Human mode flushes the exact wait/rebuild
   notices before the long operation; JSON mode provisionally buffers those
@@ -330,7 +334,38 @@ Last updated: 2026-07-28
   5 ms arm span and 3 ms p99 pass. Raw report
   `/private/tmp/aurora-phase57-after-pinned-worker-multicore.json`, SHA-256
   `6d47c90d3dd9eb85421245c92aa3d12b01cb58ddf9ac0819b0e210c14123531d`.
-  Phase 5.7 is ready for its evidence commit; Phase 5.8 typed select follows.
+  The benchmark evidence is committed at `f601fc7`.
+- Phase 5.8 typed select is active. Provisional ADR-0034 landed alone at
+  `ec3fd61` before implementation. It specifies a variadic positional builtin
+  over Queue, Task, and relative-Duration sources; the typed
+  `SelectOutcome[Q, T]` result; cancellation-first then lowest-index
+  arbitration; common-base deadlines; non-repeatable Task observation-right
+  consumption and loser abandonment; and check-subscribe-recheck with
+  idempotent loser cleanup. No statement syntax is added.
+- Phase 5.8 implementation and focused verification are complete. MIR and
+  direct execution share one composite scheduler wait with cancellation-first,
+  original-index arbitration, post-validation common-base deadlines, atomic
+  Queue receive, Task observation claims, direct cross-worker wakeups, and
+  rollback-safe loser cleanup. Both adapters validate typed source metadata
+  and malformed descriptors with `AU4001`; the direct backend uses the owned
+  internal `aurora_direct_select(tuple_ptr)` ABI. Focused gates are green for
+  40 compiler select tests, all fixture families, four forced-backend
+  four-worker CLI parity tests, 89 LSP tests, 13 extension tests, 119 verified
+  reference blocks, docs, formatting, and hygiene. Frozen compiler coverage is
+  green at 69,985/72,794 lines (96.141165%), 4,634/4,779 functions
+  (96.965892%), and 103,033/109,068 regions (94.466755%), above the unchanged
+  96.13/96.89/94.35 floors. The coverage closure contains only observable
+  semantics, diagnostics, recovery, parity, and malformed external-ABI tests;
+  no synthetic coverage test or exclusion was added. Exact full CI is green:
+  45 benchmark-runner tests, 292 CLI tests, 1,105 compiler library tests, the
+  forced MIR/direct matrix in 820.09 seconds, 89 LSP tests, 13 extension tests,
+  both coverage gates, reference integrity, docs, audits, warning-denied
+  Clippy, and hygiene over the Phase 5.8 snapshot. A pre-existing MIR TCP test
+  ordered `peer_addr` after `shutdown_write`; contention reproduced the race
+  and the test now proves live addresses before shutdown without changing
+  runtime code or timeouts. The user-owned `personal/file_ops.au` remains
+  byte-identical and excluded. The implementation commit and clean-tree
+  benchmark remain before Phase 5.8 sign-off.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

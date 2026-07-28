@@ -698,6 +698,43 @@ if rg -n 'maintained interpreter|tree-walk interpreter' docs/manual; then
   exit 1
 fi
 
+# Phase 5.8: Provisional ADR-0034 is an implemented builtin call, not the
+# historical statement form. Keep the normative reference, teaching track,
+# runnable example, and ADR ledger synchronized.
+test -s architecture_docs/decisions/0034-typed-heterogeneous-select.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0034-typed-heterogeneous-select.md
+grep -Fq '0034-typed-heterogeneous-select.md) — implemented provisionally in Phase 5.8, pending checkpoint ratification' architecture_docs/decisions/README.md
+test -s examples/concurrency/typed_select.au
+grep -Fq 'execute typed heterogeneous Queue, Task, and relative-deadline selection' README.md
+grep -Fq '`typed_select.au`' examples/README.md
+grep -Fq '`select`' docs/manual/index.md
+grep -Fq '`select(...)` provides a typed heterogeneous Queue/Task/deadline wait' docs/manual/status-and-compatibility.md
+grep -Fq '`select(source, ...)` evaluates its Queue, Task, and relative-Duration sources' docs/manual/execution-model.md
+grep -Fq '`select` | `select(source, ...) -> SelectOutcome[Q, T]`' docs/manual/api-index.md
+grep -Fq 'Provisional ADR-0034 typed heterogeneous `select`' docs/manual/conformance.md
+grep -Fq 'Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative' tutorials/13-concurrency.md
+grep -Fq 'explicit-stack start methods, typed `select(...)` over Queue, Task, and' tutorials/README.md
+grep -Fq 'typed `select(queue_or_task_or_duration, ...)`' tutorials/14-current-language-surface.md
+test -s crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
+test -s crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
+grep -Fq 'select:' crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
+grep -Fq 'error[AU1101]: expected Newline' crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
+grep -Fq 'compiler bridge exposes typed select inference, hover, and outcome completions' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'compiler bridge preserves typed select diagnostic codes and guidance' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'assert.ok(names.includes("select"));' tools/aurora-language-server/test/recovery.test.js
+grep -Fq 'assert.ok(names.includes("SelectOutcome"));' tools/aurora-language-server/test/recovery.test.js
+grep -Fq '"SelectOutcome",' tools/vscode-aurora/test/package.test.js
+
+if rg -n 'language-level `select`|instead of the removed `select` statement|typed heterogeneous selection[^.\n]*(unavailable|not implemented)' \
+  README.md \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  examples/README.md; then
+  echo "maintained reference still describes typed select as unavailable" >&2
+  exit 1
+fi
+
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 scripts/test_capability_migrate.py

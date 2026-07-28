@@ -4500,14 +4500,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         ),
         Value::Unit
     );
-    assert_eq!(
-        result_ok_payload(
-            runtime
-                .evaluate_tcp_stream_method(tcp_client.clone(), "shutdown_write", &[], &mut env)
-                .expect("tcp shutdown_write should succeed")
-        ),
-        Value::Unit
-    );
+    // Inspect both endpoints while the peer is guaranteed to remain connected. Once the client
+    // shuts down its write side, the server may finish and close before another socket query.
     match result_ok_payload(
         runtime
             .evaluate_tcp_stream_method(tcp_client.clone(), "local_addr", &[], &mut env)
@@ -4524,6 +4518,14 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         Value::String(address) => assert_eq!(address, tcp_address),
         other => panic!("expected tcp peer address string, found {other:?}"),
     }
+    assert_eq!(
+        result_ok_payload(
+            runtime
+                .evaluate_tcp_stream_method(tcp_client.clone(), "shutdown_write", &[], &mut env)
+                .expect("tcp shutdown_write should succeed")
+        ),
+        Value::Unit
+    );
     let tcp_line = result_ok_payload(
         runtime
             .evaluate_tcp_stream_method(
@@ -12531,6 +12533,398 @@ fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing(
             .expect_err("wait_all must claim every result before waiting");
         assert_eq!(error.code, "AU4001");
     }
+}
+
+#[test]
+fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
+    let first = ChannelValue::new();
+    let second = ChannelValue::new();
+    first
+        .send(Value::String("first".to_string()))
+        .expect("first queue should accept its item");
+    second
+        .send(Value::String("second".to_string()))
+        .expect("second queue should accept its item");
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "first",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Channel(first),
+    );
+    env.define_typed(
+        "second",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Channel(second.clone()),
+    );
+    let selected = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[
+                mir_arg(None, Operand::Place("first".to_string())),
+                mir_arg(None, Operand::Place("second".to_string())),
+            ],
+            &mut env,
+        )
+        .expect("the lowest ready queue index should win");
+    let selected = enum_payloads(selected, "SelectOutcome", "Queue");
+    assert_eq!(
+        selected[0],
+        Value::Int(IntegerValue::from_signed(0)),
+        "the result index is the original argument position"
+    );
+    assert_eq!(
+        enum_payloads(selected[1].clone(), "QueueReceive", "Item"),
+        vec![Value::String("first".to_string())]
+    );
+    assert_eq!(
+        second.try_recv(),
+        crate::runtime_value::TryRecvResult::Value(Value::String("second".to_string())),
+        "a simultaneously ready losing queue must not lose its item"
+    );
+
+    let closed = ChannelValue::new();
+    closed.close();
+    env.define_typed(
+        "closed",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Channel(closed),
+    );
+    let selected = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[mir_arg(None, Operand::Place("closed".to_string()))],
+            &mut env,
+        )
+        .expect("a closed queue should be immediately ready");
+    let selected = enum_payloads(selected, "SelectOutcome", "Queue");
+    assert_eq!(selected[0], Value::Int(IntegerValue::from_signed(0)));
+    assert!(enum_payloads(selected[1].clone(), "QueueReceive", "Closed").is_empty());
+}
+
+#[test]
+fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
+    let ready = TaskValue::from_handle(std::thread::spawn(|| {
+        Ok(Value::String("ready".to_string()))
+    }));
+    let failed =
+        TaskValue::from_handle(std::thread::spawn(|| Err(Diagnostic::new("select failed"))));
+    while ready.completed_result_observed().is_none()
+        || failed.completed_result_observed().is_none()
+    {
+        std::thread::yield_now();
+    }
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "ready",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Task(ready),
+    );
+    env.define_typed(
+        "failed",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Task(failed),
+    );
+    let selected = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[
+                mir_arg(None, Operand::Place("ready".to_string())),
+                mir_arg(None, Operand::Place("failed".to_string())),
+            ],
+            &mut env,
+        )
+        .expect("the lowest-index completed task should win");
+    let selected = enum_payloads(selected, "SelectOutcome", "Task");
+    assert_eq!(selected[0], Value::Int(IntegerValue::from_signed(0)));
+    assert_eq!(
+        enum_payloads(selected[1].clone(), "TaskResult", "Ready"),
+        vec![Value::String("ready".to_string())]
+    );
+
+    let failed_only =
+        TaskValue::from_handle(std::thread::spawn(|| Err(Diagnostic::new("task error"))));
+    env.define_typed(
+        "failed_only",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Task(failed_only),
+    );
+    let failed_outcome = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[mir_arg(None, Operand::Place("failed_only".to_string()))],
+            &mut env,
+        )
+        .expect("a failed child is a typed select outcome");
+    let failed_outcome = enum_payloads(failed_outcome, "SelectOutcome", "Task");
+    assert_eq!(
+        enum_payloads(failed_outcome[1].clone(), "TaskResult", "Error"),
+        vec![Value::String("task error".to_string())]
+    );
+
+    let blocker = ChannelValue::new();
+    let unblocker = blocker.clone();
+    let losing = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(move || {
+            let _ = unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    env.define_typed(
+        "losing",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Task(losing.clone()),
+    );
+    let deadline = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[
+                mir_arg(None, Operand::Duration(0)),
+                mir_arg(None, Operand::MovePlace("losing".to_string())),
+            ],
+            &mut env,
+        )
+        .expect("an immediate deadline should beat a pending task");
+    assert_eq!(
+        enum_payloads(deadline, "SelectOutcome", "Deadline"),
+        vec![Value::Int(IntegerValue::from_signed(0))]
+    );
+    blocker.close();
+    let repeated = runtime
+        .join_task(losing, Some(StdDuration::from_secs(1)))
+        .expect_err("select must abandon a losing non-repeatable task observation right");
+    assert_eq!(repeated.code, "AU4001");
+}
+
+#[test]
+fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation() {
+    let child_outcome = crate::runtime_value::run_lightweight_root_task(|| {
+        let child =
+            crate::runtime_value::spawn_lightweight_task(|| -> crate::diag::Result<Value> {
+                crate::runtime_value::cancel_current_lightweight_task_boundary()
+            })?;
+        while child.completed_result_observed().is_none() {
+            crate::runtime_value::yield_now_with_runtime_scheduler();
+        }
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        env.define_typed(
+            "child",
+            Type::Named("Task".to_string(), vec![Type::Unit]),
+            Value::Task(child),
+        );
+        runtime.evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[mir_arg(None, Operand::Place("child".to_string()))],
+            &mut env,
+        )
+    })
+    .expect("a cancelled child should be returned as its TaskResult");
+    let child_outcome = enum_payloads(child_outcome, "SelectOutcome", "Task");
+    assert!(enum_payloads(child_outcome[1].clone(), "TaskResult", "Cancelled").is_empty());
+
+    let parent = CancellationContext::default();
+    let group = TaskGroupValue::new(&parent);
+    let cancellation = group.child_cancellation();
+    group.cancel();
+    let ready = ChannelValue::new();
+    ready
+        .send(Value::String("preserved".to_string()))
+        .expect("queue should accept the ready value");
+    let mut runtime = MirRuntime::new(
+        MirModule {
+            functions: Vec::new(),
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        Arc::new(Mutex::new(String::new())),
+        cancellation,
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "ready",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Channel(ready.clone()),
+    );
+    let cancelled = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[mir_arg(None, Operand::Place("ready".to_string()))],
+            &mut env,
+        )
+        .expect("current-task cancellation should be a select result");
+    assert!(enum_payloads(cancelled, "SelectOutcome", "Cancelled").is_empty());
+    assert_eq!(
+        ready.try_recv(),
+        crate::runtime_value::TryRecvResult::Value(Value::String("preserved".to_string())),
+        "cancellation wins before a ready source and must not consume it"
+    );
+}
+
+#[test]
+fn mir_runtime_select_adapter_rejects_invalid_deadlines_and_named_sources() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    for invalid in [-1, i128::MAX] {
+        let error = runtime
+            .evaluate_call(
+                &CallTarget::Name("select".to_string()),
+                &[mir_arg(None, Operand::Duration(invalid))],
+                &mut env,
+            )
+            .expect_err("invalid select deadlines must trap");
+        assert_eq!(error.code, "AU4001");
+    }
+
+    let named = runtime
+        .evaluate_call(
+            &CallTarget::Name("select".to_string()),
+            &[mir_arg(Some("source"), Operand::Duration(0))],
+            &mut env,
+        )
+        .expect_err("malformed MIR must not smuggle a named select source");
+    assert_eq!(named.code, "AU4001");
+    assert!(named.message.contains("positional source"));
+}
+
+#[test]
+fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitration() {
+    fn select_error(runtime: &mut MirRuntime, env: &mut Env, source_names: &[&str]) -> Diagnostic {
+        let args = source_names
+            .iter()
+            .map(|name| mir_arg(None, Operand::Place((*name).to_string())))
+            .collect::<Vec<_>>();
+        runtime
+            .evaluate_call(&CallTarget::Name("select".to_string()), &args, env)
+            .expect_err("malformed MIR select descriptors must trap")
+    }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    let missing_type_queue = ChannelValue::new();
+    missing_type_queue
+        .send(Value::String("ready".to_string()))
+        .expect("the malformed queue should be ready so a missing validation fails promptly");
+    env.values.insert(
+        "missing_type".to_string(),
+        Value::Channel(missing_type_queue),
+    );
+    let missing = select_error(&mut runtime, &mut env, &["missing_type"]);
+    assert_eq!(missing.code, "AU4001");
+    assert!(missing.message.contains("missing source type metadata"));
+
+    env.define_typed(
+        "wrong_type",
+        Type::named("String"),
+        Value::Channel(ChannelValue::new()),
+    );
+    let wrong = select_error(&mut runtime, &mut env, &["wrong_type"]);
+    assert_eq!(wrong.code, "AU4001");
+    assert!(wrong.message.contains("`Queue[T]`"));
+    assert!(wrong.message.contains("`Task[T]`"));
+    assert!(wrong.message.contains("`Duration`"));
+
+    env.define_typed(
+        "wrong_queue_arity",
+        Type::named("Queue"),
+        Value::Channel(ChannelValue::new()),
+    );
+    let wrong_arity = select_error(&mut runtime, &mut env, &["wrong_queue_arity"]);
+    assert_eq!(wrong_arity.code, "AU4001");
+    assert!(wrong_arity.message.contains("Queue[T]"));
+
+    env.define_typed(
+        "wrong_task_arity",
+        Type::named("Task"),
+        Value::Task(TaskValue::from_handle(std::thread::spawn(|| {
+            Ok(Value::Unit)
+        }))),
+    );
+    let wrong_task_arity = select_error(&mut runtime, &mut env, &["wrong_task_arity"]);
+    assert_eq!(wrong_task_arity.code, "AU4001");
+    assert!(wrong_task_arity.message.contains("Task[T]"));
+
+    env.define_typed(
+        "wrong_duration_arity",
+        Type::Named("Duration".to_string(), vec![Type::named("String")]),
+        Value::Duration(0),
+    );
+    let wrong_duration_arity = select_error(&mut runtime, &mut env, &["wrong_duration_arity"]);
+    assert_eq!(wrong_duration_arity.code, "AU4001");
+    assert!(wrong_duration_arity
+        .message
+        .contains("malformed Duration descriptor"));
+
+    env.define_typed(
+        "queue_value_mismatch",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Duration(0),
+    );
+    let queue_mismatch = select_error(&mut runtime, &mut env, &["queue_value_mismatch"]);
+    assert_eq!(queue_mismatch.code, "AU4001");
+    assert!(queue_mismatch.message.contains("Queue[String]"));
+    assert!(queue_mismatch.message.contains("queue runtime value"));
+
+    env.define_typed(
+        "task_value_mismatch",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Duration(0),
+    );
+    let task_mismatch = select_error(&mut runtime, &mut env, &["task_value_mismatch"]);
+    assert_eq!(task_mismatch.code, "AU4001");
+    assert!(task_mismatch.message.contains("Task[String]"));
+    assert!(task_mismatch.message.contains("task runtime value"));
+
+    env.define_typed(
+        "duration_value_mismatch",
+        Type::named("Duration"),
+        Value::Channel(ChannelValue::new()),
+    );
+    let duration_mismatch = select_error(&mut runtime, &mut env, &["duration_value_mismatch"]);
+    assert_eq!(duration_mismatch.code, "AU4001");
+    assert!(duration_mismatch.message.contains("Duration"));
+    assert!(duration_mismatch.message.contains("duration runtime value"));
+
+    env.define_typed(
+        "queue_string",
+        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Value::Channel(ChannelValue::new()),
+    );
+    env.define_typed(
+        "queue_int",
+        Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+        Value::Channel(ChannelValue::new()),
+    );
+    let mixed_queues = select_error(&mut runtime, &mut env, &["queue_string", "queue_int"]);
+    assert_eq!(mixed_queues.code, "AU4001");
+    assert!(mixed_queues.message.contains("common Queue payload type"));
+    assert!(mixed_queues.message.contains("String"));
+    assert!(mixed_queues.message.contains("int32"));
+
+    env.define_typed(
+        "task_string",
+        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Value::Task(TaskValue::from_handle(std::thread::spawn(|| {
+            Ok(Value::String("ready".to_string()))
+        }))),
+    );
+    env.define_typed(
+        "task_bool",
+        Type::Named("Task".to_string(), vec![Type::named("bool")]),
+        Value::Task(TaskValue::from_handle(std::thread::spawn(|| {
+            Ok(Value::Bool(true))
+        }))),
+    );
+    let mixed_tasks = select_error(&mut runtime, &mut env, &["task_string", "task_bool"]);
+    assert_eq!(mixed_tasks.code, "AU4001");
+    assert!(mixed_tasks.message.contains("common Task result type"));
+    assert!(mixed_tasks.message.contains("String"));
+    assert!(mixed_tasks.message.contains("bool"));
 }
 
 #[test]

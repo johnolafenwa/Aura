@@ -346,8 +346,10 @@ ADR-0008 also distinguishes repeatable and single-consumer task results.
 is a recursively repeatable `Task[...]`. For any other transferable `T`,
 `result`, `result_or_none`, and `result_or` consume the unique observation
 right on every outcome. `wait_any` and `wait_all` consume the complete task
-vector; `wait_any` abandons the unchosen rights. This prevents handle aliases,
-including nested `Task[Task[String]]`, from producing a second value.
+vector; `wait_any` abandons the unchosen rights. `select(...)` consumes every
+non-repeatable Task source at call entry and abandons each losing right. This
+prevents handle aliases, including nested `Task[Task[String]]`, from producing
+a second value.
 Attempts to clone, read through a clone-producing collection method, or copy
 an aggregate containing such a right use `AU3009`. Reusing the task binding
 after a consuming observation uses ordinary moved-value `AU3001`; consuming

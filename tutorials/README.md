@@ -76,7 +76,8 @@ The current tutorial set covers:
 - `with` using `close(mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, its ordinary and
-  explicit-stack start methods, `wait_any(...)`, `wait_all(...)`, send-result
+  explicit-stack start methods, typed `select(...)` over Queue, Task, and
+  relative-Duration sources, `wait_any(...)`, `wait_all(...)`, send-result
   errors, structural `Transfer` boundaries, single-consumer task results, and
   cooperative cancellation
 - arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons

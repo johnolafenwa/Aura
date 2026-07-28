@@ -542,6 +542,13 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(timeout);
         release(task_list);
 
+        let source_buffer = aurora_direct_arg_buffer_new(1);
+        aurora_direct_arg_buffer_store_owned(source_buffer, 0, duration_value(0) as i64);
+        let sources = aurora_direct_tuple_new(source_buffer, 1);
+        let deadline_index =
+            expect_variant_payload(aurora_direct_select(sources), "SelectOutcome", "Deadline");
+        assert_eq!(expect_i64(deadline_index), 0);
+
         aurora_direct_sleep_ms(0);
     }
 }

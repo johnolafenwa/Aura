@@ -215,6 +215,37 @@ The parent owns the shape of the system: it decides how many workers to spawn an
 
 Leaving the `with` block waits for the producer to finish and for each worker to drain the queue.
 
+## Waiting On Queues, Tasks, And Deadlines
+
+Use `select(...)` when one operation may become ready through different source
+kinds:
+
+```python
+outcome = select(messages, task, 50ms)
+
+match own outcome:
+    case SelectOutcome.Queue(index, received):
+        print(index)
+        print(received)
+    case SelectOutcome.Task(index, result):
+        print(index)
+        print(result)
+    case SelectOutcome.Deadline(index):
+        print(index)
+    case SelectOutcome.Cancelled:
+        print("cancelled")
+```
+
+The Queue sources in one call share a payload type, and the Task sources share
+a result type. Missing categories use `None` in `SelectOutcome[Q, T]`.
+Cancellation wins; otherwise the lowest original argument index wins a tie.
+The runtime registers one composite wait and removes every loser when a source
+wins. A losing Queue remains unchanged. A non-repeatable Task right is
+consumed at entry and abandoned if another source wins.
+
+This is an ordinary builtin call. Aurora still has no statement-form
+`select:` syntax.
+
 ## Waiting For Several Tasks
 
 Sometimes a program needs to wait on a batch of tasks at once. `wait_any` returns when the first one finishes:

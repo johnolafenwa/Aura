@@ -132,7 +132,10 @@ duplicate a single-consumer result right. Copying an allowed handle never
 copies queued values or task results; it gives another reference to the same
 queue or task.
 
-`TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` are treated as move outcome values even when `T` is copyable. `Range` is also not a general copy type in Aurora 0.1; use ranges directly in iteration rather than relying on duplication.
+`TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are
+treated as move outcome values even when every payload type is copyable.
+`Range` is also not a general copy type in Aurora 0.1; use ranges directly in
+iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.
 
@@ -236,6 +239,7 @@ on different pinned workers.
 | `SendError[T]` | Queue send failure that carries the unsent value. |
 | `QueueReceive[T]` | Queue receive outcome. |
 | `TaskResult[T]` | Task result outcome. |
+| `SelectOutcome[Q, T]` | Typed `select(...)` outcome for Queue payload `Q` and Task result `T`; an absent source category uses `None`. |
 | `WaitAny[T]` | `wait_any(...)` outcome. |
 | `WaitAll[T]` | `wait_all(...)` outcome. |
 

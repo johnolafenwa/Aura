@@ -5236,6 +5236,43 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
+            ExprKind::Name(name) if name == "select" => {
+                let lowered_args = args
+                    .iter()
+                    .map(|argument| {
+                        let source_type = self.infer_expr_type(&argument.value);
+                        let consumes_task_observation = matches!(
+                            source_type.as_ref(),
+                            Some(Type::Named(task, result))
+                                if task == "Task"
+                                    && result.len() == 1
+                                    && !type_is_copy_in_program(
+                                        &Type::Named(task.clone(), result.clone()),
+                                        self.program,
+                                    )
+                        );
+                        MirArg {
+                            name: argument.name.clone(),
+                            value: if consumes_task_observation {
+                                self.lower_expr_for_owned_value(
+                                    &argument.value,
+                                    source_type.as_ref(),
+                                )
+                            } else {
+                                self.lower_expr_at_sequence_point(&argument.value, None)
+                            },
+                            writeback_place: None,
+                        }
+                    })
+                    .collect();
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name.clone()),
+                        args: lowered_args,
+                    },
+                });
+            }
             ExprKind::Name(name) if matches!(name.as_str(), "wait_any" | "wait_all") => {
                 let builtin = BuiltinFunction::from_name(name)
                     .expect("wait builtins should have maintained call metadata");
@@ -5921,6 +5958,32 @@ impl<'a> Lowerer<'a> {
                         }
                         if name == "sleep" {
                             return Some(Type::Unit);
+                        }
+                        if name == "select" {
+                            let mut queue_payload = None;
+                            let mut task_result = None;
+                            for argument in args {
+                                match self.infer_expr_type(&argument.value) {
+                                    Some(Type::Named(source, mut source_args))
+                                        if source == "Queue" && source_args.len() == 1 =>
+                                    {
+                                        queue_payload = Some(source_args.remove(0));
+                                    }
+                                    Some(Type::Named(source, mut source_args))
+                                        if source == "Task" && source_args.len() == 1 =>
+                                    {
+                                        task_result = Some(source_args.remove(0));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            return Some(Type::Named(
+                                "SelectOutcome".to_string(),
+                                vec![
+                                    queue_payload.unwrap_or(Type::Unit),
+                                    task_result.unwrap_or(Type::Unit),
+                                ],
+                            ));
                         }
                         if name == "wait_any" {
                             return args.first().and_then(|argument| {

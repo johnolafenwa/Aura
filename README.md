@@ -183,6 +183,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/yield_now.au`
   - execute bounded CPU-work chunks with explicit cooperative scheduling
     points; ordinary loop backedges also receive automatic checks
+- `cargo run -p aura -- run examples/concurrency/typed_select.au`
+  - execute typed heterogeneous Queue, Task, and relative-deadline selection
+    with deterministic source indexes on both maintained backends
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
   - compile a standalone native binary through the default auto backend
 - `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`
@@ -281,6 +284,10 @@ Current `run` status:
   direct Queue, task-completion, and blocking-pool notifications, including
   cross-worker wakes; an idle worker blocks until local work, a notification,
   an event, or a deadline without a periodic tick
+- `select(source, ...)` provides typed heterogeneous Queue, Task, and
+  relative-deadline waiting with cancellation-first/lowest-index arbitration,
+  one winner, and loser cleanup; it is an ordinary builtin, not statement
+  syntax
 - `yield_now()` yields only to runnable work on the current task's worker;
   task scheduling, cross-worker completion, and program-output order are
   deliberately unspecified

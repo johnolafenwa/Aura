@@ -1,0 +1,16 @@
+def answer() -> int32:
+    return 42
+
+def main() -> int32:
+    messages = Queue[String]()
+    messages.put("queued")
+
+    print(select(messages, 0ms))
+
+    with TaskGroup() as group:
+        task = group.start(answer)
+        print(task.result(timeout=1s))
+        print(select(task, 0ms))
+
+    print(select(0ms))
+    return 0

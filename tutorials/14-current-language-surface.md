@@ -663,6 +663,7 @@ The current bootstrap concurrency surface includes:
 - `TaskGroup.start_with_stack(bytes, ...)`
 - `TaskGroup.start_soon_with_stack(bytes, ...)`
 - `Task.result(timeout=...)`
+- typed `select(queue_or_task_or_duration, ...)`
 - `wait_any(...)`
 - `wait_all(...)`
 - cooperative cancellation
@@ -721,6 +722,14 @@ and `wait_all` consume the complete task vector for such a `T`; `wait_any`
 abandons unchosen observation rights. Boundary failures are `AU3008`,
 attempted duplication of a single-consumer right is `AU3009`, and using a
 directly observed handle again is moved-value `AU3001`.
+
+`select(...)` accepts one or more positional Queue, Task, and relative-Duration
+sources and returns `SelectOutcome[Q, T]`. All Queue payloads share `Q`, all
+Task results share `T`, and a missing category uses `None`. Source expressions
+run once from left to right. Current-task cancellation wins; otherwise the
+lowest original argument index wins among ready sources. Every
+non-repeatable Task right is consumed at entry and a losing right is
+abandoned. The old statement-shaped `select` remains unsupported.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. The clean Mac14,9 Phase

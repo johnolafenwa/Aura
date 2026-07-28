@@ -12381,6 +12381,182 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
 }
 
 #[test]
+fn typed_select_infers_source_categories_and_builtin_outcome_payloads() {
+    crate::check_source(
+        r#"
+def ready() -> int32:
+    return 7
+
+def main():
+    jobs = Queue[String]()
+    with TaskGroup() as group:
+        task = group.start(ready)
+        deadline_only: SelectOutcome[None, None] = select(1ms)
+        queue_only: SelectOutcome[String, None] = select(jobs)
+        task_only: SelectOutcome[None, int32] = select(task)
+        mixed: SelectOutcome[String, int32] = select(jobs, task, 1ms)
+        match mixed:
+            case SelectOutcome.Queue(index, outcome):
+                expected_index: int32 = index
+                expected_queue: QueueReceive[String] = outcome
+            case SelectOutcome.Task(index, outcome):
+                expected_index: int32 = index
+                expected_task: TaskResult[int32] = outcome
+            case SelectOutcome.Deadline(index):
+                expected_index: int32 = index
+            case SelectOutcome.Cancelled:
+                pass
+"#,
+    )
+    .expect("select should infer absent categories as None and type every outcome payload");
+
+    let non_exhaustive = crate::check_source(
+        r#"
+def main():
+    match select(0ms):
+        case SelectOutcome.Deadline(index):
+            print(index)
+"#,
+    )
+    .expect_err("SelectOutcome matches must cover all outer variants");
+    assert_eq!(non_exhaustive.code, "AU2999", "{non_exhaustive:?}");
+    assert!(non_exhaustive
+        .message
+        .contains("non-exhaustive match over `SelectOutcome`"));
+    assert!(non_exhaustive.message.contains("Queue"));
+    assert!(non_exhaustive.message.contains("Task"));
+    assert!(non_exhaustive.message.contains("Cancelled"));
+}
+
+#[test]
+fn typed_select_rejects_invalid_call_shapes_and_inconsistent_sources() {
+    for (source, code, message) in [
+        (
+            "def main():\n    print(select())\n",
+            "AU2004",
+            "`select` expects at least one positional source",
+        ),
+        (
+            "def main():\n    jobs = Queue[int32]()\n    print(select(source=jobs))\n",
+            "AU2004",
+            "`select` does not take keyword arguments",
+        ),
+        (
+            "def main():\n    print(select(1))\n",
+            "AU2002",
+            "`select` sources must be `Queue[Q]`, `Task[T]`, or `Duration`",
+        ),
+        (
+            "def main():\n    left = Queue[int32]()\n    right = Queue[String]()\n    print(select(left, right))\n",
+            "AU2002",
+            "all Queue sources in one `select` call must have the same payload type",
+        ),
+    ] {
+        let rejected = crate::check_source(source).expect_err("invalid select should be rejected");
+        assert_eq!(rejected.code, code, "{source}: {rejected:?}");
+        assert!(rejected.message.contains(message), "{source}: {rejected:?}");
+    }
+
+    let mixed_tasks = crate::check_source(
+        r#"
+def number() -> int32:
+    return 1
+
+def text() -> String:
+    return "one"
+
+def main():
+    with TaskGroup() as group:
+        left = group.start(number)
+        right = group.start(text)
+        print(select(left, right))
+"#,
+    )
+    .expect_err("mixed task result types should be rejected");
+    assert_eq!(mixed_tasks.code, "AU2002");
+    assert!(mixed_tasks
+        .message
+        .contains("all Task sources in one `select` call must have the same result type"));
+}
+
+#[test]
+fn typed_select_consumes_each_nonrepeatable_task_and_rejects_visible_duplicates() {
+    crate::check_source(
+        "def observe(task: Task[Task[int32]]):\n    print(select(task, task))\n    print(task)\n",
+    )
+    .expect("recursively repeatable task sources may be duplicated and remain reusable");
+
+    let shared = crate::check_source("def observe(task: Task[String]):\n    print(select(task))\n")
+        .expect_err("shared access cannot consume a non-repeatable task source");
+    assert_eq!(shared.code, "AU3002");
+    assert!(shared
+        .message
+        .contains("`select` consumes every non-repeatable Task source at call entry"));
+
+    let moved = crate::check_source(
+        "def observe(task: own Task[String]):\n    print(select(task))\n    print(task)\n",
+    )
+    .expect_err("a consumed select source must be moved");
+    assert_eq!(moved.code, "AU3001");
+
+    let duplicate = crate::check_source(
+        "def observe(task: own Task[String]):\n    print(select(task, task))\n",
+    )
+    .expect_err("one select cannot duplicate a single-consumer observation right");
+    assert_eq!(duplicate.code, "AU3009");
+    assert_eq!(
+        duplicate.message,
+        "one `select` call cannot use the same non-repeatable Task source `task` more than once"
+    );
+}
+
+#[test]
+fn typed_select_rejects_non_cloneable_results_and_accepts_inline_task_rights() {
+    let non_cloneable = crate::check_source(
+        "import random\n\ndef observe(task: own Task[random.Rng]):\n    print(select(task))\n",
+    )
+    .expect_err("select must not clone a random.Rng task result");
+    assert_eq!(non_cloneable.code, "AU3007");
+    assert!(non_cloneable.message.contains("select"));
+    assert!(non_cloneable.message.contains("non-cloneable `random.Rng`"));
+
+    crate::check_source(
+        r#"
+def text() -> String:
+    return "ready"
+
+def main():
+    with TaskGroup() as group:
+        outcome: SelectOutcome[None, String] = select(group.start(text))
+        print(outcome)
+"#,
+    )
+    .expect("an inline non-repeatable task expression transfers its observation right once");
+}
+
+#[test]
+fn typed_select_names_are_reserved_builtins() {
+    let function = crate::check_source("def select(value: int32):\n    pass\n")
+        .expect_err("select builtin function cannot be redefined");
+    assert_eq!(function.code, "AU2007");
+
+    let outcome = crate::check_source("enum SelectOutcome:\n    Cancelled\n")
+        .expect_err("SelectOutcome builtin enum cannot be redefined");
+    assert_eq!(outcome.code, "AU2002");
+    assert!(outcome
+        .message
+        .contains("`SelectOutcome` is a reserved built-in type name"));
+
+    let arity =
+        crate::check_source("def observe(outcome: SelectOutcome[int32]):\n    print(outcome)\n")
+            .expect_err("SelectOutcome requires queue and task type arguments");
+    assert_eq!(arity.code, "AU2002");
+    assert!(arity
+        .message
+        .contains("`SelectOutcome` expects exactly two type arguments"));
+}
+
+#[test]
 fn checker_function_default_loop_and_resource_validation_cover_additional_branches() {
     for source in [
         "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in jobs:\n        pass\n",
@@ -15105,6 +15281,48 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             "Cancelled",
             Vec::new(),
         ),
+        (
+            Type::Named(
+                "SelectOutcome".to_string(),
+                vec![string_ty.clone(), int_ty.clone()],
+            ),
+            "SelectOutcome",
+            "Queue",
+            vec![
+                int_ty.clone(),
+                Type::Named("QueueReceive".to_string(), vec![string_ty.clone()]),
+            ],
+        ),
+        (
+            Type::Named(
+                "SelectOutcome".to_string(),
+                vec![string_ty.clone(), int_ty.clone()],
+            ),
+            "SelectOutcome",
+            "Task",
+            vec![
+                int_ty.clone(),
+                Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
+            ],
+        ),
+        (
+            Type::Named(
+                "SelectOutcome".to_string(),
+                vec![string_ty.clone(), int_ty.clone()],
+            ),
+            "SelectOutcome",
+            "Deadline",
+            vec![int_ty.clone()],
+        ),
+        (
+            Type::Named(
+                "SelectOutcome".to_string(),
+                vec![string_ty.clone(), int_ty.clone()],
+            ),
+            "SelectOutcome",
+            "Cancelled",
+            Vec::new(),
+        ),
     ];
     for (expected, enum_name, variant_name, payload) in builtin_payload_cases {
         assert_eq!(
@@ -15144,6 +15362,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         ("TaskResult", vec![int_ty.clone()]),
         ("WaitAny", vec![int_ty.clone()]),
         ("WaitAll", vec![int_ty.clone()]),
+        ("SelectOutcome", vec![string_ty.clone(), int_ty.clone()]),
     ] {
         assert_eq!(
             checker
@@ -18737,6 +18956,60 @@ def launch(task: own Task[String], queue: Queue[String]):
     .expect(
         "copy data, String, structural containers, classes, enums, tuples, and handles are Transfer",
     );
+}
+
+#[test]
+fn task_boundaries_derive_transfer_for_both_select_outcome_payload_categories() {
+    crate::check_source(
+        r#"
+def consume(outcome: own SelectOutcome[String, int32]):
+    print(outcome)
+
+def launch(outcome: own SelectOutcome[String, int32]):
+    with group = TaskGroup():
+        group.start(consume, outcome)
+"#,
+    )
+    .expect("SelectOutcome is Transfer when both payload categories are Transfer");
+
+    for (type_args, category) in [
+        (
+            "random.Rng, int32",
+            "queue payload of `SelectOutcome[random.Rng, int32]`",
+        ),
+        (
+            "String, random.Rng",
+            "task payload of `SelectOutcome[String, random.Rng]`",
+        ),
+    ] {
+        let source = format!(
+            r#"
+import random
+
+def consume(outcome: own SelectOutcome[{type_args}]):
+    print(outcome)
+
+def launch(outcome: own SelectOutcome[{type_args}]):
+    with group = TaskGroup():
+        group.start(consume, outcome)
+"#
+        );
+        let rejected = crate::check_source(&source)
+            .expect_err("a non-Transfer SelectOutcome payload must not cross a task boundary");
+        assert_eq!(rejected.code, "AU3008", "{rejected:?}");
+        assert!(
+            rejected
+                .message
+                .contains("task argument `outcome` cannot cross a task boundary"),
+            "{rejected:?}"
+        );
+        assert!(
+            rejected.message.contains(&format!(
+                "{category} -> `random.Rng` is a stateful generator and is not Transfer"
+            )),
+            "{rejected:?}"
+        );
+    }
 }
 
 #[test]

@@ -1,0 +1,3 @@
+def main():
+    jobs = Queue[int32]()
+    print(select(source=jobs))

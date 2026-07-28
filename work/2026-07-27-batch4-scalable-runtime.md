@@ -628,10 +628,97 @@ a second registered control primitive for formal recovery; the implementation
 keeps control state durable, retries terminal shutdown notification, and does
 not weaken the no-periodic-tick contract.
 
+## Phase 5.8 typed heterogeneous select
+
+Provisional ADR-0034 landed before implementation at `ec3fd61`. The language
+now exposes variadic positional `select(source, ...)` over Queue, Task, and
+relative-Duration sources, returning `SelectOutcome[Q, T]`. Source expressions
+evaluate once from left to right. Cancellation wins before ready sources;
+otherwise the lowest original argument index wins. Non-repeatable Task
+observation rights are consumed at call entry and abandoned when they lose,
+while Queue and repeatable Task handles remain reusable.
+
+MIR and direct execution share one scheduler primitive. It validates every
+source before capturing one common deadline base, claims Task observation
+rights in source order, uses a composite check-subscribe-recheck wait, and
+removes all losing Queue, Task, deadline, and cancellation registrations
+before returning. A panic during subscription rolls back registrations and
+the reactor wait before unwinding. Atomic Queue receive commits a winner that
+later cancellation cannot replace. Cross-worker notifications use the
+existing direct reactor/inbox wake path; no polling tick, helper task,
+coroutine migration, or backend-specific arbitration loop was added.
+
+Both runtime adapters retain and validate typed source descriptors as defense
+in depth. Malformed MIR and direct tuples trap with `AU4001` for missing or
+inconsistent metadata, descriptor/value mismatches, malformed generic arity,
+mixed Queue payload types, and mixed Task result types. The direct ABI remains
+the internal owned-tuple `aurora_direct_select(tuple_ptr)` contract.
+
+Focused verification is green: 40 select-named compiler tests, all nine
+fixture families, four forced MIR/direct four-worker CLI parity tests, 89
+language-server tests including the typed-select compiler bridge, 13 extension
+tests, 119 verified reference blocks, the documentation build, formatting,
+and diff hygiene. Behavioral coverage includes Queue item/closed/duplicate
+and loser preservation, Task ready/error/child cancellation/repeatable reuse,
+deadlines and common-base timing, cancellation and index priority, source
+evaluation order, non-repeatable ownership diagnostics, registration races,
+concurrent Queue/Task publication with exactly one waiter enqueue, atomic
+receive races, cross-worker wakeup, late publication, committed-winner
+stability, selected non-repeatable Task delivery on both backends, invalid
+named-call analysis withholding, and unwind cleanup. No synthetic coverage
+test or exclusion was added.
+
+The frozen compiler-coverage gate is green at 69,985/72,794 lines
+(96.141165%), 4,634/4,779 functions (96.965892%), and 103,033/109,068 regions
+(94.466755%), above the unchanged 96.13/96.89/94.35 floors. The behavior-only
+closure additionally pins nested Transfer derivation for both outcome payload
+categories, unresolved and invalid analysis recovery, non-cloneable Task
+results, inline non-repeatable Task rights, post-validation deadline overflow,
+committed closed-Queue priority, direct source inference, and malformed native
+ABI descriptors. No synthetic coverage test or coverage exclusion was added.
+The source-count-over-`i32::MAX` guard and native-codegen fallbacks for
+malformed checked MIR remain justified uncovered defensive branches. The
+first requires allocating more than 2.1 billion runtime values. The latter
+cover empty or named select calls, absent operand types, malformed Queue/Task
+arity, inconsistent payload types, and non-source operands that semantic
+checking and normal MIR lowering cannot produce. The runtime MIR adapter and
+external direct ABI metadata guards are behavior-tested. No instrumentation or
+source exclusion was added.
+
+The final implementation tree passes the complete gate: 45 benchmark-runner
+tests, 292 CLI product tests, 1,105 compiler library tests, the full forced
+MIR/direct fixture matrix in 820.09 seconds, 89 language-server tests, 13
+extension tests, compiler and 100% LSP coverage, reference integrity with 119
+verified blocks and all 683 migration manifests, the docs build, npm and Rust
+audits, warning-denied Clippy, and hygiene. Cargo audit retains only the
+repository's allowed `rustls-pemfile` unmaintained warning.
+
+The first final-tree attempt exposed a pre-existing test-order race: a MIR TCP
+helper queried `peer_addr` after `shutdown_write`, allowing the server to close
+first under default-parallel contention. Backtrace-guided stress reproduced
+the failure repeatedly across 320 invocations at concurrency 16. Moving the
+live address assertions before shutdown made all 320 pass, along with all 49
+parallel MIR-runtime sibling tests; no runtime code or timeout changed.
+
+The repository hygiene command is green when run against the Phase 5.8
+snapshot. The main worktree also contains unrelated user-owned trailing spaces
+in `personal/file_ops.au`; that file was temporarily isolated for this one
+gate and restored byte-identically (SHA-256
+`70c359fe35e5b7c82ecba741d54f8b7b5374fb3244de2f20b50c3832cdc3a32d`).
+It is excluded from the implementation commit. The isolated implementation
+commit and clean-tree contractual benchmark remain before Phase 5.8 sign-off.
+
 ## Follow-up
 
-Commit the clean-tree Phase 5.7 benchmark evidence, then begin Phase 5.8 typed
-select with its provisional ADR before implementation. The
-massive-concurrency memory claim remains unavailable under the recorded escape
-hatch. Coverage floors remain frozen until the one-time Batch 4 sign-off
-re-ratchet.
+Phase 5.7 benchmark evidence is committed at `f601fc7`. Provisional ADR-0034
+landed separately at `ec3fd61` before implementation and defines Phase 5.8's
+variadic positional `select` over Queue, Task, and relative-Duration sources,
+the typed `SelectOutcome[Q, T]` result, cancellation-first/lowest-index
+arbitration, non-repeatable Task observation consumption, and mandatory atomic
+registration plus loser cleanup. Phase 5.8's focused implementation and frozen
+coverage gates and exact full CI are green. The isolated implementation commit
+and its clean-tree benchmark remain.
+
+The massive-concurrency memory claim remains unavailable under the recorded
+escape hatch. Coverage floors remain frozen until the one-time Batch 4
+sign-off re-ratchet.

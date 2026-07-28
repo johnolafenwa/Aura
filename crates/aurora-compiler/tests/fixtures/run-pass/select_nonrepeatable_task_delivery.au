@@ -1,0 +1,29 @@
+def make_message() -> String:
+    sleep(1ms)
+    return "one-shot payload"
+
+def consume_message(message: own String):
+    print(message)
+
+def main():
+    with TaskGroup() as group:
+        task = group.start(make_message)
+        selected = select(task)
+        match own selected:
+            case SelectOutcome.Queue(_, _):
+                print("unexpected queue")
+            case SelectOutcome.Task(index, outcome):
+                print(index)
+                match own outcome:
+                    case TaskResult.Ready(message):
+                        consume_message(message)
+                    case TaskResult.Error(_):
+                        print("unexpected error")
+                    case TaskResult.TimedOut:
+                        print("unexpected timeout")
+                    case TaskResult.Cancelled:
+                        print("unexpected cancellation")
+            case SelectOutcome.Deadline(_):
+                print("unexpected deadline")
+            case SelectOutcome.Cancelled:
+                print("unexpected select cancellation")

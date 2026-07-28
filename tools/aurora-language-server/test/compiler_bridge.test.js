@@ -3038,6 +3038,255 @@ test("compiler bridge includes String and Map builtin members in completions", a
   }
 });
 
+test("compiler bridge exposes typed select inference, hover, and outcome completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-typed-select-"));
+  const source = [
+    "def inspect(queue: Queue[String], task: Task[int32]):",
+    "    result = select(queue, task, 1ms)",
+    "    match result:",
+    "        case SelectOutcome.Queue(index, outcome):",
+    "            print(index)",
+    "            print(outcome)",
+    "        case SelectOutcome.Task(index, outcome):",
+    "            print(index)",
+    "            print(outcome)",
+    "        case SelectOutcome.Deadline(index):",
+    "            print(index)",
+    "        case SelectOutcome.Cancelled:",
+    "            pass",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const selectHover = compilerHoverAtPosition(
+      analysis,
+      1,
+      source.split("\n")[1].indexOf("select") + 1
+    );
+    assert.ok(selectHover, "select call should expose builtin hover");
+    assert.ok(
+      selectHover.value.includes(
+        "select(source, ...) -> SelectOutcome[Q, T] [Queue[Q], Task[T], or Duration sources]"
+      ),
+      `unexpected select hover: ${selectHover.value}`
+    );
+    assert.ok(
+      selectHover.value.includes(
+        "non-repeatable Task sources are consumed at call entry"
+      ),
+      `select hover must teach its observation-right contract: ${selectHover.value}`
+    );
+
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover ===
+          "```aurora\nbinding result: SelectOutcome[String, int32]\n```"
+      ),
+      "select result hover should preserve independently inferred Queue and Task types"
+    );
+
+    const globalCompletions = await completeWithCompiler(
+      mainUri,
+      source,
+      1,
+      4,
+      null
+    );
+    assert.deepEqual(
+      globalCompletions.find((completion) => completion.name === "select"),
+      {
+        name: "select",
+        kind: "function",
+        detail:
+          "select(source, ...) -> SelectOutcome[Q, T] [Queue[Q], Task[T], or Duration sources]"
+      }
+    );
+    assert.deepEqual(
+      globalCompletions.find((completion) => completion.name === "SelectOutcome"),
+      {
+        name: "SelectOutcome",
+        kind: "enum",
+        detail: "enum SelectOutcome[Q, T]"
+      }
+    );
+
+    const outcomeSource = "def main():\n    SelectOutcome.\n";
+    const outcomeCompletions = await completeWithCompiler(
+      mainUri,
+      outcomeSource,
+      1,
+      "    SelectOutcome.".length,
+      "."
+    );
+    assert.deepEqual(
+      outcomeCompletions.filter((completion) =>
+        ["Queue", "Task", "Deadline", "Cancelled"].includes(completion.name)
+      ),
+      [
+        {
+          name: "Queue",
+          kind: "variant",
+          detail: "Queue(own int32, own QueueReceive[Q]) -> SelectOutcome"
+        },
+        {
+          name: "Task",
+          kind: "variant",
+          detail: "Task(own int32, own TaskResult[T]) -> SelectOutcome"
+        },
+        {
+          name: "Deadline",
+          kind: "variant",
+          detail: "Deadline(own int32) -> SelectOutcome"
+        },
+        {
+          name: "Cancelled",
+          kind: "variant",
+          detail: "Cancelled -> SelectOutcome"
+        }
+      ]
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves typed select diagnostic codes and guidance", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-typed-select-diagnostics-")
+  );
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    for (const [source, code, message, help] of [
+      [
+        "def main():\n    print(select())\n",
+        "AU2004",
+        "`select` expects at least one positional source",
+        null
+      ],
+      [
+        "def main():\n    jobs = Queue[int32]()\n    print(select(source=jobs))\n",
+        "AU2004",
+        "`select` does not take keyword arguments",
+        null
+      ],
+      [
+        "def main():\n    print(select(1))\n",
+        "AU2002",
+        "`select` sources must be `Queue[Q]`, `Task[T]`, or `Duration`",
+        "pass one or more queue handles, task handles, or relative Duration values as positional sources"
+      ],
+      [
+        "def main():\n    left = Queue[int32]()\n    right = Queue[String]()\n    print(select(left, right))\n",
+        "AU2002",
+        "all Queue sources in one `select` call must have the same payload type",
+        "wrap heterogeneous queue payloads in one explicit enum before selecting"
+      ]
+    ]) {
+      const analysis = await analyzeWithCompiler(mainUri, source);
+      assert.ok(analysis);
+      assert.equal(analysis.diagnostics.length, 1, JSON.stringify(analysis.diagnostics));
+      const [diagnostic] = analysis.diagnostics;
+      assert.equal(diagnostic.code, code);
+      assert.ok(
+        diagnostic.message.includes(message),
+        `${source}: expected ${message}, found ${diagnostic.message}`
+      );
+      if (help !== null) {
+        assert.ok(
+          diagnostic.help.includes(help),
+          `${source}: expected help ${help}, found ${JSON.stringify(diagnostic.help)}`
+        );
+      }
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge withholds typed select inference for rejected keyword arguments", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-typed-select-keyword-")
+  );
+  const source = [
+    "def inspect(queue: Queue[String]):",
+    "    result = select(source=queue)",
+    "    print(result)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].code, "AU2004");
+    assert.ok(
+      analysis.diagnostics[0].message.includes(
+        "`select` does not take keyword arguments"
+      )
+    );
+    assert.equal(
+      analysis.occurrences.some((occurrence) =>
+        occurrence.hover?.includes("SelectOutcome")
+      ),
+      false,
+      "a rejected keyword-form select call must not advertise SelectOutcome inference or hover"
+    );
+    assert.equal(
+      compilerHoverAtPosition(
+        analysis,
+        2,
+        source.split("\n")[2].indexOf("result") + 1
+      ),
+      null,
+      "a use of the rejected select result must not expose inferred SelectOutcome hover"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves typed select builtin redefinition diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-typed-select-redefinition-")
+  );
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    for (const [source, code, message] of [
+      [
+        "def select(value: int32):\n    pass\n",
+        "AU2007",
+        "`select` is a builtin function name and cannot be redefined"
+      ],
+      [
+        "enum SelectOutcome:\n    Cancelled\n",
+        "AU2002",
+        "`SelectOutcome` is a reserved built-in type name"
+      ]
+    ]) {
+      const analysis = await analyzeWithCompiler(mainUri, source);
+      assert.ok(analysis);
+      assert.equal(analysis.diagnostics.length, 1, JSON.stringify(analysis.diagnostics));
+      assert.equal(analysis.diagnostics[0].code, code);
+      assert.equal(analysis.diagnostics[0].message, message);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge includes Set collection members and MapEntry fields", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-set-mapentry-"));
   try {

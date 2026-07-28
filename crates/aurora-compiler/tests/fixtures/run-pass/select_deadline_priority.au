@@ -1,0 +1,3 @@
+def main():
+    print(select(0ms, 0ms))
+    print(select(1ms))

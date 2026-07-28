@@ -1,0 +1,4 @@
+def main():
+    numbers = Queue[int32]()
+    labels = Queue[String]()
+    print(select(numbers, labels))

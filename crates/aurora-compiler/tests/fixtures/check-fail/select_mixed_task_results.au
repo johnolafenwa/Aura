@@ -1,0 +1,11 @@
+def number() -> int32:
+    return 1
+
+def label() -> String:
+    return "one"
+
+def main():
+    with TaskGroup() as group:
+        number_task = group.start(number)
+        label_task = group.start(label)
+        print(select(number_task, label_task))

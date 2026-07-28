@@ -2,7 +2,8 @@
 
 Aurora provides pinned-worker scheduler-backed lightweight tasks, structured
 task groups, queues, task handles, cancellation checks, sleeping, and
-multi-task wait helpers. Scheduler waits use a persistent event reactor:
+typed single- and multi-source wait helpers. Scheduler waits use a persistent
+event reactor:
 descriptors stay registered, deadlines live in a timer heap, and Queue,
 task-completion, and blocking-pool events notify the responsible worker
 directly.
@@ -208,6 +209,7 @@ explicitly is still the clearest program shape.
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
 | `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task so other runnable work can proceed. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
+| `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional `Queue[Q]`, `Task[T]`, or relative-`Duration` sources; cancellation wins, otherwise the lowest ready source index wins. |
 | `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout. For non-repeatable `T`, consumes the vector and abandons unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait. For non-repeatable `T`, consumes the vector. |
 
@@ -235,6 +237,64 @@ task must also respond to cancellation.
 | `TimedOut` | No task completed before the timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
+### Typed Heterogeneous Selection
+
+`select(source, ...)` waits without polling over any positional mixture of
+`Queue[Q]`, `Task[T]`, and relative `Duration` sources. At least one source is
+required and named arguments are rejected. All Queue sources in one call use
+one payload type `Q`, and all Task sources use one result type `T`; the two
+categories are independent. An absent category is represented by `None`, so
+selecting a `Queue[String]` with a deadline returns
+`SelectOutcome[String, None]`, while selecting a `Task[int32]` with a deadline
+returns `SelectOutcome[None, int32]`.
+
+`SelectOutcome[Q, T]` variants:
+
+| Variant | Meaning |
+| --- | --- |
+| `Queue(index: own int32, outcome: own QueueReceive[Q])` | The Queue at the original zero-based source index produced an item or closed outcome. |
+| `Task(index: own int32, outcome: own TaskResult[T])` | The Task at the original zero-based source index produced a ready, error, or child-cancelled outcome. |
+| `Deadline(index: own int32)` | The relative Duration at the original zero-based source index expired. |
+| `Cancelled` | Cancellation of the selecting task interrupted the wait. |
+
+Queue sources have no individual timeout, so `select` never produces
+`QueueReceive.TimedOut`; selecting-task cancellation uses the outer
+`SelectOutcome.Cancelled`. Task sources likewise never produce
+`TaskResult.TimedOut`. A child task that is itself cancelled still produces
+the nested `TaskResult.Cancelled` outcome.
+
+Source expressions are evaluated exactly once from left to right. All
+durations use one common base instant after evaluation and validation. Zero is
+immediately ready; a negative or host-range-overflowing duration traps with
+`AU4001`. Current-task cancellation has priority over every source. Otherwise,
+if several sources are ready at the same arbitration point, the lowest
+original argument index wins. A selected Queue removes exactly one item;
+losing Queue sources remain unchanged. A closed Queue is ready, with buffered
+items received before `Closed`.
+
+Selecting a repeatable Task leaves the handle reusable. Every non-repeatable
+Task observation right is consumed at call entry, even when another source
+wins; losing rights are deliberately abandoned, matching `wait_any`.
+Repeating the same non-repeatable Task in one call is rejected with `AU3009`.
+Queue handles, repeatable Tasks, and Duration values may be repeated, and the
+lowest ready occurrence wins. Selection uses one composite
+check-subscribe-recheck registration and removes every losing registration
+before returning, trapping, or propagating cancellation. Once a source has
+been atomically claimed, that winner is committed: cancellation or another
+readiness event observed later does not replace it.
+
+Index priority is deterministic, not fair. A persistently ready lower-index
+source can starve a higher-index source. Rotate argument order between calls
+when round-robin service is required.
+
+```python
+def main() -> int32:
+    messages = Queue[String]()
+    messages.put("ready")
+    print(select(messages, 0ms))
+    return 0
+```
+
 `WaitAll[T]` variants:
 
 | Variant | Meaning |
@@ -253,6 +313,7 @@ Cancellation is cooperative. `group.cancel()` marks child tasks as cancelled. Ta
 - `sleep(...)`
 - queue send and receive waits
 - task result waits
+- `select(...)`
 - `wait_any(...)` and `wait_all(...)`
 - scheduler-aware process, network, and I/O waits where supported
 
@@ -287,8 +348,9 @@ For operating-system child processes, use the `process` module and decide explic
 ## Grammar
 
 Concurrency introduces no `async`, `await`, or detached-spawn grammar.
-`TaskGroup`, `Task`, `Queue`, `yield_now`, `sleep`, `cancelled`, `wait_any`, and
-`wait_all` use ordinary construction and call syntax; structured groups use
+`TaskGroup`, `Task`, `Queue`, `yield_now`, `sleep`, `cancelled`, `select`,
+`wait_any`, and `wait_all` use ordinary construction and call syntax;
+structured groups use
 the ordinary `with` statement. Stack overrides are ordinary member calls, not
 new task or spawn grammar. Queue iteration uses only
 `for item in queue:`. Duration
@@ -313,6 +375,12 @@ the `own` and `mut` modifiers are rejected. Timeout and capacity expressions
 must have the documented exact types. Queue receive operations transfer one
 owned value and do not recheck payload Transfer. A supplied Queue capacity
 must be greater than zero.
+
+Every `select` source must be exactly `Queue[Q]`, `Task[T]`, or `Duration`.
+Queue payload types agree with one `Q`, Task result types agree with one `T`,
+and a missing category is inferred as `None`. A non-repeatable Task source is
+an owned observation and is moved at call entry; a repeatable Task and every
+Queue or Duration source is read without consuming its source binding.
 
 The Provisional Phase 5.6 boundary adds a structural `Transfer` obligation to
 every captured argument and target result for all four task-start methods,
@@ -359,6 +427,14 @@ task-completion, and blocking-pool readiness is delivered by direct
 notification to the responsible worker. With no ready local work, a worker
 blocks until work, an event, or a deadline rather than polling on a fixed tick.
 
+Typed selection uses the same persistent wait machinery. One waiter subscribes
+to all Queue, Task, cancellation, and earliest-deadline sources, rechecks them
+before parking, and re-arbitrates in source order after a wake. Notifications
+do not choose the winner themselves. Committing a winner atomically consumes
+only that Queue item or selected Task result, then idempotently removes every
+losing subscription. Selection does not create helper tasks, migrate the
+selecting task, or introduce a periodic scheduler tick.
+
 Queue and Task handles are the maintained cross-worker communication surface.
 Their runtime state is synchronized so a Queue operation or task completion
 can wake a task pinned elsewhere. Every other captured argument and task result
@@ -401,7 +477,10 @@ handle once at loop entry, produces already-owned items, and never freezes or
 borrows the source binding. Task result observation clones a stored value only
 when the result is repeatable. A non-repeatable result instead carries one
 statically enforced observation right, and no alias may produce a second
-value.
+value. A `select(...)` call evaluates all source expressions once from left to
+right. It copies Queue, repeatable Task, and Duration sources, but consumes
+every non-repeatable Task observation right at call entry and deliberately
+abandons any such right that loses.
 
 ## Diagnostics
 
@@ -451,13 +530,19 @@ The runtime's atomic defense rejects a second claim of a non-repeatable result
 with `AU4001`: `task result has already been observed; non-repeatable task
 results allow exactly one observing attempt`. A correctly checked Aurora
 program should be stopped earlier by the static ownership diagnostics.
+For `select(...)`, `AU2004` reports an empty call or named source, `AU2002`
+reports an invalid source or inconsistent Queue/Task category type, `AU3002`
+reports a non-repeatable Task supplied without owned access, and `AU3009`
+reports the same visible non-repeatable Task twice. Dynamic invalid deadlines
+and runtime observation-claim failures remain `AU4001`.
 
 ## Backend Support
 
 Structured groups, task targets and captures, Queue operations and iteration,
-wait helpers, sleep, cancellation, compiler-inserted loop safepoints, and
-user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for noncolliding
-method names are maintained on both MIR execution and direct native generation.
+typed heterogeneous `select`, wait helpers, sleep, cancellation,
+compiler-inserted loop safepoints, and user-trait dispatch on `Queue[T]`,
+`Task[T]`, and `TaskGroup` for noncolliding method names are maintained on
+both MIR execution and direct native generation.
 Default and explicit guarded stack requests use the same scheduler allocation
 path on both backends.
 MIR checks each backedge and yields every 8 backedges. Native code uses 4,096
@@ -534,9 +619,13 @@ tasks. Phase 5.7 makes Queue and Task handle state cross-worker safe and runs
 task bodies on spawn-time pinned workers on both backends. This is a multicore
 task-execution contract, not a guarantee of work stealing, preemption,
 particular speedup, task/output order, or broader automatic parallelism.
+Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
+`select(source, ...)` builtin on both backends, using the shared persistent
+wait machinery for atomic registration, deterministic one-winner arbitration,
+cross-worker wakeups, and loser cleanup. It adds no statement syntax.
 Preemptive scheduling,
-`mut` task targets, typed heterogeneous selection, configurable blocking-pool
-sizing, native frame parity, and detached task syntax are unavailable. On the
+`mut` task targets, configurable blocking-pool sizing, native frame parity,
+and detached task syntax are unavailable. On the
 clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked sleepers used
 206,503,936 bytes of worst whole-process RSS and 197,885,952 bytes above their
 same-process pre-spawn baseline.

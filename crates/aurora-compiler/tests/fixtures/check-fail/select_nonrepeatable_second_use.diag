@@ -1,0 +1,7 @@
+error[AU3001]: use of moved value `task`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/select_nonrepeatable_second_use.au:3:11
+  |
+3 |     print(task)
+  |           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/select_nonrepeatable_second_use.au:2:18: value moved here
+  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

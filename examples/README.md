@@ -653,6 +653,14 @@ single task-result right on the first attempt.
     loop backedges also receive compiler-inserted amortized scheduling checks
   - prints three numbered steps for each of `alpha` and `beta`; their exact
     interleaving is intentionally unspecified
+- `typed_select.au`
+  - typed heterogeneous selection over Queue, Task, and relative-Duration
+    sources, including deterministic lowest-index priority
+  - prints:
+    - `SelectOutcome.Queue(0, QueueReceive.Item(queued))`
+    - `TaskResult.Ready(42)`
+    - `SelectOutcome.Task(0, TaskResult.Ready(42))`
+    - `SelectOutcome.Deadline(0)`
 - `task_group_wait_helpers.au`
   - consuming `own` outcome helpers for `TaskResult[T]`, `WaitAny[T]`,
     `WaitAll[T]`, and bounded `Queue[T]` coordination
@@ -866,6 +874,7 @@ cargo run -p aura -- run examples/concurrency/queue_put_timeout.au
 cargo run -p aura -- run examples/concurrency/task_group_queue_sum.au
 cargo run -p aura -- run examples/concurrency/task_group_cancel.au
 cargo run -p aura -- run examples/concurrency/yield_now.au
+cargo run -p aura -- run examples/concurrency/typed_select.au
 cargo run -p aura -- run examples/concurrency/queue_timeout.au
 cargo run -p aura -- run examples/concurrency/queue_get_timeout.au
 cargo run -p aura -- run examples/concurrency/queue_get_timeout_named.au

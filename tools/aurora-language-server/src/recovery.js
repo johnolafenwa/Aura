@@ -40,6 +40,7 @@ const BUILTINS = [
   "Option",
   "Queue",
   "Result",
+  "SelectOutcome",
   "Set",
   "String",
   "TaskGroup",
@@ -52,6 +53,7 @@ const BUILTINS = [
   "int64",
   "print",
   "range",
+  "select",
   "yield_now"
 ];
 

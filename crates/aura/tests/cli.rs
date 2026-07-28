@@ -9501,3 +9501,201 @@ fn native_cache_format_is_bumped_past_the_capability_migration() {
         "the retired v3 cache format must not linger in the key material"
     );
 }
+
+#[test]
+fn typed_select_queue_priority_and_loser_preservation_match_with_four_workers() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/select_queue_priority.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/select_queue_priority.stdout");
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-typed-select-queue-priority",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        4,
+    );
+}
+
+#[test]
+fn typed_select_nonrepeatable_task_delivery_matches_with_four_workers() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.stdout"
+    );
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-typed-select-nonrepeatable-task-delivery",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        4,
+    );
+}
+
+#[test]
+fn typed_select_pending_queue_task_deadline_and_cancellation_match_with_four_workers() {
+    let source = r#"def publish(queue: Queue[int32], value: int32) -> int32:
+    sleep(2ms)
+    queue.put(value)
+    return value
+
+def finish(value: int32) -> int32:
+    sleep(2ms)
+    return value
+
+def fail() -> int32:
+    return 1 // 0
+
+def observe(label: String, queue: Queue[int32]) -> Queue[int32]:
+    print(label)
+    return queue
+
+def wait_until_cancelled(queue: Queue[int32]) -> int32:
+    match select(queue, 1s):
+        case SelectOutcome.Queue(_, _):
+            return -1
+        case SelectOutcome.Task(_, _):
+            return -2
+        case SelectOutcome.Deadline(_):
+            return -3
+        case SelectOutcome.Cancelled:
+            return 9
+
+def main():
+    pending = Queue[int32]()
+    with TaskGroup() as group:
+        producer = group.start(publish, pending, 41)
+        match select(100ms, pending):
+            case SelectOutcome.Queue(index, outcome):
+                print(index)
+                print(outcome)
+            case SelectOutcome.Task(_, _):
+                print("unexpected task")
+            case SelectOutcome.Deadline(_):
+                print("unexpected deadline")
+            case SelectOutcome.Cancelled:
+                print("unexpected cancellation")
+        print(producer.result())
+
+    with TaskGroup() as group:
+        task = group.start(finish, 42)
+        match select(100ms, task):
+            case SelectOutcome.Queue(_, _):
+                print("unexpected queue")
+            case SelectOutcome.Task(index, outcome):
+                print(index)
+                print(outcome)
+            case SelectOutcome.Deadline(_):
+                print("unexpected deadline")
+            case SelectOutcome.Cancelled:
+                print("unexpected cancellation")
+        print(task.result())
+
+    with TaskGroup() as group:
+        failed = group.start(fail)
+        match select(failed):
+            case SelectOutcome.Queue(_, _):
+                print("unexpected queue")
+            case SelectOutcome.Task(index, outcome):
+                print(index)
+                match outcome:
+                    case TaskResult.Ready(_):
+                        print("unexpected ready")
+                    case TaskResult.Error(_):
+                        print("task error")
+                    case TaskResult.TimedOut:
+                        print("unexpected timeout")
+                    case TaskResult.Cancelled:
+                        print("terminal child cancelled")
+            case SelectOutcome.Deadline(_):
+                print("unexpected deadline")
+            case SelectOutcome.Cancelled:
+                print("unexpected cancellation")
+
+    never = Queue[int32]()
+    with TaskGroup() as group:
+        waiter = group.start(wait_until_cancelled, never)
+        sleep(2ms)
+        group.cancel()
+        print(waiter.result())
+
+    first = Queue[int32]()
+    second = Queue[int32]()
+    first.put(1)
+    second.put(2)
+    print(select(observe("first", first), observe("second", second)))
+    print(second.get())
+
+    print(select(0ms, 0ms))
+"#;
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-typed-select-four-worker-matrix",
+        source,
+        std::time::Duration::from_secs(30),
+        concat!(
+            "1\n",
+            "QueueReceive.Item(41)\n",
+            "TaskResult.Ready(41)\n",
+            "1\n",
+            "TaskResult.Ready(42)\n",
+            "TaskResult.Ready(42)\n",
+            "0\n",
+            "task error\n",
+            "TaskResult.Ready(9)\n",
+            "first\n",
+            "second\n",
+            "SelectOutcome.Queue(0, QueueReceive.Item(1))\n",
+            "QueueReceive.Item(2)\n",
+            "SelectOutcome.Deadline(0)\n",
+        ),
+        4,
+    );
+}
+
+#[test]
+fn typed_select_negative_deadline_is_au4001_on_both_backends_with_four_workers() {
+    let source = "def main():\n    print(select(Duration.ms(-1)))\n";
+    let (temp, source_path) = write_temp_source("aurora-typed-select-negative-deadline", source);
+
+    let mut mir = Command::new(aura_bin());
+    mir.env("AURORA_WORKERS", "4")
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir = command_output_with_timeout(
+        mir,
+        std::time::Duration::from_secs(30),
+        "typed-select negative-deadline MIR fixture",
+    );
+    assert!(!mir.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&mir.stderr).lines().next(),
+        Some("error[AU4001]: select deadline must be non-negative")
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build typed-select negative-deadline fixture");
+    assert!(
+        build.status.success(),
+        "typed-select negative-deadline direct build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let mut direct = generated_binary(&output_path);
+    direct.env("AURORA_WORKERS", "4");
+    let direct = command_output_with_timeout(
+        direct,
+        std::time::Duration::from_secs(30),
+        "typed-select negative-deadline direct fixture",
+    );
+    assert!(!direct.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&direct.stderr).lines().next(),
+        Some("error[AU4001]: select deadline must be non-negative")
+    );
+}

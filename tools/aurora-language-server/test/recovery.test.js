@@ -48,6 +48,8 @@ test("recovery completion exposes keywords builtins and declarations but no memb
   assert.ok(names.includes("own"));
   assert.equal(names.includes("borrow"), false);
   assert.ok(names.includes("print"));
+  assert.ok(names.includes("select"));
+  assert.ok(names.includes("SelectOutcome"));
   assert.ok(names.includes("yield_now"));
   assert.ok(names.includes("Point"));
   assert.ok(names.includes("main"));

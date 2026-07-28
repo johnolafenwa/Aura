@@ -131,7 +131,12 @@ mutable (`mut self`) contract.
 
 ## Builtin Names And Modules
 
-Top-level builtin functions such as `print`, `range`, and `sleep` are available without import. Builtin modules such as `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`, `log`, `trace`, and `metrics` must be imported before their module-qualified members are used.
+Top-level builtin functions such as `print`, `range`, `sleep`, and `select`
+are available without import. Builtin enum names such as `SelectOutcome` are
+also reserved and available without import. Builtin modules such as `fs`,
+`io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`,
+`log`, `trace`, and `metrics` must be imported before their module-qualified
+members are used.
 
 `random.Rng` is the builtin type and constructor spelling for a deterministic
 generator. Its methods remain module-qualified through the receiver type;

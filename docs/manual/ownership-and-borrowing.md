@@ -42,7 +42,8 @@ Move values transfer ownership on by-value use. Current move categories include:
 - `random.Rng`
 - ordinary user classes
 - user or builtin enums with any move payload
-- `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` even when `T` is copyable
+- `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` even
+  when every payload type is copyable
 - `Range`
 - `TaskGroup`
 - file, process, supervisor, pipe, and network resources

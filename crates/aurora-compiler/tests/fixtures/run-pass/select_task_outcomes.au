@@ -1,0 +1,61 @@
+def ready() -> int32:
+    return 7
+
+def fail() -> int32:
+    return 1 // 0
+
+def blocked(gate: Queue[int32]) -> int32:
+    match select(gate):
+        case SelectOutcome.Queue(_, outcome):
+            match outcome:
+                case QueueReceive.Item(value):
+                    return value
+                case QueueReceive.Closed:
+                    return -1
+                case QueueReceive.TimedOut:
+                    return -2
+                case QueueReceive.Cancelled:
+                    return -4
+        case SelectOutcome.Task(_, _):
+            return -1
+        case SelectOutcome.Deadline(_):
+            return -2
+        case SelectOutcome.Cancelled:
+            return -3
+
+def show(value: own SelectOutcome[None, int32]):
+    match own value:
+        case SelectOutcome.Queue(_, _):
+            print("unexpected queue")
+        case SelectOutcome.Task(index, outcome):
+            print(index)
+            match own outcome:
+                case TaskResult.Ready(result):
+                    print(result)
+                case TaskResult.Error(_):
+                    print("error")
+                case TaskResult.TimedOut:
+                    print("unexpected timeout")
+                case TaskResult.Cancelled:
+                    print("terminal child cancelled")
+        case SelectOutcome.Deadline(index):
+            print(index)
+        case SelectOutcome.Cancelled:
+            print("select cancelled")
+
+def main():
+    with TaskGroup() as group:
+        ready_task = group.start(ready)
+        show(select(ready_task))
+        print(ready_task.result())
+
+    with TaskGroup() as group:
+        failed_task = group.start(fail)
+        show(select(failed_task))
+
+    gate = Queue[int32]()
+    with TaskGroup() as group:
+        cancelled_task = group.start(blocked, gate)
+        sleep(1ms)
+        group.cancel()
+        show(select(cancelled_task))

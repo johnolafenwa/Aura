@@ -92,7 +92,11 @@ Bare builtin constructor names such as `Some(...)`, `Ok(...)`, `Err(...)`, or `N
 
 A user enum is copyable when every payload type declared by every variant is statically copyable. Otherwise the enum is a move type. This classification is structural across all variants, not based on the variant held at runtime.
 
-`Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` remain move outcome types in Aurora 0.1 even for copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
+`Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the
+same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`,
+and `WaitAll[T]` remain move outcome types in Aurora 0.1 even for copy
+payloads. An unconstrained generic payload is not assumed copyable. See
+[Types](/manual/types#copy-and-move-categories).
 
 ## Statement Matches
 
@@ -266,6 +270,7 @@ visible; enum declarations themselves continue to write only the payload type:
 | `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
 | `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
 | `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
+| `SelectOutcome[Q, T]` | `Queue(index: own int32, outcome: own QueueReceive[Q])`, `Task(index: own int32, outcome: own TaskResult[T])`, `Deadline(index: own int32)`, `Cancelled` |
 | `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 | `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 
@@ -357,9 +362,9 @@ Aurora 0.1 has no match guards, or-patterns, range/rest patterns, named-payload
 patterns, class/collection destructuring, top-level catch-all binding pattern,
 arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.
-`TaskResult`, `WaitAny`, and `WaitAll` remain move outcome types regardless of
-copy payloads. Scrutinee and arm order, exhaustiveness, payload order, and
-borrowed-match writeback are language-defined rather than
+`TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` remain move outcome
+types regardless of copy payloads. Scrutinee and arm order, exhaustiveness,
+payload order, and borrowed-match writeback are language-defined rather than
 implementation-defined.
 
 ## Status

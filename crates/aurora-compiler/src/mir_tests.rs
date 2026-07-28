@@ -2208,6 +2208,84 @@ def main():
 }
 
 #[test]
+fn typed_select_lowers_sources_in_order_and_moves_only_nonrepeatable_task_rights() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def string_worker() -> String:
+    return "value"
+
+def main():
+    queue = Queue[int64]()
+    with TaskGroup() as group:
+        single_consumer = group.start(string_worker)
+        outcome = select(queue, 1ms, single_consumer)
+"#,
+    )
+    .expect("typed select sources should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let select_args = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                ..
+            } if name == "select" => Some(args),
+            _ => None,
+        })
+        .expect("select should lower as one variadic MIR call");
+
+    assert_eq!(select_args.len(), 3);
+    assert!(select_args.iter().all(|argument| argument.name.is_none()));
+    assert!(matches!(select_args[0].value, Operand::Place(_)));
+    assert!(matches!(select_args[1].value, Operand::Duration(1_000_000)));
+    assert_eq!(
+        select_args[2].value,
+        Operand::MovePlace("single_consumer".to_string())
+    );
+}
+
+#[test]
+fn typed_select_queue_and_deadline_outcomes_execute_through_mir() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    first = Queue[String]()
+    second = Queue[String]()
+    first.put("first")
+    second.put("second")
+    print(select(first, second))
+    print(second.get())
+
+    closed = Queue[String]()
+    closed.close()
+    print(select(closed))
+    print(select(0ms, 0ms))
+"#,
+    )
+    .expect("typed select outcomes should lower");
+    let output = crate::run_mir(&module).expect("typed select outcomes should execute through MIR");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "SelectOutcome.Queue(0, QueueReceive.Item(first))\n",
+            "QueueReceive.Item(second)\n",
+            "SelectOutcome.Queue(0, QueueReceive.Closed)\n",
+            "SelectOutcome.Deadline(0)\n",
+        )
+    );
+}
+
+#[test]
 fn task_group_stack_override_lowers_stack_operand_and_named_target_arguments() {
     let module = crate::lower_source_to_mir(
         r#"

@@ -40,8 +40,8 @@ use crate::runtime_value::{
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
-    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
-    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
@@ -5680,6 +5680,131 @@ pub extern "C-unwind" fn aurora_direct_wait_all_timeout_value(
             expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
             Some(timeout),
         ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+fn validate_direct_select_tuple_metadata(sources: &TupleValue) -> Result<(), Diagnostic> {
+    if sources.element_types.len() != sources.elements.len() {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "direct `select` ABI tuple metadata has {} element types for {} source{}",
+                sources.element_types.len(),
+                sources.elements.len(),
+                if sources.elements.len() == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+
+    let mut queue_payload: Option<(usize, Type)> = None;
+    let mut task_result: Option<(usize, Type)> = None;
+    for (index, (declared, value)) in sources
+        .element_types
+        .iter()
+        .zip(&sources.elements)
+        .enumerate()
+    {
+        match value {
+            Value::Channel(_) => {
+                let Type::Named(name, type_args) = declared else {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                };
+                let [payload] = type_args.as_slice() else {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                };
+                if name != "Queue" {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                }
+                if let Some((previous_index, previous)) = &queue_payload {
+                    if previous != payload {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            format!(
+                                "direct `select` ABI Queue sources must share one payload type; \
+                                 source {} uses `{}` but source {} uses `{}`",
+                                previous_index, previous, index, payload
+                            ),
+                        ));
+                    }
+                } else {
+                    queue_payload = Some((index, payload.clone()));
+                }
+            }
+            Value::Task(_) => {
+                let Type::Named(name, type_args) = declared else {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                };
+                let [result] = type_args.as_slice() else {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                };
+                if name != "Task" {
+                    return Err(direct_select_metadata_kind_error(index, declared, value));
+                }
+                if let Some((previous_index, previous)) = &task_result {
+                    if previous != result {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            format!(
+                                "direct `select` ABI Task sources must share one result type; \
+                                 source {} uses `{}` but source {} uses `{}`",
+                                previous_index, previous, index, result
+                            ),
+                        ));
+                    }
+                } else {
+                    task_result = Some((index, result.clone()));
+                }
+            }
+            Value::Duration(_)
+                if matches!(
+                    declared,
+                    Type::Named(name, type_args)
+                        if name == "Duration" && type_args.is_empty()
+                ) => {}
+            Value::Duration(_) => {
+                return Err(direct_select_metadata_kind_error(index, declared, value));
+            }
+            // The shared primitive owns the canonical invalid-descriptor
+            // diagnostic for values that are not select sources.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn direct_select_metadata_kind_error(index: usize, declared: &Type, value: &Value) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        format!(
+            "direct `select` ABI source {} is tagged `{}` but contains `{}`",
+            index,
+            declared,
+            value_type_name(value)
+        ),
+    )
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_select(sources: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let sources = unsafe { consume_owned_value(sources) };
+        let Value::Tuple(sources) = sources else {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "direct `select` ABI expected an owned tuple of Queue, Task, or Duration \
+                     sources, found `{}`",
+                    value_type_name(&sources)
+                ),
+            ));
+        };
+        if let Err(error) = validate_direct_select_tuple_metadata(&sources) {
+            runtime_diagnostic_error(error);
+        }
+        match select_runtime_values(sources.elements, Some(&current_cancellation())) {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
         }

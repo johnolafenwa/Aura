@@ -1,0 +1,5 @@
+def observe(task: Task[Task[int32]]):
+    first: SelectOutcome[None, Task[int32]] = select(task, task)
+    second: SelectOutcome[None, Task[int32]] = select(task)
+    print(first)
+    print(second)

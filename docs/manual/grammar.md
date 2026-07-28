@@ -691,6 +691,7 @@ The grammar intentionally excludes:
 - match guards, alternative patterns, and collection patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
-- detached `spawn`, `select`, and proposal-only concurrency syntax
+- detached `spawn`, statement-form `select`, and proposal-only concurrency
+  syntax; the maintained `select(source, ...)` is an ordinary call expression
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aurora.

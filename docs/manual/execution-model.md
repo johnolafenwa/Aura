@@ -327,10 +327,20 @@ The scheduler owns a persistent event reactor. Nonblocking descriptors remain
 registered across scheduler turns, deadlines are ordered in a timer heap, and
 Queue, task-completion, and blocking-pool events notify the responsible ready
 queue directly, including across workers. Registration uses a
-check-subscribe-check protocol with wait epochs,
+check-subscribe-recheck protocol with wait epochs,
 so a readiness edge racing with suspension is not lost and stale wakeups do
 not resume a later wait. If no task is ready, the scheduler blocks until the
 next event or deadline; there is no periodic park tick.
+
+`select(source, ...)` evaluates its Queue, Task, and relative-Duration sources
+once from left to right, then uses one composite wait under that same
+protocol. Current-task cancellation wins; otherwise each arbitration probes
+sources by their original zero-based index and commits the first ready source.
+A wake is only a request to arbitrate, so a Queue item lost to another
+consumer before the selecting task resumes does not create a false outcome.
+Winner commit consumes at most one Queue item or selected Task result and
+removes every losing registration. All Duration sources share one base instant
+established after evaluation and validation.
 
 Queue and Task handles are the maintained cross-worker communication surface.
 Every other capture and result is owned `Transfer` data, preserving the

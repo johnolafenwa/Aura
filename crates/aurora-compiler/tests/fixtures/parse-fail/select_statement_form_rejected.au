@@ -1,0 +1,5 @@
+def main():
+    messages = Queue[String]()
+    select:
+        case value = messages.get():
+            print(value)

@@ -59,6 +59,13 @@ fn duration_nanoseconds_value(value: i128) -> *mut OpaqueValue {
     super::aurora_direct_duration_literal(value as i64, (value >> 64) as i64)
 }
 
+fn select_sources(element_types: Vec<Type>, elements: Vec<Value>) -> *mut OpaqueValue {
+    boxed_value(Value::Tuple(TupleValue {
+        element_types,
+        elements,
+    }))
+}
+
 #[test]
 fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
     assert_eq!(
@@ -3222,6 +3229,30 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         bool_value(false),
     ));
     assert!(expect_variant_value(no_run_command, "Error", "NoCommand").is_empty());
+}
+
+#[test]
+fn direct_select_abi_consumes_its_owned_tuple_and_returns_canonical_deadline_outcome() {
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let clone_count = super::direct_value_clone_count();
+    let payloads = expect_variant_ptr(
+        super::aurora_direct_select(select_sources(
+            vec![Type::named("Duration")],
+            vec![Value::Duration(0)],
+        )),
+        "SelectOutcome",
+        "Deadline",
+    );
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count + 1,
+        "only reading the returned outcome may clone an opaque value; the direct select boundary \
+         must move its owned input tuple"
+    );
+    match payloads.as_slice() {
+        [Value::Int(index)] => assert_eq!(index.as_i128(), Some(0)),
+        other => panic!("expected SelectOutcome.Deadline(0), found {other:?}"),
+    }
 }
 
 #[test]
@@ -8986,6 +9017,100 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "queue-recv-registered-producers-type" => {
                 super::aurora_direct_channel_recv_with_registered_producers(bool_value(true));
             }
+            "select-container-type" => {
+                super::aurora_direct_select(bool_value(true));
+            }
+            "select-source-type" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::named("String")],
+                    vec![Value::String("not a source".to_string())],
+                ));
+            }
+            "select-metadata-arity" => {
+                super::aurora_direct_select(select_sources(Vec::new(), vec![Value::Duration(0)]));
+            }
+            "select-metadata-arity-plural" => {
+                super::aurora_direct_select(select_sources(
+                    Vec::new(),
+                    vec![Value::Duration(0), Value::Duration(1)],
+                ));
+            }
+            "select-metadata-kind" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::named("Duration"), Type::named("Duration")],
+                    vec![Value::Channel(ChannelValue::new()), Value::Duration(0)],
+                ));
+            }
+            "select-metadata-queue-shape" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::Tuple(vec![Type::named("String")])],
+                    vec![Value::Channel(ChannelValue::new())],
+                ));
+            }
+            "select-metadata-queue-name" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::Named("Task".to_string(), vec![Type::named("String")])],
+                    vec![Value::Channel(ChannelValue::new())],
+                ));
+            }
+            "select-metadata-queue-payload" => {
+                super::aurora_direct_select(select_sources(
+                    vec![
+                        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+                        Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+                        Type::named("Duration"),
+                    ],
+                    vec![
+                        Value::Channel(ChannelValue::new()),
+                        Value::Channel(ChannelValue::new()),
+                        Value::Duration(0),
+                    ],
+                ));
+            }
+            "select-metadata-task-shape" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::Tuple(vec![Type::named("String")])],
+                    vec![Value::Task(TaskValue::from_handle(thread::spawn(|| {
+                        Ok(Value::Unit)
+                    })))],
+                ));
+            }
+            "select-metadata-task-arity" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::named("Task")],
+                    vec![Value::Task(TaskValue::from_handle(thread::spawn(|| {
+                        Ok(Value::Unit)
+                    })))],
+                ));
+            }
+            "select-metadata-task-name" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::Named("Queue".to_string(), vec![Type::Unit])],
+                    vec![Value::Task(TaskValue::from_handle(thread::spawn(|| {
+                        Ok(Value::Unit)
+                    })))],
+                ));
+            }
+            "select-metadata-task-result" => {
+                super::aurora_direct_select(select_sources(
+                    vec![
+                        Type::Named("Task".to_string(), vec![Type::named("String")]),
+                        Type::Named("Task".to_string(), vec![Type::named("int32")]),
+                        Type::named("Duration"),
+                    ],
+                    vec![
+                        Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)))),
+                        Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)))),
+                        Value::Duration(0),
+                    ],
+                ));
+            }
+            "select-metadata-duration-kind" => {
+                super::aurora_direct_select(select_sources(
+                    vec![Type::named("String")],
+                    vec![Value::Duration(0)],
+                ));
+            }
             "wait-any-timeout-negative" => {
                 super::aurora_direct_wait_any_timeout_value(
                     super::aurora_direct_vec_empty(),
@@ -10060,6 +10185,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             other => panic!("unexpected runtime helper case: {other}"),
         }
+        panic!("runtime helper case `{case}` unexpectedly returned without trapping");
     }
 
     for (case, expected) in [
@@ -10214,6 +10340,58 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "queue-recv-registered-producers-type",
             "expected `Queue`, found `bool`",
+        ),
+        (
+            "select-container-type",
+            "expected an owned tuple of Queue, Task, or Duration sources, found `bool`",
+        ),
+        (
+            "select-source-type",
+            "select source 0 must be a Queue, Task, or Duration",
+        ),
+        (
+            "select-metadata-arity",
+            "direct `select` ABI tuple metadata has 0 element types for 1 source",
+        ),
+        (
+            "select-metadata-arity-plural",
+            "direct `select` ABI tuple metadata has 0 element types for 2 sources",
+        ),
+        (
+            "select-metadata-kind",
+            "direct `select` ABI source 0 is tagged `Duration` but contains `Queue`",
+        ),
+        (
+            "select-metadata-queue-shape",
+            "direct `select` ABI source 0 is tagged `(String,)` but contains `Queue`",
+        ),
+        (
+            "select-metadata-queue-name",
+            "direct `select` ABI source 0 is tagged `Task[String]` but contains `Queue`",
+        ),
+        (
+            "select-metadata-queue-payload",
+            "direct `select` ABI Queue sources must share one payload type",
+        ),
+        (
+            "select-metadata-task-shape",
+            "direct `select` ABI source 0 is tagged `(String,)` but contains `Task`",
+        ),
+        (
+            "select-metadata-task-arity",
+            "direct `select` ABI source 0 is tagged `Task` but contains `Task`",
+        ),
+        (
+            "select-metadata-task-name",
+            "direct `select` ABI source 0 is tagged `Queue[None]` but contains `Task`",
+        ),
+        (
+            "select-metadata-task-result",
+            "direct `select` ABI Task sources must share one result type",
+        ),
+        (
+            "select-metadata-duration-kind",
+            "direct `select` ABI source 0 is tagged `String` but contains `Duration`",
         ),
         (
             "wait-any-timeout-negative",
@@ -10998,7 +11176,20 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         );
         if matches!(
             case,
-            "queue-send-timeout-negative"
+            "select-container-type"
+                | "select-source-type"
+                | "select-metadata-arity"
+                | "select-metadata-arity-plural"
+                | "select-metadata-kind"
+                | "select-metadata-queue-shape"
+                | "select-metadata-queue-name"
+                | "select-metadata-queue-payload"
+                | "select-metadata-task-shape"
+                | "select-metadata-task-arity"
+                | "select-metadata-task-name"
+                | "select-metadata-task-result"
+                | "select-metadata-duration-kind"
+                | "queue-send-timeout-negative"
                 | "queue-recv-timeout-negative"
                 | "queue-recv-or-none-timeout-negative"
                 | "queue-recv-or-value-timeout-negative"

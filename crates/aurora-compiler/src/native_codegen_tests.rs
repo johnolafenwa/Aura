@@ -440,6 +440,114 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_select_packages_variadic_sources_into_the_owned_tuple_abi() {
+    let module = module_with_main_call_result_type(
+        Rvalue::Call {
+            callee: CallTarget::Name("select".to_string()),
+            args: vec![MirArg {
+                name: None,
+                value: Operand::Duration(0),
+                writeback_place: None,
+            }],
+        },
+        Type::Named("SelectOutcome".to_string(), vec![Type::Unit, Type::Unit]),
+    );
+    let object = emit_host_object(&module)
+        .expect("typed select should package direct sources into an owned tuple");
+    let referenced = object_referenced_symbols(&object);
+    for required in [
+        "aurora_direct_duration_literal",
+        "aurora_direct_arg_buffer_new",
+        "aurora_direct_arg_buffer_store_owned",
+        "aurora_direct_tuple_new",
+        "aurora_direct_select",
+        "aurora_direct_release_value",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "direct select code should reference `{required}`: {referenced:?}"
+        );
+    }
+    assert!(
+        referenced
+            .iter()
+            .all(|symbol| !symbol.contains("aurora_direct_host_builtin")),
+        "select must use its internal tuple ABI rather than generic host dispatch: {referenced:?}"
+    );
+
+    let nonrepeatable_task_source = r#"
+def worker() -> String:
+    return "value"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker)
+        outcome = select(task, 0ms)
+    return 0
+"#;
+    let mir = lower_source_to_mir(nonrepeatable_task_source)
+        .expect("a nonrepeatable Task select source should lower");
+    let object = emit_host_object(&mir)
+        .expect("the direct select tuple must accept a moved nonrepeatable Task source");
+    assert!(
+        object_referenced_symbols(&object)
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_select")),
+        "source-level nonrepeatable Task selection must use the direct select ABI"
+    );
+}
+
+#[test]
+fn direct_select_inference_preserves_queue_and_task_payload_types() {
+    let variable_types = HashMap::from([
+        (
+            "messages".to_string(),
+            DirectType::Opaque(Type::Named(
+                "Queue".to_string(),
+                vec![Type::named("String")],
+            )),
+        ),
+        (
+            "worker".to_string(),
+            DirectType::Opaque(Type::Named("Task".to_string(), vec![Type::named("int32")])),
+        ),
+    ]);
+    let select_call = Rvalue::Call {
+        callee: CallTarget::Name("select".to_string()),
+        args: vec![
+            MirArg {
+                name: None,
+                value: Operand::Place("messages".to_string()),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Place("worker".to_string()),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Duration(0),
+                writeback_place: None,
+            },
+        ],
+    };
+    assert_eq!(
+        infer_rvalue_type(
+            &select_call,
+            &variable_types,
+            &HashMap::new(),
+            &HashMap::new(),
+        ),
+        Some(DirectType::Opaque(Type::Named(
+            "SelectOutcome".to_string(),
+            vec![Type::named("String"), Type::named("int32")],
+        ))),
+        "native result inference must preserve the homogeneous payload type of each source family"
+    );
+}
+
+#[test]
 fn direct_random_api_uses_dedicated_borrowed_runtime_symbols() {
     let source = r#"
 import random

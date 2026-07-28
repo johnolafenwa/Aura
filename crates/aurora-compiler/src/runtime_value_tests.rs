@@ -9,9 +9,9 @@ use super::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
     remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation,
+    run_lightweight_root_task, run_protocol_step, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
@@ -27,6 +27,7 @@ use super::{
     UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
     MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
+use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_reactor::{RuntimeReactor, WaitKey};
@@ -5912,6 +5913,905 @@ fn task_result_batch_claim_rejects_duplicate_aliases_and_cleanup_does_not_consum
     let error = claim_task_result_observations(&[task])
         .expect_err("the failed duplicate attempt must still consume the observation right");
     assert_eq!(error.code, "AU4001");
+}
+
+#[test]
+fn phase58_select_uses_cancellation_first_then_original_source_index() {
+    let first = ChannelValue::new();
+    let second = ChannelValue::new();
+    assert_eq!(
+        first.try_send(Value::String("first".to_string())),
+        super::TrySendResult::Sent
+    );
+    assert_eq!(
+        second.try_send(Value::String("second".to_string())),
+        super::TrySendResult::Sent
+    );
+
+    let selected = select_runtime_values(
+        vec![
+            Value::Channel(first.clone()),
+            Value::Duration(0),
+            Value::Channel(second.clone()),
+        ],
+        None,
+    )
+    .expect("the lowest ready source should win");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(first))"
+    );
+    assert_eq!(first.try_recv(), TryRecvResult::Empty);
+    assert_eq!(
+        second.try_recv(),
+        TryRecvResult::Value(Value::String("second".to_string())),
+        "a losing queue must remain unchanged"
+    );
+
+    let duplicate = ChannelValue::new();
+    assert_eq!(
+        duplicate.try_send(Value::String("once".to_string())),
+        super::TrySendResult::Sent
+    );
+    let selected = select_runtime_values(
+        vec![
+            Value::Channel(duplicate.clone()),
+            Value::Channel(duplicate.clone()),
+        ],
+        None,
+    )
+    .expect("duplicate queue sources compete independently");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(once))"
+    );
+    assert_eq!(
+        duplicate.try_recv(),
+        TryRecvResult::Empty,
+        "one selected duplicate must remove exactly one item"
+    );
+
+    let cancelled_queue = ChannelValue::new();
+    assert_eq!(
+        cancelled_queue.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    group.cancel();
+    let selected = select_runtime_values(
+        vec![Value::Channel(cancelled_queue.clone()), Value::Duration(0)],
+        Some(&cancellation),
+    )
+    .expect("current-task cancellation is an outcome");
+    assert_eq!(selected.render(), "SelectOutcome.Cancelled");
+    assert_eq!(
+        cancelled_queue.try_recv(),
+        TryRecvResult::Value(Value::Unit),
+        "cancellation must be decided before consuming a ready source"
+    );
+}
+
+#[test]
+fn phase58_select_preserves_queue_task_and_deadline_outcome_shapes() {
+    let buffered_then_closed = ChannelValue::new();
+    assert_eq!(
+        buffered_then_closed.try_send(Value::String("buffered".to_string())),
+        super::TrySendResult::Sent
+    );
+    buffered_then_closed.close();
+    let selected = select_runtime_values(vec![Value::Channel(buffered_then_closed.clone())], None)
+        .expect("a buffered item should precede a closed queue outcome");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(buffered))"
+    );
+    let selected = select_runtime_values(vec![Value::Channel(buffered_then_closed)], None)
+        .expect("the drained closed queue should remain ready");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Closed)"
+    );
+
+    let closed = ChannelValue::new();
+    closed.close();
+    let selected = select_runtime_values(vec![Value::Channel(closed)], None)
+        .expect("a closed queue should be ready");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Closed)"
+    );
+
+    let ready_task =
+        TaskValue::from_handle(thread::spawn(|| Ok(Value::String("finished".to_string()))));
+    assert_eq!(
+        wait_task_ready(&ready_task).expect("the task should complete"),
+        Value::String("finished".to_string())
+    );
+    let selected = select_runtime_values(
+        vec![Value::Duration(1_000_000_000), Value::Task(ready_task)],
+        None,
+    )
+    .expect("the completed task should win");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(1, TaskResult.Ready(finished))"
+    );
+
+    let error_task =
+        TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("selected failure"))));
+    let selected = select_runtime_values(vec![Value::Task(error_task)], None)
+        .expect("a failed child is still a ready select source");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(0, TaskResult.Error(selected failure))"
+    );
+
+    let selected = super::run_lightweight_root_task_with_worker_count(2, || {
+        let cancelled_task = spawn_lightweight_task(|| {
+            cancel_current_lightweight_task_boundary();
+        })?;
+        select_runtime_values(
+            vec![Value::Task(cancelled_task), Value::Duration(1_000_000_000)],
+            None,
+        )
+    })
+    .expect("a child cancelled on another worker should wake select");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(0, TaskResult.Cancelled)"
+    );
+
+    let selected = select_runtime_values(vec![Value::Duration(0), Value::Duration(0)], None)
+        .expect("an immediate deadline should win");
+    assert_eq!(selected.render(), "SelectOutcome.Deadline(0)");
+}
+
+#[test]
+fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
+    let ready_queue = ChannelValue::new();
+    assert_eq!(
+        ready_queue.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let losing_task = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        false,
+    );
+
+    let selected = select_runtime_values(
+        vec![
+            Value::Channel(ready_queue),
+            Value::Task(losing_task.clone()),
+        ],
+        None,
+    )
+    .expect("the ready queue should win");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item())"
+    );
+    let error = losing_task
+        .claim_result_observation()
+        .expect_err("a losing nonrepeatable task observation is abandoned");
+    assert_eq!(error.code, "AU4001");
+
+    let repeatable_queue = ChannelValue::new();
+    assert_eq!(
+        repeatable_queue.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let repeatable_task = TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::String("repeatable".to_string()))
+    }));
+    let selected = select_runtime_values(
+        vec![
+            Value::Channel(repeatable_queue),
+            Value::Task(repeatable_task.clone()),
+        ],
+        None,
+    )
+    .expect("a repeatable task may lose without losing reuse");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item())"
+    );
+    assert_eq!(
+        wait_task_ready(&repeatable_task).expect("a losing repeatable task remains observable"),
+        Value::String("repeatable".to_string())
+    );
+
+    let selected_nonrepeatable = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("selected-owned".to_string()))),
+        false,
+    );
+    let selected = select_runtime_values(
+        vec![
+            Value::Task(selected_nonrepeatable.clone()),
+            Value::Duration(1_000_000_000),
+        ],
+        None,
+    )
+    .expect("a selected nonrepeatable task should deliver its one result");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(0, TaskResult.Ready(selected-owned))"
+    );
+    let error = selected_nonrepeatable
+        .claim_result_observation()
+        .expect_err("the selected nonrepeatable result is consumed");
+    assert_eq!(error.code, "AU4001");
+
+    let duplicate =
+        TaskValue::from_handle_with_result_repeatability(thread::spawn(|| Ok(Value::Unit)), false);
+    let error = select_runtime_values(
+        vec![Value::Task(duplicate.clone()), Value::Task(duplicate)],
+        None,
+    )
+    .expect_err("runtime duplicate defense must reject one observation right twice");
+    assert_eq!(error.code, "AU4001");
+}
+
+#[test]
+fn phase58_select_validates_every_source_and_deadline_before_observing_readiness() {
+    let empty = select_runtime_values(Vec::new(), None)
+        .expect_err("the runtime must defend the one-or-more source contract");
+    assert_eq!(empty.code, "AU4001");
+
+    let ready = ChannelValue::new();
+    assert_eq!(ready.try_send(Value::Unit), super::TrySendResult::Sent);
+    let invalid_source = select_runtime_values(
+        vec![
+            Value::Channel(ready.clone()),
+            Value::String("not a select source".to_string()),
+        ],
+        None,
+    )
+    .expect_err("runtime descriptors are validated before a ready source is consumed");
+    assert_eq!(invalid_source.code, "AU4001");
+    assert_eq!(
+        ready.try_recv(),
+        TryRecvResult::Value(Value::Unit),
+        "validation failure must not consume a source"
+    );
+
+    let negative = select_runtime_values(vec![Value::Duration(-1)], None)
+        .expect_err("negative relative deadlines are invalid");
+    assert_eq!(negative.code, "AU4001");
+    assert!(negative.message.contains("non-negative"));
+
+    let overflow = select_runtime_values(vec![Value::Duration(i128::MAX)], None)
+        .expect_err("host deadline overflow is invalid");
+    assert_eq!(overflow.code, "AU4001");
+    assert!(
+        overflow.message.contains("host timer range")
+            || overflow.message.contains("host deadline range")
+    );
+}
+
+#[test]
+fn phase58_select_rejects_a_deadline_that_overflows_after_source_validation() {
+    let mut accepted = 0_i128;
+    let mut rejected = i128::MAX;
+    while accepted + 1 < rejected {
+        let candidate = accepted + (rejected - accepted) / 2;
+        if super::duration_to_host_timer(candidate, "select deadline").is_ok() {
+            accepted = candidate;
+        } else {
+            rejected = candidate;
+        }
+    }
+
+    let validation_margin = StdDuration::from_millis(100);
+    let duration = accepted
+        .checked_sub(validation_margin.as_nanos() as i128)
+        .expect("the host Instant range should exceed the validation margin");
+    let hook_ran = Arc::new(AtomicBool::new(false));
+    let hook_ran_inside = hook_ran.clone();
+    install_after_select_source_validation_hook(move || {
+        hook_ran_inside.store(true, Ordering::SeqCst);
+        thread::sleep(StdDuration::from_millis(250));
+    });
+
+    let error = select_runtime_values(vec![Value::Duration(duration)], None)
+        .expect_err("elapsed validation time must not wrap an absolute select deadline");
+    assert!(
+        hook_ran.load(Ordering::SeqCst),
+        "the relative duration must pass validation before the absolute deadline overflows"
+    );
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "select deadline exceeds the host deadline range"
+    );
+}
+
+#[test]
+fn phase58_select_captures_one_deadline_base_after_all_sources_validate() {
+    let validation_finished_at = Arc::new(Mutex::new(None));
+    let hook_timestamp = validation_finished_at.clone();
+    install_after_select_source_validation_hook(move || {
+        thread::sleep(StdDuration::from_millis(20));
+        *lock_mutex(&hook_timestamp) = Some(Instant::now());
+    });
+
+    let selected = select_runtime_values(
+        vec![
+            Value::Duration(100_000_000),
+            Value::Channel(ChannelValue::new()),
+            Value::Duration(100_000_000),
+        ],
+        None,
+    )
+    .expect("validated relative deadlines should share a post-validation base");
+    let validation_finished_at =
+        lock_mutex(&validation_finished_at).expect("the validation hook must run");
+    assert_eq!(selected.render(), "SelectOutcome.Deadline(0)");
+    assert!(
+        validation_finished_at.elapsed() >= StdDuration::from_millis(80),
+        "deadline time must start after every source and duration has validated"
+    );
+}
+
+#[test]
+fn phase58_select_repeatable_task_winner_remains_reusable() {
+    let task = TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::String("repeatable-winner".to_string()))
+    }));
+    assert_eq!(
+        wait_task_ready(&task).expect("the repeatable task should complete"),
+        Value::String("repeatable-winner".to_string())
+    );
+
+    for attempt in 0..2 {
+        let selected = select_runtime_values(
+            vec![Value::Task(task.clone()), Value::Duration(1_000_000_000)],
+            None,
+        )
+        .expect("a repeatable completed task may win select repeatedly");
+        assert_eq!(
+            selected.render(),
+            "SelectOutcome.Task(0, TaskResult.Ready(repeatable-winner))",
+            "repeatable winner attempt {attempt} changed its result"
+        );
+    }
+    assert_eq!(
+        wait_task_ready(&task).expect("select must not consume a repeatable task result"),
+        Value::String("repeatable-winner".to_string())
+    );
+}
+
+#[test]
+fn phase58_select_uses_original_index_across_queue_task_deadline_permutations() {
+    fn ready_task() -> TaskValue {
+        let task = TaskValue::from_handle(thread::spawn(|| {
+            Ok(Value::String("ready-task".to_string()))
+        }));
+        assert_eq!(
+            wait_task_ready(&task).expect("the task should be ready before arbitration"),
+            Value::String("ready-task".to_string())
+        );
+        task
+    }
+
+    let queue_first = ChannelValue::new();
+    assert_eq!(
+        queue_first.try_send(Value::String("queue-first".to_string())),
+        super::TrySendResult::Sent
+    );
+    let selected = select_runtime_values(
+        vec![
+            Value::Channel(queue_first.clone()),
+            Value::Task(ready_task()),
+            Value::Duration(0),
+        ],
+        None,
+    )
+    .expect("the lowest ready Queue should win");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(queue-first))"
+    );
+    assert_eq!(queue_first.try_recv(), TryRecvResult::Empty);
+
+    let queue_last = ChannelValue::new();
+    assert_eq!(
+        queue_last.try_send(Value::String("queue-loser".to_string())),
+        super::TrySendResult::Sent
+    );
+    let task_first = ready_task();
+    let selected = select_runtime_values(
+        vec![
+            Value::Task(task_first.clone()),
+            Value::Duration(0),
+            Value::Channel(queue_last.clone()),
+        ],
+        None,
+    )
+    .expect("the lowest ready Task should win");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(0, TaskResult.Ready(ready-task))"
+    );
+    assert_eq!(
+        queue_last.try_recv(),
+        TryRecvResult::Value(Value::String("queue-loser".to_string()))
+    );
+    assert_eq!(
+        wait_task_ready(&task_first).expect("a repeatable winning Task remains reusable"),
+        Value::String("ready-task".to_string())
+    );
+
+    let deadline_loser_queue = ChannelValue::new();
+    assert_eq!(
+        deadline_loser_queue.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let selected = select_runtime_values(
+        vec![
+            Value::Duration(0),
+            Value::Channel(deadline_loser_queue.clone()),
+            Value::Task(ready_task()),
+        ],
+        None,
+    )
+    .expect("the lowest ready Deadline should win");
+    assert_eq!(selected.render(), "SelectOutcome.Deadline(0)");
+    assert_eq!(
+        deadline_loser_queue.try_recv(),
+        TryRecvResult::Value(Value::Unit),
+        "the losing queue must remain unchanged"
+    );
+}
+
+#[test]
+fn phase58_select_committed_queue_winner_is_not_replaced_by_later_cancellation() {
+    let queue = ChannelValue::new();
+    assert_eq!(
+        queue.try_send(Value::String("committed".to_string())),
+        super::TrySendResult::Sent
+    );
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let hook_ran = Arc::new(AtomicBool::new(false));
+    let hook_ran_inside = hook_ran.clone();
+    install_after_select_queue_commit_hook(move || {
+        hook_ran_inside.store(true, Ordering::SeqCst);
+        group.cancel();
+    });
+
+    let selected = select_runtime_values(vec![Value::Channel(queue)], Some(&cancellation))
+        .expect("cancellation after the atomic receive must not revoke the committed winner");
+    assert!(hook_ran.load(Ordering::SeqCst));
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(committed))"
+    );
+
+    let closed_queue = ChannelValue::new();
+    closed_queue.close();
+    let closed_group = TaskGroupValue::new(&CancellationContext::default());
+    let closed_cancellation = closed_group.child_cancellation();
+    let closed_hook_ran = Arc::new(AtomicBool::new(false));
+    let closed_hook_ran_inside = closed_hook_ran.clone();
+    install_after_select_queue_commit_hook(move || {
+        closed_hook_ran_inside.store(true, Ordering::SeqCst);
+        closed_group.cancel();
+    });
+
+    let selected = select_runtime_values(
+        vec![Value::Channel(closed_queue)],
+        Some(&closed_cancellation),
+    )
+    .expect("cancellation after observing queue closure must not revoke the committed outcome");
+    assert!(closed_hook_ran.load(Ordering::SeqCst));
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Closed)"
+    );
+}
+
+#[test]
+fn phase58_select_unwind_during_subscription_cleans_every_loser_registration() {
+    let queue = ChannelValue::new();
+    let task = TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(20));
+        Ok(Value::Unit)
+    }));
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let inspected_queue = queue.clone();
+    let inspected_task = task.clone();
+    let inspected_cancellation = cancellation.clone();
+
+    let error = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(|| {
+            panic!("injected select subscription unwind");
+        });
+        select_runtime_values(
+            vec![
+                Value::Channel(queue),
+                Value::Task(task),
+                Value::Duration(1_000_000_000),
+            ],
+            Some(&cancellation),
+        )
+    })
+    .expect_err("the injected subscription unwind should fail the selecting task");
+    assert!(error
+        .message
+        .contains("injected select subscription unwind"));
+    assert!(
+        lock_mutex(&inspected_queue.inner.recv_reactor_subscribers).is_empty(),
+        "queue subscription must be rolled back during unwind"
+    );
+    assert!(
+        lock_mutex(&inspected_task.inner.completion_reactor_subscribers).is_empty(),
+        "task subscription must be rolled back during unwind"
+    );
+    assert!(
+        inspected_cancellation
+            .flags
+            .iter()
+            .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()),
+        "cancellation subscription must be rolled back during unwind"
+    );
+    assert_eq!(
+        inspected_queue.try_send(Value::String("late-after-unwind".to_string())),
+        super::TrySendResult::Sent,
+        "late publication after unwind must remain harmless"
+    );
+    assert_eq!(
+        inspected_queue.try_recv(),
+        TryRecvResult::Value(Value::String("late-after-unwind".to_string()))
+    );
+}
+
+#[test]
+fn phase58_select_check_subscribe_recheck_and_loser_cleanup_are_race_safe() {
+    let winner = ChannelValue::new();
+    let losing_queue = ChannelValue::new();
+    let losing_task = TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(50));
+        Ok(Value::Unit)
+    }));
+    let cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = cancellation_group.child_cancellation();
+    let injected_winner = winner.clone();
+
+    let selected = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(move || {
+            assert_eq!(
+                injected_winner.try_send(Value::String("published".to_string())),
+                super::TrySendResult::Sent
+            );
+        });
+        let outcome = select_runtime_values(
+            vec![
+                Value::Channel(winner),
+                Value::Channel(losing_queue.clone()),
+                Value::Task(losing_task.clone()),
+                Value::Duration(1_000_000_000),
+            ],
+            Some(&cancellation),
+        )?;
+        assert!(
+            lock_mutex(&losing_queue.inner.recv_reactor_subscribers).is_empty(),
+            "the losing queue registration must be removed before select returns"
+        );
+        assert!(
+            lock_mutex(&losing_task.inner.completion_reactor_subscribers).is_empty(),
+            "the losing task registration must be removed before select returns"
+        );
+        assert!(
+            cancellation
+                .flags
+                .iter()
+                .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()),
+            "the losing cancellation registration must be removed before select returns"
+        );
+        assert_eq!(
+            losing_queue.try_send(Value::String("late".to_string())),
+            super::TrySendResult::Sent,
+            "a late losing notification should be harmless"
+        );
+        assert_eq!(
+            losing_queue.try_recv(),
+            TryRecvResult::Value(Value::String("late".to_string())),
+            "a late loser wake must not consume the losing source"
+        );
+        Ok(outcome)
+    })
+    .expect("publication during registration must not be lost");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(published))"
+    );
+}
+
+#[test]
+fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
+    let queue = ChannelValue::new();
+    let publication_barrier = Arc::new(Barrier::new(3));
+    let task_barrier = publication_barrier.clone();
+    let task = TaskValue::from_handle(thread::spawn(move || {
+        task_barrier.wait();
+        Ok(Value::String("task-ready".to_string()))
+    }));
+    let inspected_queue = queue.clone();
+    let inspected_task = task.clone();
+    let ready_enqueues = Arc::new(AtomicUsize::new(0));
+    let observed_enqueues = ready_enqueues.clone();
+    let select_returns = Arc::new(AtomicUsize::new(0));
+    let observed_returns = select_returns.clone();
+
+    let selected = run_lightweight_root_task(move || {
+        super::install_next_task_wait_ready_enqueue_counter(ready_enqueues);
+        let published_queue = queue.clone();
+        let published_task = task.clone();
+        super::install_after_task_wait_subscribe_hook(move || {
+            assert_eq!(
+                lock_mutex(&published_queue.inner.recv_reactor_subscribers).len(),
+                1,
+                "the Queue must be registered before concurrent publication"
+            );
+            assert_eq!(
+                lock_mutex(&published_task.inner.completion_reactor_subscribers).len(),
+                1,
+                "the Task must be registered before concurrent publication"
+            );
+
+            let queue_barrier = publication_barrier.clone();
+            let queue_publisher = thread::spawn(move || {
+                queue_barrier.wait();
+                assert_eq!(
+                    published_queue.try_send(Value::String("queue-ready".to_string())),
+                    super::TrySendResult::Sent
+                );
+            });
+            publication_barrier.wait();
+            queue_publisher
+                .join()
+                .expect("the concurrent Queue publisher should finish");
+            while published_task.completed_result().is_none() {
+                thread::yield_now();
+            }
+        });
+
+        let outcome = select_runtime_values(
+            vec![
+                Value::Channel(queue),
+                Value::Task(task),
+                Value::Duration(1_000_000_000),
+            ],
+            None,
+        )?;
+        select_returns.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            lock_mutex(&inspected_queue.inner.recv_reactor_subscribers).is_empty(),
+            "the selected Queue registration must be retired"
+        );
+        assert!(
+            lock_mutex(&inspected_task.inner.completion_reactor_subscribers).is_empty(),
+            "the losing Task registration must be retired"
+        );
+        assert_eq!(
+            wait_task_ready(&inspected_task).expect("the losing repeatable Task remains reusable"),
+            Value::String("task-ready".to_string())
+        );
+
+        let sleep_started = Instant::now();
+        let wake = sleep_with_runtime_scheduler(StdDuration::from_millis(20), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        assert_eq!(
+            wake,
+            super::RuntimeSchedulerWakeReason::TimedOut,
+            "a duplicate select enqueue must not resume the task's next suspension"
+        );
+        assert!(
+            sleep_started.elapsed() >= StdDuration::from_millis(15),
+            "the next suspension must not be resumed by a stale select wake"
+        );
+        super::clear_task_wait_ready_enqueue_counter();
+        Ok(outcome)
+    })
+    .expect("concurrent Queue and Task publication should produce one select winner");
+
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(queue-ready))",
+        "one arbitration pass must choose the lowest ready original index"
+    );
+    assert_eq!(
+        observed_enqueues.load(Ordering::SeqCst),
+        1,
+        "both source notifications must coalesce into one waiter enqueue"
+    );
+    assert_eq!(
+        observed_returns.load(Ordering::SeqCst),
+        1,
+        "the selecting coroutine must return from select exactly once"
+    );
+}
+
+#[test]
+fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let task = TaskValue::from_handle(thread::spawn(move || {
+        release_rx
+            .recv()
+            .expect("the registration hook should release the task");
+        Ok(Value::String("task-race".to_string()))
+    }));
+    let hook_task = task.clone();
+    let task_loser_queue = ChannelValue::new();
+    let task_cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let task_cancellation = task_cancellation_group.child_cancellation();
+    let selected = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(move || {
+            release_tx
+                .send(())
+                .expect("the pending task should be released");
+            while hook_task.completed_result().is_none() {
+                thread::yield_now();
+            }
+        });
+        let outcome = select_runtime_values(
+            vec![
+                Value::Channel(task_loser_queue.clone()),
+                Value::Task(task.clone()),
+                Value::Duration(1_000_000_000),
+            ],
+            Some(&task_cancellation),
+        )?;
+        assert!(lock_mutex(&task_loser_queue.inner.recv_reactor_subscribers).is_empty());
+        assert!(lock_mutex(&task.inner.completion_reactor_subscribers).is_empty());
+        assert!(task_cancellation
+            .flags
+            .iter()
+            .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()));
+        Ok(outcome)
+    })
+    .expect("task completion between subscription and recheck must not be lost");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Task(1, TaskResult.Ready(task-race))"
+    );
+
+    let deadline_loser_queue = ChannelValue::new();
+    let deadline_loser_task = TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(20));
+        Ok(Value::Unit)
+    }));
+    let deadline_cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let deadline_cancellation = deadline_cancellation_group.child_cancellation();
+    let selected = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(|| {
+            thread::sleep(StdDuration::from_millis(3));
+        });
+        let outcome = select_runtime_values(
+            vec![
+                Value::Channel(deadline_loser_queue.clone()),
+                Value::Task(deadline_loser_task.clone()),
+                Value::Duration(1_000_000),
+            ],
+            Some(&deadline_cancellation),
+        )?;
+        assert!(lock_mutex(&deadline_loser_queue.inner.recv_reactor_subscribers).is_empty());
+        assert!(lock_mutex(&deadline_loser_task.inner.completion_reactor_subscribers).is_empty());
+        assert!(deadline_cancellation
+            .flags
+            .iter()
+            .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()));
+        assert_eq!(
+            deadline_loser_queue.try_send(Value::Unit),
+            super::TrySendResult::Sent,
+            "a late queue notification after a deadline win is harmless"
+        );
+        Ok(outcome)
+    })
+    .expect("deadline expiry between subscription and recheck must not be lost");
+    assert_eq!(selected.render(), "SelectOutcome.Deadline(2)");
+
+    let cancelled_loser_queue = ChannelValue::new();
+    let cancelled_loser_task = TaskValue::from_handle(thread::spawn(|| {
+        thread::sleep(StdDuration::from_millis(20));
+        Ok(Value::Unit)
+    }));
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let selected = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(move || group.cancel());
+        let outcome = select_runtime_values(
+            vec![
+                Value::Channel(cancelled_loser_queue.clone()),
+                Value::Task(cancelled_loser_task.clone()),
+                Value::Duration(1_000_000_000),
+            ],
+            Some(&cancellation),
+        )?;
+        assert!(lock_mutex(&cancelled_loser_queue.inner.recv_reactor_subscribers).is_empty());
+        assert!(lock_mutex(&cancelled_loser_task.inner.completion_reactor_subscribers).is_empty());
+        assert!(cancellation
+            .flags
+            .iter()
+            .all(|flag| lock_mutex(&flag.reactor_subscribers).is_empty()));
+        assert_eq!(
+            cancelled_loser_queue.try_send(Value::Unit),
+            super::TrySendResult::Sent,
+            "a late queue notification after cancellation is harmless"
+        );
+        Ok(outcome)
+    })
+    .expect("cancellation between subscription and recheck must not be lost");
+    assert_eq!(selected.render(), "SelectOutcome.Cancelled");
+}
+
+#[test]
+fn phase58_select_rearms_when_a_queue_wake_loses_the_atomic_receive_race() {
+    let queue = ChannelValue::new();
+    let hook_queue = queue.clone();
+    let selected = run_lightweight_root_task(move || {
+        super::install_after_task_wait_subscribe_hook(move || {
+            assert_eq!(
+                hook_queue.try_send(Value::String("stolen".to_string())),
+                super::TrySendResult::Sent
+            );
+            assert_eq!(
+                hook_queue.try_recv(),
+                TryRecvResult::Value(Value::String("stolen".to_string())),
+                "an external consumer should be able to win before arbitration"
+            );
+            let final_queue = hook_queue.clone();
+            thread::spawn(move || {
+                thread::sleep(StdDuration::from_millis(3));
+                assert_eq!(
+                    final_queue.try_send(Value::String("final".to_string())),
+                    super::TrySendResult::Sent
+                );
+            });
+        });
+        select_runtime_values(
+            vec![Value::Channel(queue), Value::Duration(1_000_000_000)],
+            None,
+        )
+    })
+    .expect("a lost receive race should rearm the same composite wait");
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(final))"
+    );
+}
+
+#[test]
+fn phase58_select_cross_worker_publication_wakes_the_pinned_waiter() {
+    let queue = ChannelValue::new();
+    let observed_queue = queue.clone();
+    let selected = super::run_lightweight_root_task_with_worker_count(2, move || {
+        let producer_queue = queue.clone();
+        let _producer = spawn_lightweight_task(move || {
+            assert_eq!(
+                producer_queue.try_send(Value::String("cross-worker".to_string())),
+                super::TrySendResult::Sent
+            );
+            Ok(Value::Unit)
+        })?;
+        select_runtime_values(
+            vec![Value::Channel(queue), Value::Duration(1_000_000_000)],
+            None,
+        )
+    })
+    .expect("a different worker should wake the selecting task directly");
+
+    assert_eq!(
+        selected.render(),
+        "SelectOutcome.Queue(0, QueueReceive.Item(cross-worker))"
+    );
+    assert_eq!(
+        observed_queue.try_recv(),
+        TryRecvResult::Empty,
+        "one cross-worker publication must enqueue and deliver exactly one item"
+    );
 }
 
 #[test]

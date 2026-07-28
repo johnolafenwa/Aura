@@ -158,6 +158,7 @@ test("syntax grammar tracks maintained builtin types", () => {
     "Queue",
     "QueueReceive",
     "TaskResult",
+    "SelectOutcome",
     "WaitAny",
     "WaitAll",
     "Map",

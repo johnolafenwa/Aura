@@ -1,0 +1,5 @@
+error[AU2004]: `select` does not take keyword arguments
+ --> crates/aurora-compiler/tests/fixtures/check-fail/select_named_argument.au:3:18
+  |
+3 |     print(select(source=jobs))
+  |                  ^

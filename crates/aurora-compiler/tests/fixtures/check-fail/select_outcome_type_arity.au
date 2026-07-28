@@ -1,0 +1,2 @@
+def observe(outcome: SelectOutcome[int32]):
+    print(outcome)

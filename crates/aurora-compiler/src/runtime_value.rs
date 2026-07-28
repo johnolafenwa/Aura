@@ -1870,6 +1870,216 @@ pub(crate) fn wait_for_runtime_scheduler(
         .wait()
 }
 
+enum SelectRuntimeSource {
+    Queue(ChannelValue),
+    Task(TaskValue),
+    Deadline(Instant),
+}
+
+enum ValidatedSelectRuntimeSource {
+    Queue(ChannelValue),
+    Task(TaskValue),
+    Deadline(StdDuration),
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_SELECT_SOURCE_VALIDATION_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+    static AFTER_SELECT_QUEUE_COMMIT_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn install_after_select_source_validation_hook(hook: impl FnOnce() + 'static) {
+    AFTER_SELECT_SOURCE_VALIDATION_HOOK.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "a select-source validation hook is already installed"
+        );
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn install_after_select_queue_commit_hook(hook: impl FnOnce() + 'static) {
+    AFTER_SELECT_QUEUE_COMMIT_HOOK.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "an after-select queue commit hook is already installed"
+        );
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+fn select_runtime_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::coded("AU4001", message)
+}
+
+fn select_runtime_sources(values: Vec<Value>) -> Result<Vec<SelectRuntimeSource>> {
+    #[cfg(test)]
+    let after_validation_hook =
+        AFTER_SELECT_SOURCE_VALIDATION_HOOK.with(|slot| slot.borrow_mut().take());
+    if values.is_empty() {
+        return Err(select_runtime_error(
+            "select runtime requires at least one Queue, Task, or Duration source",
+        ));
+    }
+    if values.len() > i32::MAX as usize {
+        return Err(select_runtime_error(
+            "select runtime source count exceeds the int32 outcome-index range",
+        ));
+    }
+
+    let validated_sources = values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            Value::Channel(channel) => Ok(ValidatedSelectRuntimeSource::Queue(channel)),
+            Value::Task(task) => Ok(ValidatedSelectRuntimeSource::Task(task)),
+            Value::Duration(nanoseconds) => {
+                let duration = duration_to_host_timer(nanoseconds, "select deadline")
+                    .map_err(|error| select_runtime_error(error.to_string()))?;
+                Ok(ValidatedSelectRuntimeSource::Deadline(duration))
+            }
+            _ => Err(select_runtime_error(format!(
+                "select source {index} must be a Queue, Task, or Duration"
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    #[cfg(test)]
+    if let Some(hook) = after_validation_hook {
+        hook();
+    }
+
+    let wait_started = Instant::now();
+    validated_sources
+        .into_iter()
+        .map(|source| match source {
+            ValidatedSelectRuntimeSource::Queue(channel) => Ok(SelectRuntimeSource::Queue(channel)),
+            ValidatedSelectRuntimeSource::Task(task) => Ok(SelectRuntimeSource::Task(task)),
+            ValidatedSelectRuntimeSource::Deadline(duration) => wait_started
+                .checked_add(duration)
+                .map(SelectRuntimeSource::Deadline)
+                .ok_or_else(|| {
+                    select_runtime_error("select deadline exceeds the host deadline range")
+                }),
+        })
+        .collect()
+}
+
+fn select_runtime_probe(
+    sources: &[SelectRuntimeSource],
+    cancellation: Option<&CancellationContext>,
+) -> Option<Value> {
+    if cancellation.is_some_and(CancellationContext::is_cancelled) {
+        return Some(select_outcome_cancelled());
+    }
+
+    let now = Instant::now();
+    for (index, source) in sources.iter().enumerate() {
+        let index = i32::try_from(index).expect("select source count was validated");
+        match source {
+            SelectRuntimeSource::Queue(channel) => match channel.try_recv() {
+                TryRecvResult::Value(value) => {
+                    #[cfg(test)]
+                    AFTER_SELECT_QUEUE_COMMIT_HOOK.with(|slot| {
+                        if let Some(hook) = slot.borrow_mut().take() {
+                            hook();
+                        }
+                    });
+                    return Some(select_outcome_queue(index, queue_receive_item(value)));
+                }
+                TryRecvResult::Closed => {
+                    #[cfg(test)]
+                    AFTER_SELECT_QUEUE_COMMIT_HOOK.with(|slot| {
+                        if let Some(hook) = slot.borrow_mut().take() {
+                            hook();
+                        }
+                    });
+                    return Some(select_outcome_queue(index, queue_receive_closed()));
+                }
+                TryRecvResult::Empty => {}
+            },
+            SelectRuntimeSource::Task(task) => match task.completed_result_observed() {
+                Some(TaskExecutionResult::Ready(Ok(value))) => {
+                    return Some(select_outcome_task(index, task_result_ready(value)));
+                }
+                Some(TaskExecutionResult::Ready(Err(error))) => {
+                    return Some(select_outcome_task(index, task_result_error(error.message)));
+                }
+                Some(TaskExecutionResult::Cancelled) => {
+                    return Some(select_outcome_task(index, task_result_cancelled()));
+                }
+                None => {}
+            },
+            SelectRuntimeSource::Deadline(deadline) if now >= *deadline => {
+                return Some(select_outcome_deadline(index));
+            }
+            SelectRuntimeSource::Deadline(_) => {}
+        }
+    }
+    None
+}
+
+/// Shared Phase 5.8 heterogeneous wait primitive used by the MIR and direct
+/// adapters. Descriptors are already-evaluated source values in source order.
+///
+/// Validation and non-repeatable Task observation claims happen before any
+/// readiness is observed. The wait itself is one persistent-reactor
+/// registration; wakeups trigger cancellation-first, original-index
+/// arbitration and never choose a winner directly.
+pub(crate) fn select_runtime_values(
+    values: Vec<Value>,
+    cancellation: Option<&CancellationContext>,
+) -> Result<Value> {
+    let sources = select_runtime_sources(values)?;
+    for source in &sources {
+        if let SelectRuntimeSource::Task(task) = source {
+            task.claim_result_observation()?;
+        }
+    }
+
+    let recv_channels = sources
+        .iter()
+        .filter_map(|source| match source {
+            SelectRuntimeSource::Queue(channel) => Some(channel.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let task_waits = sources
+        .iter()
+        .filter_map(|source| match source {
+            SelectRuntimeSource::Task(task) => Some(task.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let deadline = sources.iter().filter_map(|source| match source {
+        SelectRuntimeSource::Deadline(deadline) => Some(*deadline),
+        _ => None,
+    });
+    let deadline = deadline.min();
+
+    loop {
+        if let Some(outcome) = select_runtime_probe(&sources, cancellation) {
+            return Ok(outcome);
+        }
+
+        match wait_for_runtime_scheduler(
+            recv_channels.clone(),
+            false,
+            Vec::new(),
+            task_waits.clone(),
+            deadline,
+            cancellation,
+        ) {
+            RuntimeSchedulerWakeReason::Cancelled => return Ok(select_outcome_cancelled()),
+            RuntimeSchedulerWakeReason::Ready | RuntimeSchedulerWakeReason::TimedOut => {}
+        }
+    }
+}
+
 pub(crate) fn sleep_with_runtime_scheduler(
     duration: StdDuration,
     cancellation: Option<&CancellationContext>,
@@ -1892,9 +2102,75 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_EXIT: std::cell::RefCell<Option<TaskExecutionResult>> =
         const { std::cell::RefCell::new(None) };
+    #[cfg(test)]
+    static AFTER_TASK_WAIT_SUBSCRIBE_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+    #[cfg(test)]
+    static NEXT_TASK_WAIT_READY_ENQUEUE_PROBE: RefCell<Option<TaskWaitReadyEnqueueProbe>> =
+        const { RefCell::new(None) };
 }
 
 static LIGHTWEIGHT_TASK_PANIC_HOOK: Once = Once::new();
+
+#[cfg(test)]
+struct TaskWaitReadyEnqueueProbe {
+    subscription: Option<ReactorSubscriptionKey>,
+    counter: Arc<AtomicUsize>,
+}
+
+#[cfg(test)]
+pub(crate) fn install_after_task_wait_subscribe_hook(hook: impl FnOnce() + 'static) {
+    AFTER_TASK_WAIT_SUBSCRIBE_HOOK.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "a task-wait subscription race hook is already installed"
+        );
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn install_next_task_wait_ready_enqueue_counter(counter: Arc<AtomicUsize>) {
+    NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "a task-wait ready-enqueue counter is already installed"
+        );
+        *slot.borrow_mut() = Some(TaskWaitReadyEnqueueProbe {
+            subscription: None,
+            counter,
+        });
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn clear_task_wait_ready_enqueue_counter() {
+    NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
+        slot.borrow_mut().take();
+    });
+}
+
+#[cfg(test)]
+fn bind_task_wait_ready_enqueue_counter(subscription: ReactorSubscriptionKey) {
+    NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().as_mut() {
+            probe.subscription.get_or_insert(subscription);
+        }
+    });
+}
+
+#[cfg(test)]
+fn record_task_wait_ready_enqueue(subscription: ReactorSubscriptionKey) {
+    NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
+        let slot = slot.borrow();
+        if let Some(probe) = slot
+            .as_ref()
+            .filter(|probe| probe.subscription == Some(subscription))
+        {
+            probe.counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+}
 
 struct LightweightTaskContextGuard {
     previous: Option<Rc<LightweightTaskContext>>,
@@ -2283,6 +2559,14 @@ impl TaskWaitRegistration {
         if let Some(cancellation) = &self.cancellation {
             cancellation.subscribe_reactor(subscription);
         }
+        #[cfg(test)]
+        bind_task_wait_ready_enqueue_counter(subscription.identity());
+        #[cfg(test)]
+        AFTER_TASK_WAIT_SUBSCRIBE_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
     }
 
     fn unsubscribe_reactor(&self, subscription: &ReactorSubscription) {
@@ -2821,8 +3105,16 @@ impl LightweightTaskScheduler {
         }
 
         let subscription = ReactorSubscription::new(key, self.reactor.handle());
-        registration.subscribe_reactor(&subscription);
+        if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+            registration.subscribe_reactor(&subscription);
+        })) {
+            registration.unsubscribe_reactor(&subscription);
+            let _ = self.reactor.cancel_wait(key);
+            panic::resume_unwind(payload);
+        }
         if let Some(reason) = registration.ready_reason(false) {
+            #[cfg(test)]
+            record_task_wait_ready_enqueue(subscription.identity());
             registration.unsubscribe_reactor(&subscription);
             let _ = self.reactor.cancel_wait(key);
             self.ready.push_back((task_id, reason));
@@ -2930,10 +3222,14 @@ impl LightweightTaskScheduler {
             if current.key != key {
                 continue;
             }
+            #[cfg(test)]
+            let subscription_identity = current.subscription.identity();
             let registration = self
                 .take_ready_wait(key.0)
                 .expect("the matching reactor wait remains registered");
             if let Some(reason) = registration.ready_reason(registration.fd_wait.is_some()) {
+                #[cfg(test)]
+                record_task_wait_ready_enqueue(subscription_identity);
                 self.ready.push_back((key.0, reason));
             } else {
                 self.arm_wait(key.0, registration);
@@ -11956,6 +12252,44 @@ pub(crate) fn task_result_timed_out() -> Value {
 pub(crate) fn task_result_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn select_outcome_queue(index: i32, outcome: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SelectOutcome".to_string(),
+        variant_name: "Queue".to_string(),
+        payloads: vec![
+            Value::Int(IntegerValue::from_signed(index as i128)),
+            outcome,
+        ],
+    })
+}
+
+pub(crate) fn select_outcome_task(index: i32, outcome: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SelectOutcome".to_string(),
+        variant_name: "Task".to_string(),
+        payloads: vec![
+            Value::Int(IntegerValue::from_signed(index as i128)),
+            outcome,
+        ],
+    })
+}
+
+pub(crate) fn select_outcome_deadline(index: i32) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SelectOutcome".to_string(),
+        variant_name: "Deadline".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128))],
+    })
+}
+
+pub(crate) fn select_outcome_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SelectOutcome".to_string(),
         variant_name: "Cancelled".to_string(),
         payloads: Vec::new(),
     })

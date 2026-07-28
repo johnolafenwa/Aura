@@ -16,6 +16,7 @@ The maintained user-facing model is:
 - `Task[T].result_or(default, timeout=...) -> T`
 - `Queue[T].get_or_none(timeout=...) -> Option[T]`
 - `Queue[T].get_or(default, timeout=...) -> T`
+- `select(queue_or_task_or_duration, ...) -> SelectOutcome[Q, T]`
 - `wait_any(...)` and `wait_all(...)`
 
 Aurora no longer exposes the older unstructured task forms. Every task belongs to a `TaskGroup`.
@@ -260,7 +261,43 @@ match task.result():
 
 ## Waiting On Multiple Tasks
 
-Use `wait_any(...)` and `wait_all(...)` instead of the removed `select` statement.
+Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative
+deadline. It is an ordinary variadic call, not the removed statement form:
+
+```python
+outcome = select(messages, worker_task, 20ms)
+
+match own outcome:
+    case SelectOutcome.Queue(index, received):
+        print(index)
+        match own received:
+            case QueueReceive.Item(message):
+                print(message)
+            case _:
+                pass
+    case SelectOutcome.Task(index, result):
+        print(index)
+        match own result:
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                pass
+    case SelectOutcome.Deadline(index):
+        print(index)
+    case SelectOutcome.Cancelled:
+        print("cancelled")
+```
+
+All Queue sources share one payload type and all Task sources share one result
+type. Missing source categories appear as `None` in
+`SelectOutcome[Q, T]`. Source expressions are evaluated once from left to
+right. Cancellation wins; otherwise the lowest original argument index wins
+when several sources are ready together. A selected Queue removes one item,
+while losing queues remain unchanged. Every non-repeatable Task observation
+right is consumed at call entry, even when a Queue or deadline wins.
+
+Use `wait_any(...)` and `wait_all(...)` for an existing homogeneous
+`Vec[Task[T]]`.
 
 `wait_any(tasks, timeout=...)` returns `WaitAny[T]`:
 

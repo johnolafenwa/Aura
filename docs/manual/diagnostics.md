@@ -45,7 +45,7 @@ renamed; backend dispatch is never selected by which implementation happens to
 run first.
 
 `AU2007` rejects a module-level function declaration whose name is already a
-builtin function name, such as `len`, `str`, `abs`, or `print`. The builtin
+builtin function name, such as `len`, `str`, `abs`, `print`, or `select`. The builtin
 surface is closed, so the declaration must be renamed. This rejection is
 distinct from the `AU2006` method collision: it covers free functions rather
 than trait methods on a builtin target.
@@ -99,11 +99,21 @@ non-copy because its result is non-repeatable. A later use of the same binding
 after a consuming result observation is `AU3001`; trying to consume the right
 through shared access is `AU3002`.
 
+For `select(...)`, `AU3009` also rejects the same statically visible
+non-repeatable Task source appearing twice in one call. `AU3002` explains that
+each non-repeatable Task must arrive through owned access because `select`
+consumes all such observation rights at entry and abandons losers. Call-shape
+errors such as an empty call or named source are `AU2004`; an invalid source
+kind or inconsistent Queue/Task category type is `AU2002`.
+
 The atomic runtime containment for non-repeatable results is separate from
 those static errors. If a backend defect or foreign handle reaches a second
 runtime claim, Aurora traps with `AU4001` and
 `task result has already been observed; non-repeatable task results allow
 exactly one observing attempt`; it never returns or clones the stored value.
+The same defense applies when malformed backend state reaches `select`; an
+already-claimed or duplicated non-repeatable Task traps with `AU4001` before
+any result is delivered.
 
 ## Diagnostic Structure
 

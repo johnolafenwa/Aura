@@ -38,8 +38,8 @@ use crate::runtime_value::{
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    runtime_value_to_json, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
@@ -2933,6 +2933,14 @@ impl MirRuntime {
                     sleep_with_runtime_scheduler(duration, Some(&self.cancellation))
                         .map_err(timer_error_to_diagnostic)?;
                     return Ok(Value::Unit);
+                }
+
+                if name == "select" {
+                    let values = evaluate_named_args(args, env)?;
+                    return select_runtime_values(
+                        validate_mir_select_sources(values)?,
+                        Some(&self.cancellation),
+                    );
                 }
 
                 if matches!(name.as_str(), "wait_any" | "wait_all") {
@@ -7040,6 +7048,135 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
             })
         })
         .collect()
+}
+
+fn validate_mir_select_sources(args: Vec<EvaluatedMirArg>) -> Result<Vec<Value>> {
+    let mut queue_payload_type = None;
+    let mut task_result_type = None;
+    let mut sources = Vec::with_capacity(args.len());
+
+    for (index, argument) in args.into_iter().enumerate() {
+        if argument.name.is_some() {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                "`select` expects positional source values in MIR runtime",
+            ));
+        }
+
+        let ty = argument.ty.ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "`select` MIR source {index} is missing source type metadata; \
+                     expected `Queue[T]`, `Task[T]`, or `Duration`"
+                ),
+            )
+        })?;
+
+        match (&ty, &argument.value) {
+            (Type::Named(name, args), Value::Channel(_)) if name == "Queue" && args.len() == 1 => {
+                let payload_type = &args[0];
+                if let Some(expected) = queue_payload_type.as_ref() {
+                    if payload_type != expected {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            format!(
+                                "`select` MIR sources require a common Queue payload type; \
+                                 source {index} uses `{payload_type}`, expected `{expected}`"
+                            ),
+                        ));
+                    }
+                } else {
+                    queue_payload_type = Some(payload_type.clone());
+                }
+            }
+            (Type::Named(name, args), Value::Task(_)) if name == "Task" && args.len() == 1 => {
+                let result_type = &args[0];
+                if let Some(expected) = task_result_type.as_ref() {
+                    if result_type != expected {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            format!(
+                                "`select` MIR sources require a common Task result type; \
+                                 source {index} uses `{result_type}`, expected `{expected}`"
+                            ),
+                        ));
+                    }
+                } else {
+                    task_result_type = Some(result_type.clone());
+                }
+            }
+            (Type::Named(name, args), Value::Duration(_))
+                if name == "Duration" && args.is_empty() => {}
+            (Type::Named(name, args), _) if name == "Queue" && args.len() != 1 => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} has malformed Queue descriptor `{ty}`; \
+                         expected `Queue[T]`"
+                    ),
+                ));
+            }
+            (Type::Named(name, args), _) if name == "Task" && args.len() != 1 => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} has malformed Task descriptor `{ty}`; \
+                         expected `Task[T]`"
+                    ),
+                ));
+            }
+            (Type::Named(name, args), _) if name == "Duration" && !args.is_empty() => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} has malformed Duration descriptor `{ty}`; \
+                         expected `Duration`"
+                    ),
+                ));
+            }
+            (Type::Named(name, args), _) if name == "Queue" && args.len() == 1 => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} is described as `{ty}` but is not a queue \
+                         runtime value"
+                    ),
+                ));
+            }
+            (Type::Named(name, args), _) if name == "Task" && args.len() == 1 => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} is described as `{ty}` but is not a task \
+                         runtime value"
+                    ),
+                ));
+            }
+            (Type::Named(name, args), _) if name == "Duration" && args.is_empty() => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} is described as `Duration` but is not a \
+                         duration runtime value"
+                    ),
+                ));
+            }
+            _ => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "`select` MIR source {index} has type `{ty}`; expected `Queue[T]`, \
+                         `Task[T]`, or `Duration`"
+                    ),
+                ));
+            }
+        }
+
+        sources.push(argument.value);
+    }
+
+    Ok(sources)
 }
 
 fn bind_args(params: &[MirParam], args: Vec<EvaluatedMirArg>) -> Result<Vec<EvaluatedMirArg>> {

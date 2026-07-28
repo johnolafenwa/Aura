@@ -17,6 +17,10 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
   default; `AURORA_WORKERS=<positive integer>` selects an explicit worker
   count. Queue order remains FIFO per producer, but global sibling execution
   and output order are deliberately unspecified.
+- Reserved the builtin names `select` and `SelectOutcome`. Existing user
+  declarations with either name must be renamed. The new variadic
+  `select(source, ...)` waits over Queue, Task, and relative-Duration sources
+  and returns a typed `SelectOutcome[Q, T]`.
 
 - Built a typed bootstrap compiler, MIR runtime, direct native backend, package/workspace support, structured concurrency, file/network/process APIs, LSP, VS Code extension, and maintained book.
 - Froze syntax expansion while the 0.1 distribution, safety validation, editor responsiveness, and control-plane standard library are hardened.

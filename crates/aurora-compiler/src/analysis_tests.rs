@@ -160,6 +160,160 @@ fn checked_program(source: &str) -> crate::sema::Program {
     crate::check_source(source).expect("source should type check")
 }
 
+#[test]
+fn typed_select_analysis_exposes_inferred_outcomes_and_builtin_surface() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let binding = |name: &str, ty: Type| {
+        (
+            name.to_string(),
+            super::BindingInfo {
+                ty,
+                trait_bounds: Vec::new(),
+                definition: super::AnalysisRange {
+                    file_path: None,
+                    line: 0,
+                    start_character: 0,
+                    end_character: name.len(),
+                },
+                hover: format!("binding {name}"),
+            },
+        )
+    };
+    let scope = BTreeMap::from([
+        binding(
+            "jobs",
+            Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        ),
+        binding(
+            "task",
+            Type::Named("Task".to_string(), vec![Type::named("int32")]),
+        ),
+    ]);
+
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("select".to_string())),
+            &[
+                arg(expr(ExprKind::Name("jobs".to_string()))),
+                arg(expr(ExprKind::DurationNanos(1_000_000))),
+                arg(expr(ExprKind::Name("task".to_string()))),
+            ],
+            &scope,
+        ),
+        Some(Type::Named(
+            "SelectOutcome".to_string(),
+            vec![Type::named("String"), Type::named("int32")],
+        ))
+    );
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("select".to_string())),
+            &[arg(expr(ExprKind::DurationNanos(0)))],
+            &scope,
+        ),
+        Some(Type::Named(
+            "SelectOutcome".to_string(),
+            vec![Type::Unit, Type::Unit],
+        ))
+    );
+
+    let top_level = builder
+        .top_level_completions()
+        .into_iter()
+        .map(|completion| (completion.name, completion.detail))
+        .collect::<BTreeMap<_, _>>();
+    assert!(top_level
+        .get("select")
+        .is_some_and(|detail| detail.contains("SelectOutcome[Q, T]")));
+    assert_eq!(
+        top_level.get("SelectOutcome"),
+        Some(&"enum SelectOutcome[Q, T]".to_string())
+    );
+
+    let variants = builtin_enum_variant_completions("SelectOutcome")
+        .into_iter()
+        .map(|completion| (completion.name, completion.detail))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(variants.len(), 4);
+    assert!(variants
+        .get("Queue")
+        .is_some_and(|detail| detail.contains("QueueReceive[Q]")));
+    assert!(variants
+        .get("Task")
+        .is_some_and(|detail| detail.contains("TaskResult[T]")));
+    for variant in ["Queue", "Task", "Deadline", "Cancelled"] {
+        assert!(
+            builder
+                .resolve_member_type(&Type::named("SelectOutcome"), variant)
+                .is_some(),
+            "{variant}"
+        );
+    }
+}
+
+#[test]
+fn typed_select_analysis_withholds_types_for_invalid_or_ambiguous_sources() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let binding = |name: &str, ty: Type| {
+        (
+            name.to_string(),
+            super::BindingInfo {
+                ty,
+                trait_bounds: Vec::new(),
+                definition: super::AnalysisRange {
+                    file_path: None,
+                    line: 0,
+                    start_character: 0,
+                    end_character: name.len(),
+                },
+                hover: format!("binding {name}"),
+            },
+        )
+    };
+    let scope = BTreeMap::from([
+        binding(
+            "int_jobs",
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+        ),
+        binding(
+            "text_jobs",
+            Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        ),
+        binding(
+            "int_task",
+            Type::Named("Task".to_string(), vec![Type::named("int32")]),
+        ),
+        binding(
+            "text_task",
+            Type::Named("Task".to_string(), vec![Type::named("String")]),
+        ),
+    ]);
+    let select = expr(ExprKind::Name("select".to_string()));
+    let named_source = |name: &str| arg(expr(ExprKind::Name(name.to_string())));
+    let keyword_source = |name: &str| {
+        let mut argument = named_source(name);
+        argument.name = Some("source".to_string());
+        argument
+    };
+
+    for sources in [
+        vec![named_source("int_jobs"), named_source("text_jobs")],
+        vec![named_source("int_task"), named_source("text_task")],
+        vec![keyword_source("int_jobs")],
+        vec![arg(expr(ExprKind::Int(1)))],
+        vec![named_source("missing")],
+        Vec::new(),
+    ] {
+        assert_eq!(
+            builder.infer_call_type(&select, &sources, &scope),
+            None,
+            "analysis must not advertise a SelectOutcome type for invalid or incomplete sources"
+        );
+    }
+}
+
 fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
     FunctionDecl {
         public: true,

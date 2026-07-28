@@ -385,6 +385,12 @@
       "reason": "Queue-iteration fragment: jobs is the queue established by the surrounding example."
     },
     "docs/manual/concurrency.md#aurora-6": {
+      "sha256": "e7be39c5b333fda8ad0ca4d4dfc0f3eae7decd74b0625bdd04af148b23abed89",
+      "mode": "run",
+      "stdout": "SelectOutcome.Queue(0, QueueReceive.Item(ready))\n",
+      "stderr": ""
+    },
+    "docs/manual/concurrency.md#aurora-7": {
       "sha256": "93adedeb13f11b84a412b9a1ead15a875d0269dd91a253556d4078b2789dd979",
       "mode": "illustrative",
       "reason": "Cancellation-loop fragment: do_step is an application hook intentionally left to the embedding program."

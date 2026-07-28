@@ -221,6 +221,24 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
         .message
         .contains("`wait_any` expects 2 arguments"));
 
+    let select_sources = [dummy_arg(None), dummy_arg(None), dummy_arg(None)];
+    let selected = BuiltinFunction::Select
+        .bind_args(&select_sources, Span::new(1, 1))
+        .expect("select should accept one or more positional sources");
+    assert_eq!(selected.len(), 3);
+    assert_eq!(
+        BuiltinFunction::Select.argument_passing(2),
+        Some(ReceiverKind::Borrow)
+    );
+    let select_empty = BuiltinFunction::Select
+        .bind_args(&[], Span::new(1, 1))
+        .expect_err("select should require at least one source");
+    assert_eq!(select_empty.code, "AU2004");
+    let select_named = BuiltinFunction::Select
+        .bind_args(&[dummy_arg(Some("source"))], Span::new(1, 1))
+        .expect_err("select should reject named sources");
+    assert_eq!(select_named.code, "AU2004");
+
     assert!(BuiltinFunction::YieldNow
         .bind_args(&[], Span::new(1, 1))
         .expect("yield_now should accept no arguments")

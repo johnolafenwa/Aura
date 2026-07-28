@@ -15,6 +15,7 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `cancelled` | `cancelled() -> bool` | Returns the current task cancellation state. |
 | `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task to the scheduler. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task using the scheduler. |
+| `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional Queue, Task, or relative-Duration sources; cancellation wins, otherwise the lowest ready source index wins. |
 | `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; consumes the vector and abandons unchosen rights when `T` is non-repeatable. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; consumes the vector when `T` is non-repeatable. |
 | `abs` | `abs(value: number) -> number` | Absolute value for integers and floats. |
@@ -404,6 +405,7 @@ Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `
 | `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
 | `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
 | `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
+| `SelectOutcome[Q, T]` | `Queue(index: own int32, outcome: own QueueReceive[Q])`, `Task(index: own int32, outcome: own TaskResult[T])`, `Deadline(index: own int32)`, `Cancelled` |
 | `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 | `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
 | `bytes.Error` | `InvalidUtf8(index: own int32)`, `InvalidHexLength(length: own int32)`, `InvalidHexDigit(index: own int32, byte: own uint8)`, `InvalidBase64(index: own int32)` |

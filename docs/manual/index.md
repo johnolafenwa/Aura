@@ -39,7 +39,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `Vec[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.
-- [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, `yield_now`, `wait_any`, `wait_all`, and scheduler-aware waits.
+- [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,
+  cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
+  `wait_all`, and scheduler-aware waits.
 - [I/O Module](/manual/io): standard input/output and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, scoped file cleanup, byte and text limits.
 - [Network Module](/manual/network): TCP, UDP, HTTP, WebSocket, Unix sockets, TLS, and HTTP client helpers.

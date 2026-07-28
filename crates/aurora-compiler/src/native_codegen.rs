@@ -384,6 +384,7 @@ struct NativeCodegen<'a> {
     wait_any_timeout_value: FuncId,
     wait_all: FuncId,
     wait_all_timeout_value: FuncId,
+    select: FuncId,
     io_write: FuncId,
     io_flush: FuncId,
     io_read_line: FuncId,
@@ -864,6 +865,7 @@ impl<'a> NativeCodegen<'a> {
             wait_any_timeout_value => ("aurora_direct_wait_any_timeout_value", [types::I64, types::I64], Some(types::I64)),
             wait_all => ("aurora_direct_wait_all", [types::I64], Some(types::I64)),
             wait_all_timeout_value => ("aurora_direct_wait_all_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            select => ("aurora_direct_select", [types::I64], Some(types::I64)),
             io_write => ("aurora_direct_io_write", [types::I64], Some(types::I64)),
             io_flush => ("aurora_direct_io_flush", [], Some(types::I64)),
             io_read_line => ("aurora_direct_io_read_line", [], Some(types::I64)),
@@ -1256,6 +1258,7 @@ impl<'a> NativeCodegen<'a> {
             wait_any_timeout_value,
             wait_all,
             wait_all_timeout_value,
+            select,
             io_write,
             io_flush,
             io_read_line,
@@ -2144,6 +2147,7 @@ impl<'a> NativeCodegen<'a> {
         let wait_all_timeout_value = self
             .object
             .declare_func_in_func(self.wait_all_timeout_value, builder.func);
+        let select = self.object.declare_func_in_func(self.select, builder.func);
         let io_write = self
             .object
             .declare_func_in_func(self.io_write, builder.func);
@@ -2745,6 +2749,7 @@ impl<'a> NativeCodegen<'a> {
             wait_any_timeout_value,
             wait_all,
             wait_all_timeout_value,
+            select,
             io_write,
             io_flush,
             io_read_line,
@@ -3416,6 +3421,7 @@ struct FunctionCompiler<'a> {
     wait_any_timeout_value: cranelift_codegen::ir::FuncRef,
     wait_all: cranelift_codegen::ir::FuncRef,
     wait_all_timeout_value: cranelift_codegen::ir::FuncRef,
+    select: cranelift_codegen::ir::FuncRef,
     io_write: cranelift_codegen::ir::FuncRef,
     io_flush: cranelift_codegen::ir::FuncRef,
     io_read_line: cranelift_codegen::ir::FuncRef,
@@ -5080,6 +5086,97 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .call(self.sleep_value_void, &[duration.values[0]]);
             return Ok(unit_value(&mut self.builder));
+        }
+        if name == "select" {
+            if args.is_empty() || args.iter().any(|argument| argument.name.is_some()) {
+                return Err(
+                    "direct backend expected `select(source, ...)` with one or more positional \
+                     Queue, Task, or Duration sources"
+                        .to_string(),
+                );
+            }
+
+            let mut operands = Vec::with_capacity(args.len());
+            let mut element_types = Vec::with_capacity(args.len());
+            let mut queue_payload: Option<Type> = None;
+            let mut task_payload: Option<Type> = None;
+            for argument in args {
+                let direct =
+                    infer_operand_type(&argument.value, &self.variable_types, &self.classes)
+                        .ok_or_else(|| {
+                            "direct backend could not infer a `select` source type".to_string()
+                        })?;
+                let ty = direct_type_to_type(&direct);
+                match &ty {
+                    Type::Named(name, type_args) if name == "Queue" => {
+                        let [payload] = type_args.as_slice() else {
+                            return Err("direct backend expected `Queue[Q]` as a `select` source"
+                                .to_string());
+                        };
+                        if let Some(previous) = &queue_payload {
+                            if previous != payload {
+                                return Err(
+                                    "direct backend received inconsistent Queue payload types in \
+                                     `select`"
+                                        .to_string(),
+                                );
+                            }
+                        } else {
+                            queue_payload = Some(payload.clone());
+                        }
+                    }
+                    Type::Named(name, type_args) if name == "Task" => {
+                        let [payload] = type_args.as_slice() else {
+                            return Err("direct backend expected `Task[T]` as a `select` source"
+                                .to_string());
+                        };
+                        if let Some(previous) = &task_payload {
+                            if previous != payload {
+                                return Err(
+                                    "direct backend received inconsistent Task result types in \
+                                     `select`"
+                                        .to_string(),
+                                );
+                            }
+                        } else {
+                            task_payload = Some(payload.clone());
+                        }
+                    }
+                    Type::Named(name, type_args) if name == "Duration" && type_args.is_empty() => {}
+                    _ => {
+                        return Err(format!(
+                            "direct backend expected a Queue, Task, or Duration `select` source, \
+                             found `{}`",
+                            render_direct_type(&direct)
+                        ));
+                    }
+                }
+                operands.push(argument.value.clone());
+                element_types.push(ty);
+            }
+
+            let tuple_type = Type::Tuple(element_types.clone());
+            let tuple = self.compile_tuple_literal(&operands, &element_types, tuple_type)?;
+            let tuple = self.transfer_opaque_arg(&tuple);
+            let inst = self.builder.ins().call(self.select, &[tuple]);
+            let inferred_result_type = Type::Named(
+                "SelectOutcome".to_string(),
+                vec![
+                    queue_payload.unwrap_or(Type::Unit),
+                    task_payload.unwrap_or(Type::Unit),
+                ],
+            );
+            let result_type = match target {
+                Some(DirectType::Opaque(Type::Named(name, type_args)))
+                    if name == "SelectOutcome" && type_args.len() == 2 =>
+                {
+                    Type::Named(name.clone(), type_args.clone())
+                }
+                _ => inferred_result_type,
+            };
+            return Ok(
+                self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_type)
+            );
         }
         if matches!(name, "wait_any" | "wait_all") {
             let mut tasks_arg: Option<&MirArg> = None;
@@ -12535,6 +12632,29 @@ fn infer_rvalue_type(
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) if host_builtin_return_type(name).is_some() => {
                 direct_type(&host_builtin_return_type(name)?, classes)
+            }
+            CallTarget::Name(name) if name == "select" => {
+                let mut queue_payload = Type::Unit;
+                let mut task_payload = Type::Unit;
+                for argument in args {
+                    match infer_operand_type(&argument.value, variable_types, classes) {
+                        Some(DirectType::Opaque(Type::Named(source, type_args)))
+                            if source == "Queue" =>
+                        {
+                            queue_payload = type_args.first().cloned().unwrap_or(Type::Unit);
+                        }
+                        Some(DirectType::Opaque(Type::Named(source, type_args)))
+                            if source == "Task" =>
+                        {
+                            task_payload = type_args.first().cloned().unwrap_or(Type::Unit);
+                        }
+                        _ => {}
+                    }
+                }
+                Some(DirectType::Opaque(Type::Named(
+                    "SelectOutcome".to_string(),
+                    vec![queue_payload, task_payload],
+                )))
             }
             CallTarget::Name(name) if matches!(name.as_str(), "wait_any" | "wait_all") => {
                 let task_payload = args

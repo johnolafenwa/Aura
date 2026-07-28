@@ -380,6 +380,7 @@ pub enum BuiltinFunction {
     Cancelled,
     YieldNow,
     Sleep,
+    Select,
     WaitAny,
     WaitAll,
     Abs,
@@ -399,6 +400,7 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Cancelled,
     BuiltinFunction::YieldNow,
     BuiltinFunction::Sleep,
+    BuiltinFunction::Select,
     BuiltinFunction::WaitAny,
     BuiltinFunction::WaitAll,
     BuiltinFunction::Len,
@@ -420,6 +422,7 @@ impl BuiltinFunction {
             "cancelled" => Some(Self::Cancelled),
             "yield_now" => Some(Self::YieldNow),
             "sleep" => Some(Self::Sleep),
+            "select" => Some(Self::Select),
             "wait_any" => Some(Self::WaitAny),
             "wait_all" => Some(Self::WaitAll),
             "abs" => Some(Self::Abs),
@@ -442,6 +445,7 @@ impl BuiltinFunction {
             Self::Cancelled => "cancelled",
             Self::YieldNow => "yield_now",
             Self::Sleep => "sleep",
+            Self::Select => "select",
             Self::WaitAny => "wait_any",
             Self::WaitAll => "wait_all",
             Self::Abs => "abs",
@@ -463,6 +467,9 @@ impl BuiltinFunction {
             Self::Cancelled => "cancelled() -> bool",
             Self::YieldNow => "yield_now() -> None",
             Self::Sleep => "sleep(duration: Duration) -> None",
+            Self::Select => {
+                "select(source, ...) -> SelectOutcome[Q, T] [Queue[Q], Task[T], or Duration sources]"
+            }
             Self::WaitAny => {
                 "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T] [consumes tasks when T is non-repeatable]"
             }
@@ -492,6 +499,9 @@ impl BuiltinFunction {
                 "Keeps the current task runnable while yielding its scheduler turn to other ready tasks."
             }
             Self::Sleep => "Blocks the current task for the requested duration.",
+            Self::Select => {
+                "Waits atomically for one Queue receive, Task result, or relative Duration deadline. Queue payloads share one `Q`, task results share one `T`, and non-repeatable Task sources are consumed at call entry."
+            }
             Self::WaitAny => {
                 "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right; repeatable `T` leaves the vector reusable."
             }
@@ -512,6 +522,23 @@ impl BuiltinFunction {
 
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         match self {
+            Self::Select => {
+                if args.is_empty() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2004",
+                        span,
+                        "`select` expects at least one positional source",
+                    ));
+                }
+                if let Some(argument) = args.iter().find(|argument| argument.name.is_some()) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2004",
+                        argument.span,
+                        "`select` does not take keyword arguments",
+                    ));
+                }
+                self.call_shape().bind_args("`select`", args, span)
+            }
             Self::Range => {
                 if args.len() > 2 {
                     return Err(Diagnostic::at(
@@ -542,6 +569,8 @@ impl BuiltinFunction {
         let shape = self.call_shape();
         if index < shape.params.len() {
             Some(shape.params[index].passing)
+        } else if matches!(self, Self::Select) {
+            shape.variadic_passing
         } else {
             None
         }
@@ -572,6 +601,7 @@ impl BuiltinFunction {
             Self::Sleep => {
                 BuiltinCallShape::fixed(&SLEEP_PARAMS, CallConvention::PositionalOrNamed)
             }
+            Self::Select => BuiltinCallShape::variadic(&NO_BUILTIN_PARAMS, ReceiverKind::Borrow),
             Self::WaitAny | Self::WaitAll => BuiltinCallShape::fixed(
                 &TASK_LIST_TIMEOUT_PARAMS,
                 CallConvention::PositionalOrNamed,
