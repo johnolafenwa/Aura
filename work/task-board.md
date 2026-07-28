@@ -269,10 +269,14 @@ Last updated: 2026-07-28
   coverage test or exclusion was added. Redundant checked-MIR and
   validated-type defensive branches were restructured into explicit
   invariants instead of receiving artificial tests.
-- Phase 5.6 now needs only its implementation commit followed by the
-  contractual after-stage benchmark/provenance commit. Phase 5.7 pinned-worker
-  multicore remains pending and no Phase 5.6 text or test claims parallel task
-  execution.
+- Phase 5.6 is complete at implementation commit `7dcdd70` plus its benchmark
+  evidence commit. Its clean contractual report passes the 10,000-sleeper,
+  timer, idle, starvation, and V6 controls; only the already-accepted
+  100,000-sleeper RSS gate remains red, while that workload's timer controls
+  pass. Raw report `/private/tmp/aurora-phase56-after-transfer.json`, SHA-256
+  `209baaf5264fe469db9f88c2c7aa235fce2d2505e3d233eb0baad69fbe060bb7`.
+  Phase 5.7 pinned-worker multicore is next, and no Phase 5.6 text or test
+  claims parallel task execution.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

@@ -443,3 +443,56 @@ improves from 3 ms to 2 ms, and the other controls remain comfortably inside
 their limits. These are evidence of no material regression, not new
 performance claims. The one-resident-page stackful-coroutine floor and the
 resulting restriction on massive-concurrency marketing are unchanged.
+
+## Phase 5.6 structural Transfer
+
+The accepted Phase 5.5 report above is the before-stage baseline. Phase 5.6
+adds compiler-derived structural Transfer checks, static task-result
+observation rights, and an atomic runtime claim for non-repeatable task
+results. It intentionally does not add parallel execution; this benchmark
+repeats every maintained runtime control to detect an unintended scheduler,
+memory, timer, or native-code regression before pinned-worker multicore.
+
+The clean-tree after-stage command was:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+/Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
+  scripts/bench-scalable-runtime.py \
+  --label phase56-after-transfer \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --idle-seconds 30 \
+  --json /tmp/aurora-phase56-after-transfer.json
+```
+
+The report records clean implementation commit
+`7dcdd70aa54bdae01a61d83ce867a2020fec4909`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. The
+host remains the Mac14,9 Apple M2 Pro with 10 physical/logical cores and
+16 GiB RAM. The freshly qualified locked release `aura` SHA-256 is
+`b50fc66fda17e39d97af3409dfa1d6bb1a40a5ab87e3bdf05df1dffd479fa716`.
+Raw report: `/private/tmp/aurora-phase56-after-transfer.json`; SHA-256:
+`209baaf5264fe469db9f88c2c7aa235fce2d2505e3d233eb0baad69fbe060bb7`.
+
+| Workload | Repetitions | Contractual post-Transfer result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 205,209,600 bytes worst whole-process peak RSS; 197,869,568 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,438,973,952 bytes best and 1,855,143,936 bytes worst whole-process peak RSS; 1,847,754,752 bytes worst incremental peak RSS; 4 ms worst arm span; 4 ms worst p99 | RSS FAIL against 1.5 GiB; timer gates PASS under the recorded escape hatch |
+| 1,000 timers | 3 | arm spans 5, 3, 3 ms; p99 2 ms in every run | PASS |
+| 10 idle tasks | 3 | 0.00001354949145045805% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 14 ms worst result | PASS, at most 50 ms |
+| V6 int32 loop | 5 plus warmup | median 34.838167 ms; MAD 0.542583 ms; p95 47.171209 ms; best 34.295584 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | median 14.039166 ms; MAD 0.734291 ms; p95 15.000125 ms; best 12.093083 ms | recorded stage evidence |
+
+Every process completed naturally with its exact protocol marker, zero status,
+empty standard error, and no sampling error. The contractual runner exits
+nonzero solely because the already-accepted massive-concurrency RSS gate
+remains unavailable; every other gate passes. The 10,000-sleeper peak is
+slightly below Phase 5.5, the massive-workload worst peak is about 5.4% lower,
+standalone timer p99 remains 2 ms, and idle/starvation controls remain far
+inside their limits. These measurements establish no material runtime
+regression from the Transfer boundary. They do not claim multicore execution
+or restore the massive-concurrency marketing claim.

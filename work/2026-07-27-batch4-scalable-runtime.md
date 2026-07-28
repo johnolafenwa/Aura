@@ -510,10 +510,21 @@ Phase 5.7 pinned-worker multicore remains pending. Phase 5.6 establishes the
 boundary contract while execution remains single-worker and makes no parallel
 execution claim.
 
+The contractual clean-tree after-stage benchmark is recorded from
+`7dcdd70aa54bdae01a61d83ce867a2020fec4909`. Ten thousand sleepers, standalone
+timers, idle CPU, starvation latency, and V6 controls all pass. The
+100,000-sleeper workload remains the sole red gate under the accepted Phase
+5.4 escape hatch, while its timer controls pass. The report is
+`/private/tmp/aurora-phase56-after-transfer.json` with SHA-256
+`209baaf5264fe469db9f88c2c7aa235fce2d2505e3d233eb0baad69fbe060bb7`;
+full provenance and measurements are in
+`work/2026-07-27-phase5-runtime-benchmarks.md`.
+
 ## Follow-up
 
-Commit the Phase 5.6 implementation checkpoint, then capture its contractual
-after-stage benchmark and provenance before advancing to pinned-worker
-multicore. The massive-concurrency memory claim remains unavailable under the
-recorded escape hatch. Coverage floors remain frozen until the one-time Batch
-4 sign-off re-ratchet.
+Phase 5.6 is complete at implementation commit `7dcdd70` plus its benchmark
+evidence commit. Begin Phase 5.7 pinned-worker multicore with failing worker
+lifecycle, affinity, cross-worker wake, cleanup, and performance-gate tests.
+The massive-concurrency memory claim remains unavailable under the recorded
+escape hatch. Coverage floors remain frozen until the one-time Batch 4
+sign-off re-ratchet.
