@@ -25,20 +25,42 @@ Last updated: 2026-07-28
   JSON transport, analysis/LSP forwarding, and maintained documentation are
   implemented. Both diagnostic-note parity masks are removed and all 53
   maintained run-fail oracles pin their full Aurora call chains. The compiler
-  library passes all 1,144 tests; focused MIR/native/CLI checks pass; all 90
+  library passes all 1,147 tests; focused MIR/native/CLI checks pass; all 90
   LSP tests pass at 100% coverage; reference integrity and the documentation
   build are green. Three independently found transport defects are fixed and
   regression-tested: post-launch automatic fallback, descendant
   descriptor/environment leakage, and child human output after a signalled
   record failure. The complete serialized forced-backend matrix passes in
-  669.49 seconds across 239 run-pass and 53 run-fail fixtures. Frozen-floor
-  coverage passes at 70,931/73,779 lines (96.139822984860189%),
-  4,718/4,869 functions (96.898747176011497%), and 104,201/110,309 regions
-  (94.462827149190005%). Exact CI passes every product gate; its final hygiene
+  669.49 seconds across 239 run-pass and 53 run-fail fixtures. Clean-commit
+  coverage before the compact correction passes at 70,930/73,779 lines
+  (96.13846759%), 4,718/4,869 functions (96.89874718%), and
+  104,200/110,309 regions (94.46192060%). Exact CI passes every product gate;
+  its final hygiene
   check reports only whitespace in the excluded user-owned
-  `personal/file_ops.au`. A clean detached-commit CI replay, contractual
+  `personal/file_ops.au`. A corrected clean-commit CI replay, contractual
   benchmark, one-time Batch 4 coverage re-ratchet, and checkpoint report
   remain.
+  Phase 5.10 implementation commit `29ff7f6` passes exact clean detached CI,
+  including hygiene. Its first contractual benchmark is valid but rejected:
+  massive concurrency peaks at 2,040,184,832 bytes, 582,336,512 bytes above
+  Phase 5.9 and above the 1.5 GiB gate. The stable 10,000-sleeper signal adds
+  about 1.43 KiB per task. Audit isolates the regression to eagerly owned
+  native call/task frame vectors and strings retained by every suspended task,
+  with added coroutine-stack page pressure. A test-first compact internal
+  representation is implemented: validated immutable metadata is retained
+  without owned strings, depth-one call storage is inline, ancestry is shared
+  and iteratively retired, and owned diagnostic frames materialize only on the
+  first trap. The call-entry stack frame fell from 528 to 208 bytes. The
+  post-correction 10,000-sleeper control peaks at 210,305,024 bytes
+  whole-process and 202,784,768 bytes incremental, below every rejected-report
+  control run. A corrected clean commit, exact CI, and the contractual
+  100,000-task replay remain. The
+  first report also has one standalone timer outlier (14 ms arm span, 7 ms
+  p99), but all three massive-workload timer runs pass at 3-4 ms arm spans and
+  2 ms p99; requalify on a quiet host after the RSS fix before changing timer
+  behavior. Rejected report:
+  `/private/tmp/aurora-phase510-after-native-frames.json`, SHA-256
+  `012feee3e8a840c1c59c3c503572188b7bc4a8cc72b1ac3f30b5bb53f49f4528`.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without

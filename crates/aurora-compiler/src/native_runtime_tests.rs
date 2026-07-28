@@ -12513,6 +12513,7 @@ fn runtime_source_span(path: &str, line: usize, column: usize) -> RuntimeSourceS
 
 #[test]
 fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
+    super::reset_direct_runtime_frame_materialization_count();
     super::with_direct_task_runtime_scope(|| {
         unsafe {
             super::aurora_direct_enter_call_with_frame(
@@ -12549,6 +12550,11 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
                 },
             ]
         );
+        assert_eq!(
+            super::direct_runtime_frame_materialization_count(),
+            2,
+            "the first trap should materialize each active call frame exactly once"
+        );
 
         // Propagation through an observer with a different active frame must
         // preserve the first completed snapshot byte-for-byte.
@@ -12568,6 +12574,11 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
         });
         assert_eq!(propagated.call_frames, first.call_frames);
         assert_eq!(propagated.task_ancestry, first.task_ancestry);
+        assert_eq!(
+            super::direct_runtime_frame_materialization_count(),
+            2,
+            "re-propagating an already captured diagnostic must not rematerialize frames"
+        );
 
         unsafe {
             super::aurora_direct_exit_call();
@@ -12580,12 +12591,113 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
 }
 
 #[test]
+fn native_runtime_common_frame_storage_stays_inline_until_a_trap_materializes_it() {
+    let ancestry = vec![RuntimeTaskFrame {
+        task_function: "child".to_string(),
+        task_entry_span: runtime_source_span("/workspace/child.au", 2, 1),
+        parent_function: "main".to_string(),
+        spawn_span: runtime_source_span("/workspace/main.au", 8, 5),
+    }];
+
+    super::reset_direct_runtime_frame_materialization_count();
+    super::with_direct_task_runtime_scope_with_ancestry(ancestry, || {
+        unsafe {
+            super::aurora_direct_enter_call_with_frame(
+                2,
+                1,
+                b"/workspace/child.au".as_ptr(),
+                b"/workspace/child.au".len(),
+                b"child".as_ptr(),
+                b"child".len(),
+            );
+        }
+
+        super::with_direct_task_runtime_state(|state| {
+            assert_eq!(state.call_frames.len(), 1);
+            assert!(
+                !state.call_frames.has_heap_spill(),
+                "the common depth-one call chain must remain inline"
+            );
+            assert_eq!(state.task_ancestry.len(), 1);
+        });
+        assert_eq!(
+            super::direct_runtime_frame_materialization_count(),
+            0,
+            "successful task and call entry must retain compact metadata instead of owned diagnostics"
+        );
+
+        unsafe {
+            super::aurora_direct_exit_call();
+        }
+        assert_eq!(super::direct_runtime_frame_materialization_count(), 0);
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("compact frame storage probe should complete");
+}
+
+#[test]
+fn native_runtime_deep_persistent_task_ancestry_drops_iteratively() {
+    const DEPTH: usize = 100_000;
+
+    thread::Builder::new()
+        .name("aurora-deep-ancestry-drop".to_string())
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let frame = super::DirectRuntimeTaskFrame::from_runtime(RuntimeTaskFrame {
+                task_function: "child".to_string(),
+                task_entry_span: runtime_source_span("/workspace/child.au", 2, 1),
+                parent_function: "parent".to_string(),
+                spawn_span: runtime_source_span("/workspace/parent.au", 8, 5),
+            });
+            let mut ancestry = super::DirectTaskAncestry::default();
+            for _ in 0..DEPTH {
+                ancestry = ancestry.prepend(frame.clone());
+            }
+            assert_eq!(ancestry.len(), DEPTH);
+            drop(ancestry);
+        })
+        .expect("deep ancestry drop probe should spawn")
+        .join()
+        .expect("deep ancestry must drop without recursively overflowing the stack");
+}
+
+#[test]
+fn native_runtime_frame_metadata_rejects_invalid_utf8_before_mutating_call_state() {
+    let diagnostic = run_lightweight_root_task(|| {
+        let invalid = [0xff_u8];
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                unsafe {
+                    super::aurora_direct_enter_call_with_frame(
+                        2,
+                        1,
+                        b"/workspace/main.au".as_ptr(),
+                        b"/workspace/main.au".len(),
+                        invalid.as_ptr(),
+                        invalid.len(),
+                    );
+                }
+                #[allow(unreachable_code)]
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("invalid frame metadata should fail at the scheduler boundary");
+    assert!(diagnostic.message.contains("invalid UTF-8"));
+    assert!(
+        diagnostic.call_frames.is_empty(),
+        "invalid metadata must be rejected before the attempted frame becomes active"
+    );
+}
+
+#[test]
 fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
     let diagnostic = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
                 for index in 0..super::DIRECT_MAX_CALL_DEPTH {
-                    let function = format!("accepted_{index}");
+                    let function: &'static str =
+                        Box::leak(format!("accepted_{index}").into_boxed_str());
                     unsafe {
                         super::aurora_direct_enter_call_with_frame(
                             index as i64 + 1,

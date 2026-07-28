@@ -13,9 +13,9 @@ use std::process;
 use std::slice;
 use std::str;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
-use std::sync::{OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
@@ -86,6 +86,303 @@ impl Drop for DirectCleanupRegistration {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DirectStaticFrameText {
+    address: usize,
+    len: usize,
+}
+
+impl DirectStaticFrameText {
+    unsafe fn validate(ptr: *const u8, len: usize) -> std::result::Result<Self, ()> {
+        if ptr.is_null() {
+            return Err(());
+        }
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        str::from_utf8(bytes).map_err(|_| ())?;
+        Ok(Self {
+            address: ptr as usize,
+            len,
+        })
+    }
+
+    fn as_str(&self) -> &str {
+        // SAFETY: the private generated-code ABI requires frame metadata to
+        // remain readable and unchanged for the active call or spawned task
+        // lifetime, and `validate` establishes UTF-8 before this handle enters
+        // runtime state.
+        let bytes = unsafe { slice::from_raw_parts(self.address as *const u8, self.len) };
+        unsafe { str::from_utf8_unchecked(bytes) }
+    }
+}
+
+#[derive(Clone)]
+enum DirectFrameText {
+    Static(DirectStaticFrameText),
+    #[cfg(test)]
+    Shared(Arc<str>),
+}
+
+impl DirectFrameText {
+    unsafe fn validate_static(ptr: *const u8, len: usize) -> std::result::Result<Self, ()> {
+        unsafe { DirectStaticFrameText::validate(ptr, len) }.map(Self::Static)
+    }
+
+    #[cfg(test)]
+    fn shared(value: String) -> Self {
+        Self::Shared(Arc::from(value))
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Static(value) => value.as_str(),
+            #[cfg(test)]
+            Self::Shared(value) => value,
+        }
+    }
+
+    fn materialize(&self) -> String {
+        self.as_str().to_string()
+    }
+}
+
+#[derive(Clone)]
+struct DirectRuntimeSourceSpan {
+    path: Option<DirectFrameText>,
+    start: Span,
+    end: Span,
+}
+
+impl DirectRuntimeSourceSpan {
+    fn point(path: Option<DirectFrameText>, start: Span) -> Self {
+        Self {
+            path,
+            start,
+            end: Span::new(start.line, start.column.saturating_add(1)),
+        }
+    }
+
+    fn materialize(&self) -> RuntimeSourceSpan {
+        RuntimeSourceSpan {
+            path: self.path.as_ref().map(DirectFrameText::materialize),
+            start: self.start,
+            end: self.end,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DirectRuntimeCallFrame {
+    function: DirectFrameText,
+    span: DirectRuntimeSourceSpan,
+}
+
+impl DirectRuntimeCallFrame {
+    fn materialize(&self) -> RuntimeCallFrame {
+        note_direct_runtime_frame_materialized();
+        RuntimeCallFrame {
+            function: self.function.materialize(),
+            span: self.span.materialize(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DirectRuntimeTaskFrame {
+    task_function: DirectFrameText,
+    task_entry_span: DirectRuntimeSourceSpan,
+    parent_function: DirectFrameText,
+    spawn_span: DirectRuntimeSourceSpan,
+}
+
+impl DirectRuntimeTaskFrame {
+    fn materialize(&self) -> RuntimeTaskFrame {
+        note_direct_runtime_frame_materialized();
+        RuntimeTaskFrame {
+            task_function: self.task_function.materialize(),
+            task_entry_span: self.task_entry_span.materialize(),
+            parent_function: self.parent_function.materialize(),
+            spawn_span: self.spawn_span.materialize(),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_runtime(frame: RuntimeTaskFrame) -> Self {
+        Self {
+            task_function: DirectFrameText::shared(frame.task_function),
+            task_entry_span: DirectRuntimeSourceSpan {
+                path: frame.task_entry_span.path.map(DirectFrameText::shared),
+                start: frame.task_entry_span.start,
+                end: frame.task_entry_span.end,
+            },
+            parent_function: DirectFrameText::shared(frame.parent_function),
+            spawn_span: DirectRuntimeSourceSpan {
+                path: frame.spawn_span.path.map(DirectFrameText::shared),
+                start: frame.spawn_span.start,
+                end: frame.spawn_span.end,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DirectTaskAncestryNode {
+    frame: DirectRuntimeTaskFrame,
+    parent: Option<Arc<DirectTaskAncestryNode>>,
+}
+
+#[derive(Clone, Default)]
+struct DirectTaskAncestry {
+    youngest: Option<Arc<DirectTaskAncestryNode>>,
+    len: usize,
+}
+
+impl DirectTaskAncestry {
+    fn prepend(&self, frame: DirectRuntimeTaskFrame) -> Self {
+        Self {
+            youngest: Some(Arc::new(DirectTaskAncestryNode {
+                frame,
+                parent: self.youngest.clone(),
+            })),
+            len: self.len + 1,
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn materialize(&self) -> Vec<RuntimeTaskFrame> {
+        let mut frames = Vec::with_capacity(self.len);
+        let mut current = self.youngest.as_deref();
+        while let Some(node) = current {
+            frames.push(node.frame.materialize());
+            current = node.parent.as_deref();
+        }
+        frames
+    }
+
+    #[cfg(test)]
+    fn from_runtime(frames: Vec<RuntimeTaskFrame>) -> Self {
+        frames
+            .into_iter()
+            .rev()
+            .fold(Self::default(), |ancestry, frame| {
+                ancestry.prepend(DirectRuntimeTaskFrame::from_runtime(frame))
+            })
+    }
+}
+
+impl Drop for DirectTaskAncestry {
+    fn drop(&mut self) {
+        let mut current = self.youngest.take();
+        while let Some(node) = current {
+            match Arc::try_unwrap(node) {
+                Ok(mut node) => current = node.parent.take(),
+                Err(shared) => {
+                    // Another ancestry snapshot owns the rest of this
+                    // persistent chain. Releasing this reference cannot retire
+                    // the shared node, so its eventual last owner will perform
+                    // the iterative teardown.
+                    drop(shared);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+enum DirectCallFrameStorage {
+    #[default]
+    Empty,
+    Inline(DirectRuntimeCallFrame),
+    Spill(Vec<DirectRuntimeCallFrame>),
+}
+
+impl DirectCallFrameStorage {
+    fn push(&mut self, frame: DirectRuntimeCallFrame) {
+        match std::mem::take(self) {
+            Self::Empty => *self = Self::Inline(frame),
+            Self::Inline(first) => {
+                let mut frames = Vec::with_capacity(4);
+                frames.push(first);
+                frames.push(frame);
+                *self = Self::Spill(frames);
+            }
+            Self::Spill(mut frames) => {
+                frames.push(frame);
+                *self = Self::Spill(frames);
+            }
+        }
+    }
+
+    fn pop(&mut self) -> Option<DirectRuntimeCallFrame> {
+        match std::mem::take(self) {
+            Self::Empty => None,
+            Self::Inline(frame) => Some(frame),
+            Self::Spill(mut frames) => {
+                let popped = frames.pop();
+                *self = match frames.len() {
+                    0 => Self::Empty,
+                    1 => Self::Inline(frames.pop().expect("one frame remains")),
+                    _ => Self::Spill(frames),
+                };
+                popped
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Inline(_) => 1,
+            Self::Spill(frames) => frames.len(),
+        }
+    }
+
+    #[cfg(test)]
+    fn has_heap_spill(&self) -> bool {
+        matches!(self, Self::Spill(_))
+    }
+
+    fn materialize_innermost_first(&self) -> Vec<RuntimeCallFrame> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::Inline(frame) => vec![frame.materialize()],
+            Self::Spill(frames) => frames
+                .iter()
+                .rev()
+                .map(DirectRuntimeCallFrame::materialize)
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_direct_runtime_frame_materialized() {
+    DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn note_direct_runtime_frame_materialized() {}
+
+#[cfg(test)]
+fn reset_direct_runtime_frame_materialization_count() {
+    DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn direct_runtime_frame_materialization_count() -> usize {
+    DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(Cell::get)
+}
+
 struct DirectTaskRuntimeState {
     ownership_tracking_active: bool,
     owned_value_refs: BTreeMap<usize, usize>,
@@ -95,8 +392,8 @@ struct DirectTaskRuntimeState {
     cleanup_draining: bool,
     primary_runtime_diagnostic: Option<Diagnostic>,
     call_depth: usize,
-    call_frames: Vec<RuntimeCallFrame>,
-    task_ancestry: Vec<RuntimeTaskFrame>,
+    call_frames: DirectCallFrameStorage,
+    task_ancestry: DirectTaskAncestry,
     fallback_cancellation: CancellationContext,
 }
 
@@ -111,8 +408,8 @@ impl Default for DirectTaskRuntimeState {
             cleanup_draining: false,
             primary_runtime_diagnostic: None,
             call_depth: 0,
-            call_frames: Vec::new(),
-            task_ancestry: Vec::new(),
+            call_frames: DirectCallFrameStorage::default(),
+            task_ancestry: DirectTaskAncestry::default(),
             fallback_cancellation: CancellationContext::default(),
         }
     }
@@ -214,7 +511,7 @@ fn unregister_direct_owned_value(value: *mut OpaqueValue) -> bool {
 
 struct DirectTaskRuntimeScopeGuard {
     key: u64,
-    previous: Option<DirectTaskRuntimeState>,
+    previous: Option<Box<DirectTaskRuntimeState>>,
 }
 
 impl Drop for DirectTaskRuntimeScopeGuard {
@@ -225,7 +522,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
             let previous = self.previous.take();
             let restored_previous = previous.is_some();
             if let Some(previous) = previous {
-                states.insert(self.key, previous);
+                states.insert(self.key, *previous);
             }
             (current, restored_previous)
         });
@@ -270,11 +567,22 @@ impl Drop for DirectTaskRuntimeScopeGuard {
 }
 
 fn with_direct_task_runtime_scope<T>(work: impl FnOnce() -> T) -> T {
-    with_direct_task_runtime_scope_with_ancestry(Vec::new(), work)
+    with_direct_task_runtime_scope_with_direct_ancestry(DirectTaskAncestry::default(), work)
 }
 
+#[cfg(test)]
 fn with_direct_task_runtime_scope_with_ancestry<T>(
     task_ancestry: Vec<RuntimeTaskFrame>,
+    work: impl FnOnce() -> T,
+) -> T {
+    with_direct_task_runtime_scope_with_direct_ancestry(
+        DirectTaskAncestry::from_runtime(task_ancestry),
+        work,
+    )
+}
+
+fn with_direct_task_runtime_scope_with_direct_ancestry<T>(
+    task_ancestry: DirectTaskAncestry,
     work: impl FnOnce() -> T,
 ) -> T {
     let key = direct_task_runtime_key();
@@ -283,22 +591,30 @@ fn with_direct_task_runtime_scope_with_ancestry<T>(
         task_ancestry,
         ..DirectTaskRuntimeState::default()
     };
-    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().insert(key, state));
+    let previous = DIRECT_TASK_RUNTIME_STATES
+        .with(|states| states.borrow_mut().insert(key, state))
+        .map(Box::new);
     let _guard = DirectTaskRuntimeScopeGuard { key, previous };
     work()
 }
 
 fn direct_runtime_call_frames() -> Vec<RuntimeCallFrame> {
-    with_direct_task_runtime_state(|state| state.call_frames.iter().rev().cloned().collect())
+    with_direct_task_runtime_state(|state| state.call_frames.materialize_innermost_first())
 }
 
 fn direct_runtime_task_ancestry() -> Vec<RuntimeTaskFrame> {
+    with_direct_task_runtime_state(|state| state.task_ancestry.materialize())
+}
+
+fn direct_runtime_compact_task_ancestry() -> DirectTaskAncestry {
     with_direct_task_runtime_state(|state| state.task_ancestry.clone())
 }
 
 fn capture_direct_runtime_frames_once(diagnostic: &mut Diagnostic) {
-    diagnostic
-        .capture_runtime_frames_once(direct_runtime_call_frames(), direct_runtime_task_ancestry());
+    if diagnostic.capture_runtime_frames_once(Vec::new(), Vec::new()) {
+        diagnostic.call_frames = direct_runtime_call_frames();
+        diagnostic.task_ancestry = direct_runtime_task_ancestry();
+    }
 }
 
 fn clear_direct_task_runtime_states() {
@@ -2495,6 +2811,45 @@ pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
     }
 }
 
+fn direct_program_path_frame_text() -> Option<DirectFrameText> {
+    DIRECT_PROGRAM_SOURCE.get().map(|context| {
+        DirectFrameText::Static(DirectStaticFrameText {
+            address: context.path.as_ptr() as usize,
+            len: context.path.len(),
+        })
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn reject_invalid_direct_frame_utf8() -> ! {
+    task_runtime_boundary(|| runtime_error("aurora direct runtime received invalid UTF-8 bytes"))
+}
+
+#[cold]
+#[inline(never)]
+fn reject_direct_call_depth(line: i64, column: i64, function: &DirectFrameText) -> ! {
+    task_runtime_boundary(|| {
+        let message = format!(
+            "maximum call depth of {} exceeded while calling `{}`",
+            DIRECT_MAX_CALL_DEPTH,
+            function.as_str()
+        );
+        if line > 0 && column > 0 {
+            runtime_error_at(Span::new(line as usize, column as usize), message);
+        }
+        runtime_error(message);
+    })
+}
+
+/// Enters one generated Aurora call frame.
+///
+/// # Safety
+///
+/// Each non-null byte range must remain readable and unchanged until the
+/// matching `aurora_direct_exit_call`. UTF-8 is validated by the runtime before
+/// the range is retained. Native codegen satisfies this private ABI contract
+/// with immutable object-file data.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_enter_call_with_frame(
     line: i64,
@@ -2504,55 +2859,48 @@ pub unsafe extern "C-unwind" fn aurora_direct_enter_call_with_frame(
     function_ptr: *const u8,
     function_len: usize,
 ) {
-    task_runtime_boundary(|| {
-        let function = decode_bytes(function_ptr, function_len);
-        let path = if path_ptr.is_null() || path_len == 0 {
-            DIRECT_PROGRAM_SOURCE
-                .get()
-                .map(|context| context.path.clone())
-        } else {
-            Some(decode_bytes(path_ptr, path_len))
-        };
-        let start = Span::new(
-            usize::try_from(line).unwrap_or_default(),
-            usize::try_from(column).unwrap_or_default(),
-        );
-        let frame = RuntimeCallFrame {
-            function: function.clone(),
-            span: RuntimeSourceSpan::point(path, start),
-        };
-        let depth_exceeded = with_direct_task_runtime_state(|state| {
-            if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
-                true
-            } else {
-                state.call_depth += 1;
-                state.call_frames.push(frame);
-                false
-            }
-        });
-        if depth_exceeded {
-            let message = format!(
-                "maximum call depth of {} exceeded while calling `{}`",
-                DIRECT_MAX_CALL_DEPTH, function
-            );
-            if line > 0 && column > 0 {
-                runtime_error_at(Span::new(line as usize, column as usize), message);
-            }
-            runtime_error(message);
+    let function = match unsafe { DirectFrameText::validate_static(function_ptr, function_len) } {
+        Ok(function) => function,
+        Err(()) => reject_invalid_direct_frame_utf8(),
+    };
+    let path = if path_ptr.is_null() || path_len == 0 {
+        direct_program_path_frame_text()
+    } else {
+        match unsafe { DirectFrameText::validate_static(path_ptr, path_len) } {
+            Ok(path) => Some(path),
+            Err(()) => reject_invalid_direct_frame_utf8(),
         }
-    })
+    };
+    let start = Span::new(
+        usize::try_from(line).unwrap_or_default(),
+        usize::try_from(column).unwrap_or_default(),
+    );
+    let frame = DirectRuntimeCallFrame {
+        function: function.clone(),
+        span: DirectRuntimeSourceSpan::point(path, start),
+    };
+    let depth_exceeded = with_direct_task_runtime_state(|state| {
+        if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
+            true
+        } else {
+            state.call_depth += 1;
+            state.call_frames.push(frame);
+            false
+        }
+    });
+    if depth_exceeded {
+        reject_direct_call_depth(line, column, &function);
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
-    task_runtime_boundary(|| {
-        with_direct_task_runtime_state(|state| {
-            if state.call_depth > 0 {
-                state.call_depth -= 1;
-                let _ = state.call_frames.pop();
-            }
-        });
-    })
+    with_direct_task_runtime_state(|state| {
+        if state.call_depth > 0 {
+            state.call_depth -= 1;
+            let _ = state.call_frames.pop();
+        }
+    });
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -9030,7 +9378,7 @@ where
                 claim_flag_address,
                 result_is_copy,
                 stack_size,
-                task_ancestry: Vec::new(),
+                task_ancestry: DirectTaskAncestry::default(),
             },
             register_before_submit,
         )
@@ -9044,7 +9392,7 @@ struct DirectTaskSpawn {
     claim_flag_address: usize,
     result_is_copy: bool,
     stack_size: Option<usize>,
-    task_ancestry: Vec<RuntimeTaskFrame>,
+    task_ancestry: DirectTaskAncestry,
 }
 
 unsafe fn spawn_direct_task_with_external_state_and_ancestry<R>(
@@ -9073,7 +9421,7 @@ where
             args_address,
             claim_flag_address,
         };
-        with_direct_task_runtime_scope_with_ancestry(task_ancestry, || {
+        with_direct_task_runtime_scope_with_direct_ancestry(task_ancestry, || {
             Ok(with_task_runtime_error_capture(|| {
                 unsafe {
                     let args = &*(args_address as *const Vec<i64>);
@@ -9133,11 +9481,19 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             result_is_copy,
             stack_size_present,
             stack_size,
-            task_ancestry: Vec::new(),
+            task_ancestry: DirectTaskAncestry::default(),
         })
     }
 }
 
+/// Starts a generated Aurora task while attaching immutable source metadata.
+///
+/// # Safety
+///
+/// Every non-null metadata byte range must remain readable and unchanged until
+/// the spawned task completes. UTF-8 is validated by the runtime before any
+/// range is retained. Native codegen satisfies this private ABI contract with
+/// immutable object-file data.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_start_task_call_with_frames(
     thunk_ptr: i64,
@@ -9161,40 +9517,51 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call_with_frames(
     spawn_line: i64,
     spawn_column: i64,
 ) -> *mut OpaqueValue {
-    let task_function = decode_bytes(task_function_ptr, task_function_len);
-    let parent_function = decode_bytes(parent_function_ptr, parent_function_len);
+    let task_function =
+        match unsafe { DirectFrameText::validate_static(task_function_ptr, task_function_len) } {
+            Ok(task_function) => task_function,
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        };
+    let parent_function =
+        match unsafe { DirectFrameText::validate_static(parent_function_ptr, parent_function_len) }
+        {
+            Ok(parent_function) => parent_function,
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        };
     let task_path = if task_path_ptr.is_null() || task_path_len == 0 {
         None
     } else {
-        Some(decode_bytes(task_path_ptr, task_path_len))
+        match unsafe { DirectFrameText::validate_static(task_path_ptr, task_path_len) } {
+            Ok(task_path) => Some(task_path),
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        }
     };
     let spawn_path = if spawn_path_ptr.is_null() || spawn_path_len == 0 {
         None
     } else {
-        Some(decode_bytes(spawn_path_ptr, spawn_path_len))
+        match unsafe { DirectFrameText::validate_static(spawn_path_ptr, spawn_path_len) } {
+            Ok(spawn_path) => Some(spawn_path),
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        }
     };
-    let mut task_ancestry = direct_runtime_task_ancestry();
-    task_ancestry.insert(
-        0,
-        RuntimeTaskFrame {
-            task_function,
-            task_entry_span: RuntimeSourceSpan::point(
-                task_path,
-                Span::new(
-                    usize::try_from(task_line).unwrap_or_default(),
-                    usize::try_from(task_column).unwrap_or_default(),
-                ),
+    let task_ancestry = direct_runtime_compact_task_ancestry().prepend(DirectRuntimeTaskFrame {
+        task_function,
+        task_entry_span: DirectRuntimeSourceSpan::point(
+            task_path,
+            Span::new(
+                usize::try_from(task_line).unwrap_or_default(),
+                usize::try_from(task_column).unwrap_or_default(),
             ),
-            parent_function,
-            spawn_span: RuntimeSourceSpan::point(
-                spawn_path,
-                Span::new(
-                    usize::try_from(spawn_line).unwrap_or_default(),
-                    usize::try_from(spawn_column).unwrap_or_default(),
-                ),
+        ),
+        parent_function,
+        spawn_span: DirectRuntimeSourceSpan::point(
+            spawn_path,
+            Span::new(
+                usize::try_from(spawn_line).unwrap_or_default(),
+                usize::try_from(spawn_column).unwrap_or_default(),
             ),
-        },
-    );
+        ),
+    });
     unsafe {
         start_direct_task_call(DirectTaskCall {
             thunk_ptr,
@@ -9219,7 +9586,7 @@ struct DirectTaskCall {
     result_is_copy: i64,
     stack_size_present: i64,
     stack_size: i64,
-    task_ancestry: Vec<RuntimeTaskFrame>,
+    task_ancestry: DirectTaskAncestry,
 }
 
 unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
