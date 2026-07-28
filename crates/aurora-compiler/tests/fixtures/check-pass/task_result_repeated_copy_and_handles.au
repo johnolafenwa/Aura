@@ -1,0 +1,23 @@
+def make_number() -> int32:
+    return 7
+
+def make_queue() -> Queue[int32]:
+    return Queue[int32]()
+
+def echo_task(task: Task[int32]) -> Task[int32]:
+    return task
+
+def main() -> int32:
+    with TaskGroup() as group:
+        number = group.start(make_number)
+        print(number.result())
+        print(number.result())
+
+        queue = group.start(make_queue)
+        print(queue.result())
+        print(queue.result())
+
+        task_handle = group.start(echo_task, number)
+        print(task_handle.result())
+        print(task_handle.result())
+    return 0

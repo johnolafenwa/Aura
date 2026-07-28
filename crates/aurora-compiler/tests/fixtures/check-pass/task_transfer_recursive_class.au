@@ -1,0 +1,12 @@
+class Node:
+    value: String
+    next: indirect Node?
+
+def consume(node: own Node) -> int32:
+    return node.value.len() as int32
+
+def main() -> int32:
+    node = Node(value="root", next=Option.None)
+    with TaskGroup() as group:
+        _task = group.start(consume, node)
+    return 0

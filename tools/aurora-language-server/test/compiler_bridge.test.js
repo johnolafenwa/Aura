@@ -1488,6 +1488,249 @@ test("compiler bridge preserves real ownership provenance, help, and safe edits"
   }
 });
 
+test("compiler bridge preserves nested Transfer diagnostics and provenance", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-transfer-diag-"));
+  const source = [
+    "import random",
+    "",
+    "class Holder:",
+    "    label: String",
+    "    generator: random.Rng",
+    "",
+    "def consume(holder: own Holder):",
+    "    print(holder.label)",
+    "",
+    "def launch(group: TaskGroup, holder: own Holder):",
+    "    group.start_soon(consume, holder)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostic.code, "AU3008");
+    assert.equal(
+      diagnostic.message,
+      "task argument `holder` cannot cross a task boundary because field `generator` of `Holder` -> `random.Rng` is a stateful generator and is not Transfer"
+    );
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 10, character: 30 },
+      end: { line: 10, character: 31 }
+    });
+    assert.deepEqual(diagnostic.relatedInformation, [
+      {
+        location: {
+          uri: mainUri,
+          range: {
+            start: { line: 6, character: 12 },
+            end: { line: 6, character: 13 }
+          }
+        },
+        message: "task parameter `holder` is declared here"
+      }
+    ]);
+    assert.deepEqual(diagnostic.data.help, [
+      "send owned data made only from Transfer components; keep capabilities and host resources on their owning worker"
+    ]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves single-consumer duplication diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-task-result-diag-")
+  );
+  const source = [
+    "def duplicate(tasks: Vec[Task[String]]) -> Vec[Task[String]]:",
+    "    return tasks.clone()",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostic.code, "AU3009");
+    assert.equal(
+      diagnostic.message,
+      "cannot use `Vec.clone` because duplicating `Vec[Task[String]]` would create a second observation right for non-repeatable task result `String`"
+    );
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 17 },
+      end: { line: 1, character: 18 }
+    });
+    assert.deepEqual(diagnostic.data.help, [
+      "transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers"
+    ]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves single-consumer Task alias provenance", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-task-alias-"));
+  const source = [
+    "def make_text() -> String:",
+    '    return "once"',
+    "",
+    "def main() -> int32:",
+    "    with TaskGroup() as group:",
+    "        task = group.start(make_text)",
+    "        alias = task",
+    "        print(task.result())",
+    "        print(alias.result_or_none())",
+    "    return 0",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostic.code, "AU3001");
+    assert.equal(diagnostic.message, "use of moved value `task`");
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 7, character: 14 },
+      end: { line: 7, character: 15 }
+    });
+    assert.deepEqual(diagnostic.relatedInformation, [
+      {
+        location: {
+          uri: mainUri,
+          range: {
+            start: { line: 6, character: 16 },
+            end: { line: 6, character: 17 }
+          }
+        },
+        message: "value moved here"
+      }
+    ]);
+    assert.deepEqual(diagnostic.data.help, [
+      "pass shared access when ownership is not needed, or transfer this non-cloneable value only once"
+    ]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge teaches conditional task consumption and Queue Transfer", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-task-transfer-hover-")
+  );
+  const source = [
+    "def inspect(task: own Task[String], tasks: own Vec[Task[String]], queue: Queue[String]):",
+    "    print(task.result_or_none())",
+    "    print(wait_all(tasks))",
+    '    queue.put("hello")',
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const hovers = analysis.occurrences.map((occurrence) => occurrence.hover);
+    assert.ok(
+      hovers.some(
+        (hover) =>
+          hover.includes("result_or_none(timeout: Duration = ...) -> Option[T]") &&
+          hover.includes("consumes the unique `Task[T]` observation right") &&
+          hover.includes("`Task[T]` is copyable only when `T` is repeatable")
+      )
+    );
+    assert.ok(
+      hovers.some(
+        (hover) =>
+          hover.includes("wait_all(tasks: Vec[Task[T]]") &&
+          hover.includes("consumes the whole `Vec[Task[T]]` observation right") &&
+          hover.includes("repeatable `T` leaves the vector reusable")
+      )
+    );
+    assert.ok(
+      hovers.some(
+        (hover) =>
+          hover.includes("put(value: own T") &&
+          hover.includes("Queue payload type `T` must be Transfer") &&
+          !hover.includes("multiple workers")
+      )
+    );
+
+    const globalCompletions = await completeWithCompiler(
+      mainUri,
+      "def main():\n    yield_now()\n",
+      1,
+      4,
+      null
+    );
+    assert.ok(globalCompletions);
+    for (const name of ["wait_any", "wait_all"]) {
+      const item = globalCompletions.find((completion) => completion.name === name);
+      assert.ok(item, `missing ${name} completion`);
+      assert.ok(
+        item.detail.includes("consumes tasks when T is non-repeatable"),
+        `${name} completion must expose whole-vector conditional consumption`
+      );
+    }
+
+    const taskCompletions = await completeWithCompiler(
+      mainUri,
+      "def inspect(task: own Task[String]):\n    task.\n",
+      1,
+      9,
+      "."
+    );
+    assert.ok(taskCompletions);
+    for (const name of ["result", "result_or_none", "result_or"]) {
+      const item = taskCompletions.find((completion) => completion.name === name);
+      assert.ok(item, `missing Task.${name} completion`);
+      assert.ok(
+        item.detail.includes("consumes Task[T] when T is non-repeatable"),
+        `Task.${name} completion must expose conditional consumption`
+      );
+    }
+
+    const queueCompletions = await completeWithCompiler(
+      mainUri,
+      "def inspect(queue: Queue[String]):\n    queue.\n",
+      1,
+      10,
+      "."
+    );
+    assert.ok(queueCompletions);
+    for (const name of ["put", "try_put", "get", "get_or_none", "get_or"]) {
+      const item = queueCompletions.find((completion) => completion.name === name);
+      assert.ok(item, `missing Queue.${name} completion`);
+      assert.ok(
+        item.detail.includes("T must be Transfer"),
+        `Queue.${name} completion must expose the structural boundary`
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves exact ADR-0022 retired-borrow migration diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-retired-borrow-"));
   const cases = [

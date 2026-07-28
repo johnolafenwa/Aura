@@ -1,0 +1,10 @@
+import io
+import net
+
+def open_listener() -> Result[net.TcpListener, io.Error]:
+    return net.listen("127.0.0.1:0")
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _task = group.start(open_listener)
+    return 0

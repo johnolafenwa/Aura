@@ -163,7 +163,9 @@ with listener = try net.listen("127.0.0.1:0"):
 
 Hostname lookup and blocking connect syscalls are sent to the bounded blocking service, so they do not freeze sibling Aurora tasks. The `1s` timeout above is a single budget for DNS and all candidate addresses rather than a fresh second for every address. Task-group cancellation stops waiting promptly even when the host resolver itself cannot be interrupted.
 
-A server usually has its listener at the top of a scope and each accepted connection running in its own task:
+A live listener or stream is not `Transfer`, so it cannot be captured by a
+new task. The task that creates a listener keeps it and its accepted streams;
+it may use an ordinary helper on that same task to process a connection:
 
 ```python
 import io
@@ -179,6 +181,11 @@ def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
                 pass
     return Result.Ok(None)
 ```
+
+When a server itself should run as a child task, let that child create the
+listener. A copy `Queue[String]` handle can cross the boundary so the child can
+publish its bound address to the parent; the live listener never leaves its
+owning task.
 
 The `read_line` returns `Result[Option[String], io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means.
 

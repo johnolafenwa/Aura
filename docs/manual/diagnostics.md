@@ -16,7 +16,7 @@ the phase that owns the failure:
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
 | `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2999` general compile-time rejection |
-| `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication |
+| `AU30xx` | ownership, borrows, and transfer | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
 `AU1001` also owns source-delimiter pairing. An unexpected closer is primary at
@@ -69,10 +69,41 @@ collections, user classes, enum payloads, and other value wrappers. A generic
 definition over unresolved types records an inferred clone-safety obligation;
 `AU3007` is emitted at an unsafe concrete specialization, when a concrete
 requirement cannot be proved, or when an implementation would strengthen its
-trait method's contract. Copying `Task[random.Rng]` or
-`Queue[random.Rng]` handles is valid because it copies only the handle;
-transferring the generator with a move, collection removal, or queue receive is
-also valid because it leaves one owner.
+trait method's contract. Under Provisional ADR-0033, `random.Rng` is not
+Transfer: a task returning it and a Queue carrying it are rejected with
+`AU3008`, and the task handle is not copyable. Moving or removing a generator
+within one owning task remains valid because it leaves one owner.
+
+Provisional ADR-0033 reserves `AU3008` for a captured argument, task result, or
+Queue payload that cannot cross a task-worker boundary. The diagnostic names
+the failed boundary and follows the specialized type to the first
+non-transferable leaf, including its field, tuple element, collection
+component, or enum payload path. For example, it explains that a `Job` cannot
+cross because `Job.source` contains `fs.File`; it does not stop at
+“`Job` is not Transfer.”
+
+`AU3008` guidance recommends passing owned transferable input/output data
+instead of a non-copy shared or mutable capability, and keeping live host
+authority or `random.Rng` on its owning task. It may explain that reading Copy
+data materializes an owned snapshot; it must not claim all borrowed Copy
+captures fail. It never proposes an `impl Transfer` because Transfer is
+compiler-derived and has no builtin source-level trait surface. An ordinary
+user trait also named `Transfer` and its implementations do not alter the
+structural property.
+
+`AU3009` rejects an operation that would duplicate an existing
+single-consumer task-result observation right. It covers explicit clone,
+clone-producing `get`, and implicit collection or aggregate copy. It is not a
+Transfer-boundary failure: the contained task handle is Transfer, but is
+non-copy because its result is non-repeatable. A later use of the same binding
+after a consuming result observation is `AU3001`; trying to consume the right
+through shared access is `AU3002`.
+
+The atomic runtime containment for non-repeatable results is separate from
+those static errors. If a backend defect or foreign handle reaches a second
+runtime claim, Aurora traps with `AU4001` and
+`task result has already been observed; non-repeatable task results allow
+exactly one observing attempt`; it never returns or clones the stored value.
 
 ## Diagnostic Structure
 

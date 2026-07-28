@@ -1,0 +1,11 @@
+import random
+
+class Holder:
+    label: String
+    generator: random.Rng
+
+def consume(holder: own Holder):
+    print(holder.label)
+
+def launch(group: TaskGroup, holder: own Holder):
+    group.start_soon(consume, holder)

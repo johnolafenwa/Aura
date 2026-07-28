@@ -1147,6 +1147,10 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
             "def lookup[V](values: Map[String, V], key: String) -> V:\n    return values[key]\n\ndef main():\n    print(\"ok\")\n",
             "cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
         ),
+        (
+            "def first(values: Vec[Task[String]]) -> Task[String]:\n    return values[0]\n",
+            "cannot implicitly copy `Task[String]` out of a vector index; `get(index)` cannot clone it because that would duplicate the single observation right for task result `String`, so use `remove(index)` to transfer ownership instead",
+        ),
     ] {
         let rejected = crate::check_source(source)
             .expect_err("an unresolved indexed read must be rejected");
@@ -1223,6 +1227,10 @@ fn indexed_compound_assignment_guidance_follows_the_element_clone_safety() {
         (
             "def update[V](values: mut Map[String, V], rhs: V):\n    values[\"one\"] += rhs\n",
             "cannot implicitly copy `V` out of a map index for compound assignment; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+        ),
+        (
+            "def update(values: mut Vec[Task[String]], rhs: Task[String]):\n    values[0] += rhs\n",
+            "cannot implicitly copy `Task[String]` out of a vector index for compound assignment; `get(index)` cannot clone it because that would duplicate the single observation right for task result `String`, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -1480,6 +1488,60 @@ fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
             overlap.message
         );
     }
+
+    crate::check_source(
+        r#"
+class Observer[T]:
+    task: Task[T]
+
+class Nested[U]:
+    observer: Observer[Result[U, U]]
+
+def duplicate(values: Vec[Nested[int32]]) -> Vec[Nested[int32]]:
+    return values.clone()
+"#,
+    )
+    .expect(
+        "a repeated generic formal inside a copy result remains repeatably observable through a nested class",
+    );
+
+    let nested = crate::check_source(
+        r#"
+class Observer[T]:
+    task: Task[T]
+
+class Nested[U]:
+    observer: Observer[Result[U, U]]
+
+def duplicate(values: Vec[Nested[String]]) -> Vec[Nested[String]]:
+    return values.clone()
+"#,
+    )
+    .expect_err(
+        "a nested generic specialization must preserve its single task-result observation right",
+    );
+    assert_eq!(nested.code, "AU3009");
+    assert!(
+        nested
+            .message
+            .contains("non-repeatable task result `Result[String, String]`"),
+        "{nested:?}"
+    );
+
+    let tuple = crate::check_source(
+        r#"
+def duplicate(values: Vec[(Task[String], int32)]) -> Vec[(Task[String], int32)]:
+    return values.clone()
+"#,
+    )
+    .expect_err("a task right nested in a tuple must remain single-consumer");
+    assert_eq!(tuple.code, "AU3009");
+    assert!(
+        tuple
+            .message
+            .contains("non-repeatable task result `String`"),
+        "{tuple:?}"
+    );
 }
 
 #[test]
@@ -2987,7 +3049,7 @@ def main() -> int32:
         r#"
 import random
 
-def clone_task_handles(values: Vec[Task[random.Rng]]) -> Vec[Task[random.Rng]]:
+def clone_task_handles(values: Vec[Task[int64]]) -> Vec[Task[int64]]:
     return values.clone()
 
 def clone_queue_handles(values: Vec[Queue[random.Rng]]) -> Vec[Queue[random.Rng]]:
@@ -18643,4 +18705,1103 @@ def main() -> int32:
             "unexpected diagnostic for {method}: {wrong_type:?}"
         );
     }
+}
+
+#[test]
+fn task_boundaries_accept_structurally_transferable_values_and_results() {
+    crate::check_source(
+        r#"
+class Message:
+    label: String
+    samples: Vec[int64]
+
+enum Delivery:
+    Ready(Message)
+    Routed(queue: Queue[String], task: Task[String])
+
+def echo(payload: own Delivery, metadata: own Map[String, Set[int32]]) -> Delivery:
+    print(metadata)
+    return payload
+
+def relay(task: own Task[String], queue: Queue[String]) -> (Task[String], Queue[String]):
+    return (task, queue)
+
+def launch(task: own Task[String], queue: Queue[String]):
+    with group = TaskGroup():
+        metadata = Map[String, Set[int32]]()
+        payload = Delivery.Ready(Message(label="ready", samples=[1, 2]))
+        group.start(echo, payload, metadata)
+        group.start(relay, task, queue)
+"#,
+    )
+    .expect(
+        "copy data, String, structural containers, classes, enums, tuples, and handles are Transfer",
+    );
+}
+
+#[test]
+fn range_is_transfer_without_becoming_copy() {
+    crate::check_source(
+        r#"
+def echo(values: own Range, output: Queue[Range]) -> Range:
+    output.put(values)
+    return range(4, 7)
+
+def keep_handle(output: Queue[Range]) -> Queue[Range]:
+    return output
+
+def launch():
+    output = Queue[Range]()
+    with group = TaskGroup():
+        group.start(echo, range(0, 3), output)
+        group.start(keep_handle, output)
+"#,
+    )
+    .expect("Range data crosses task and Queue boundaries while Queue handles remain Transfer");
+
+    assert!(
+        !Type::named("Range").is_copy(),
+        "Phase 5.6 must preserve Range's existing non-Copy ownership semantics"
+    );
+}
+
+#[test]
+fn task_boundary_diagnostics_explain_the_exact_nested_non_transfer_reason() {
+    let nested_argument = crate::check_source(
+        r#"
+import random
+
+class GeneratorBox:
+    generator: random.Rng
+
+class Job:
+    boxes: Vec[GeneratorBox]
+
+def use_job(job: own Job):
+    pass
+
+def launch(job: own Job):
+    with group = TaskGroup():
+        group.start_soon(use_job, job)
+"#,
+    )
+    .expect_err("a nested random generator must not cross a task boundary");
+    assert_eq!(nested_argument.code, "AU3008");
+    assert!(
+        nested_argument
+            .message
+            .contains("task argument `job` cannot cross a task boundary"),
+        "{nested_argument:?}"
+    );
+    assert!(
+        nested_argument.message.contains(
+            "field `boxes` of `Job` -> element of `Vec[GeneratorBox]` -> field `generator` of `GeneratorBox` -> `random.Rng` is a stateful generator and is not Transfer"
+        ),
+        "{nested_argument:?}"
+    );
+
+    let nested_result = crate::check_source(
+        r#"
+import fs
+
+enum WorkerResult:
+    Opened(fs.File)
+    Skipped
+
+def worker() -> WorkerResult:
+    return WorkerResult.Skipped
+
+def launch():
+    with group = TaskGroup():
+        group.start_soon(worker)
+"#,
+    )
+    .expect_err("a host resource nested in a task result must be rejected");
+    assert_eq!(nested_result.code, "AU3008");
+    assert!(
+        nested_result
+            .message
+            .contains("task result `WorkerResult` cannot cross a task boundary"),
+        "{nested_result:?}"
+    );
+    assert!(
+        nested_result.message.contains(
+            "variant `Opened` of `WorkerResult` -> payload 1 -> `fs.File` is a host resource and is not Transfer"
+        ),
+        "{nested_result:?}"
+    );
+}
+
+#[test]
+fn task_transfer_checks_use_the_concrete_generic_specialization() {
+    crate::check_source(
+        r#"
+def echo[T](value: own T) -> T:
+    return value
+
+def launch():
+    with group = TaskGroup():
+        group.start(echo, "transfer")
+"#,
+    )
+    .expect("a generic task target specialized with String should be Transfer");
+
+    let rejected = crate::check_source(
+        r#"
+import random
+
+def echo[T](value: own T) -> T:
+    return value
+
+def launch():
+    with group = TaskGroup():
+        group.start(echo, random.Rng(seed=7))
+"#,
+    )
+    .expect_err("the concrete random.Rng specialization is not Transfer");
+    assert_eq!(rejected.code, "AU3008");
+    assert!(
+        rejected
+            .message
+            .contains("task argument `value` cannot cross a task boundary"),
+        "{rejected:?}"
+    );
+    assert!(
+        rejected
+            .message
+            .contains("`random.Rng` is a stateful generator and is not Transfer"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn task_transfer_is_compiler_derived_and_not_a_user_trait_escape_hatch() {
+    let rejected = crate::check_source(
+        r#"
+import random
+
+class Wrapper:
+    generator: random.Rng
+
+trait Transfer:
+    pass
+
+impl Transfer for Wrapper:
+    pass
+
+def worker(value: own Wrapper):
+    pass
+
+def launch(value: own Wrapper):
+    with group = TaskGroup():
+        group.start_soon(worker, value)
+"#,
+    )
+    .expect_err("a same-named user trait must not affect structural Transfer");
+    assert_eq!(rejected.code, "AU3008");
+    assert!(rejected.message.contains("field `generator` of `Wrapper`"));
+}
+
+#[test]
+fn transfer_uses_stored_components_not_phantom_type_arguments() {
+    crate::check_source(
+        r#"
+import random
+
+class Phantom[T]:
+    value: int32
+
+def worker(value: own Phantom[random.Rng]) -> int32:
+    return value.value
+
+def launch(value: own Phantom[random.Rng]):
+    with group = TaskGroup():
+        group.start(worker, value)
+"#,
+    )
+    .expect("an unused generic argument is not a stored Transfer component");
+}
+
+#[test]
+fn transfer_coinduction_checks_changing_recursive_specializations() {
+    crate::check_source(
+        r#"
+class Growing[T]:
+    value: T
+    next: indirect Growing[Vec[T]]
+
+def worker(value: own Growing[int32]):
+    pass
+
+def launch(value: own Growing[int32]):
+    with group = TaskGroup():
+        group.start_soon(worker, value)
+"#,
+    )
+    .expect("a recursive specialization whose stored components stay Transfer should terminate");
+
+    let rejected = crate::check_source(
+        r#"
+import random
+
+class Node[T]:
+    value: T
+    next: indirect Node[random.Rng]
+
+def worker(value: own Node[int32]):
+    pass
+
+def launch(value: own Node[int32]):
+    with group = TaskGroup():
+        group.start_soon(worker, value)
+"#,
+    )
+    .expect_err("a changing recursive specialization must inspect its substituted stored field");
+    assert_eq!(rejected.code, "AU3008");
+    assert!(
+        rejected
+            .message
+            .contains("field `next` of `Node` -> field `value` of `Node` -> `random.Rng`"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn task_result_observation_rights_follow_repeatability() {
+    crate::check_source(
+        r#"
+def number() -> int32:
+    return 7
+
+def launch():
+    with group = TaskGroup():
+        task = group.start(number)
+        print(task.result())
+        print(task.result_or(0))
+"#,
+    )
+    .expect("copy task results remain repeatably observable");
+
+    let consumed = crate::check_source(
+        r#"
+def text() -> String:
+    return "ready"
+
+def launch():
+    with group = TaskGroup():
+        task = group.start(text)
+        print(task.result_or("missing"))
+        print(task.result_or("missing"))
+"#,
+    )
+    .expect_err("a non-repeatable task result has one observation right");
+    assert_eq!(consumed.code, "AU3001");
+    assert!(consumed.message.contains("use of moved value `task`"));
+
+    let shared = crate::check_source(
+        r#"
+def observe(task: Task[String]):
+    print(task.result_or("missing"))
+"#,
+    )
+    .expect_err("shared access cannot consume a single task-result observation right");
+    assert_eq!(shared.code, "AU3002");
+    assert!(shared.message.contains("parameter `task` is borrowed"));
+
+    assert!(Type::Named("Task".to_string(), vec![Type::named("int32")]).is_copy());
+    assert!(!Type::Named("Task".to_string(), vec![Type::named("String")]).is_copy());
+    assert!(Type::Named(
+        "Task".to_string(),
+        vec![Type::Named(
+            "Queue".to_string(),
+            vec![Type::named("random.Rng")]
+        )]
+    )
+    .is_copy());
+    assert!(!Type::Named(
+        "Task".to_string(),
+        vec![Type::Named("Task".to_string(), vec![Type::named("String")])]
+    )
+    .is_copy());
+}
+
+#[test]
+fn clone_producing_operations_cannot_duplicate_task_observation_rights() {
+    let rejected = crate::check_source(
+        r#"
+def duplicate(tasks: Vec[Task[String]]) -> Vec[Task[String]]:
+    return tasks.clone()
+"#,
+    )
+    .expect_err("cloning a container must not duplicate single-consumer Task handles");
+    assert_eq!(rejected.code, "AU3009");
+    assert!(
+        rejected
+            .message
+            .contains("second observation right for non-repeatable task result `String`"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn queue_transport_requires_transfer_payloads_but_handle_only_methods_do_not() {
+    let constructed = crate::check_source(
+        r#"
+import random
+
+def launch():
+    queue = Queue[random.Rng]()
+"#,
+    )
+    .expect_err("constructing a Queue transport for random.Rng must fail");
+    assert_eq!(constructed.code, "AU3008");
+    assert!(constructed.message.contains("Queue payload `random.Rng`"));
+
+    let sent = crate::check_source(
+        r#"
+import random
+
+def send(queue: Queue[random.Rng], value: own random.Rng):
+    queue.put(value)
+"#,
+    )
+    .expect_err("put must reject a non-Transfer payload even on an external handle");
+    assert_eq!(sent.code, "AU3008");
+    assert!(sent.message.contains("Queue payload `random.Rng`"));
+
+    crate::check_source(
+        r#"
+import random
+
+def close_only(queue: Queue[random.Rng]):
+    queue.close()
+"#,
+    )
+    .expect("handle-only Queue operations do not transport their payload");
+}
+
+#[test]
+fn owned_builtin_snapshots_are_transfer_but_live_authority_is_not() {
+    crate::check_source(
+        r#"
+import net
+import process
+
+def completed(value: own process.Completed) -> process.Completed:
+    return value
+
+def response(value: own net.HttpResponse) -> net.HttpResponse:
+    return value
+
+def datagram(value: own net.UdpDatagram) -> net.UdpDatagram:
+    return value
+
+def launch(
+    completed_value: own process.Completed,
+    response_value: own net.HttpResponse,
+    datagram_value: own net.UdpDatagram
+):
+    with group = TaskGroup():
+        group.start(completed, completed_value)
+        group.start(response, response_value)
+        group.start(datagram, datagram_value)
+"#,
+    )
+    .expect("completed process, HTTP, and UDP snapshots contain only owned Transfer data");
+
+    let live = crate::check_source(
+        r#"
+import net
+
+def worker(stream: own net.TcpStream):
+    pass
+
+def launch(stream: own net.TcpStream):
+    with group = TaskGroup():
+        group.start_soon(worker, stream)
+"#,
+    )
+    .expect_err("a live stream is host authority and is not Transfer");
+    assert_eq!(live.code, "AU3008");
+    assert!(live.message.contains("`net.TcpStream` is a host resource"));
+}
+
+#[test]
+fn map_entry_clone_observers_preserve_single_task_result_rights() {
+    for helper in ["items", "entries"] {
+        let source = format!(
+            "def duplicate(values: Map[String, Task[String]]):\n    print(values.{helper}())\n"
+        );
+        let rejected = crate::check_source(&source)
+            .expect_err("Map entry cloning must not duplicate a Task[String] right");
+        assert_eq!(rejected.code, "AU3009", "{helper}: {rejected:?}");
+        assert!(
+            rejected
+                .message
+                .contains("non-repeatable task result `String`"),
+            "{helper}: {rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn task_target_explicit_specialization_and_contextual_defaults_are_concrete() {
+    crate::check_source(
+        r#"
+def empty[T]() -> Option[T]:
+    return Option.None
+
+class Factory:
+    def empty[T]() -> Option[T]:
+        return Option.None
+
+def pair[A, B]() -> (Option[A], Option[B]):
+    return (Option.None, Option.None)
+
+def fallback(value: own Option[String] = Option.None) -> Option[String]:
+    return value
+
+def launch():
+    with group = TaskGroup():
+        first = group.start(empty[String])
+        second = group.start(Factory.empty[String])
+        third = group.start(fallback)
+        group.start(pair[String, int32])
+        print(first.result_or(Option.None))
+        print(second.result_or(Option.None))
+        print(third.result_or(Option.None))
+"#,
+    )
+    .expect("explicit callable type arguments and contextual defaults must classify concretely");
+
+    let arity = crate::check_source(
+        r#"
+def pair[A, B]() -> (Option[A], Option[B]):
+    return (Option.None, Option.None)
+
+def launch():
+    with group = TaskGroup():
+        group.start(pair[String])
+"#,
+    )
+    .expect_err("task callable specialization must enforce all explicit type arguments");
+    assert!(arity
+        .message
+        .contains("function `pair` expects 2 type arguments, found 1"));
+}
+
+#[test]
+fn task_capture_materializes_copy_snapshots_but_not_noncopy_shared_views() {
+    crate::check_source(
+        r#"
+def worker(value: int32) -> int32:
+    return value
+
+def launch(value: int32):
+    with group = TaskGroup():
+        group.start(worker, value)
+"#,
+    )
+    .expect("a borrowed Copy parameter can materialize an owned snapshot for the child");
+
+    let rejected = crate::check_source(
+        r#"
+def worker(value: own String):
+    pass
+
+def launch(value: String):
+    with group = TaskGroup():
+        group.start_soon(worker, value)
+"#,
+    )
+    .expect_err("a noncopy shared parameter cannot be moved into a child");
+    assert_eq!(rejected.code, "AU3002");
+    assert!(rejected.message.contains("parameter `value` is borrowed"));
+}
+
+#[test]
+fn transfer_recursion_does_not_skip_a_third_changing_specialization() {
+    let rejected = crate::check_source(
+        r#"
+import random
+
+class Stair[A, B]:
+    value: A
+    next: indirect Stair[B, random.Rng]
+
+def worker(value: own Stair[int32, String]):
+    pass
+
+def launch(value: own Stair[int32, String]):
+    with group = TaskGroup():
+        group.start_soon(worker, value)
+"#,
+    )
+    .expect_err("the third recursive specialization stores random.Rng");
+    assert_eq!(rejected.code, "AU3008");
+    assert!(
+        rejected
+            .message
+            .contains("field `next` of `Stair` -> field `next` of `Stair` -> field `value` of `Stair` -> `random.Rng`"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn task_observation_duplication_ignores_phantom_type_arguments() {
+    crate::check_source(
+        r#"
+class Phantom[T]:
+    marker: int32
+
+def duplicate(values: Vec[Phantom[Task[String]]]) -> Vec[Phantom[Task[String]]]:
+    return values.clone()
+"#,
+    )
+    .expect("a Task in an unused type argument does not create a stored observation right");
+
+    crate::check_source(
+        r#"
+class Growing[T]:
+    value: T
+    next: indirect Growing[Vec[T]]
+
+def duplicate(values: Vec[Growing[Task[int32]]]) -> Vec[Growing[Task[int32]]]:
+    return values.clone()
+"#,
+    )
+    .expect("changing recursive specializations must not invent an observation right");
+}
+
+#[test]
+fn conditional_task_observation_consumption_participates_in_argument_overlap() {
+    let task_member = crate::check_source(
+        r#"
+class Holder:
+    task: Task[String]
+
+def derive(holder: Holder) -> String:
+    return "fallback"
+
+def observe(holder: own Holder):
+    print(holder.task.result_or(derive(holder)))
+"#,
+    )
+    .expect_err("the consuming Task receiver precedes and conflicts with the fallback read");
+    assert_eq!(task_member.code, "AU3002");
+    assert!(
+        task_member.message.contains("overlap")
+            || task_member.message.contains("partially moved")
+            || task_member.message.contains("moved field")
+            || task_member.message.contains("reserved for consumption"),
+        "{task_member:?}"
+    );
+
+    let wait = crate::check_source(
+        r#"
+def derive_timeout(tasks: Vec[Task[String]]) -> Duration:
+    return 1ms
+
+def observe(tasks: own Vec[Task[String]]):
+    print(wait_any(tasks, timeout=derive_timeout(tasks)))
+"#,
+    )
+    .expect_err("the consuming wait collection precedes and conflicts with the timeout read");
+    assert_eq!(wait.code, "AU3002");
+    assert!(
+        wait.message.contains("overlap")
+            || wait.message.contains("moved value")
+            || wait.message.contains("borrow"),
+        "{wait:?}"
+    );
+
+    crate::check_source(
+        r#"
+def derive_timeout(tasks: Vec[Task[int32]]) -> Duration:
+    return 1ms
+
+def observe(tasks: Vec[Task[int32]]):
+    print(wait_any(tasks, timeout=derive_timeout(tasks)))
+    print(wait_all(tasks, timeout=derive_timeout(tasks)))
+"#,
+    )
+    .expect("repeatable Task[int32] observation does not consume the tasks vector");
+}
+
+#[test]
+fn transfer_diagnostics_preserve_map_entry_result_and_generic_witnesses() {
+    let map_key = crate::check_source(
+        r#"
+import random
+
+def consume(values: own Map[random.Rng, String]):
+    pass
+
+def launch(values: own Map[random.Rng, String]):
+    with group = TaskGroup():
+        group.start(consume, values)
+"#,
+    )
+    .expect_err("a non-Transfer map key must be diagnosed at task admission");
+    assert_eq!(map_key.code, "AU3008");
+    assert_eq!(map_key.span, Some(Span::new(9, 30)));
+    assert!(
+        map_key
+            .message
+            .contains("key of `Map[random.Rng, String]` -> `random.Rng`"),
+        "{map_key:?}"
+    );
+    assert!(map_key
+        .help
+        .iter()
+        .any(|help| help.contains("keep capabilities and host resources on their owning worker")));
+
+    let entry_value = crate::check_source(
+        r#"
+import fs
+
+def consume(entry: own MapEntry[String, fs.File]):
+    pass
+
+def launch(entry: own MapEntry[String, fs.File]):
+    with group = TaskGroup():
+        group.start(consume, entry)
+"#,
+    )
+    .expect_err("a non-Transfer MapEntry value must name its stored field");
+    assert_eq!(entry_value.code, "AU3008");
+    assert!(
+        entry_value
+            .message
+            .contains("field `value` of `MapEntry[String, fs.File]` -> `fs.File`"),
+        "{entry_value:?}"
+    );
+
+    let entry_key = crate::check_source(
+        r#"
+import random
+
+def consume(entry: own MapEntry[random.Rng, String]):
+    pass
+
+def launch(entry: own MapEntry[random.Rng, String]):
+    with group = TaskGroup():
+        group.start(consume, entry)
+"#,
+    )
+    .expect_err("a non-Transfer MapEntry key must name its stored field");
+    assert_eq!(entry_key.code, "AU3008");
+    assert!(
+        entry_key
+            .message
+            .contains("field `key` of `MapEntry[random.Rng, String]` -> `random.Rng`"),
+        "{entry_key:?}"
+    );
+
+    let result_error = crate::check_source(
+        r#"
+import random
+
+def produce() -> Result[String, random.Rng]:
+    return Result.Ok("ready")
+
+def launch():
+    with group = TaskGroup():
+        group.start(produce)
+"#,
+    )
+    .expect_err("a non-Transfer Result error must be checked as part of the task result");
+    assert_eq!(result_error.code, "AU3008");
+    assert!(
+        result_error
+            .message
+            .contains("error payload of `Result[String, random.Rng]` -> `random.Rng`"),
+        "{result_error:?}"
+    );
+
+    let unresolved = crate::check_source(
+        r#"
+def consume[T](value: own T):
+    pass
+
+def launch[T](value: own T):
+    with group = TaskGroup():
+        group.start(consume, value)
+"#,
+    )
+    .expect_err("an unspecialized generic task payload has no proven Transfer shape");
+    assert_eq!(unresolved.code, "AU3008");
+    assert!(
+        unresolved
+            .message
+            .contains("type parameter `T` has no compiler-proven Transfer specialization"),
+        "{unresolved:?}"
+    );
+
+    let module = crate::check_source(
+        r#"
+import fs
+
+def consume[T](value: own T):
+    pass
+
+def launch():
+    with group = TaskGroup():
+        group.start(consume, fs)
+"#,
+    )
+    .expect_err("an imported module capability must not cross a task boundary");
+    assert_eq!(module.code, "AU3008");
+    assert!(
+        module
+            .message
+            .contains("`module fs` is a module capability and is not Transfer"),
+        "{module:?}"
+    );
+}
+
+#[test]
+fn queue_try_put_enforces_structural_transfer_at_the_payload_span() {
+    let rejected = crate::check_source(
+        r#"
+import random
+
+class Envelope:
+    value: random.Rng
+
+def send(queue: Queue[Envelope], value: own Envelope):
+    queue.try_put(value)
+"#,
+    )
+    .expect_err("try_put transports its payload and must enforce structural Transfer");
+    assert_eq!(rejected.code, "AU3008");
+    assert_eq!(rejected.span, Some(Span::new(8, 11)));
+    assert!(rejected.message.contains("Queue payload `Envelope`"));
+    assert!(
+        rejected
+            .message
+            .contains("field `value` of `Envelope` -> `random.Rng`"),
+        "{rejected:?}"
+    );
+    assert!(rejected
+        .help
+        .iter()
+        .any(|help| help.contains("use a Queue payload made only from Transfer components")));
+}
+
+#[test]
+fn clone_rejection_follows_stored_task_rights_through_classes_enums_and_generics() {
+    let class = crate::check_source(
+        r#"
+class Holder:
+    label: String
+    task: Task[String]
+
+def duplicate(values: Vec[Holder]) -> Vec[Holder]:
+    return values.clone()
+"#,
+    )
+    .expect_err("a stored Task[String] right makes its enclosing class non-duplicable");
+    assert_eq!(class.code, "AU3009");
+    assert_eq!(class.span, Some(Span::new(7, 19)));
+    assert!(class
+        .message
+        .contains("non-repeatable task result `String`"));
+
+    let enumeration = crate::check_source(
+        r#"
+enum Work:
+    Empty
+    Pending(Task[String])
+
+def duplicate(values: Vec[Work]) -> Vec[Work]:
+    return values.clone()
+"#,
+    )
+    .expect_err("a task right in a later enum variant must still prevent duplication");
+    assert_eq!(enumeration.code, "AU3009");
+    assert!(enumeration
+        .message
+        .contains("non-repeatable task result `String`"));
+
+    crate::check_source(
+        r#"
+class Holder[T]:
+    value: T
+
+class Observer[T]:
+    task: Task[T]
+
+def copy_containment(values: Vec[Holder[Task[int32]]]) -> Vec[Holder[Task[int32]]]:
+    return values.clone()
+
+def copy_conditional(values: Vec[Observer[int32]]) -> Vec[Observer[int32]]:
+    return values.clone()
+"#,
+    )
+    .expect("copy-result tasks remain repeatably observable through generic stored fields");
+
+    for source in [
+        r#"
+class Holder[T]:
+    value: T
+
+def duplicate(values: Vec[Holder[Task[String]]]) -> Vec[Holder[Task[String]]]:
+    return values.clone()
+"#,
+        r#"
+class Observer[T]:
+    task: Task[T]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("a concrete String specialization has one stored task-result right");
+        assert_eq!(rejected.code, "AU3009", "{rejected:?}");
+        assert!(
+            rejected
+                .message
+                .contains("non-repeatable task result `String`"),
+            "{rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn task_repeatability_is_derived_through_every_symbolic_copy_wrapper() {
+    crate::check_source(
+        r#"
+copy class CopyPoint:
+    x: int32
+
+enum Maybe[T]:
+    None
+    Some(T)
+
+class TupleObserver[T]:
+    task: Task[(T, int32)]
+
+class OptionObserver[T]:
+    task: Task[Option[T]]
+
+class ResultObserver[T]:
+    task: Task[Result[int32, T]]
+
+class SendObserver[T]:
+    task: Task[SendError[T]]
+
+class ReceiveObserver[T]:
+    task: Task[QueueReceive[T]]
+
+class NestedTaskObserver[T]:
+    task: Task[Task[T]]
+
+class EnumObserver[T]:
+    task: Task[Maybe[T]]
+
+class CopyClassObserver:
+    task: Task[CopyPoint]
+
+def copy_tuple(values: Vec[TupleObserver[int32]]) -> Vec[TupleObserver[int32]]:
+    return values.clone()
+
+def copy_option(values: Vec[OptionObserver[int32]]) -> Vec[OptionObserver[int32]]:
+    return values.clone()
+
+def copy_result(values: Vec[ResultObserver[int32]]) -> Vec[ResultObserver[int32]]:
+    return values.clone()
+
+def copy_send(values: Vec[SendObserver[int32]]) -> Vec[SendObserver[int32]]:
+    return values.clone()
+
+def copy_receive(values: Vec[ReceiveObserver[int32]]) -> Vec[ReceiveObserver[int32]]:
+    return values.clone()
+
+def copy_nested_task(values: Vec[NestedTaskObserver[int32]]) -> Vec[NestedTaskObserver[int32]]:
+    return values.clone()
+
+def copy_enum(values: Vec[EnumObserver[int32]]) -> Vec[EnumObserver[int32]]:
+    return values.clone()
+
+def copy_class(values: Vec[CopyClassObserver]) -> Vec[CopyClassObserver]:
+    return values.clone()
+"#,
+    )
+    .expect("every all-Copy specialization retains repeatable task observation");
+
+    for (shape, source, result) in [
+        (
+            "tuple",
+            r#"
+class Observer[T]:
+    task: Task[(T, int32)]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "(String, int32)",
+        ),
+        (
+            "option",
+            r#"
+class Observer[T]:
+    task: Task[Option[T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "Option[String]",
+        ),
+        (
+            "result",
+            r#"
+class Observer[T]:
+    task: Task[Result[int32, T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "Result[int32, String]",
+        ),
+        (
+            "send error",
+            r#"
+class Observer[T]:
+    task: Task[SendError[T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "SendError[String]",
+        ),
+        (
+            "queue receive",
+            r#"
+class Observer[T]:
+    task: Task[QueueReceive[T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "QueueReceive[String]",
+        ),
+        (
+            "nested task",
+            r#"
+class Observer[T]:
+    task: Task[Task[T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "Task[String]",
+        ),
+        (
+            "generic enum",
+            r#"
+enum Maybe[T]:
+    None
+    Some(T)
+
+class Observer[T]:
+    task: Task[Maybe[T]]
+
+def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
+    return values.clone()
+"#,
+            "Maybe[String]",
+        ),
+        (
+            "non-copy class",
+            r#"
+class HeapValue:
+    text: String
+
+class Observer:
+    task: Task[HeapValue]
+
+def duplicate(values: Vec[Observer]) -> Vec[Observer]:
+    return values.clone()
+"#,
+            "HeapValue",
+        ),
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("the concrete non-Copy task result must remain single-consumer");
+        assert_eq!(rejected.code, "AU3009", "{shape}: {rejected:?}");
+        assert!(
+            rejected
+                .message
+                .contains(&format!("non-repeatable task result `{result}`")),
+            "{shape}: {rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn recursive_result_shapes_remain_single_consumer_without_nontermination() {
+    let rejected = crate::check_source(
+        r#"
+enum Chain[T]:
+    End
+    Link(indirect Chain[T])
+
+class Observer:
+    task: Task[Chain[int32]]
+
+def duplicate(values: Vec[Observer]) -> Vec[Observer]:
+    return values.clone()
+"#,
+    )
+    .expect_err("recursive heap-backed result shapes are not implicitly repeatable");
+    assert_eq!(rejected.code, "AU3009");
+    assert!(rejected
+        .message
+        .contains("non-repeatable task result `Chain[int32]`"));
+}
+
+#[test]
+fn task_target_specialization_accepts_nested_and_grouped_type_arguments() {
+    crate::check_source(
+        r#"
+def empty[T]() -> Option[T]:
+    return Option.None
+
+def identity[T](value: own T) -> T:
+    return value
+
+class Factory:
+    def empty[T]() -> Option[T]:
+        return Option.None
+
+def launch():
+    with group = TaskGroup():
+        group.start(empty[Option[String]])
+        group.start(Factory.empty[Result[String, int32]])
+        group.start(identity[((String, int32))], ("ready", 7))
+"#,
+    )
+    .expect("task targets accept nested named types and one grouped tuple type argument");
+
+    let invalid = crate::check_source(
+        r#"
+def empty[T]() -> Option[T]:
+    return Option.None
+
+def make_type() -> String:
+    return "String"
+
+def launch():
+    with group = TaskGroup():
+        group.start(empty[make_type()])
+"#,
+    )
+    .expect_err("a runtime call expression is not a task-target type argument");
+    assert_eq!(invalid.code, "AU2002");
+    assert_eq!(invalid.span, Some(Span::new(10, 21)));
+    assert!(invalid
+        .message
+        .contains("task target indexing is not a callable type specialization"));
 }

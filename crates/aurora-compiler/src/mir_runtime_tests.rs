@@ -12338,6 +12338,202 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
 }
 
 #[test]
+fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+
+    let repeatable = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Ok(Value::Bool(true))),
+        true,
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            enum_payloads(
+                runtime
+                    .join_task(repeatable.clone(), Some(StdDuration::from_secs(1)))
+                    .expect("repeatable task results should remain observable"),
+                "TaskResult",
+                "Ready",
+            ),
+            vec![Value::Bool(true)]
+        );
+    }
+
+    let error_task = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Err(Diagnostic::new("task failed"))),
+        false,
+    );
+    enum_payloads(
+        runtime
+            .join_task(error_task.clone(), Some(StdDuration::from_secs(1)))
+            .expect("the first error observation should consume the right"),
+        "TaskResult",
+        "Error",
+    );
+    let repeated_error = runtime
+        .join_task(error_task, Some(StdDuration::from_secs(1)))
+        .expect_err("an error outcome must still consume a non-repeatable result");
+    assert_eq!(repeated_error.code, "AU4001");
+
+    let timeout_blocker = ChannelValue::new();
+    let timeout_unblocker = timeout_blocker.clone();
+    let timed_task = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(move || {
+            let _ = timeout_unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    enum_payloads(
+        runtime
+            .join_task(timed_task.clone(), Some(StdDuration::ZERO))
+            .expect("the first timed observation should return a TaskResult"),
+        "TaskResult",
+        "TimedOut",
+    );
+    let repeated_timeout = runtime
+        .join_task(timed_task.clone(), Some(StdDuration::ZERO))
+        .expect_err("a timeout must consume a non-repeatable observation right");
+    assert_eq!(repeated_timeout.code, "AU4001");
+    timeout_blocker.close();
+
+    let default_blocker = ChannelValue::new();
+    let default_unblocker = default_blocker.clone();
+    let default_task = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(move || {
+            let _ = default_unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    assert_eq!(
+        runtime
+            .evaluate_task_method(
+                default_task.clone(),
+                "result_or",
+                &[mir_arg(None, Operand::String("fallback".to_string()))],
+                &mut env,
+            )
+            .expect("the first default observation should succeed"),
+        Value::String("fallback".to_string())
+    );
+    let repeated_default = runtime
+        .evaluate_task_method(default_task, "result_or_none", &[], &mut env)
+        .expect_err("a default outcome must consume a non-repeatable observation right");
+    assert_eq!(repeated_default.code, "AU4001");
+    default_blocker.close();
+
+    let parent = CancellationContext::default();
+    let group = TaskGroupValue::new(&parent);
+    let cancelled_context = group.child_cancellation();
+    group.cancel();
+    let mut cancelled_runtime = MirRuntime::new(
+        MirModule {
+            functions: Vec::new(),
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        Arc::new(Mutex::new(String::new())),
+        cancelled_context,
+    );
+    let cancel_blocker = ChannelValue::new();
+    let cancel_unblocker = cancel_blocker.clone();
+    let cancelled_task = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(move || {
+            let _ = cancel_unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    enum_payloads(
+        cancelled_runtime
+            .join_task(cancelled_task.clone(), None)
+            .expect("the first cancelled observation should return a TaskResult"),
+        "TaskResult",
+        "Cancelled",
+    );
+    let repeated_cancel = cancelled_runtime
+        .join_task(cancelled_task, None)
+        .expect_err("cancellation must consume a non-repeatable observation right");
+    assert_eq!(repeated_cancel.code, "AU4001");
+    cancel_blocker.close();
+}
+
+#[test]
+fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing() {
+    let mut runtime = test_runtime();
+    let duplicate = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Ok(Value::String("ready".to_string()))),
+        false,
+    );
+    let duplicate_error = runtime
+        .wait_any(
+            vec![duplicate.clone(), duplicate.clone()],
+            Some(StdDuration::from_secs(1)),
+        )
+        .expect_err("one wait call must reject duplicate non-repeatable aliases");
+    assert_eq!(duplicate_error.code, "AU4001");
+    let repeated = runtime
+        .join_task(duplicate, Some(StdDuration::from_secs(1)))
+        .expect_err("the failed duplicate attempt must consume the observation right");
+    assert_eq!(repeated.code, "AU4001");
+
+    let duplicate_all = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Ok(Value::String("once".to_string()))),
+        false,
+    );
+    let duplicate_all_error = runtime
+        .wait_all(
+            vec![duplicate_all.clone(), duplicate_all],
+            Some(StdDuration::from_secs(1)),
+        )
+        .expect_err("wait_all must not deliver one non-repeatable result twice");
+    assert_eq!(duplicate_all_error.code, "AU4001");
+
+    let selected = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Ok(Value::String("selected".to_string()))),
+        false,
+    );
+    enum_payloads(
+        runtime
+            .wait_any(vec![selected.clone()], Some(StdDuration::from_secs(1)))
+            .expect("wait_any should deliver one uniquely claimed result"),
+        "WaitAny",
+        "Ready",
+    );
+    let repeated = runtime
+        .join_task(selected, Some(StdDuration::from_secs(1)))
+        .expect_err("wait_any must consume the selected task result");
+    assert_eq!(repeated.code, "AU4001");
+
+    let first = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Ok(Value::String("first".to_string()))),
+        false,
+    );
+    let second = TaskValue::from_handle_with_result_repeatability(
+        std::thread::spawn(|| Err(Diagnostic::new("second failed"))),
+        false,
+    );
+    enum_payloads(
+        runtime
+            .wait_all(
+                vec![first.clone(), second.clone()],
+                Some(StdDuration::from_secs(1)),
+            )
+            .expect("wait_all should report the task error as a value"),
+        "WaitAll",
+        "Error",
+    );
+    for claimed in [first, second] {
+        let error = runtime
+            .join_task(claimed, Some(StdDuration::from_secs(1)))
+            .expect_err("wait_all must claim every result before waiting");
+        assert_eq!(error.code, "AU4001");
+    }
+}
+
+#[test]
 fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_paths() {
     let mut runtime = test_runtime();
     let ready_task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));

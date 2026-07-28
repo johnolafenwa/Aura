@@ -145,7 +145,12 @@ Current package-system limits:
 
 Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
 
-Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `random.Rng`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
+Copy types (all numeric types, `bool`, `Duration`, and `Queue[T]`) are
+duplicated on assignment. `Task[T]` is copyable only when `T` is copyable, a
+`Queue[...]` handle, or a recursively repeatable `Task[...]` handle. Move
+types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `random.Rng`, `TaskGroup`,
+ordinary user-defined classes, and `Task[T]` for a non-repeatable `T`) transfer
+ownership on assignment.
 
 `copy class` declarations are allowed when all fields are copy types.
 
@@ -622,9 +627,10 @@ secure floating function. See [20-randomness.md](20-randomness.md).
 Clone-producing generic bodies infer clone-safety obligations rather than
 rejecting unresolved type parameters. Requirements propagate through generic
 calls, imports, trait/default/associated dispatch, operators, and `From`, then
-reject an unsafe concrete `random.Rng` specialization with `AU3007`. Task and
-Queue handles remain clone barriers because copying a handle does not observe
-its payload.
+reject an unsafe concrete `random.Rng` specialization with `AU3007`. Queue
+handles remain clone barriers because copying a handle does not observe its
+payload. An allowed Task-handle copy also does not observe its payload, but
+`Task[T]` is not copyable when `T` carries a single-consumer result right.
 
 ## Pattern Matching
 
@@ -680,8 +686,31 @@ keeps deep host protocol frames on service workers.
 Scheduler waits use persistent descriptor
 registrations, a timer heap, and direct Queue, task-completion, and
 blocking-pool notifications; an idle scheduler blocks until an event or
-deadline without a periodic tick. Resource-bearing task results are
-single-observer-only; the checker does not yet enforce that restriction.
+deadline without a periodic tick.
+
+Task starts require every captured argument and the target result to be
+structurally `Transfer` after generic specialization. Copy values, `String`,
+recursively transferable collections, tuples, classes, enums, and
+Queue/Task handle identities pass. Shared or mutable access,
+`random.Rng`, `TaskGroup`, and live filesystem, process, pipe, supervisor,
+listener, socket, stream, HTTP-exchange, WebSocket, and TLS resources do not.
+`Transfer` is compiler-derived and has no builtin user trait or escape hatch;
+an ordinary same-named trait cannot confer the property. A Copy value read
+through access becomes an owned snapshot and may cross; non-copy access cannot.
+
+The current scheduler remains single-worker. Phase 5.7 must make the runtime
+state behind Queue and Task handles cross-worker thread-safe before multicore
+execution.
+
+Task results are repeatable only for copy `T`, `Queue[...]`, or recursively
+repeatable `Task[...]`. `Task[T]` is always transferable but is copyable only
+for those repeatable results. For every other transferable `T`, `result`,
+`result_or_none`, and `result_or` consume the handle on their first attempt,
+including timeout, cancellation, failure, and fallback outcomes. `wait_any`
+and `wait_all` consume the complete task vector for such a `T`; `wait_any`
+abandons unchosen observation rights. Boundary failures are `AU3008`,
+attempted duplication of a single-consumer right is `AU3009`, and using a
+directly observed handle again is moved-value `AU3001`.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. The clean Mac14,9
@@ -722,18 +751,33 @@ Current collection notes:
 - `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
 - bare Set iteration is shared; `for value in own set:` consumes
 - `for value in mut set:` is not currently supported
-- `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
+- `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on
+  the shared runtime scheduler; construction, `put`, and `try_put` require a
+  structurally `Transfer` payload type
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
 - `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
 - `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback; without a timeout it returns the fallback immediately when no item is ready
 - Queue iteration receives owned items and accepts only bare `for value in
   queue:`; the explicit `own` and `mut` modifiers are rejected
-- `Task.result(timeout=...)` returns `TaskResult[T]`, distinguishing `Ready(value)`, `Error(message)`, `TimedOut`, and `Cancelled`
-- `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`, `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns `TimedOut` immediately
-- `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`, `Error(index, message)`, `TimedOut`, and `Cancelled`
-- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case where task failure, timeout, and cancellation all map to “no result yet”; without a timeout it performs an immediate non-blocking check
-- `Task.result_or(default, timeout=...)` returns either the task result or a caller-provided fallback when the task fails, times out, or is cancelled; without a timeout it returns the fallback immediately when the task is not ready
+- `Task.result(timeout=...)` returns `TaskResult[T]`, distinguishing
+  `Ready(value)`, `Error(message)`, `TimedOut`, and `Cancelled`; for
+  non-repeatable `T`, the call consumes the task handle on every outcome
+- `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`,
+  `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns
+  `TimedOut` immediately, and a non-repeatable `T` makes the call consume the
+  entire task vector and abandon unchosen rights
+- `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`,
+  `Error(index, message)`, `TimedOut`, and `Cancelled`; a non-repeatable `T`
+  makes the call consume the entire task vector
+- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case
+  where task failure, timeout, and cancellation all map to “no result yet”;
+  without a timeout it performs an immediate non-blocking check, and for
+  non-repeatable `T` even a `None` outcome consumes the handle
+- `Task.result_or(default, timeout=...)` returns either the task result or a
+  caller-provided fallback when the task fails, times out, or is cancelled;
+  without a timeout it returns the fallback immediately when the task is not
+  ready, and for non-repeatable `T` every outcome consumes the handle
 
 ## Tooling
 
@@ -789,7 +833,10 @@ Current expression/ergonomics limitations:
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
 - `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, and their explicit-stack
   variants support named functions plus associated methods without `self`,
-  using task-owned captures
+  using task-owned captures; every capture and target result must be
+  structurally `Transfer` after specialization, and explicit generic targets
+  may use `function[Types]` or `Type.associated_method[Types]` in the callable
+  slot
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,

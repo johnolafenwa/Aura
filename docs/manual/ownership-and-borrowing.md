@@ -14,7 +14,8 @@ Current copy categories are:
 - `float32` and `float64`
 - `bool`
 - `Duration`
-- `Queue[T]` and `Task[T]` handles
+- `Queue[T]` handles and, under Provisional ADR-0033, `Task[T]` handles whose
+  result type is repeatable
 - tuples whose every element type is copyable
 - `copy class` values whose fields are copyable
 - user enums whose every declared payload type is statically copyable
@@ -27,7 +28,9 @@ print(a)
 print(b)
 ```
 
-`Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying one does not duplicate the underlying queue, task, queued values, or stored result.
+`Queue[T]` is a copy handle to shared runtime state. Provisional ADR-0033 makes
+`Task[T]` copyable only when `T` is repeatable. Copying an allowed handle does
+not duplicate the underlying queue, task, queued values, or stored result.
 
 ## Move Types
 
@@ -327,6 +330,32 @@ its declared mode. Copy task and queue handles still refer to shared runtime
 state. See
 [Concurrency](/manual/concurrency) and [Execution Model](/manual/execution-model#tasks-and-scheduler).
 
+Provisional ADR-0033 adds a separate `Transfer` check to task captures,
+results, Queue construction, and Queue `put`/`try_put`. Handle-only Queue
+operations do not recheck the payload. A bare target parameter can still borrow its
+child-owned capture for the call, but the captured value itself must be
+transferable. A shared or mutable capability view cannot cross the boundary:
+pass owned structural data instead. Copy values, `String`, and aggregates made
+entirely from transferable components qualify; `random.Rng`, `TaskGroup`, and
+live host resources do not.
+
+`process.Completed`, `net.HttpResponse`, and `net.UdpDatagram` are owned
+snapshot data rather than live resources, so they qualify. Their live
+`process.Child`, `net.HttpExchange`, and `net.UdpSocket` sources do not.
+
+A Copy value read through shared or mutable access is a narrow exception: task
+capture materializes an independent owned snapshot, so no capability crosses.
+A non-copy access cannot be captured this way because the child would need
+ownership of the value.
+
+The same decision statically divides task results into repeatable values and
+single-consumer values. `Task[T]` is copyable only when `T` is copyable, a
+`Queue[...]`, or a recursively repeatable `Task[...]`. Otherwise each result
+method consumes the unique observation right even when it reports timeout,
+cancellation, or failure. Multi-task waits consume their entire task vector,
+and `wait_any` abandons unchosen rights. These rules are required before the
+pinned-worker runtime may enable multicore task execution.
+
 ## Resources And `with`
 
 Resource ownership should normally be lexical:
@@ -431,7 +460,11 @@ reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
 `AU3005` rejects a direct indexed read of a non-copy Vec element or Map value;
 `AU3006` rejects the corresponding indexed compound read-modify-write.
 `AU3007` rejects direct or transitive duplication of non-cloneable
-`random.Rng` state, including an unsafe generic specialization.
+`random.Rng` state, including an unsafe generic specialization. `AU3008`
+reports a non-Transfer task or Queue boundary. `AU3009` rejects clone,
+clone-producing collection read, or aggregate copy that would duplicate a
+single-consumer task-result right. Reuse after direct observation is the
+ordinary moved-value `AU3001`; shared-access consumption is `AU3002`.
 Ownership failures are static. A runtime operation reached through an owned or
 borrowed value keeps its own code: `AU4001` for a general trap, `AU4002` for
 arithmetic overflow or underflow, `AU4003` for a bounds or lookup violation,

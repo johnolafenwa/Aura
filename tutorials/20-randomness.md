@@ -76,11 +76,12 @@ def roll(rng: mut random.Rng) -> int64:
 This makes state flow visible at the same call boundary as any other mutation.
 
 Wrapping the generator does not make it cloneable. Aurora rejects collection
-clones, cloned collection reads, and task-result observations that would
-duplicate an `Rng`, even when it is nested inside a class or enum. Moving or
-removing a generator from a collection is valid, as is cloning a task or queue
-handle that may eventually transfer one: those operations do not duplicate the
-generator itself.
+clones and cloned collection reads that would duplicate an `Rng`, even when it
+is nested inside a class or enum. Moving or removing a generator from a
+collection within one owning task remains valid. An `Rng` is not `Transfer`,
+so it cannot be a task result or Queue payload: those boundaries fail with
+`AU3008`. Queue handles remain copy values for admitted payload types, while a
+Task handle is copyable only when its result is repeatable.
 
 Generic code is not rejected merely because its element type is unresolved.
 If a body clones `Vec[T]` or performs another clone-producing operation, Aurora

@@ -1,0 +1,101 @@
+class Payload:
+    label: String
+    values: Vec[int32]
+    groups: Map[String, Set[int32]]
+    pair: (String, int32)
+
+enum Envelope:
+    Payload(Payload)
+
+def make_number() -> int32:
+    return 7
+
+def relay_range(values: own Range, output: Queue[Range]) -> Range:
+    output.put(values)
+    return range(4, 7)
+
+def summarize(
+    envelope: own Envelope,
+    output: Queue[String],
+    completed: Task[int32]
+) -> String:
+    mut total: int32 = 0
+    match completed.result():
+        case TaskResult.Ready(value):
+            total = value
+        case TaskResult.Error(_message):
+            return "error"
+        case TaskResult.Cancelled:
+            return "cancelled"
+        case TaskResult.TimedOut:
+            return "timed out"
+
+    match own envelope:
+        case Envelope.Payload(payload):
+            pair_name, pair_value = payload.pair
+            output.put(payload.label)
+            return f"{pair_name}:{payload.values.len()}:{payload.groups.len()}:{total + pair_value}"
+
+def main() -> int32:
+    output = Queue[String]()
+    ranges = Queue[Range]()
+    payload = Payload(
+        label="transfer",
+        values=[1, 2, 3],
+        groups={"odd": {1, 3}},
+        pair=("sum", 5)
+    )
+
+    with TaskGroup() as group:
+        completed = group.start(make_number)
+        task = group.start(summarize, Envelope.Payload(payload), output, completed)
+        range_task = group.start(relay_range, range(1, 4), ranges)
+
+        match output.get():
+            case QueueReceive.Item(value):
+                print(value)
+            case QueueReceive.Closed:
+                return 2
+            case QueueReceive.TimedOut:
+                return 3
+            case QueueReceive.Cancelled:
+                return 4
+
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message)
+                return 5
+            case TaskResult.Cancelled:
+                return 6
+            case TaskResult.TimedOut:
+                return 7
+
+        match ranges.get():
+            case QueueReceive.Item(values):
+                mut count: int32 = 0
+                for _value in values:
+                    count += 1
+                print(count)
+            case QueueReceive.Closed:
+                return 8
+            case QueueReceive.TimedOut:
+                return 9
+            case QueueReceive.Cancelled:
+                return 10
+
+        match range_task.result():
+            case TaskResult.Ready(values):
+                mut total: int32 = 0
+                for value in values:
+                    total += value
+                print(total)
+            case TaskResult.Error(message):
+                print(message)
+                return 11
+            case TaskResult.Cancelled:
+                return 12
+            case TaskResult.TimedOut:
+                return 13
+    return 0

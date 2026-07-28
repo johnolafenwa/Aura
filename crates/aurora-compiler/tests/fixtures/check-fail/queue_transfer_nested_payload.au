@@ -1,0 +1,9 @@
+import random
+
+class Job:
+    name: String
+    generator: random.Rng
+
+def main() -> int32:
+    _queue = Queue[Job]()
+    return 0

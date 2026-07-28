@@ -23,8 +23,9 @@ def tls_key_pem() -> String:
     pem += "-----END PRIVATE KEY-----\n"
     return pem
 
-def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+    with server_listener = try net.unix_listen(path):
+        ready.put(true)
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=5s):
@@ -34,8 +35,9 @@ def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_tls(cert_path: String, key_path: String, addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
+        addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:
             _payload = try server_stream.read_exact(5, timeout=5s)
@@ -67,16 +69,24 @@ def run() -> Result[None, io.Error]:
     try fs.write_string(key_path.clone(), tls_key_pem())
 
     with TaskGroup() as group:
-        unix_listener = try net.unix_listen(socket_path.clone())
-        unix_task = group.start(serve_unix, unix_listener)
-        client = try net.unix_connect_timeout(socket_path.clone(), 5s)
-        with unix_client = client:
-            try unix_client.write_all("ping\n", timeout=5s)
-            match try unix_client.read_line(timeout=5s):
-                case Option.Some(text):
-                    print(text)
-                case Option.None:
-                    return Result.Ok(None)
+        unix_ready = Queue[bool](capacity=1)
+        unix_task = group.start(serve_unix, socket_path.clone(), unix_ready)
+        match unix_ready.get(timeout=5s):
+            case QueueReceive.Item(_):
+                client = try net.unix_connect_timeout(socket_path.clone(), 5s)
+                with unix_client = client:
+                    try unix_client.write_all("ping\n", timeout=5s)
+                    match try unix_client.read_line(timeout=5s):
+                        case Option.Some(text):
+                            print(text)
+                        case Option.None:
+                            return Result.Ok(None)
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="Unix readiness queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
         match own unix_task.result():
             case TaskResult.Ready(result):
                 try result
@@ -87,14 +97,21 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        tls_listener = try net.tls_listen("127.0.0.1:0", cert_path.clone(), key_path.clone())
-        tls_addr = try tls_listener.local_addr()
-        tls_task = group.start(serve_tls, tls_listener)
-        stream = try net.tls_connect_timeout(tls_addr, "localhost", cert_path.clone(), 5s)
-        with tls_client = stream:
-            try tls_client.write_all("ping!", timeout=5s)
-            reply = try tls_client.read_exact(9, timeout=5s)
-            print(reply.len())
+        tls_addresses = Queue[String](capacity=1)
+        tls_task = group.start(serve_tls, cert_path.clone(), key_path.clone(), tls_addresses)
+        match tls_addresses.get(timeout=5s):
+            case QueueReceive.Item(tls_addr):
+                stream = try net.tls_connect_timeout(tls_addr, "localhost", cert_path.clone(), 5s)
+                with tls_client = stream:
+                    try tls_client.write_all("ping!", timeout=5s)
+                    reply = try tls_client.read_exact(9, timeout=5s)
+                    print(reply.len())
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="TLS address queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
         match own tls_task.result():
             case TaskResult.Ready(result):
                 try result

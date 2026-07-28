@@ -1,0 +1,5 @@
+import random
+
+def main() -> int32:
+    _queue = Queue[random.Rng]()
+    return 0

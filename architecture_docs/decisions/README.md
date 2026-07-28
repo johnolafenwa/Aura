@@ -39,3 +39,4 @@ test locations that must prove completion.
 30. [ADR-0030: `len` and `str` builtins](0030-len-and-str-builtins.md)
 31. [ADR-0031: CLI backend defaults](0031-cli-backend-defaults.md)
 32. [ADR-0032: Guarded lightweight-task stacks](0032-guarded-lightweight-task-stacks.md)
+33. [ADR-0033: Structural Transfer and task-result consumption](0033-structural-transfer-and-task-results.md) — implemented provisionally in Phase 5.6, pending checkpoint ratification

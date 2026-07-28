@@ -1,0 +1,14 @@
+def make_text() -> String:
+    return "branch"
+
+def observe(flag: bool) -> int32:
+    with TaskGroup() as group:
+        task = group.start(make_text)
+        if flag:
+            print(task.result())
+        else:
+            print(task.result_or("fallback"))
+    return 0
+
+def main() -> int32:
+    return observe(true)

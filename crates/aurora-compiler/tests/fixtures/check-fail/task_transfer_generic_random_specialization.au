@@ -1,0 +1,7 @@
+import random
+
+def echo[T](value: own T) -> T:
+    return value
+
+def launch(group: TaskGroup, generator: own random.Rng):
+    group.start(echo, generator)

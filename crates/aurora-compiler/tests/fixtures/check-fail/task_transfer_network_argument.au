@@ -1,0 +1,7 @@
+import net
+
+def consume(listener: own net.TcpListener):
+    listener.close()
+
+def launch(group: TaskGroup, listener: own net.TcpListener):
+    group.start_soon(consume, listener)

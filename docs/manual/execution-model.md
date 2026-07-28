@@ -363,14 +363,34 @@ helpers remain bounded caller-side compatibility operations and do not use
 this service. Codec workers are process-lifetime and have no Aurora 0.1
 shutdown or configuration surface.
 
-`Task[T]` and `Queue[T]` are copy handles to shared runtime state. Copying a handle does not duplicate the underlying task or queue.
+`Queue[T]` is a copy handle to shared runtime state. Under Provisional
+ADR-0033, a `Task[T]` handle is copyable only when its result is repeatable;
+every task handle remains transferable. Copying an allowed handle does not
+duplicate the underlying task or queue.
 
 Starting a task first copies or moves every argument into task-owned capture
 storage. The child then applies the target's declared parameter capability to
 that capture: a bare parameter borrows it, and an `own` parameter consumes it.
 Mutable targets are rejected statically.
 
-A task stores its completed result. Repeated result observation clones the stored runtime value. For ordinary copy data this produces another ordinary value. A result containing an exclusive runtime resource is single-observer-only in 0.1; the checker does not yet enforce that restriction, and a second observation can alias the same host resource through shared handles. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
+A task stores its completed result. Copy results, Queue handles, and
+recursively repeatable Task handles permit repeated observation. Every other
+transferable result has a unique observation right;
+each direct result call consumes it on every outcome, and multi-task waits
+consume the complete task vector. `wait_any` abandons the unchosen rights.
+Task captures, results, and Queue payloads must also satisfy the structural
+Transfer check before the separate pinned-worker stage can enable parallel
+task execution.
+
+The runtime also protects a non-repeatable stored result with an atomic
+one-winner claim. A failed second claim traps with `AU4001` and
+`task result has already been observed; non-repeatable task results allow
+exactly one observing attempt`. This is defense in depth for backend defects
+or foreign handles, not a replacement for static ownership diagnostics.
+TaskGroup scope
+cleanup joins, abandons, or accounts for a child without observing its
+successful result: cleanup does not claim the right or make the value
+available to another observer.
 
 ## Task Groups And Failure Observation
 

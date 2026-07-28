@@ -1,0 +1,7 @@
+error[AU3008]: task argument `socket` cannot cross a task boundary because `net.WebSocket` is a host resource and is not Transfer
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_websocket_argument.au:7:31
+  |
+7 |     group.start_soon(consume, socket)
+  |                               ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_websocket_argument.au:3:13: task parameter `socket` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

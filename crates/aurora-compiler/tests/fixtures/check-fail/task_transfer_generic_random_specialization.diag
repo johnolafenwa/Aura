@@ -1,0 +1,7 @@
+error[AU3008]: task argument `value` cannot cross a task boundary because `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_generic_random_specialization.au:7:23
+  |
+7 |     group.start(echo, generator)
+  |                       ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_generic_random_specialization.au:3:13: task parameter `value` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

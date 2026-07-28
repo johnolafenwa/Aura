@@ -1,0 +1,16 @@
+def make_text() -> String:
+    return "once"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(make_text)
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.Cancelled:
+                pass
+            case TaskResult.TimedOut:
+                pass
+    return 0

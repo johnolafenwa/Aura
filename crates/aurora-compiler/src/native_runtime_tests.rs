@@ -30,7 +30,7 @@ use std::io::{self, Read, Write};
 use std::panic;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -3218,6 +3218,264 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         bool_value(false),
     ));
     assert!(expect_variant_value(no_run_command, "Error", "NoCommand").is_empty());
+}
+
+#[test]
+fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() {
+    fn task_ptr(task: &TaskValue) -> *mut OpaqueValue {
+        boxed_value(Value::Task(task.clone()))
+    }
+
+    #[derive(Clone, Copy)]
+    enum Observer {
+        Result,
+        ResultWithTimeout,
+        ResultOrNone,
+        ResultOrNoneWithTimeout,
+        ResultOr,
+        ResultOrWithTimeout,
+    }
+
+    fn repeated_observation_error(task: TaskValue, observer: Observer) -> Diagnostic {
+        struct OwnedOpaque(*mut OpaqueValue);
+
+        impl Drop for OwnedOpaque {
+            fn drop(&mut self) {
+                unsafe {
+                    release_value(self.0);
+                }
+            }
+        }
+
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let task = OwnedOpaque(task_ptr(&task));
+                let _ = match observer {
+                    Observer::Result => super::aurora_direct_task_join(task.0),
+                    Observer::ResultWithTimeout => {
+                        super::aurora_direct_task_join_timeout_value(task.0, duration_value(0))
+                    }
+                    Observer::ResultOrNone => super::aurora_direct_task_join_or_none(task.0),
+                    Observer::ResultOrNoneWithTimeout => {
+                        super::aurora_direct_task_join_or_none_timeout_value(
+                            task.0,
+                            duration_value(0),
+                        )
+                    }
+                    Observer::ResultOr => {
+                        super::aurora_direct_task_join_or_value(task.0, string_value("fallback"))
+                    }
+                    Observer::ResultOrWithTimeout => {
+                        super::aurora_direct_task_join_or_value_timeout_value(
+                            task.0,
+                            string_value("fallback"),
+                            duration_value(0),
+                        )
+                    }
+                };
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("a repeated direct task observation should fail its Aurora task")
+    }
+
+    fn repeated_join_error(task: TaskValue) -> Diagnostic {
+        repeated_observation_error(task, Observer::Result)
+    }
+
+    let repeatable = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::Int(IntegerValue::from_signed(7)))),
+        true,
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            expect_task_result_ready_int(super::aurora_direct_task_join(task_ptr(&repeatable))),
+            7
+        );
+    }
+
+    let timeout_blocker = ChannelValue::new();
+    let timeout_unblocker = timeout_blocker.clone();
+    let nonrepeatable = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(move || {
+            let _ = timeout_unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    assert!(expect_variant_ptr(
+        super::aurora_direct_task_join_timeout_value(task_ptr(&nonrepeatable), duration_value(0),),
+        "TaskResult",
+        "TimedOut",
+    )
+    .is_empty());
+    let repeated = repeated_join_error(nonrepeatable.clone());
+    assert_eq!(repeated.code, "AU4001");
+    assert!(repeated.message.contains("already been observed"));
+    timeout_blocker.close();
+
+    let default_blocker = ChannelValue::new();
+    let default_unblocker = default_blocker.clone();
+    let default_task = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(move || {
+            let _ = default_unblocker.recv_with_cancellation(None, None);
+            Ok(Value::String("late".to_string()))
+        }),
+        false,
+    );
+    assert_eq!(
+        expect_string(super::aurora_direct_task_join_or_value(
+            task_ptr(&default_task),
+            string_value("fallback"),
+        )),
+        "fallback"
+    );
+    assert_eq!(repeated_join_error(default_task).code, "AU4001");
+    default_blocker.close();
+
+    let cancelled_task = Arc::new(Mutex::new(None));
+    let saved_cancelled_task = cancelled_task.clone();
+    run_lightweight_root_task(move || {
+        let task = crate::runtime_value::spawn_lightweight_task_with_result_repeatability(
+            false,
+            || -> crate::diag::Result<Value> {
+                crate::runtime_value::cancel_current_lightweight_task_boundary()
+            },
+        )?;
+        *saved_cancelled_task
+            .lock()
+            .expect("cancelled task slot should remain usable") = Some(task.clone());
+        assert!(expect_variant_ptr(
+            super::aurora_direct_task_join(task_ptr(&task)),
+            "TaskResult",
+            "Cancelled",
+        )
+        .is_empty());
+        Ok(Value::Unit)
+    })
+    .expect("the first cancelled direct observation should return a TaskResult");
+    let cancelled_task = cancelled_task
+        .lock()
+        .expect("cancelled task slot should remain usable")
+        .take()
+        .expect("cancelled task should be retained for the competing observer");
+    assert_eq!(repeated_join_error(cancelled_task).code, "AU4001");
+
+    let duplicate = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("ready".to_string()))),
+        false,
+    );
+    let duplicate_error = super::wait_any_tasks(
+        vec![duplicate.clone(), duplicate.clone()],
+        Some(StdDuration::from_secs(1)),
+    )
+    .expect_err("wait_any must reject duplicate non-repeatable aliases");
+    assert_eq!(duplicate_error.code, "AU4001");
+    let repeated = repeated_join_error(duplicate);
+    assert_eq!(repeated.code, "AU4001");
+
+    let duplicate_all = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("once".to_string()))),
+        false,
+    );
+    let duplicate_all_error = super::wait_all_tasks(
+        vec![duplicate_all.clone(), duplicate_all],
+        Some(StdDuration::from_secs(1)),
+    )
+    .expect_err("wait_all must not deliver one non-repeatable result twice");
+    assert_eq!(duplicate_all_error.code, "AU4001");
+
+    let selected = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("selected".to_string()))),
+        false,
+    );
+    let selected_payloads = expect_variant_ptr(
+        super::aurora_direct_wait_any(task_vec(std::slice::from_ref(&selected))),
+        "WaitAny",
+        "Ready",
+    );
+    assert_eq!(selected_payloads.len(), 2);
+    assert_eq!(repeated_join_error(selected).code, "AU4001");
+
+    let first = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("first".to_string()))),
+        false,
+    );
+    let second = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Err(Diagnostic::new("second failed"))),
+        false,
+    );
+    let error = expect_variant_ptr(
+        super::aurora_direct_wait_all(task_vec(&[first.clone(), second.clone()])),
+        "WaitAll",
+        "Error",
+    );
+    assert_eq!(error.len(), 2);
+    for claimed in [first, second] {
+        let diagnostic = repeated_join_error(claimed);
+        assert_eq!(diagnostic.code, "AU4001");
+    }
+
+    for observer in [
+        Observer::ResultWithTimeout,
+        Observer::ResultOrNone,
+        Observer::ResultOrNoneWithTimeout,
+        Observer::ResultOr,
+        Observer::ResultOrWithTimeout,
+    ] {
+        let blocker = ChannelValue::new();
+        let unblocker = blocker.clone();
+        let task = TaskValue::from_handle_with_result_repeatability(
+            thread::spawn(move || {
+                let _ = unblocker.recv_with_cancellation(None, None);
+                Ok(Value::String("late".to_string()))
+            }),
+            false,
+        );
+        task.claim_result_observation()
+            .expect("the first alias should consume the single observation right");
+        let error = repeated_observation_error(task, observer);
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(
+            error.message,
+            "task result has already been observed; non-repeatable task results allow exactly one observing attempt"
+        );
+        blocker.close();
+    }
+
+    run_lightweight_root_task(|| {
+        let cancelled = spawn_lightweight_task(|| -> crate::diag::Result<Value> {
+            crate::runtime_value::cancel_current_lightweight_task_boundary()
+        })?;
+        assert!(matches!(
+            cancelled
+                .wait_result_with_cancellation(None, None)
+                .expect("cancelled task completion should remain observable internally"),
+            TaskWaitStatus::Cancelled
+        ));
+
+        assert!(expect_variant_ptr(
+            super::aurora_direct_task_join_or_none(task_ptr(&cancelled)),
+            "Option",
+            "None",
+        )
+        .is_empty());
+        assert_eq!(
+            expect_string(super::aurora_direct_task_join_or_value(
+                task_ptr(&cancelled),
+                string_value("fallback"),
+            )),
+            "fallback"
+        );
+        assert!(expect_variant_value(
+            super::wait_any_tasks(vec![cancelled], Some(StdDuration::from_secs(1)))?,
+            "WaitAny",
+            "Cancelled",
+        )
+        .is_empty());
+        Ok(Value::Unit)
+    })
+    .expect("all direct observers should report an already-cancelled child consistently");
 }
 
 #[test]

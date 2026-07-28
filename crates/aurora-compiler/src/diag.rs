@@ -172,6 +172,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "non-cloneable state duplication",
     },
     DiagnosticCodeInfo {
+        code: "AU3008",
+        band: "ownership",
+        title: "non-Transfer task or queue boundary",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3009",
+        band: "ownership",
+        title: "single-consumer task-result duplication",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",

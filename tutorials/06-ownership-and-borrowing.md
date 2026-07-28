@@ -57,8 +57,12 @@ The built-in move types include:
 - `TaskGroup`
 - user-defined classes (by default)
 
-`Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying a
-handle does not copy a queued value or task result.
+`Queue[T]` is a copy handle to shared runtime state. `Task[T]` is always safe
+to transfer between tasks, but it is copyable only when its result can be
+observed repeatedly: `T` must be copyable, a `Queue[...]` handle, or a
+recursively repeatable `Task[...]` handle. A task returning `String`,
+`Vec[...]`, or another non-copy owned value therefore has a move-only handle.
+Copying an allowed handle never copies a queued value or task result.
 
 Here is where Python intuition breaks down:
 
@@ -551,7 +555,16 @@ jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
-Queue and task handles are cheap copy-like references. Passing a queue to `TaskGroup.start(...)` shares the same underlying queue; you do not need `.clone()` for the common case:
+Queue construction and sending require the payload type to satisfy Aurora's
+compiler-derived `Transfer` rule. Copy values, `String`, and aggregates whose
+stored components are all `Transfer` may cross. `random.Rng`, `TaskGroup`,
+shared or mutable access, and live file, process, or network resources may
+not. Keep a live resource on the task that owns it and exchange owned
+descriptions, bytes, snapshot results, or queue/task handles instead.
+
+Queue handles are cheap copy references. Passing a queue to
+`TaskGroup.start(...)` shares the same underlying queue; you do not need
+`.clone()` for the common case:
 
 ```python
 def send_message(jobs: Queue[String]):
@@ -573,7 +586,19 @@ with TaskGroup() as group:
     task.result()
 ```
 
-Queue and task handles are cheap copy-like values, so the maintained surface does not require `.clone()` when passing them around.
+Every task argument and result must also be structurally `Transfer`. This rule
+is checked after generic specialization. A task target may borrow from its
+task-owned capture through a bare parameter, but the captured value itself
+crosses by ownership.
+
+Task result observation has a separate repeatability rule. A copy result, a
+`Queue[...]` result, or a recursively repeatable `Task[...]` result may be
+observed repeatedly. For any other transferable result,
+`result()`, `result_or_none()`, and `result_or()` consume the task handle on
+the first attempt, even if that attempt times out, is cancelled, fails, or
+returns a fallback. `wait_any` and `wait_all` consume the complete task vector
+for such results; `wait_any` deliberately abandons the unchosen observation
+rights.
 
 ## Common Patterns And Fixes
 
@@ -691,6 +716,10 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
    and `own self` consumes.
 7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in mut collection` to modify elements.
 8. Use `match value` to pattern-match without consuming.
-9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.
+9. Queues transfer ownership of sent values and admit only structurally
+   `Transfer` payloads. Queue handles are copy values.
+10. Task captures and results must be structurally `Transfer`. A `Task[T]`
+    handle is copyable only for a repeatable `T`; otherwise the first result
+    attempt consumes its unique observation right.
 
 The compiler enforces all of these rules. When you see an error about moved values or borrowing, come back to this chapter -- the fix is almost always one of the patterns listed above.

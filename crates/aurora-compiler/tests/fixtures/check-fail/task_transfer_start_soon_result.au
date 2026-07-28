@@ -1,0 +1,9 @@
+import random
+
+def make_generator() -> random.Rng:
+    return random.Rng(seed=7)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_soon(make_generator)
+    return 0

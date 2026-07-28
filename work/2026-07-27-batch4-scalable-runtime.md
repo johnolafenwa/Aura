@@ -423,9 +423,97 @@ before-reactor baseline is recorded in
   without material performance regression; it does not add a performance or
   massive-concurrency marketing claim.
 
+## Phase 5.6 implementation gate
+
+Phase 5.6 structural Transfer and static single-consumer task-result
+enforcement is implemented and has passed its complete repository gate:
+
+- The checker derives Transfer from fully resolved specialized types rather
+  than a user trait. Copy values, `String`, and recursively transferable
+  collections, tuples, classes, and enums pass. Shared or mutable capability
+  views, `random.Rng`, `TaskGroup`, and live filesystem, process, network,
+  HTTP, WebSocket, TLS, and similar host resources fail. Owned snapshot data
+  remains classified by its stored fields.
+- `Queue[T]` and `Task[T]` handles are transferable independently of their
+  payload because the handle names synchronized state. Queue construction and
+  `put`/`try_put` separately require a transferable payload. The four
+  TaskGroup start surfaces check every captured argument and the specialized
+  task result before scheduling. Nested failures use `AU3008` and name the
+  boundary plus the field, element, or payload path to the non-Transfer leaf.
+- Result repeatability is static. `Task[T]` is copyable only when `T` is copy
+  data, a Queue handle, or a recursively repeatable Task handle. `result`,
+  `result_or_none`, and `result_or` consume a non-repeatable Task binding on
+  every outcome; `wait_any` and `wait_all` consume the complete task vector.
+  `AU3009` rejects clone, collection access, or aggregate/container copying
+  that would duplicate the unique observation right. Later binding use and
+  shared-access consumption retain the existing moved-value and borrow
+  diagnostics.
+- MIR start instructions and direct-native task entry metadata carry the
+  result-repeatability bit into task creation. MIR and direct observation
+  paths both use an atomic one-winner runtime claim as defense in depth, so a
+  backend defect or foreign handle cannot clone or return the same
+  non-repeatable stored result twice. TaskGroup cleanup does not claim a
+  source-level result.
+- Provisional ADR-0033 records the structural rules and completion matrix,
+  with corresponding amendments to ADR-0008 and ADR-0020. Semantic/runtime
+  architecture documents, the language manual, diagnostic catalog, editor
+  behavior, and API descriptions have been updated. The fixture matrix covers
+  transferable aggregates and recursive data, generic specialization, Queue
+  payloads, capability and host-resource leaves, repeated observations,
+  alias/container/branch/loop escape attempts, both multi-wait helpers, and a
+  MIR/direct runtime matrix.
+
+Final review additionally closed two material gaps:
+
+- `Range` is explicitly Transfer without becoming Copy. Behavioral coverage
+  sends a Range through `Queue[Range]`, passes and returns one across a task
+  boundary, and observes the non-repeatable result on both backends.
+- Maintained prose no longer calls Queue/Task internals synchronized before
+  Phase 5.7. It states the implemented transferable/copyable handle-identity
+  contract and makes thread-safe cross-worker internals a Phase 5.7
+  requirement. A same-named user `Transfer` trait remains an ordinary user
+  trait and does not confer the compiler-derived property.
+
+Focused and final evidence is green:
+
+- 9/9 compiler fixture-harness tests
+- 19/19 call-metadata tests
+- 85/85 language-server tests with 100% coverage: 895/895 statements and
+  lines, 246/246 branches, and 49/49 functions
+- 13/13 MIR `task_group_` tests plus four focused specialization and move tests
+- imported-class, associated-method, and native-object tests
+- CLI structural-Transfer MIR/direct parity
+- the single-observer JSON MIR/direct cleanup regression
+- direct TCP and Unix ownership smoke tests
+- executable reference integrity and the documentation build
+
+The exact final-tree `npm run ci` gate is green: formatting; 282 CLI tests;
+1,056 compiler-library tests; the serialized forced MIR/direct fixture matrix
+in 565.37 seconds; 85 language-server tests and compiler-bridge coverage at
+100%; 13 extension tests; compiler coverage; executable reference integrity
+(34 pages, 247 fences, 118 verified blocks, 59 migration tests, and 683
+migrated manifests); docs build; npm and Rust audits; warning-denied Clippy;
+and hygiene. Cargo audit retains only the accepted `rustls-pemfile 2.2.0`
+unmaintained warning.
+
+Frozen compiler coverage passes at 68,580/71,330 lines (96.144680%),
+4,525/4,670 functions (96.895075%), and 101,189/107,171 regions
+(94.418266%), above the unchanged 96.13/96.89/94.35 floors. All new tests pin
+observable semantics, diagnostics, runtime containment, editor behavior, or
+backend parity. No synthetic coverage test or exclusion was added.
+Unreachable defensive paths were restructured into checked-MIR and
+validated-type invariants rather than exercised artificially: redundant direct
+Task-target reconstruction was removed, and validated Transfer nominal/arity
+fallbacks are assertions.
+
+Phase 5.7 pinned-worker multicore remains pending. Phase 5.6 establishes the
+boundary contract while execution remains single-worker and makes no parallel
+execution claim.
+
 ## Follow-up
 
-Advance to structural Transfer and static single-consumer task-result
-enforcement. The massive-concurrency memory claim remains unavailable under
-the recorded escape hatch. Coverage floors remain frozen until the one-time
-Batch 4 sign-off re-ratchet.
+Commit the Phase 5.6 implementation checkpoint, then capture its contractual
+after-stage benchmark and provenance before advancing to pinned-worker
+multicore. The massive-concurrency memory claim remains unavailable under the
+recorded escape hatch. Coverage floors remain frozen until the one-time Batch
+4 sign-off re-ratchet.

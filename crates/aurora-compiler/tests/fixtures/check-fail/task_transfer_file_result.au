@@ -1,0 +1,10 @@
+import fs
+import io
+
+def open_file() -> Result[fs.File, io.Error]:
+    return fs.open("not-opened-by-check")
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _task = group.start(open_file)
+    return 0

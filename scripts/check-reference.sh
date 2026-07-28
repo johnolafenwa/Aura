@@ -526,9 +526,13 @@ grep -Fq 'borrow mut' architecture_docs/decisions/0006-parameter-and-loop-owners
 grep -Fq 'for name in own names' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'def handle(stream: own net.TcpStream)' docs/manual/network.md
 grep -Fq 'def handle(stream: own net.TcpStream)' docs/learn/io-process-networking.md
-grep -Fq 'def serve(listener: own net.TcpListener)' tutorials/19-io-and-networking.md
+grep -Fq 'def serve(addresses: Queue[String])' tutorials/19-io-and-networking.md
+grep -Fq 'Listeners and other live network resources are not `Transfer`' tutorials/19-io-and-networking.md
 grep -Fq 'def process_file(handle: own FileHandle)' tutorials/12-error-propagation.md
-grep -Fq 'Queue and task handles are cheap copy-like values' tutorials/06-ownership-and-borrowing.md
+grep -Fq '`Queue[T]` is a copy handle to shared runtime state.' tutorials/06-ownership-and-borrowing.md
+grep -Fq '`Task[T]` is always safe' tutorials/06-ownership-and-borrowing.md
+grep -Fq 'admit only structurally' tutorials/06-ownership-and-borrowing.md
+grep -Fq 'first result' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'declaration-stable' docs/aurora_language_proposal.html
 grep -Fq 'Queue iteration receives each item already owned' docs/aurora_language_proposal.html
 grep -Fq 'const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs

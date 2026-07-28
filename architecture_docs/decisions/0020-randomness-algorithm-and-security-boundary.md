@@ -3,7 +3,14 @@
 - Status: Accepted
 - Date: 2026-07-22
 - Amended: 2026-07-26 (B3.0-d secure-byte resource ceiling clarification)
+- Amended: 2026-07-28 by Provisional ADR-0033 for task/Queue boundary availability
 - Roadmap decision: Phase 3 Randomness gap-fill policy
+
+> **Phase 5.6 boundary amendment.** The clone-safety barrier remains true: an
+> allowed Task or Queue handle copy does not clone its payload. Provisional
+> ADR-0033 separately makes `random.Rng` non-Transfer, so a task may not return
+> it and a Queue may not transport it. Those boundary rejections use `AU3008`;
+> the older examples below do not provide an escape from Transfer checking.
 
 ## Context
 
@@ -49,11 +56,12 @@ also create a serious API-category error.
   generic-to-generic calls and imports, and is discharged after concrete
   substitution. Task and Queue handles stop structural traversal because
   copying them does not observe their payload.
-- `Task[random.Rng]` and `Queue[random.Rng]` handles are clone barriers:
-  copying a handle does not observe or duplicate the contained generator.
-  Moving or removing an `Rng`, receiving it from a queue, and shuffling owned
-  generator elements in place are also permitted because they transfer or
-  rearrange ownership without cloning state.
+- Task and Queue handles are clone-safety barriers: an allowed handle copy
+  does not observe or duplicate its payload. Under Provisional ADR-0033,
+  `random.Rng` is not available as a task result or Queue payload, and a Task
+  holding a non-repeatable result is not copyable. Moving or removing an `Rng`
+  and shuffling owned generator elements in one owning task remain permitted
+  because they transfer or rearrange ownership without cloning state.
 - The deterministic stream, integer mapping, floating mapping, and shuffle
   order are stable throughout the Aurora 0.1.x compatibility series. A future
   series may select another generator only through an explicit compatibility

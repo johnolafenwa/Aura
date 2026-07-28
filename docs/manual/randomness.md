@@ -173,13 +173,14 @@ clone-safety obligation. The generic declaration remains valid, the obligation
 propagates through generic-to-generic calls and imports, and an unsafe concrete
 specialization is rejected with `AU3007`.
 
-Task and Queue handles are clone barriers: copying a `Task[random.Rng]` or
-`Queue[random.Rng]` handle does not clone the
-stored or queued generator and remains valid, including when those handles are
-elements of a cloned collection. Operations that transfer one owned value
-instead of duplicating it also remain valid: examples include `Vec.pop`,
-`Vec.remove`, `Map.remove`, ordinary moves, queue receive operations, and
-shuffling a `Vec[random.Rng]` in place.
+Task and Queue handles are clone barriers: an allowed handle copy does not
+clone its stored payload. This is a clone-safety statement. Provisional
+ADR-0033 separately forbids
+`random.Rng` at task-result and Queue-payload boundaries with `AU3008`, and a
+Task carrying a non-repeatable result is not copyable. Operations that
+transfer one owned value within one owning task remain valid; examples include
+`Vec.pop`, `Vec.remove`, `Map.remove`, ordinary moves, and shuffling a
+`Vec[random.Rng]` in place.
 
 Clone-safety obligations are part of callable and trait method contracts. An
 obligation inferred by a trait default body is substituted through `Self` and
@@ -223,9 +224,10 @@ function that should advance a caller's stream takes
 Moving a generator into or out of a collection preserves its single owner.
 Cloning an enclosing value would not, so the transitive clone restrictions in
 the typing rules apply even when the generator is nested several type layers
-deep. A copied task or queue handle is different: it aliases the synchronization
-handle, not the `Rng` value behind that handle, and therefore does not duplicate
-generator state.
+deep. An allowed Task- or Queue-handle copy is different: it copies handle
+identity, not the `Rng` value behind that handle, and therefore does not
+duplicate generator state. Phase 5.7 must make the referenced state
+cross-worker thread-safe before multicore use.
 
 `shuffle(values: mut Vec[T])` borrows the caller's vector exclusively,
 mutates that same place, and returns `None`; it does not move, clone, or replace

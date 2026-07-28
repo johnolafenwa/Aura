@@ -143,6 +143,52 @@ Places used by move, borrow, iteration-freeze, and mutable-match analysis have a
 
 That is why move and borrow diagnostics come from `sema.rs`, not the parser.
 
+## Provisional task-boundary Transfer analysis
+
+Phase 5.6 introduces the Provisional ADR-0033 design before Aurora enables
+multiple workers. `Transfer` is a compiler-derived structural property, not a
+user trait. The checker must walk specialized collection, tuple, class, and
+enum storage and retain a path to the first non-transferable leaf so a
+diagnostic can explain why a captured argument or result cannot cross a task
+boundary.
+
+All copy types and `String` are transferable. Collections and user aggregates
+are transferable when every stored component is; `Queue[T]` and `Task[T]`
+handles are transferable because only handle identity, not stored payload,
+crosses. The runtime state behind those handles remains single-worker here and
+must become cross-worker thread-safe in Phase 5.7 before multicore execution.
+Capability views, `random.Rng`, `TaskGroup`, and live host resources are not
+transferable unless a later compiler-owned whitelist proves a particular type
+safe. Reading a Copy value through shared or mutable access still produces an
+owned snapshot; that snapshot may be captured when its type is Transfer. A
+non-copy access cannot be materialized or transported this way. Phase 5.6
+rejects an unresolved type parameter at a task or Queue
+boundary rather than assuming it is transferable or exporting an inferred
+Transfer obligation.
+
+Owned host-result snapshots are classified by their stored data:
+`process.Completed`, `net.HttpResponse`, and `net.UdpDatagram` are Transfer,
+while their live Child, exchange, and socket sources are not. Queue payload
+Transfer is checked by construction and `put`/`try_put`; handle-only operations
+do not recheck the payload.
+
+Task-start capture and result checks happen after callable specialization and
+before scheduling. Result analysis also implements ADR-0008: only copy results
+and `Queue[...]` or recursively repeatable `Task[...]` results are repeatable;
+other transferable results have one observation right across all aliases and
+wait helpers. Conservative consumption may produce zero values.
+
+The task-target slot supports explicit `function[Types]` and
+`Type.associated_method[Types]` specialization without changing ordinary
+indexing elsewhere. Boundary failures use `AU3008`, duplication of a
+single-consumer right uses `AU3009`, and reuse after a consuming observation
+uses ordinary `AU3001`.
+
+This section describes the implemented Provisional Phase 5.6 semantic
+contract. It does not imply that the Phase 5.5 single-threaded scheduler or
+request broker is thread-safe. Pinned-worker execution remains a separate
+Phase 5.7 runtime gate.
+
 ## A tiny Aurora-like type checker in Rust
 
 This toy example checks three things:

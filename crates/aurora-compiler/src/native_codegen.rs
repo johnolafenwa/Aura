@@ -200,6 +200,12 @@ struct ValueRef {
     ty: DirectType,
 }
 
+#[derive(Clone, Copy)]
+struct TaskStartMode {
+    returns_handle: bool,
+    result_is_copy: bool,
+}
+
 struct NativeCodegen<'a> {
     module: &'a MirModule,
     safepoints_enabled: bool,
@@ -4013,12 +4019,15 @@ impl<'a> FunctionCompiler<'a> {
                 args,
                 ..
             } => self.compile_start_task(
-                *returns_handle,
-                *result_is_copy,
+                TaskStartMode {
+                    returns_handle: *returns_handle,
+                    result_is_copy: *result_is_copy,
+                },
                 stack_size.as_ref(),
                 task_group,
                 function,
                 args,
+                target,
             ),
             Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
@@ -11422,12 +11431,12 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_start_task(
         &mut self,
-        returns_handle: bool,
-        result_is_copy: bool,
+        mode: TaskStartMode,
         stack_size: Option<&Operand>,
         task_group: &Operand,
         function: &str,
         args: &[MirArg],
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let thunk_ref = *self.function_thunk_refs.get(function).ok_or({
             format!(
@@ -11469,11 +11478,11 @@ impl<'a> FunctionCompiler<'a> {
         let returns_handle_value = self
             .builder
             .ins()
-            .iconst(types::I64, if returns_handle { 1 } else { 0 });
+            .iconst(types::I64, if mode.returns_handle { 1 } else { 0 });
         let result_is_copy_value = self
             .builder
             .ins()
-            .iconst(types::I64, if result_is_copy { 1 } else { 0 });
+            .iconst(types::I64, if mode.result_is_copy { 1 } else { 0 });
         let (stack_size_present_value, stack_size_value) = match stack_size {
             Some(stack_size) => {
                 let target = DirectType::Scalar(ScalarKind::Int64);
@@ -11504,12 +11513,12 @@ impl<'a> FunctionCompiler<'a> {
                 stack_size_value,
             ],
         );
-        let ty = if returns_handle {
-            let return_ty = self.call_result_type(function)?;
-            DirectType::Opaque(Type::Named(
-                "Task".to_string(),
-                vec![direct_type_to_type(&return_ty)],
-            ))
+        // MIR checking/lowering has already assigned every handle-returning
+        // start to its concrete `Task[T]` target. Carry that exact target
+        // through codegen instead of independently reconstructing or
+        // defensively revalidating the result type here.
+        let ty = if mode.returns_handle {
+            target.clone()
         } else {
             DirectType::Scalar(ScalarKind::Unit)
         };

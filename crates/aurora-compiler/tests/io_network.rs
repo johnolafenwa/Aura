@@ -72,8 +72,9 @@ fn builtin_fs_and_net_modules_run_through_public_api() {
 import fs
 import net
 
-def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept()
         with server_stream = socket:
             line = try server_stream.read_line()
@@ -85,15 +86,26 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
                     pass
             return Result.Ok(None)
 
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=1s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="TCP address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
+
 def run() -> Result[None, io.Error]:
     try fs.write_string("{path}", "alpha")
     text = try fs.read_to_string("{path}")
     try io.write(text + "\n")
 
     with TaskGroup() as group:
-        listener = try net.listen("127.0.0.1:0")
-        address = try listener.local_addr()
-        server = group.start(serve, listener)
+        addresses = Queue[String](capacity=1)
+        server = group.start(serve, addresses)
+        address = try receive_address(addresses)
         client = try net.connect(address)
         with client_stream = client:
             try client_stream.write_all("ping\n")
@@ -303,8 +315,9 @@ fn advanced_io_and_network_modules_run_through_public_api() {
 import fs
 import net
 
-def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
-    with server_socket = socket:
+def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
+    with server_socket = try net.udp_bind("127.0.0.1:0"):
+        addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
             case Option.Some(packet):
                 text = try packet.text()
@@ -313,8 +326,9 @@ def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("missing")
 
-def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             method = request.method()
@@ -328,16 +342,18 @@ def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_http_bytes(listener: own net.HttpListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_http_bytes(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             body = request.body_bytes()
             try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
-def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.websocket_listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
             match own try server_socket.recv_text(timeout=1s):
@@ -346,6 +362,17 @@ def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
                     return Result.Ok(None)
                 case Option.None:
                     return Result.Ok(None)
+
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=1s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
 
 def run() -> Result[None, io.Error]:
     bytes: Vec[uint8] = [65 as uint8, 66 as uint8]
@@ -357,9 +384,9 @@ def run() -> Result[None, io.Error]:
     print(read_back[2])
 
     with TaskGroup() as group:
-        udp_listener = try net.udp_bind("127.0.0.1:0")
-        udp_addr = try udp_listener.local_addr()
-        udp_task = group.start(serve_udp, udp_listener)
+        udp_addresses = Queue[String](capacity=1)
+        udp_task = group.start(serve_udp, udp_addresses)
+        udp_addr = try receive_address(udp_addresses)
         udp_client = try net.udp_bind("127.0.0.1:0")
         with client_socket = udp_client:
             try client_socket.send_text(udp_addr, "ping", timeout=1s)
@@ -381,9 +408,9 @@ def run() -> Result[None, io.Error]:
                 print("udp task timed out")
                 return Result.Ok(None)
 
-        http_listener = try net.http_listen("127.0.0.1:0")
-        http_addr = try http_listener.local_addr()
-        http_task = group.start(serve_http, http_listener)
+        http_addresses = Queue[String](capacity=1)
+        http_task = group.start(serve_http, http_addresses)
+        http_addr = try receive_address(http_addresses)
         headers: Map[String, String] = {{"X-Test": "ok"}}
         response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
         with http_response = response:
@@ -402,9 +429,9 @@ def run() -> Result[None, io.Error]:
                 print("http task timed out")
                 return Result.Ok(None)
 
-        http_bytes_listener = try net.http_listen("127.0.0.1:0")
-        http_bytes_addr = try http_bytes_listener.local_addr()
-        http_bytes_task = group.start(serve_http_bytes, http_bytes_listener)
+        http_bytes_addresses = Queue[String](capacity=1)
+        http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
+        http_bytes_addr = try receive_address(http_bytes_addresses)
         bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
         with received_bytes = bytes_response:
             print(received_bytes.status())
@@ -422,9 +449,9 @@ def run() -> Result[None, io.Error]:
                 print("http bytes task timed out")
                 return Result.Ok(None)
 
-        ws_listener = try net.websocket_listen("127.0.0.1:0")
-        ws_addr = try ws_listener.local_addr()
-        ws_task = group.start(serve_ws, ws_listener)
+        ws_addresses = Queue[String](capacity=1)
+        ws_task = group.start(serve_ws, ws_addresses)
+        ws_addr = try receive_address(ws_addresses)
         client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
         with ws_client = client:
             try ws_client.send_text("hi", timeout=1s)
@@ -495,8 +522,9 @@ fn unix_and_tls_modules_run_through_public_api() {
         r#"import io
 import net
 
-def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+    with server_listener = try net.unix_listen(path):
+        ready.put(true)
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=1s):
@@ -506,8 +534,9 @@ def serve_unix(listener: own net.UnixListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_tls(cert_path: String, key_path: String, addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
+        addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=2s):
@@ -517,10 +546,30 @@ def serve_tls(listener: own net.TlsListener) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=2s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="TLS address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
+
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        unix_listener = try net.unix_listen("{unix_path}")
-        unix_task = group.start(serve_unix, unix_listener)
+        unix_ready = Queue[bool](capacity=1)
+        unix_task = group.start(serve_unix, "{unix_path}", unix_ready)
+        match own unix_ready.get(timeout=1s):
+            case QueueReceive.Item(_):
+                pass
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="Unix readiness queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
         client = try net.unix_connect_timeout("{unix_path}", 1s)
         with unix_client = client:
             try unix_client.write_all("ping\n", timeout=1s)
@@ -542,9 +591,9 @@ def run() -> Result[None, io.Error]:
                 print("unix task timed out")
                 return Result.Ok(None)
 
-        tls_listener = try net.tls_listen("127.0.0.1:0", "{cert_path}", "{key_path}")
-        tls_addr = try tls_listener.local_addr()
-        tls_task = group.start(serve_tls, tls_listener)
+        tls_addresses = Queue[String](capacity=1)
+        tls_task = group.start(serve_tls, "{cert_path}", "{key_path}", tls_addresses)
+        tls_addr = try receive_address(tls_addresses)
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
         with tls_client = stream:
             try tls_client.write_all("ping!\n", timeout=2s)

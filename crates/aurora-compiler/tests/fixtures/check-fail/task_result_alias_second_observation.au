@@ -1,0 +1,10 @@
+def make_text() -> String:
+    return "once"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(make_text)
+        alias = task
+        print(task.result())
+        print(alias.result_or_none())
+    return 0

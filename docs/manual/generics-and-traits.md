@@ -78,7 +78,11 @@ record which declared parameters must be safe to clone. A concrete call
 discharges those obligations after substitution. A type is safe for this
 purpose when duplicating it cannot duplicate `random.Rng` state through an
 ordinary class, enum, or collection path; `Task[T]` and `Queue[T]` handles stop
-that traversal because copying a handle does not observe or copy `T`.
+that clone-safety traversal because an allowed handle copy does not observe or
+copy `T`. Provisional ADR-0033 separately requires Queue payloads and task
+results to be `Transfer` and makes `Task[T]` non-copy when `T` is not
+repeatable. A clone barrier is therefore not an escape from the task-boundary
+rule.
 
 A generic-to-generic call propagates the obligation to the caller. Inference
 continues to a fixed point independent of declaration order, and the resulting

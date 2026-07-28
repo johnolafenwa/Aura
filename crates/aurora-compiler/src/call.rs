@@ -463,8 +463,12 @@ impl BuiltinFunction {
             Self::Cancelled => "cancelled() -> bool",
             Self::YieldNow => "yield_now() -> None",
             Self::Sleep => "sleep(duration: Duration) -> None",
-            Self::WaitAny => "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]",
-            Self::WaitAll => "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]",
+            Self::WaitAny => {
+                "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T] [consumes tasks when T is non-repeatable]"
+            }
+            Self::WaitAll => {
+                "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T] [consumes tasks when T is non-repeatable]"
+            }
             Self::Abs => "abs(value: number) -> number",
             Self::Min => "min(left: number, right: number) -> number",
             Self::Max => "max(left: number, right: number) -> number",
@@ -489,10 +493,10 @@ impl BuiltinFunction {
             }
             Self::Sleep => "Blocks the current task for the requested duration.",
             Self::WaitAny => {
-                "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation."
+                "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right; repeatable `T` leaves the vector reusable."
             }
             Self::WaitAll => {
-                "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation."
+                "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right; repeatable `T` leaves the vector reusable."
             }
             Self::Abs => "Returns the absolute value of an integer or float.",
             Self::Min => "Returns the smaller of two numeric values of the same type.",
@@ -1356,15 +1360,31 @@ impl BuiltinMember {
             Self::SetInsert => "insert(value: own T) -> bool",
             Self::SetRemove => "remove(value: T) -> bool",
             Self::StringClone => "clone() -> String",
-            Self::QueuePut => "put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]",
-            Self::QueueTryPut => "try_put(value: own T) -> Result[None, SendError[T]]",
-            Self::QueueGet => "get(timeout: Duration = ...) -> QueueReceive[T]",
-            Self::QueueGetOrNone => "get_or_none(timeout: Duration = ...) -> Option[T]",
-            Self::QueueGetOr => "get_or(default: own T, timeout: Duration = ...) -> T",
+            Self::QueuePut => {
+                "put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]] [T must be Transfer]"
+            }
+            Self::QueueTryPut => {
+                "try_put(value: own T) -> Result[None, SendError[T]] [T must be Transfer]"
+            }
+            Self::QueueGet => {
+                "get(timeout: Duration = ...) -> QueueReceive[T] [T must be Transfer]"
+            }
+            Self::QueueGetOrNone => {
+                "get_or_none(timeout: Duration = ...) -> Option[T] [T must be Transfer]"
+            }
+            Self::QueueGetOr => {
+                "get_or(default: own T, timeout: Duration = ...) -> T [T must be Transfer]"
+            }
             Self::QueueClose => "close() -> None",
-            Self::TaskResult => "result(timeout: Duration = ...) -> TaskResult[T]",
-            Self::TaskResultOrNone => "result_or_none(timeout: Duration = ...) -> Option[T]",
-            Self::TaskResultOr => "result_or(default: own T, timeout: Duration = ...) -> T",
+            Self::TaskResult => {
+                "result(timeout: Duration = ...) -> TaskResult[T] [consumes Task[T] when T is non-repeatable]"
+            }
+            Self::TaskResultOrNone => {
+                "result_or_none(timeout: Duration = ...) -> Option[T] [consumes Task[T] when T is non-repeatable]"
+            }
+            Self::TaskResultOr => {
+                "result_or(default: own T, timeout: Duration = ...) -> T [consumes Task[T] when T is non-repeatable]"
+            }
             Self::TaskGroupStart => "start(function, own ...) -> Task[T]",
             Self::TaskGroupStartSoon => "start_soon(function, own ...) -> None",
             Self::TaskGroupStartWithStack => {
@@ -1592,29 +1612,29 @@ impl BuiltinMember {
             Self::SetRemove => "Removes `value`, returning false when it is absent.",
             Self::StringClone => "Creates a new owned `String` with the same contents.",
             Self::QueuePut => {
-                "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)`, `SendError.Cancelled(value)`, or `SendError.TimedOut(value)` if the send cannot complete."
+                "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)`, `SendError.Cancelled(value)`, or `SendError.TimedOut(value)` if the send cannot complete. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueTryPut => {
-                "Attempts to put a value into the queue without waiting and returns `SendError.Full(value)` when the queue is already at capacity."
+                "Attempts to put a value into the queue without waiting and returns `SendError.Full(value)` when the queue is already at capacity. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueGet => {
-                "Receives the next queue outcome as `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`."
+                "Receives the next queue outcome as `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueGetOrNone => {
-                "Receives the next queue value and returns `Option.Some(value)`, or `Option.None` when the queue is closed, the timeout expires, or cancellation interrupts the wait."
+                "Receives the next queue value and returns `Option.Some(value)`, or `Option.None` when the queue is closed, the timeout expires, or cancellation interrupts the wait. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueGetOr => {
-                "Receives the next queue value or returns `default` when the queue is closed, the timeout expires, or cancellation interrupts the wait."
+                "Receives the next queue value or returns `default` when the queue is closed, the timeout expires, or cancellation interrupts the wait. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueClose => "Closes the queue and wakes blocked receivers.",
             Self::TaskResult => {
-                "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.Error(message)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
+                "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.Error(message)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
             Self::TaskResultOrNone => {
-                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the task fails, the timeout expires, or cancellation interrupts the wait."
+                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
             Self::TaskResultOr => {
-                "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait."
+                "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
             Self::TaskGroupStart => {
                 "Starts a child task on the guarded 512 KiB default stack and returns its handle."

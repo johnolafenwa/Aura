@@ -1,0 +1,7 @@
+error[AU3001]: use of moved value `tasks`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_result_wait_all_second_observation.au:8:24
+  |
+8 |         print(wait_all(tasks))
+  |                        ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/task_result_wait_all_second_observation.au:7:24: value moved here
+  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

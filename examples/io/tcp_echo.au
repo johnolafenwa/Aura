@@ -1,8 +1,9 @@
 import io
 import net
 
-def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
-    with server = listener:
+def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server = try net.listen("127.0.0.1:0"):
+        addresses.put(try server.local_addr())
         with stream = try server.accept():
             message = try stream.read_line()
             match own message:
@@ -15,49 +16,50 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
 
 def main() -> int32:
     with TaskGroup() as group:
-        match own net.listen("127.0.0.1:0"):
-            case Result.Ok(listener):
-                match own listener.local_addr():
-                    case Result.Ok(address):
-                        server = group.start(serve, listener)
-                        match own net.connect(address):
-                            case Result.Ok(client):
-                                with socket = client:
-                                    match socket.write_all("ping\n"):
-                                        case Result.Ok(_):
-                                            pass
-                                        case Result.Err(_):
+        addresses = Queue[String](capacity=1)
+        server = group.start(serve, addresses)
+        match addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                match own net.connect(address):
+                    case Result.Ok(client):
+                        with socket = client:
+                            match socket.write_all("ping\n"):
+                                case Result.Ok(_):
+                                    pass
+                                case Result.Err(_):
+                                    return 1
+                            match socket.flush():
+                                case Result.Ok(_):
+                                    pass
+                                case Result.Err(_):
+                                    return 1
+                            match own socket.read_line():
+                                case Result.Ok(message):
+                                    match own message:
+                                        case Option.Some(text):
+                                            print(text)
+                                        case Option.None:
                                             return 1
-                                    match socket.flush():
-                                        case Result.Ok(_):
-                                            pass
-                                        case Result.Err(_):
-                                            return 1
-                                    match own socket.read_line():
-                                        case Result.Ok(message):
-                                            match own message:
-                                                case Option.Some(text):
-                                                    print(text)
-                                                case Option.None:
-                                                    return 1
-                                        case Result.Err(_):
-                                            return 1
-                            case Result.Err(_):
-                                return 1
-                        match own server.result():
-                            case TaskResult.Ready(result):
-                                match own result:
-                                    case Result.Ok(_):
-                                        return 0
-                                    case Result.Err(_):
-                                        return 1
-                            case TaskResult.Error(_message):
-                                return 1
-                            case TaskResult.Cancelled:
-                                return 1
-                            case TaskResult.TimedOut:
-                                return 1
+                                case Result.Err(_):
+                                    return 1
                     case Result.Err(_):
                         return 1
-            case Result.Err(_):
+                match own server.result():
+                    case TaskResult.Ready(result):
+                        match own result:
+                            case Result.Ok(_):
+                                return 0
+                            case Result.Err(_):
+                                return 1
+                    case TaskResult.Error(_message):
+                        return 1
+                    case TaskResult.Cancelled:
+                        return 1
+                    case TaskResult.TimedOut:
+                        return 1
+            case QueueReceive.Closed:
+                return 1
+            case QueueReceive.TimedOut:
+                return 1
+            case QueueReceive.Cancelled:
                 return 1

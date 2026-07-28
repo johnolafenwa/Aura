@@ -227,8 +227,10 @@ is forbidden by their internal safety contract.
 
 This design removes the aliased mutable-scheduler pattern, but it is still
 single-threaded: the task context and broker deliberately use `Rc`/`RefCell`.
-It does not implement structural Transfer checking, pinned workers, or
-multicore task execution.
+Provisional ADR-0033 defines the Phase 5.6 structural Transfer checks that must
+precede a second worker; those static checks do not make this broker or the
+runtime handles thread-safe. Pinned workers, synchronized Queue/Task internals,
+and multicore task execution remain the separate Phase 5.7 gate.
 
 ## Networking and I/O
 

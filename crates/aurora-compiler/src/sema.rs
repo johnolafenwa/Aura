@@ -89,6 +89,38 @@ pub struct EnumPayloadFieldInfo {
 }
 
 #[derive(Clone, Debug)]
+enum TransferNominal {
+    Class(ClassInfo),
+    Enum(EnumInfo),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TransferSummary {
+    failure: Option<String>,
+    /// Formal parameter indices paired with the first stored-component path
+    /// that makes the parameter relevant to Transfer.
+    requirements: Vec<(usize, String)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TaskObservationSummary {
+    /// A stored Task whose result is non-copy for every specialization.
+    unconditional_result: Option<Type>,
+    /// Formals whose stored components may themselves contain a
+    /// non-repeatable Task observation right.
+    containment_requirements: Vec<usize>,
+    /// A formal whose non-copyness makes the paired Task result
+    /// non-repeatable. The Type is the result template in nominal formals.
+    noncopy_requirements: Vec<(usize, Type)>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SymbolicCopyShape {
+    intrinsic_noncopy: bool,
+    noncopy_formals: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
 pub struct FunctionInfo {
     pub module_name: String,
     pub decl: FunctionDecl,
@@ -307,6 +339,7 @@ impl Type {
             Type::Module(_) => false,
             Type::TypeParam(_) => false,
             Type::Tuple(elements) => elements.iter().all(Type::is_copy),
+            Type::Named(name, args) if name == "Task" && args.len() == 1 => args[0].is_copy(),
             Type::Named(name, args) => is_builtin_copy_named_type(name, args),
         }
     }
@@ -314,7 +347,7 @@ impl Type {
 
 fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
     match name {
-        "Queue" | "Task" => args.len() == 1,
+        "Queue" => args.len() == 1,
         _ => {
             args.is_empty()
                 && matches!(
@@ -864,6 +897,16 @@ fn type_is_copy_in_context_inner(
                 visiting,
             )
         }),
+        Type::Named(name, args) if name == "Task" && args.len() == 1 => {
+            type_is_copy_in_context_inner(
+                &args[0],
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
+        }
         Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
         Type::Named(name, args) if name == "Option" && args.len() == 1 => {
             type_is_copy_in_context_inner(
@@ -3718,6 +3761,12 @@ struct ResolvedCallableInfo {
     seed_substitutions: HashMap<String, Type>,
 }
 
+#[derive(Debug)]
+struct CheckedCallableTypes {
+    params: Vec<Type>,
+    return_type: Type,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum BlockFlow {
     FallsThrough,
@@ -3766,6 +3815,481 @@ impl<'a> FunctionChecker<'a> {
         )
     }
 
+    /// Returns the first structural reason `ty` cannot cross a task or queue
+    /// boundary. `None` means the compiler derived `Transfer` for the whole
+    /// value. Transfer is intentionally not represented as a user trait:
+    /// every accepted case below is a compiler-known value shape.
+    fn transfer_failure(&self, ty: &Type) -> Option<String> {
+        let mut nominals = BTreeMap::new();
+        self.collect_transfer_nominals(ty, &mut nominals);
+        let mut summaries = nominals
+            .keys()
+            .map(|key| (key.clone(), TransferSummary::default()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Transfer is a conjunction-only structural property. Each nominal
+        // summary can only gain an intrinsic failure or a dependency on one
+        // of its finitely many formal parameters, so this least fixed point
+        // terminates even when recursive specializations keep changing.
+        loop {
+            let mut changed = false;
+            for (key, nominal) in &nominals {
+                let derived = self.transfer_nominal_summary(nominal, &summaries);
+                let current = summaries
+                    .get_mut(key)
+                    .expect("every discovered Transfer nominal has a summary");
+                changed |= Self::merge_transfer_summary(current, derived);
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        self.transfer_shape(ty, &BTreeMap::new(), &summaries)
+            .failure
+    }
+
+    fn collect_transfer_nominals(
+        &self,
+        ty: &Type,
+        nominals: &mut BTreeMap<String, TransferNominal>,
+    ) {
+        let Type::Named(name, args) = ty else {
+            if let Type::Tuple(elements) = ty {
+                for element in elements {
+                    self.collect_transfer_nominals(element, nominals);
+                }
+            }
+            return;
+        };
+        for arg in args {
+            self.collect_transfer_nominals(arg, nominals);
+        }
+        if let Some(class_info) = self.classes.get(name).cloned().or_else(|| {
+            copy_class_info_from_modules(name, self.imported_modules, self.module_registry).cloned()
+        }) {
+            if class_info.is_builtin {
+                return;
+            }
+            let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+            if nominals
+                .insert(key.clone(), TransferNominal::Class(class_info.clone()))
+                .is_some()
+            {
+                return;
+            }
+            for field in class_info.fields.values() {
+                self.collect_transfer_nominals(&field.ty, nominals);
+            }
+            return;
+        }
+        if let Some(enum_info) = self.enums.get(name).cloned().or_else(|| {
+            copy_enum_info_from_modules(name, self.imported_modules, self.module_registry).cloned()
+        }) {
+            let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+            if nominals
+                .insert(key, TransferNominal::Enum(enum_info.clone()))
+                .is_some()
+            {
+                return;
+            }
+            for variant in enum_info.variants.values() {
+                for payload in &variant.payloads {
+                    self.collect_transfer_nominals(&payload.ty, nominals);
+                }
+            }
+        }
+    }
+
+    fn transfer_nominal_summary(
+        &self,
+        nominal: &TransferNominal,
+        summaries: &BTreeMap<String, TransferSummary>,
+    ) -> TransferSummary {
+        match nominal {
+            TransferNominal::Class(class_info) => {
+                let formals = class_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| (name.clone(), index))
+                    .collect::<BTreeMap<_, _>>();
+                let mut result = TransferSummary::default();
+                for field_decl in &class_info.decl.fields {
+                    let Some(field) = class_info.fields.get(&field_decl.name) else {
+                        continue;
+                    };
+                    let field_summary = Self::prefix_transfer_summary(
+                        self.transfer_shape(&field.ty, &formals, summaries),
+                        &format!("field `{}` of `{}`", field_decl.name, class_info.decl.name),
+                    );
+                    Self::merge_transfer_summary(&mut result, field_summary);
+                    if result.failure.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+            TransferNominal::Enum(enum_info) => {
+                let formals = enum_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| (name.clone(), index))
+                    .collect::<BTreeMap<_, _>>();
+                let mut result = TransferSummary::default();
+                for variant_decl in &enum_info.decl.variants {
+                    let Some(variant) = enum_info.variants.get(&variant_decl.name) else {
+                        continue;
+                    };
+                    for (index, payload) in variant.payloads.iter().enumerate() {
+                        let payload_label = payload
+                            .name
+                            .as_ref()
+                            .map(|name| format!("payload `{name}`"))
+                            .unwrap_or_else(|| format!("payload {}", index + 1));
+                        let payload_summary = Self::prefix_transfer_summary(
+                            self.transfer_shape(&payload.ty, &formals, summaries),
+                            &format!(
+                                "variant `{}` of `{}` -> {payload_label}",
+                                variant_decl.name, enum_info.decl.name
+                            ),
+                        );
+                        Self::merge_transfer_summary(&mut result, payload_summary);
+                        if result.failure.is_some() {
+                            return result;
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    fn transfer_shape(
+        &self,
+        ty: &Type,
+        formals: &BTreeMap<String, usize>,
+        summaries: &BTreeMap<String, TransferSummary>,
+    ) -> TransferSummary {
+        if self.is_copy_type(ty) {
+            return TransferSummary::default();
+        }
+        match ty {
+            Type::Unit => TransferSummary::default(),
+            Type::Module(name) => TransferSummary {
+                failure: Some(format!(
+                    "`module {name}` is a module capability and is not Transfer"
+                )),
+                requirements: Vec::new(),
+            },
+            Type::TypeParam(name) => match formals.get(name) {
+                Some(index) => TransferSummary {
+                    failure: None,
+                    requirements: vec![(*index, String::new())],
+                },
+                None => TransferSummary {
+                    failure: Some(format!(
+                        "type parameter `{name}` has no compiler-proven Transfer specialization"
+                    )),
+                    requirements: Vec::new(),
+                },
+            },
+            Type::Tuple(elements) => {
+                let mut result = TransferSummary::default();
+                for (index, element) in elements.iter().enumerate() {
+                    let element_summary = Self::prefix_transfer_summary(
+                        self.transfer_shape(element, formals, summaries),
+                        &format!("element {} of `{ty}`", index + 1),
+                    );
+                    Self::merge_transfer_summary(&mut result, element_summary);
+                    if result.failure.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+            Type::Named(name, args) if name == "String" && args.is_empty() => {
+                TransferSummary::default()
+            }
+            // Range keeps its established move-only source semantics, but its
+            // runtime representation is owned start/end data with no host
+            // authority, so it may cross task and Queue boundaries.
+            Type::Named(name, args) if name == "Range" && args.is_empty() => {
+                TransferSummary::default()
+            }
+            Type::Named(name, args)
+                if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 =>
+            {
+                TransferSummary::default()
+            }
+            Type::Named(name, args)
+                if matches!(name.as_str(), "Vec" | "Set") && args.len() == 1 =>
+            {
+                Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("element of `{ty}`"),
+                )
+            }
+            Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                let mut result = Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("key of `{ty}`"),
+                );
+                if result.failure.is_none() {
+                    Self::merge_transfer_summary(
+                        &mut result,
+                        Self::prefix_transfer_summary(
+                            self.transfer_shape(&args[1], formals, summaries),
+                            &format!("value of `{ty}`"),
+                        ),
+                    );
+                }
+                result
+            }
+            Type::Named(name, args) if name == "MapEntry" && args.len() == 2 => {
+                let mut result = Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("field `key` of `{ty}`"),
+                );
+                if result.failure.is_none() {
+                    Self::merge_transfer_summary(
+                        &mut result,
+                        Self::prefix_transfer_summary(
+                            self.transfer_shape(&args[1], formals, summaries),
+                            &format!("field `value` of `{ty}`"),
+                        ),
+                    );
+                }
+                result
+            }
+            Type::Named(name, args)
+                if matches!(
+                    name.as_str(),
+                    "Option" | "SendError" | "QueueReceive" | "TaskResult" | "WaitAny" | "WaitAll"
+                ) && args.len() == 1 =>
+            {
+                Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("payload of `{ty}`"),
+                )
+            }
+            Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+                let mut result = Self::prefix_transfer_summary(
+                    self.transfer_shape(&args[0], formals, summaries),
+                    &format!("success payload of `{ty}`"),
+                );
+                if result.failure.is_none() {
+                    Self::merge_transfer_summary(
+                        &mut result,
+                        Self::prefix_transfer_summary(
+                            self.transfer_shape(&args[1], formals, summaries),
+                            &format!("error payload of `{ty}`"),
+                        ),
+                    );
+                }
+                result
+            }
+            Type::Named(name, args) if name == "random.Rng" && args.is_empty() => TransferSummary {
+                failure: Some(
+                    "`random.Rng` is a stateful generator and is not Transfer".to_string(),
+                ),
+                requirements: Vec::new(),
+            },
+            Type::Named(name, args)
+                if args.is_empty()
+                    && matches!(
+                        name.as_str(),
+                        "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
+                    ) =>
+            {
+                TransferSummary::default()
+            }
+            Type::Named(name, args) if is_builtin_io_resource_type(name, args) => TransferSummary {
+                failure: Some(format!("`{ty}` is a host resource and is not Transfer")),
+                requirements: Vec::new(),
+            },
+            Type::Named(name, args) => {
+                let nominal = if let Some(class_info) =
+                    self.classes.get(name).cloned().or_else(|| {
+                        copy_class_info_from_modules(
+                            name,
+                            self.imported_modules,
+                            self.module_registry,
+                        )
+                        .cloned()
+                    }) {
+                    Some((
+                        format!("class:{}:{}", class_info.module_name, class_info.decl.name),
+                        class_info.decl.type_params.len(),
+                        class_info.is_builtin,
+                    ))
+                } else {
+                    self.enums
+                        .get(name)
+                        .cloned()
+                        .or_else(|| {
+                            copy_enum_info_from_modules(
+                                name,
+                                self.imported_modules,
+                                self.module_registry,
+                            )
+                            .cloned()
+                        })
+                        .map(|enum_info| {
+                            (
+                                format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name),
+                                enum_info.decl.type_params.len(),
+                                false,
+                            )
+                        })
+                };
+                // Type lowering has already rejected unknown nominal names,
+                // unwhitelisted builtin classes, and generic arity mismatches.
+                // Transfer analysis therefore operates only on validated
+                // structural types instead of preserving unreachable fallback
+                // diagnostics that no Aurora program can observe.
+                let (key, arity, builtin) =
+                    nominal.expect("validated named type must have a structural definition");
+                assert!(
+                    !builtin,
+                    "validated builtin type must use an earlier Transfer case"
+                );
+                assert_eq!(
+                    args.len(),
+                    arity,
+                    "validated named type must have exact arity"
+                );
+                let callee = summaries.get(&key).cloned().unwrap_or_default();
+                if callee.failure.is_some() {
+                    return callee;
+                }
+                let mut result = TransferSummary::default();
+                for (index, witness) in callee.requirements {
+                    let applied = Self::prefix_transfer_summary(
+                        self.transfer_shape(&args[index], formals, summaries),
+                        &witness,
+                    );
+                    Self::merge_transfer_summary(&mut result, applied);
+                    if result.failure.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    fn prefix_transfer_summary(mut summary: TransferSummary, prefix: &str) -> TransferSummary {
+        let join = |suffix: &str| {
+            if prefix.is_empty() {
+                suffix.to_string()
+            } else if suffix.is_empty() {
+                prefix.to_string()
+            } else {
+                format!("{prefix} -> {suffix}")
+            }
+        };
+        summary.failure = summary.failure.map(|failure| join(&failure));
+        for (_, witness) in &mut summary.requirements {
+            *witness = join(witness);
+        }
+        summary
+    }
+
+    fn merge_transfer_summary(current: &mut TransferSummary, incoming: TransferSummary) -> bool {
+        let mut changed = false;
+        if current.failure.is_none() {
+            if let Some(failure) = incoming.failure {
+                current.failure = Some(failure);
+                changed = true;
+            }
+        }
+        for (index, witness) in incoming.requirements {
+            if current
+                .requirements
+                .iter()
+                .all(|(existing, _)| *existing != index)
+            {
+                current.requirements.push((index, witness));
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn require_transfer(
+        &self,
+        ty: &Type,
+        context: impl Into<String>,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let Some(reason) = self.transfer_failure(ty) else {
+            return Ok(());
+        };
+        Err(Diagnostic::coded_at(
+            "AU3008",
+            span,
+            format!(
+                "{} cannot cross a task boundary because {reason}",
+                context.into()
+            ),
+        )
+        .with_help(
+            "send owned data made only from Transfer components; keep capabilities and host resources on their owning worker",
+        ))
+    }
+
+    fn require_queue_payload_transfer(
+        &self,
+        payload_ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let Some(reason) = self.transfer_failure(payload_ty) else {
+            return Ok(());
+        };
+        Err(Diagnostic::coded_at(
+            "AU3008",
+            span,
+            format!(
+                "Queue payload `{payload_ty}` cannot cross a worker boundary because {reason}"
+            ),
+        )
+        .with_help(
+            "use a Queue payload made only from Transfer components; keep capabilities and host resources on their owning worker",
+        ))
+    }
+
+    fn consume_task_observation_right(
+        &self,
+        task: &Expr,
+        result_ty: &Type,
+        _operation: &str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let task_ty = Type::Named("Task".to_string(), vec![result_ty.clone()]);
+        if self.is_copy_type(&task_ty) {
+            return Ok(());
+        }
+        self.consume_value_expr(task, locals)
+    }
+
+    fn consume_task_collection_observation_right(
+        &self,
+        tasks: &Expr,
+        result_ty: &Type,
+        _operation: &str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let task_ty = Type::Named("Task".to_string(), vec![result_ty.clone()]);
+        if self.is_copy_type(&task_ty) {
+            return Ok(());
+        }
+        self.consume_value_expr(tasks, locals)
+    }
+
     /// Builds the `AU3005` message for a rejected non-copy indexed read.
     ///
     /// The recommended recovery depends on whether the selected value can be
@@ -3773,6 +4297,11 @@ impl<'a> FunctionChecker<'a> {
     /// holding non-cloneable `random.Rng` state to an `AU3007` dead end, so the
     /// guidance follows the same tri-state classification that rejection uses.
     fn indexed_read_guidance(&self, container: &str, selector: &str, ty: &Type) -> String {
+        if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
+            return format!(
+                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `remove({selector})` to transfer ownership instead"
+            );
+        }
         match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe if container == "map" => format!(
                 "cannot implicitly copy `{ty}` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
@@ -3806,6 +4335,11 @@ impl<'a> FunctionChecker<'a> {
         } else {
             "insert(index, value)"
         };
+        if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
+            return format!(
+                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+            );
+        }
         match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe if container == "map" => format!(
                 "cannot implicitly copy `{ty}` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`"
@@ -3843,17 +4377,411 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn nonrepeatable_task_result_in(&self, ty: &Type) -> Option<Type> {
+        let mut nominals = BTreeMap::new();
+        self.collect_transfer_nominals(ty, &mut nominals);
+        let mut summaries = nominals
+            .keys()
+            .map(|key| (key.clone(), TaskObservationSummary::default()))
+            .collect::<BTreeMap<_, _>>();
+        loop {
+            let mut changed = false;
+            for (key, nominal) in &nominals {
+                let derived = self.task_observation_nominal_summary(nominal, &summaries);
+                let current = summaries
+                    .get_mut(key)
+                    .expect("every discovered task-observation nominal has a summary");
+                changed |= Self::merge_task_observation_summary(current, derived);
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.task_observation_shape(ty, &BTreeMap::new(), &summaries)
+            .unconditional_result
+    }
+
+    fn task_observation_nominal_summary(
+        &self,
+        nominal: &TransferNominal,
+        summaries: &BTreeMap<String, TaskObservationSummary>,
+    ) -> TaskObservationSummary {
+        match nominal {
+            TransferNominal::Class(class_info) => {
+                let formals = class_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| (name.clone(), index))
+                    .collect::<BTreeMap<_, _>>();
+                let mut result = TaskObservationSummary::default();
+                for field_decl in &class_info.decl.fields {
+                    let Some(field) = class_info.fields.get(&field_decl.name) else {
+                        continue;
+                    };
+                    let field_summary = self.task_observation_shape(&field.ty, &formals, summaries);
+                    Self::merge_task_observation_summary(&mut result, field_summary);
+                    if result.unconditional_result.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+            TransferNominal::Enum(enum_info) => {
+                let formals = enum_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| (name.clone(), index))
+                    .collect::<BTreeMap<_, _>>();
+                let mut result = TaskObservationSummary::default();
+                for variant_decl in &enum_info.decl.variants {
+                    let Some(variant) = enum_info.variants.get(&variant_decl.name) else {
+                        continue;
+                    };
+                    for payload in &variant.payloads {
+                        let payload_summary =
+                            self.task_observation_shape(&payload.ty, &formals, summaries);
+                        Self::merge_task_observation_summary(&mut result, payload_summary);
+                        if result.unconditional_result.is_some() {
+                            return result;
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    fn task_observation_shape(
+        &self,
+        ty: &Type,
+        formals: &BTreeMap<String, usize>,
+        summaries: &BTreeMap<String, TaskObservationSummary>,
+    ) -> TaskObservationSummary {
+        match ty {
+            Type::Unit | Type::Module(_) => TaskObservationSummary::default(),
+            Type::TypeParam(name) => {
+                formals
+                    .get(name)
+                    .map_or_else(TaskObservationSummary::default, |index| {
+                        TaskObservationSummary {
+                            unconditional_result: None,
+                            containment_requirements: vec![*index],
+                            noncopy_requirements: Vec::new(),
+                        }
+                    })
+            }
+            Type::Tuple(elements) => {
+                let mut result = TaskObservationSummary::default();
+                for element in elements {
+                    let element_summary = self.task_observation_shape(element, formals, summaries);
+                    Self::merge_task_observation_summary(&mut result, element_summary);
+                    if result.unconditional_result.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+            Type::Named(name, args) if name == "Queue" && args.len() == 1 => {
+                TaskObservationSummary::default()
+            }
+            Type::Named(name, args) if name == "Task" && args.len() == 1 => {
+                let copy_shape = self.symbolic_copy_shape(&args[0], formals, &mut BTreeSet::new());
+                if copy_shape.intrinsic_noncopy {
+                    TaskObservationSummary {
+                        unconditional_result: Some(args[0].clone()),
+                        containment_requirements: Vec::new(),
+                        noncopy_requirements: Vec::new(),
+                    }
+                } else {
+                    TaskObservationSummary {
+                        unconditional_result: None,
+                        containment_requirements: Vec::new(),
+                        noncopy_requirements: copy_shape
+                            .noncopy_formals
+                            .into_iter()
+                            .map(|index| (index, args[0].clone()))
+                            .collect(),
+                    }
+                }
+            }
+            Type::Named(name, args)
+                if matches!(
+                    name.as_str(),
+                    "Vec"
+                        | "Set"
+                        | "Map"
+                        | "MapEntry"
+                        | "Option"
+                        | "Result"
+                        | "SendError"
+                        | "QueueReceive"
+                        | "TaskResult"
+                        | "WaitAny"
+                        | "WaitAll"
+                ) =>
+            {
+                let mut result = TaskObservationSummary::default();
+                for arg in args {
+                    let arg_summary = self.task_observation_shape(arg, formals, summaries);
+                    Self::merge_task_observation_summary(&mut result, arg_summary);
+                    if result.unconditional_result.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
+            Type::Named(name, args) => {
+                let (key, params) = if let Some(class_info) =
+                    self.classes.get(name).cloned().or_else(|| {
+                        copy_class_info_from_modules(
+                            name,
+                            self.imported_modules,
+                            self.module_registry,
+                        )
+                        .cloned()
+                    }) {
+                    if class_info.is_builtin || args.len() != class_info.decl.type_params.len() {
+                        return TaskObservationSummary::default();
+                    }
+                    (
+                        format!("class:{}:{}", class_info.module_name, class_info.decl.name),
+                        class_info.decl.type_params,
+                    )
+                } else if let Some(enum_info) = self.enums.get(name).cloned().or_else(|| {
+                    copy_enum_info_from_modules(name, self.imported_modules, self.module_registry)
+                        .cloned()
+                }) {
+                    if args.len() != enum_info.decl.type_params.len() {
+                        return TaskObservationSummary::default();
+                    }
+                    (
+                        format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name),
+                        enum_info.decl.type_params,
+                    )
+                } else {
+                    return TaskObservationSummary::default();
+                };
+                let substitutions = substitutions_from_decl_type_args(&params, args);
+                let callee = summaries.get(&key).cloned().unwrap_or_default();
+                let mut result = TaskObservationSummary::default();
+                if let Some(template) = callee.unconditional_result {
+                    result.unconditional_result = Some(substitute_type(&template, &substitutions));
+                    return result;
+                }
+                for index in callee.containment_requirements {
+                    let arg_summary = self.task_observation_shape(&args[index], formals, summaries);
+                    Self::merge_task_observation_summary(&mut result, arg_summary);
+                    if result.unconditional_result.is_some() {
+                        return result;
+                    }
+                }
+                for (index, template) in callee.noncopy_requirements {
+                    let copy_shape =
+                        self.symbolic_copy_shape(&args[index], formals, &mut BTreeSet::new());
+                    let applied_template = substitute_type(&template, &substitutions);
+                    if copy_shape.intrinsic_noncopy {
+                        result.unconditional_result = Some(applied_template);
+                        return result;
+                    }
+                    for formal in copy_shape.noncopy_formals {
+                        if result
+                            .noncopy_requirements
+                            .iter()
+                            .all(|(existing, _)| *existing != formal)
+                        {
+                            result
+                                .noncopy_requirements
+                                .push((formal, applied_template.clone()));
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    fn symbolic_copy_shape(
+        &self,
+        ty: &Type,
+        formals: &BTreeMap<String, usize>,
+        visiting: &mut BTreeSet<String>,
+    ) -> SymbolicCopyShape {
+        match ty {
+            Type::Unit => SymbolicCopyShape::default(),
+            Type::Module(_) => SymbolicCopyShape {
+                intrinsic_noncopy: true,
+                noncopy_formals: Vec::new(),
+            },
+            Type::TypeParam(name) => formals.get(name).map_or(
+                SymbolicCopyShape {
+                    intrinsic_noncopy: true,
+                    noncopy_formals: Vec::new(),
+                },
+                |index| SymbolicCopyShape {
+                    intrinsic_noncopy: false,
+                    noncopy_formals: vec![*index],
+                },
+            ),
+            Type::Tuple(elements) => {
+                self.combine_symbolic_copy_shapes(elements.iter(), formals, visiting)
+            }
+            Type::Named(name, args) if is_builtin_copy_named_type(name, args) => {
+                SymbolicCopyShape::default()
+            }
+            Type::Named(name, args)
+                if matches!(
+                    name.as_str(),
+                    "Task" | "Option" | "SendError" | "QueueReceive"
+                ) && args.len() == 1 =>
+            {
+                self.symbolic_copy_shape(&args[0], formals, visiting)
+            }
+            Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+                self.combine_symbolic_copy_shapes(args.iter(), formals, visiting)
+            }
+            Type::Named(name, args) => {
+                let key = ty.to_string();
+                if !visiting.insert(key.clone()) {
+                    return SymbolicCopyShape {
+                        intrinsic_noncopy: true,
+                        noncopy_formals: Vec::new(),
+                    };
+                }
+                let result = if let Some(class_info) =
+                    self.classes.get(name).cloned().or_else(|| {
+                        copy_class_info_from_modules(
+                            name,
+                            self.imported_modules,
+                            self.module_registry,
+                        )
+                        .cloned()
+                    }) {
+                    if !class_info.decl.copy || args.len() != class_info.decl.type_params.len() {
+                        SymbolicCopyShape {
+                            intrinsic_noncopy: true,
+                            noncopy_formals: Vec::new(),
+                        }
+                    } else {
+                        self.combine_symbolic_copy_shapes(args.iter(), formals, visiting)
+                    }
+                } else if let Some(enum_info) = self.enums.get(name).cloned().or_else(|| {
+                    copy_enum_info_from_modules(name, self.imported_modules, self.module_registry)
+                        .cloned()
+                }) {
+                    assert_eq!(
+                        args.len(),
+                        enum_info.decl.type_params.len(),
+                        "validated enum type must have exact arity"
+                    );
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    let payload_types = enum_info
+                        .decl
+                        .variants
+                        .iter()
+                        .filter_map(|variant_decl| enum_info.variants.get(&variant_decl.name))
+                        .flat_map(|variant| variant.payloads.iter())
+                        .map(|payload| substitute_type(&payload.ty, &substitutions))
+                        .collect::<Vec<_>>();
+                    self.combine_symbolic_copy_shapes(payload_types.iter(), formals, visiting)
+                } else {
+                    SymbolicCopyShape {
+                        intrinsic_noncopy: true,
+                        noncopy_formals: Vec::new(),
+                    }
+                };
+                visiting.remove(&key);
+                result
+            }
+        }
+    }
+
+    fn combine_symbolic_copy_shapes<'b>(
+        &self,
+        types: impl Iterator<Item = &'b Type>,
+        formals: &BTreeMap<String, usize>,
+        visiting: &mut BTreeSet<String>,
+    ) -> SymbolicCopyShape {
+        let mut result = SymbolicCopyShape::default();
+        for ty in types {
+            let child = self.symbolic_copy_shape(ty, formals, visiting);
+            result.intrinsic_noncopy |= child.intrinsic_noncopy;
+            for formal in child.noncopy_formals {
+                if !result.noncopy_formals.contains(&formal) {
+                    result.noncopy_formals.push(formal);
+                }
+            }
+        }
+        result
+    }
+
+    fn merge_task_observation_summary(
+        current: &mut TaskObservationSummary,
+        incoming: TaskObservationSummary,
+    ) -> bool {
+        let mut changed = false;
+        if current.unconditional_result.is_none() {
+            if let Some(result) = incoming.unconditional_result {
+                current.unconditional_result = Some(result);
+                changed = true;
+            }
+        }
+        for index in incoming.containment_requirements {
+            if !current.containment_requirements.contains(&index) {
+                current.containment_requirements.push(index);
+                changed = true;
+            }
+        }
+        for (index, template) in incoming.noncopy_requirements {
+            if current
+                .noncopy_requirements
+                .iter()
+                .all(|(existing, _)| *existing != index)
+            {
+                current.noncopy_requirements.push((index, template));
+                changed = true;
+            }
+        }
+        changed
+    }
+
     fn reject_rng_duplication(
         &self,
         operation: &str,
         ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
+        // These observers transfer a non-repeatable result out of their
+        // unique Task right. Their lowering must move rather than clone; the
+        // duplication check still applies to random.Rng, which is not
+        // Transfer at all.
+        let transfers_unique_task_result = matches!(
+            operation,
+            "Task.result" | "Task.result_or_none" | "Task.result_or" | "wait_any" | "wait_all"
+        );
         let operation = if operation.contains('`') {
             operation.to_string()
         } else {
             format!("`{operation}`")
         };
+        if !transfers_unique_task_result {
+            if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
+                return Err(Diagnostic::coded_at(
+                    "AU3009",
+                    span,
+                    format!(
+                        "cannot use {operation} because duplicating `{ty}` would create a second observation right for non-repeatable task result `{result_ty}`"
+                    ),
+                )
+                .with_help(
+                    "transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers",
+                ));
+            }
+        }
         let qualifier = match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe => return Ok(()),
             RngCloneSafety::ContainsRng => "contains",
@@ -4696,6 +5624,7 @@ impl<'a> FunctionChecker<'a> {
     fn type_supports_builtin_clone(&self, ty: &Type) -> bool {
         matches!(ty, Type::Named(name, _) if BuiltinMember::resolve(name, "clone").is_some())
             && self.rng_clone_safety(ty) == RngCloneSafety::Safe
+            && self.nonrepeatable_task_result_in(ty).is_none()
     }
 
     fn moved_value_diagnostic(
@@ -9453,6 +10382,7 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
+                self.require_queue_payload_transfer(&explicit_args[0], span)?;
                 let capacity_params = [crate::call::CallableParam::optional("capacity")];
                 let ordered_args = bind_call_arguments(
                     &format!("class `{}`", name),
@@ -9756,6 +10686,18 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         self.reject_rng_duplication(builtin.name(), &task_args[0], span)?;
+                        let task_handle_ty =
+                            Type::Named("Task".to_string(), vec![task_args[0].clone()]);
+                        if !self.is_copy_type(&task_handle_ty) {
+                            self.reject_conditional_value_argument_overlap(
+                                &tasks_arg.value,
+                                &tasks_ty,
+                                &format!("`{}` tasks argument", builtin.name()),
+                                args,
+                                Some(tasks_arg),
+                                locals,
+                            )?;
+                        }
                         if let Some(timeout_arg) = ordered_args[1] {
                             let actual = self.type_of_expr_hint(
                                 &timeout_arg.value,
@@ -9773,6 +10715,12 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                             }
                         }
+                        self.consume_task_collection_observation_right(
+                            &tasks_arg.value,
+                            &task_args[0],
+                            builtin.name(),
+                            locals,
+                        )?;
                         Ok(Type::Named(
                             match builtin {
                                 BuiltinFunction::WaitAny => "WaitAny".to_string(),
@@ -11195,6 +12143,7 @@ impl<'a> FunctionChecker<'a> {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
+                                    self.require_queue_payload_transfer(&receiver_args[0], span)?;
                                     let send_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -11340,6 +12289,16 @@ impl<'a> FunctionChecker<'a> {
                                 &receiver_args[0],
                                 span,
                             )?;
+                            let task_ty =
+                                Type::Named("Task".to_string(), vec![receiver_args[0].clone()]);
+                            self.reject_conditional_value_argument_overlap(
+                                object,
+                                &task_ty,
+                                "Task result receiver",
+                                args,
+                                None,
+                                locals,
+                            )?;
                             return match builtin_member {
                                 BuiltinMember::TaskResult | BuiltinMember::TaskResultOrNone => {
                                     if let Some(timeout_arg) = ordered_args[0] {
@@ -11358,6 +12317,12 @@ impl<'a> FunctionChecker<'a> {
                                             ));
                                         }
                                     }
+                                    self.consume_task_observation_right(
+                                        object,
+                                        &receiver_args[0],
+                                        field,
+                                        locals,
+                                    )?;
                                     if matches!(builtin_member, BuiltinMember::TaskResultOrNone) {
                                         Ok(Type::Named(
                                             "Option".to_string(),
@@ -11413,6 +12378,12 @@ impl<'a> FunctionChecker<'a> {
                                             ));
                                         }
                                     }
+                                    self.consume_task_observation_right(
+                                        object,
+                                        &receiver_args[0],
+                                        field,
+                                        locals,
+                                    )?;
                                     Ok(receiver_args[0].clone())
                                 }
                                 _ => unreachable!("unexpected task builtin member"),
@@ -11522,7 +12493,7 @@ impl<'a> FunctionChecker<'a> {
                                     ReceiverKind::Value;
                                     callable.signature.param_passings.len()
                                 ];
-                                self.type_check_callable_args(
+                                let checked_callable = self.type_check_callable_args_detailed(
                                     &callable.display_name,
                                     &callable.decl.type_params,
                                     &callable.decl.params,
@@ -11537,11 +12508,62 @@ impl<'a> FunctionChecker<'a> {
                                     None,
                                     callable.seed_substitutions,
                                 )?;
+                                let transfer_args = bind_call_arguments(
+                                    &callable.display_name,
+                                    &callable_params_from_decl(&callable.decl.params),
+                                    spawn_args,
+                                    span,
+                                    CallConvention::PositionalOrNamed,
+                                )?;
+                                for (index, (argument, param)) in transfer_args
+                                    .into_iter()
+                                    .zip(callable.decl.params.iter())
+                                    .enumerate()
+                                {
+                                    let value_span = argument
+                                        .map(|argument| argument.span)
+                                        .or_else(|| {
+                                            param.default.as_ref().map(|default| default.span)
+                                        })
+                                        .unwrap_or(param.span);
+                                    let concrete_param =
+                                        checked_callable.params.get(index).ok_or_else(|| {
+                                            Diagnostic::at(
+                                                span,
+                                                "internal error: task parameter type is missing",
+                                            )
+                                        })?;
+                                    self.require_transfer(
+                                        concrete_param,
+                                        format!("task argument `{}`", param.name),
+                                        value_span,
+                                    )
+                                    .map_err(|diagnostic| {
+                                        diagnostic.with_secondary(
+                                            param.span,
+                                            format!(
+                                                "task parameter `{}` is declared here",
+                                                param.name
+                                            ),
+                                        )
+                                    })?;
+                                }
+                                self.require_transfer(
+                                    &checked_callable.return_type,
+                                    format!("task result `{}`", checked_callable.return_type),
+                                    args[target_index].span,
+                                )
+                                .map_err(|diagnostic| {
+                                    diagnostic.with_secondary(
+                                        callable.decl.return_type.span,
+                                        "task target return type is declared here",
+                                    )
+                                })?;
                                 return Ok(
                                     if matches!(field.as_str(), "start" | "start_with_stack") {
                                         Type::Named(
                                             "Task".to_string(),
-                                            vec![callable.signature.return_type.clone()],
+                                            vec![checked_callable.return_type],
                                         )
                                     } else {
                                         Type::Unit
@@ -13016,25 +14038,27 @@ impl<'a> FunctionChecker<'a> {
                                 span,
                                 locals,
                             )?;
-                            return self.type_check_callable_args_seeded(
-                                &format!("method `{}`", field),
-                                &method.decl.type_params,
-                                &method.decl.params,
-                                &method.signature.param_passings,
-                                &method.signature.params,
-                                &method.signature.return_type,
-                                &method.type_param_bounds,
-                                &method.signature.rng_clone_safe_type_params,
-                                args,
-                                span,
-                                locals,
-                                expected,
-                                substitutions_from_decl_type_args(
-                                    &class_info.decl.type_params,
-                                    type_args,
-                                ),
-                                receiver_borrows,
-                            );
+                            return self
+                                .type_check_callable_args_seeded(
+                                    &format!("method `{}`", field),
+                                    &method.decl.type_params,
+                                    &method.decl.params,
+                                    &method.signature.param_passings,
+                                    &method.signature.params,
+                                    &method.signature.return_type,
+                                    &method.type_param_bounds,
+                                    &method.signature.rng_clone_safe_type_params,
+                                    args,
+                                    span,
+                                    locals,
+                                    expected,
+                                    substitutions_from_decl_type_args(
+                                        &class_info.decl.type_params,
+                                        type_args,
+                                    ),
+                                    receiver_borrows,
+                                )
+                                .map(|checked| checked.return_type);
                         }
                     }
                 }
@@ -13053,22 +14077,24 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             locals,
                         )?;
-                        return self.type_check_callable_args_seeded(
-                            &format!("method `{}`", field),
-                            &method.decl.type_params,
-                            &method.decl.params,
-                            &method.signature.param_passings,
-                            &method.signature.params,
-                            &method.signature.return_type,
-                            &method.type_param_bounds,
-                            &method.signature.rng_clone_safe_type_params,
-                            args,
-                            span,
-                            locals,
-                            expected,
-                            HashMap::new(),
-                            receiver_borrows,
-                        );
+                        return self
+                            .type_check_callable_args_seeded(
+                                &format!("method `{}`", field),
+                                &method.decl.type_params,
+                                &method.decl.params,
+                                &method.signature.param_passings,
+                                &method.signature.params,
+                                &method.signature.return_type,
+                                &method.type_param_bounds,
+                                &method.signature.rng_clone_safe_type_params,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                HashMap::new(),
+                                receiver_borrows,
+                            )
+                            .map(|checked| checked.return_type);
                     }
                 }
                 if let Some((_trait_impl, method, impl_substitutions)) =
@@ -13096,22 +14122,24 @@ impl<'a> FunctionChecker<'a> {
                         span,
                         locals,
                     )?;
-                    return self.type_check_callable_args_seeded(
-                        &format!("method `{}`", field),
-                        &method.decl.type_params,
-                        &method.decl.params,
-                        &method.signature.param_passings,
-                        &substituted_params,
-                        &substituted_return_type,
-                        &method.type_param_bounds,
-                        &method.signature.rng_clone_safe_type_params,
-                        args,
-                        span,
-                        locals,
-                        expected,
-                        impl_substitutions,
-                        receiver_borrows,
-                    );
+                    return self
+                        .type_check_callable_args_seeded(
+                            &format!("method `{}`", field),
+                            &method.decl.type_params,
+                            &method.decl.params,
+                            &method.signature.param_passings,
+                            &substituted_params,
+                            &substituted_return_type,
+                            &method.type_param_bounds,
+                            &method.signature.rng_clone_safe_type_params,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            impl_substitutions,
+                            receiver_borrows,
+                        )
+                        .map(|checked| checked.return_type);
                 }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(_name, type_args), "to_float")
@@ -15418,6 +16446,39 @@ impl<'a> FunctionChecker<'a> {
         self.reject_retained_access_overlap(&retained_receiver, &argument_accesses)
     }
 
+    fn reject_conditional_value_argument_overlap(
+        &self,
+        consumed: &Expr,
+        consumed_ty: &Type,
+        consumed_label: &str,
+        args: &[Argument],
+        skipped_argument: Option<&Argument>,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let retained = self
+            .retained_place_access(consumed, consumed_ty, ReceiverKind::Value, consumed_label)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if retained.is_empty() {
+            return Ok(());
+        }
+        let mut later_accesses = Vec::new();
+        for argument in args {
+            if skipped_argument.is_some_and(|skipped| std::ptr::eq(skipped, argument)) {
+                continue;
+            }
+            self.collect_expr_borrowed_places(&argument.value, locals, &mut later_accesses)?;
+            self.collect_expr_consumed_places(&argument.value, locals, &mut later_accesses)?;
+            self.collect_expr_place_reads(
+                &argument.value,
+                locals,
+                "argument read",
+                &mut later_accesses,
+            );
+        }
+        self.reject_retained_access_overlap(&retained, &later_accesses)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn reject_retained_expr_overlap(
         &self,
@@ -17191,10 +18252,83 @@ impl<'a> FunctionChecker<'a> {
         Ok(false)
     }
 
+    fn spawn_type_name_from_expr(expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some(name.clone()),
+            ExprKind::Member { object, field } => Some(format!(
+                "{}.{}",
+                Self::spawn_type_name_from_expr(object)?,
+                field
+            )),
+            ExprKind::Group(inner) => Self::spawn_type_name_from_expr(inner),
+            _ => None,
+        }
+    }
+
+    fn spawn_type_ref_from_expr(expr: &Expr) -> Option<TypeRef> {
+        match &expr.kind {
+            ExprKind::Name(_) | ExprKind::Member { .. } => Some(TypeRef::named(
+                Self::spawn_type_name_from_expr(expr)?,
+                Vec::new(),
+                false,
+                expr.span,
+            )),
+            ExprKind::Group(inner) => Self::spawn_type_ref_from_expr(inner),
+            ExprKind::Index { object, index } => {
+                let mut outer = Self::spawn_type_ref_from_expr(object)?;
+                let crate::ast::TypeRefKind::Named { args, .. } = &mut outer.kind else {
+                    return None;
+                };
+                if let ExprKind::Tuple(elements) = &index.kind {
+                    args.extend(
+                        elements
+                            .iter()
+                            .map(Self::spawn_type_ref_from_expr)
+                            .collect::<Option<Vec<_>>>()?,
+                    );
+                } else {
+                    args.push(Self::spawn_type_ref_from_expr(index)?);
+                }
+                Some(outer)
+            }
+            ExprKind::Tuple(elements) => Some(TypeRef::tuple(
+                elements
+                    .iter()
+                    .map(Self::spawn_type_ref_from_expr)
+                    .collect::<Option<Vec<_>>>()?,
+                false,
+                expr.span,
+            )),
+            _ => None,
+        }
+    }
+
     fn resolve_spawn_callable(&self, callee: &Expr) -> Result<ResolvedCallableInfo> {
-        let base_callee = match &callee.kind {
-            ExprKind::Specialize { expr, .. } => &**expr,
-            _ => callee,
+        let mut indexed_type_args = Vec::new();
+        let (base_callee, callable_type_args) = match &callee.kind {
+            ExprKind::Index { object, index } => {
+                if let ExprKind::Tuple(elements) = &index.kind {
+                    for element in elements {
+                        let Some(type_arg) = Self::spawn_type_ref_from_expr(element) else {
+                            return Err(Diagnostic::at(
+                                callee.span,
+                                "task target indexing is not a callable type specialization",
+                            ));
+                        };
+                        indexed_type_args.push(type_arg);
+                    }
+                } else {
+                    let Some(type_arg) = Self::spawn_type_ref_from_expr(index) else {
+                        return Err(Diagnostic::at(
+                            callee.span,
+                            "task target indexing is not a callable type specialization",
+                        ));
+                    };
+                    indexed_type_args.push(type_arg);
+                }
+                (&**object, Some(indexed_type_args.as_slice()))
+            }
+            _ => self.peel_specialization(callee),
         };
 
         match &base_callee.kind {
@@ -17208,12 +18342,22 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     )
                 })?;
+                let seed_substitutions = if let Some(type_args) = callable_type_args {
+                    self.explicit_type_substitutions(
+                        &function.decl.type_params,
+                        type_args,
+                        callee.span,
+                        &format!("function `{function_name}`"),
+                    )?
+                } else {
+                    HashMap::new()
+                };
                 Ok(ResolvedCallableInfo {
                     display_name: function_name.clone(),
                     decl: function.decl.clone(),
                     signature: function.signature.clone(),
                     type_param_bounds: function.type_param_bounds.clone(),
-                    seed_substitutions: HashMap::new(),
+                    seed_substitutions,
                 })
             }
             ExprKind::Member { object, field } => {
@@ -17223,7 +18367,8 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 if method.decl.receiver.is_none() {
-                                    let seed_substitutions = if let Some(type_args) = object_type_args
+                                    let mut seed_substitutions = if let Some(type_args) =
+                                        object_type_args
                                     {
                                         self.explicit_type_substitutions(
                                             &class_info.decl.type_params,
@@ -17234,6 +18379,32 @@ impl<'a> FunctionChecker<'a> {
                                     } else {
                                         HashMap::new()
                                     };
+                                    if let Some(type_args) = callable_type_args {
+                                        let method_substitutions = self
+                                            .explicit_type_substitutions(
+                                                &method.decl.type_params,
+                                                type_args,
+                                                callee.span,
+                                                &format!(
+                                                    "associated method `{}.{field}`",
+                                                    item_name
+                                                ),
+                                            )?;
+                                        for (name, ty) in method_substitutions {
+                                            if let Some(existing) =
+                                                seed_substitutions.insert(name.clone(), ty.clone())
+                                            {
+                                                if existing != ty {
+                                                    return Err(Diagnostic::at(
+                                                        callee.span,
+                                                        format!(
+                                                            "conflicting explicit type arguments resolve `{name}` as both `{existing}` and `{ty}`"
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
                                     return Ok(ResolvedCallableInfo {
                                         display_name: format!("{}.{}", item_name, field),
                                         decl: method.decl.clone(),
@@ -17247,19 +18418,31 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
 
-                if let Some((module_path, function_name)) = self.qualified_module_item(callee) {
+                if let Some((module_path, function_name)) =
+                    self.qualified_module_item(base_callee)
+                {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(function) = namespace
                             .functions
                             .get(&function_name)
                             .or_else(|| namespace.all_functions.get(&function_name))
                         {
+                            let seed_substitutions = if let Some(type_args) = callable_type_args {
+                                self.explicit_type_substitutions(
+                                    &function.decl.type_params,
+                                    type_args,
+                                    callee.span,
+                                    &format!("function `{}.{}`", module_path, function_name),
+                                )?
+                            } else {
+                                HashMap::new()
+                            };
                             return Ok(ResolvedCallableInfo {
                                 display_name: format!("{}.{}", module_path, function_name),
                                 decl: function.decl.clone(),
                                 signature: function.signature.clone(),
                                 type_param_bounds: function.type_param_bounds.clone(),
-                                seed_substitutions: HashMap::new(),
+                                seed_substitutions,
                             });
                         }
                     }
@@ -17269,7 +18452,8 @@ impl<'a> FunctionChecker<'a> {
                     if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_none() {
-                                let seed_substitutions = if let Some(type_args) = object_type_args {
+                                let mut seed_substitutions =
+                                    if let Some(type_args) = object_type_args {
                                     self.explicit_type_substitutions(
                                         &class_info.decl.type_params,
                                         type_args,
@@ -17279,6 +18463,32 @@ impl<'a> FunctionChecker<'a> {
                                 } else {
                                     HashMap::new()
                                 };
+                                if let Some(type_args) = callable_type_args {
+                                    let method_substitutions =
+                                        self.explicit_type_substitutions(
+                                            &method.decl.type_params,
+                                            type_args,
+                                            callee.span,
+                                            &format!(
+                                                "associated method `{}.{field}`",
+                                                class_name
+                                            ),
+                                        )?;
+                                    for (name, ty) in method_substitutions {
+                                        if let Some(existing) =
+                                            seed_substitutions.insert(name.clone(), ty.clone())
+                                        {
+                                            if existing != ty {
+                                                return Err(Diagnostic::at(
+                                                    callee.span,
+                                                    format!(
+                                                        "conflicting explicit type arguments resolve `{name}` as both `{existing}` and `{ty}`"
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
                                 return Ok(ResolvedCallableInfo {
                                     display_name: format!("{}.{}", class_name, field),
                                     decl: method.decl.clone(),
@@ -17320,6 +18530,41 @@ impl<'a> FunctionChecker<'a> {
         expected_return: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
     ) -> Result<Type> {
+        self.type_check_callable_args_detailed(
+            callee_name,
+            callee_type_params,
+            param_decls,
+            param_passings,
+            param_types,
+            return_type,
+            callee_type_param_bounds,
+            callee_rng_clone_safe_type_params,
+            args,
+            span,
+            locals,
+            expected_return,
+            seed_substitutions,
+        )
+        .map(|checked| checked.return_type)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn type_check_callable_args_detailed(
+        &self,
+        callee_name: &str,
+        callee_type_params: &[String],
+        param_decls: &[Param],
+        param_passings: &[ReceiverKind],
+        param_types: &[Type],
+        return_type: &Type,
+        callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
+        callee_rng_clone_safe_type_params: &BTreeSet<String>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_return: Option<&Type>,
+        seed_substitutions: HashMap<String, Type>,
+    ) -> Result<CheckedCallableTypes> {
         self.type_check_callable_args_seeded(
             callee_name,
             callee_type_params,
@@ -17355,7 +18600,7 @@ impl<'a> FunctionChecker<'a> {
         expected_return: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
         seeded_borrowed_places: Vec<BorrowedCallPlace>,
-    ) -> Result<Type> {
+    ) -> Result<CheckedCallableTypes> {
         let ordered_args = bind_call_arguments(
             callee_name,
             &callable_params_from_decl(param_decls),
@@ -17500,6 +18745,10 @@ impl<'a> FunctionChecker<'a> {
         )?;
 
         let resolved_return_type = substitute_type(return_type, &substitutions);
+        let resolved_param_types = param_types
+            .iter()
+            .map(|param| substitute_type(param, &substitutions))
+            .collect::<Vec<_>>();
 
         let mut enclosing_accesses = seeded_borrowed_places.clone();
         for (
@@ -17699,7 +18948,10 @@ impl<'a> FunctionChecker<'a> {
 
         self.invalidate_match_borrow_bindings_for_borrowed_places(&borrowed_places, locals);
 
-        Ok(resolved_return_type)
+        Ok(CheckedCallableTypes {
+            params: resolved_param_types,
+            return_type: resolved_return_type,
+        })
     }
 
     fn enum_variants_for_type(&self, ty: &Type) -> Option<Vec<(String, Vec<Type>)>> {

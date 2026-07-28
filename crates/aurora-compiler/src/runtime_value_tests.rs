@@ -1,6 +1,6 @@
 use super::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, create_dir_once,
-    decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
+    cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
+    create_dir_once, decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
     float_floor_divmod, io_decode_utf8, io_error, lock_mutex, non_unix_tls_listener_wait_timeout,
     option_none, option_some, process_error_cancelled, process_error_no_command,
     process_error_other, process_error_spawn, process_error_timed_out,
@@ -37,7 +37,7 @@ use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -2035,6 +2035,29 @@ fn nested_stack_allocation_failure_is_synchronous_and_does_not_enqueue_a_task() 
 }
 
 #[test]
+fn root_scheduler_stack_allocation_failure_is_synchronous_and_preserves_admission_order() {
+    let mut scheduler = super::LightweightTaskScheduler::new();
+    super::fail_next_lightweight_task_stack_allocation();
+    let error = scheduler
+        .spawn_task(None, || Ok(Value::Unit))
+        .expect_err("a root scheduler must report stack-allocation failure before admission");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "injected Aurora task stack allocation failure"
+    );
+
+    let healthy = scheduler
+        .spawn_task(None, || Ok(Value::Bool(true)))
+        .expect("the rejected task must not consume the first scheduler admission");
+    scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
+    match healthy.completed_result() {
+        Some(TaskExecutionResult::Ready(Ok(Value::Bool(true)))) => {}
+        other => panic!("expected the first admitted task to complete, found {other:?}"),
+    }
+}
+
+#[test]
 fn pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown() {
     struct DropProbe(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for DropProbe {
@@ -2097,6 +2120,67 @@ fn direct_cleanup_can_spawn_a_child_before_the_parent_is_retired() {
     assert_eq!(
         result.expect("a cleanup-spawned child should be drained safely"),
         Value::Bool(true)
+    );
+}
+
+#[test]
+fn explicit_stack_tasks_preserve_single_consumer_results_through_forced_cleanup() {
+    let forced_cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cleanup_probe = forced_cleanups.clone();
+    let result = run_lightweight_root_task(move || {
+        let completed = super::spawn_lightweight_task_with_stack_and_result_repeatability(
+            512 * 1024,
+            false,
+            || Ok(Value::String("owned result".to_string())),
+        )?;
+        completed
+            .claim_result_observation()
+            .expect("a stacked task should expose one owned-result observation");
+        assert_eq!(
+            wait_task_ready(&completed)?,
+            Value::String("owned result".to_string())
+        );
+        let error = completed
+            .claim_result_observation()
+            .expect_err("the explicit-stack path must preserve single-consumer result metadata");
+        assert_eq!(error.code, "AU4001");
+
+        let cancelled = unsafe {
+            super::spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability(
+                CancellationContext::default(),
+                Some(512 * 1024),
+                false,
+                || {
+                    super::exit_current_lightweight_task(TaskExecutionResult::Cancelled);
+                },
+                move || {
+                    cleanup_probe.fetch_add(1, Ordering::SeqCst);
+                },
+            )?
+        };
+        let _ = super::yield_now_current_lightweight_task();
+        assert!(matches!(
+            cancelled.completed_result(),
+            Some(TaskExecutionResult::Cancelled)
+        ));
+        cancelled
+            .claim_result_observation()
+            .expect("a force-cleaned task should expose its one cancelled observation");
+        let error = cancelled
+            .claim_result_observation()
+            .expect_err("forced cleanup must retain the single-consumer observation state");
+        assert_eq!(error.code, "AU4001");
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("explicit-stack result ownership should survive both completion paths"),
+        Value::Unit
+    );
+    assert_eq!(
+        forced_cleanups.load(Ordering::SeqCst),
+        1,
+        "forced exit must run the externalized cleanup exactly once"
     );
 }
 
@@ -5149,6 +5233,92 @@ fn task_execution_finalization_maps_failures_to_task_results() {
     assert!(cancelled_root
         .message
         .contains("root Aurora task was cancelled"));
+}
+
+#[test]
+fn task_result_observation_claim_is_shared_by_aliases_and_repeatable_when_allowed() {
+    let repeatable = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::Bool(true))),
+        true,
+    );
+    repeatable
+        .claim_result_observation()
+        .expect("repeatable result should allow its first observation");
+    repeatable
+        .claim_result_observation()
+        .expect("repeatable result should allow repeated observation");
+
+    let single_consumer = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        false,
+    );
+    let alias = single_consumer.clone();
+    single_consumer
+        .claim_result_observation()
+        .expect("single-consumer result should allow its first observation");
+    let error = alias
+        .claim_result_observation()
+        .expect_err("an alias must share the consumed observation right");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "task result has already been observed; non-repeatable task results allow exactly one observing attempt"
+    );
+}
+
+#[test]
+fn task_result_observation_claim_has_exactly_one_race_winner() {
+    let task = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        false,
+    );
+    let barrier = Arc::new(Barrier::new(3));
+    let observers = (0..2)
+        .map(|_| {
+            let task = task.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                task.claim_result_observation()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outcomes = observers
+        .into_iter()
+        .map(|observer| observer.join().expect("observer should not panic"))
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    let loser = outcomes
+        .into_iter()
+        .find_map(std::result::Result::err)
+        .expect("one competing observer should lose");
+    assert_eq!(loser.code, "AU4001");
+}
+
+#[test]
+fn task_result_batch_claim_rejects_duplicate_aliases_and_cleanup_does_not_consume() {
+    let task = TaskValue::from_handle_with_result_repeatability(
+        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        false,
+    );
+    let alias = task.clone();
+    assert_eq!(
+        wait_task_ready(&task).expect("task should complete before cleanup probe"),
+        Value::String("owned".to_string())
+    );
+    let cancellation = CancellationContext::default();
+    assert!(!task_group_cleanup_should_cancel(
+        std::slice::from_ref(&task),
+        &cancellation
+    ));
+
+    let error = claim_task_result_observations(&[task.clone(), alias])
+        .expect_err("one helper must not deliver a non-repeatable result twice");
+    assert_eq!(error.code, "AU4001");
+    let error = claim_task_result_observations(&[task])
+        .expect_err("the failed duplicate attempt must still consume the observation right");
+    assert_eq!(error.code, "AU4001");
 }
 
 #[test]

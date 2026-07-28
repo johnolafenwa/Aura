@@ -714,6 +714,102 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_task_lowering_preserves_specialized_repeatability_and_owned_observers() {
+    let source = r#"
+def relay[T](value: own T) -> T:
+    return value
+
+def int_worker() -> int64:
+    return 1
+
+def string_worker() -> String:
+    return "value"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        int_task = group.start(relay[int64], 1)
+        int_result = int_task.result_or(0)
+
+        string_task = group.start_with_stack(262144, relay[String], "value")
+        string_result = string_task.result_or("")
+
+        int_tasks = [group.start(int_worker)]
+        any_int = wait_any(int_tasks)
+        string_tasks = [group.start(string_worker)]
+        all_strings = wait_all(string_tasks)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source)
+        .expect("specialized task ownership source should lower to direct MIR");
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let starts = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::StartTask {
+                        result_is_copy,
+                        stack_size,
+                        ..
+                    },
+                ..
+            } => Some((*result_is_copy, stack_size.is_some())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts,
+        vec![(true, false), (false, true), (true, false), (false, false)]
+    );
+    assert!(main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: Operand::MovePlace(place),
+                        field,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            } if place == "string_task" && field == "result_or"
+        )));
+    assert!(main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    args,
+                },
+                ..
+            } if name == "wait_all"
+                && matches!(
+                    args.first().map(|arg| &arg.value),
+                    Some(Operand::MovePlace(place)) if place == "string_tasks"
+                )
+        )));
+
+    let object = emit_host_object(&mir)
+        .expect("specialized task starts and consuming observers should emit directly");
+    assert!(!object.is_empty());
+}
+
+#[test]
 fn native_loop_safepoint_elides_runtime_call_when_no_sibling_can_run() {
     let source = r#"
 def main() -> int32:
@@ -5896,10 +5992,9 @@ def main() -> int32:
     missing_return_codegen
         .function_return_types
         .remove("worker");
-    let missing_return_error = missing_return_codegen
+    missing_return_codegen
         .define_function(&main)
-        .expect_err("task start should reject missing task return metadata");
-    assert!(missing_return_error.contains("does not know return type for `worker`"));
+        .expect("task start repeatability is carried by MIR and needs no return-type side table");
 
     let mut borrowed_task_start_mir = task_start_mir.clone();
     let borrowed_main_mut = borrowed_task_start_mir

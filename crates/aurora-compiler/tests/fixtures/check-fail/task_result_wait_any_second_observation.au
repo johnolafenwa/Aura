@@ -1,0 +1,9 @@
+def make_text() -> String:
+    return "once"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        tasks = [group.start(make_text)]
+        print(wait_any(tasks))
+        print(wait_any(tasks))
+    return 0

@@ -1,0 +1,13 @@
+def make_text() -> String:
+    return "nested"
+
+def make_task() -> Task[String]:
+    with TaskGroup() as group:
+        return group.start(make_text)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(make_task)
+        print(task.result())
+        print(task.result())
+    return 0

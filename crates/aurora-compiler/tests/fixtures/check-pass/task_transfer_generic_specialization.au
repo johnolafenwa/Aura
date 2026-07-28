@@ -1,0 +1,9 @@
+def echo[T](value: own T) -> T:
+    return value
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _number = group.start(echo, 7)
+        _text = group.start(echo, "generic")
+        _values = group.start(echo, ["generic", "transfer"])
+    return 0

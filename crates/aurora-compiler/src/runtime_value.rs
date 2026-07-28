@@ -485,6 +485,8 @@ struct TaskState {
     handle: Mutex<TaskHandle>,
     ready: Condvar,
     lightweight: bool,
+    result_is_repeatable: bool,
+    result_observation_claimed: AtomicBool,
     waits_without_deadline: AtomicBool,
     observed_failure: AtomicBool,
     completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
@@ -2266,11 +2268,13 @@ impl TaskWaitRegistration {
     }
 }
 
-fn new_lightweight_task_state() -> Arc<TaskState> {
+fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
     Arc::new(TaskState {
         handle: Mutex::new(TaskHandle::Running),
         ready: Condvar::new(),
         lightweight: true,
+        result_is_repeatable,
+        result_observation_claimed: AtomicBool::new(false),
         waits_without_deadline: AtomicBool::new(false),
         observed_failure: AtomicBool::new(false),
         completion_reactor_subscribers: Mutex::new(HashMap::new()),
@@ -2283,11 +2287,12 @@ fn new_lightweight_task_state() -> Arc<TaskState> {
 fn prepare_lightweight_task(
     cancellation: Option<CancellationContext>,
     stack_size: Option<usize>,
+    result_is_repeatable: bool,
     entry: LightweightTaskEntry,
     forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
 ) -> std::result::Result<(TaskValue, PreparedLightweightTask), Diagnostic> {
     let stack = allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
-    let state = new_lightweight_task_state();
+    let state = new_lightweight_task_state(result_is_repeatable);
     let task = TaskValue {
         inner: state.clone(),
     };
@@ -2356,6 +2361,7 @@ impl LightweightTaskScheduler {
         let (task, request) = prepare_lightweight_task(
             cancellation,
             stack_size,
+            true,
             Box::new(entry),
             forced_exit_cleanup,
         )?;
@@ -2742,6 +2748,7 @@ impl Drop for LightweightTaskScheduler {
 fn enqueue_lightweight_task(
     cancellation: Option<CancellationContext>,
     stack_size: Option<usize>,
+    result_is_repeatable: bool,
     entry: LightweightTaskEntry,
     forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
 ) -> std::result::Result<TaskValue, Diagnostic> {
@@ -2752,8 +2759,13 @@ fn enqueue_lightweight_task(
             "lightweight Aurora task start requires an active task scheduler",
         ));
     };
-    let (task, request) =
-        prepare_lightweight_task(cancellation, stack_size, entry, forced_exit_cleanup)?;
+    let (task, request) = prepare_lightweight_task(
+        cancellation,
+        stack_size,
+        result_is_repeatable,
+        entry,
+        forced_exit_cleanup,
+    )?;
     spawn_requests.borrow_mut().push_back(request);
     Ok(task)
 }
@@ -2762,9 +2774,20 @@ pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskVal
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    enqueue_lightweight_task(None, None, Box::new(entry), None)
+    enqueue_lightweight_task(None, None, true, Box::new(entry), None)
 }
 
+pub(crate) fn spawn_lightweight_task_with_result_repeatability<F>(
+    result_is_repeatable: bool,
+    entry: F,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+{
+    enqueue_lightweight_task(None, None, result_is_repeatable, Box::new(entry), None)
+}
+
+#[cfg(test)]
 pub(crate) fn spawn_lightweight_task_with_stack<F>(
     stack_size: usize,
     entry: F,
@@ -2772,7 +2795,24 @@ pub(crate) fn spawn_lightweight_task_with_stack<F>(
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    enqueue_lightweight_task(None, Some(stack_size), Box::new(entry), None)
+    enqueue_lightweight_task(None, Some(stack_size), true, Box::new(entry), None)
+}
+
+pub(crate) fn spawn_lightweight_task_with_stack_and_result_repeatability<F>(
+    stack_size: usize,
+    result_is_repeatable: bool,
+    entry: F,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+{
+    enqueue_lightweight_task(
+        None,
+        Some(stack_size),
+        result_is_repeatable,
+        Box::new(entry),
+        None,
+    )
 }
 
 fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutionResult) {
@@ -2807,7 +2847,7 @@ pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    enqueue_lightweight_task(Some(cancellation), None, Box::new(entry), None)
+    enqueue_lightweight_task(Some(cancellation), None, true, Box::new(entry), None)
 }
 
 /// Starts a task whose generated stack must be reset instead of force-unwound.
@@ -2818,6 +2858,7 @@ where
 /// coroutine stack must be owned and released by `forced_exit_cleanup`. The
 /// callback must not panic: scheduler teardown relies on it completing so the
 /// remaining task records can also be retired.
+#[cfg(test)]
 pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup<F, C>(
     cancellation: CancellationContext,
     entry: F,
@@ -2843,6 +2884,7 @@ where
 ///
 /// This has the same forced-exit ownership requirements as
 /// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
+#[cfg(test)]
 pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack<
     F,
     C,
@@ -2859,6 +2901,37 @@ where
     enqueue_lightweight_task(
         Some(cancellation),
         stack_size,
+        true,
+        Box::new(entry),
+        Some(Box::new(forced_exit_cleanup)),
+    )
+}
+
+/// Starts a generated task whose result-observation repeatability is known by
+/// the compiler and whose generated stack must be reset on forced exit.
+///
+/// # Safety
+///
+/// This has the same forced-exit ownership requirements as
+/// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
+pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability<
+    F,
+    C,
+>(
+    cancellation: CancellationContext,
+    stack_size: Option<usize>,
+    result_is_repeatable: bool,
+    entry: F,
+    forced_exit_cleanup: C,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    C: FnOnce() + 'static,
+{
+    enqueue_lightweight_task(
+        Some(cancellation),
+        stack_size,
+        result_is_repeatable,
         Box::new(entry),
         Some(Box::new(forced_exit_cleanup)),
     )
@@ -9076,6 +9149,22 @@ impl TaskValue {
         }
     }
 
+    pub(crate) fn claim_result_observation(&self) -> Result<()> {
+        if self.inner.result_is_repeatable {
+            return Ok(());
+        }
+        self.inner
+            .result_observation_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| {
+                Diagnostic::coded(
+                    "AU4001",
+                    "task result has already been observed; non-repeatable task results allow exactly one observing attempt",
+                )
+            })
+    }
+
     pub(crate) fn completed_result(&self) -> Option<TaskExecutionResult> {
         let state = lock_mutex(&self.inner.handle);
         match &*state {
@@ -9094,10 +9183,20 @@ impl TaskValue {
     pub(crate) fn from_handle(
         handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
     ) -> Self {
+        Self::from_handle_with_result_repeatability(handle, true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_handle_with_result_repeatability(
+        handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
+        result_is_repeatable: bool,
+    ) -> Self {
         let inner = Arc::new(TaskState {
             handle: Mutex::new(TaskHandle::Running),
             ready: Condvar::new(),
             lightweight: false,
+            result_is_repeatable,
+            result_observation_claimed: AtomicBool::new(false),
             waits_without_deadline: AtomicBool::new(false),
             observed_failure: AtomicBool::new(false),
             completion_reactor_subscribers: Mutex::new(HashMap::new()),
@@ -9180,6 +9279,13 @@ impl TaskValue {
         }
         self.inner.waits_without_deadline.load(Ordering::SeqCst)
     }
+}
+
+pub(crate) fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> {
+    for task in tasks {
+        task.claim_result_observation()?;
+    }
+    Ok(())
 }
 
 pub(crate) fn option_some(value: Value) -> Value {

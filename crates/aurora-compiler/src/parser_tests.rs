@@ -1206,6 +1206,25 @@ fn parser_helpers_cover_specialization_and_format_parts() {
     assert!(matches!(&callee.kind, ExprKind::Specialize { .. }));
 
     let indexed = parse_expression("values[idx]").expect("index expression");
+    assert!(matches!(indexed.kind, ExprKind::Index { .. }));
+
+    let multi_index = parse_expression("triple[String, int32, Option[bool]]")
+        .expect("comma-separated index expression");
+    let ExprKind::Index { index, .. } = multi_index.kind else {
+        panic!("a bare multi-type suffix remains an index until callable context resolves it");
+    };
+    let ExprKind::Tuple(elements) = index.kind else {
+        panic!("comma-separated index elements should be represented as a tuple");
+    };
+    assert_eq!(elements.len(), 3);
+    assert!(matches!(
+        elements[2].kind,
+        ExprKind::Index {
+            object: _,
+            index: _
+        }
+    ));
+
     let tokens = lex("[Type].field\n").expect("tokens");
     let parser = Parser::new(tokens);
     assert!(!parser.starts_specialization_suffix(&indexed));

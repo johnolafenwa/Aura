@@ -174,7 +174,10 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/task_group_start.au`
   - execute the maintained queue/task concurrency surface
 - `cargo run -p aura -- run examples/concurrency/bounded_queue.au`
-  - execute bounded queues with `Queue[T](capacity=...)` on the shared scheduler
+  - execute bounded queues with `Queue[T](capacity=...)` on the shared
+    scheduler; task captures, task results, and Queue payloads use
+    compiler-derived structural `Transfer`, while non-repeatable task results
+    have one consuming observation right
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- run examples/concurrency/yield_now.au`

@@ -1642,7 +1642,22 @@ impl Parser {
             if self.eat_simple(&TokenKind::LBracket).is_some() {
                 chain_len += 1;
                 self.check_expression_chain_limit(chain_len)?;
-                let index = self.parse_expr()?;
+                let first = self.parse_expr()?;
+                let index = if self.eat_simple(&TokenKind::Comma).is_some() {
+                    let mut elements = vec![first];
+                    loop {
+                        elements.push(self.parse_expr()?);
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    Expr {
+                        span: expr.span,
+                        kind: ExprKind::Tuple(elements),
+                    }
+                } else {
+                    first
+                };
                 self.expect_simple(TokenKind::RBracket)?;
                 let span = expr.span;
                 expr = Expr {

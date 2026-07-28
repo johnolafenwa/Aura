@@ -2,8 +2,9 @@ import io
 import net
 import random
 
-def serve(listener: own net.HttpListener) -> Result[int32, io.Error]:
-    with server = listener:
+def serve(addresses: Queue[String]) -> Result[int32, io.Error]:
+    with server = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try server.local_addr())
         mut recover_requests: int32 = 0
         mut rate_requests: int32 = 0
         mut total_requests: int32 = 0
@@ -75,9 +76,9 @@ def work(address: String) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        listener = try net.http_listen("127.0.0.1:0")
-        address = try listener.local_addr()
-        server = group.start(serve, listener)
+        addresses = Queue[String](capacity=1)
+        server = group.start(serve, addresses)
+        address = try receive_address(addresses)
         worker = group.start(work, address)
 
         match own worker.result(timeout=5s):
@@ -102,6 +103,17 @@ def run() -> Result[None, io.Error]:
                 return Result.Err(io.Error.Other(message="server cancelled"))
 
         return Result.Ok(None)
+
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="HTTP address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
 
 def main() -> int32:
     match run():

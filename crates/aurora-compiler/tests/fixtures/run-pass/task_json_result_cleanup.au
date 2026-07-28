@@ -30,8 +30,5 @@ def main() -> int32:
         first = print_task_result(task.result())
         if first != 0:
             return first
-        second = print_task_result(task.result())
-        if second != 0:
-            return second
 
     return 0

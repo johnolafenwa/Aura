@@ -14,7 +14,9 @@ Read the rest of the chapter to see why each of those matters.
 
 ## Copy Values And Move Values
 
-Some values are cheap enough to duplicate that the language just does it. Numbers, `bool`, `Duration`, queue handles, and task handles are **copy types**. Assigning one to a new name produces another usable binding:
+Some values are cheap enough to duplicate that the language just does it.
+Numbers, `bool`, `Duration`, and queue handles are **copy types**. Assigning
+one to a new name produces another usable binding:
 
 ```python
 count = 3
@@ -24,10 +26,16 @@ print(count)
 print(other)
 ```
 
+Task handles are conditional. `Task[T]` is copyable when `T` is copyable, a
+`Queue[...]` handle, or a recursively repeatable `Task[...]` handle. A task
+returning `String`, `Vec[...]`, or another non-copy owned value instead has a
+move-only handle so aliases cannot duplicate its single result-observation
+right.
+
 Everything else — `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
-`random.Rng`, class instances, `TaskGroup`, file handles, process resources,
-and network resources — is a **move type**. Assigning a move value transfers
-ownership:
+`random.Rng`, ordinary class instances, `TaskGroup`, file handles, process
+resources, and network resources — is a **move type**. Assigning a move value
+transfers ownership:
 
 ```python
 name = "aurora"
@@ -239,6 +247,20 @@ with group = TaskGroup():
 Bare shared target parameters borrow their task-owned capture; `own` targets
 consume it. `mut` targets are rejected because
 mutation of detached capture storage would have no caller-visible writeback.
+
+Ownership alone is not enough to cross a task boundary. Every capture and
+result must also be structurally `Transfer`: Copy data, `String`, recursively
+transferable collections and user data, and Queue/Task handle identities can
+cross. `random.Rng`, `TaskGroup`, capability views, and live file, process, or
+network resources cannot. Keep a live resource on the task that creates it and
+exchange owned descriptions, bytes, snapshot results, or handles. Aurora still
+executes task bodies on one scheduler worker; Phase 5.7 must make the state
+behind those handles cross-worker thread-safe before multicore execution.
+
+For a non-repeatable but transferable task result, the first call to
+`result`, `result_or_none`, or `result_or` consumes the task handle even if it
+times out, is cancelled, fails, or returns a fallback. Use a Queue protocol
+when several consumers need independently owned messages.
 
 ## Resources And Cleanup
 

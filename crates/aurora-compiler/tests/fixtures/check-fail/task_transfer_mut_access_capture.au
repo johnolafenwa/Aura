@@ -1,0 +1,8 @@
+class Counter:
+    value: int32
+
+def consume(value: own Counter):
+    print(value.value)
+
+def launch(group: TaskGroup, value: mut Counter):
+    group.start_soon(consume, value)

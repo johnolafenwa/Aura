@@ -34,12 +34,17 @@ The `with` block defines the task's lifetime. Leaving the block waits for childr
 
 `TaskResult[T]` has four cases — `Ready`, `Error`, `TimedOut`, and `Cancelled` — because those are the four things that can happen to a child task, and a reasonable program might want different behaviour for each.
 
-Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
+`Task[T]` is always safe to transfer between tasks, but it is copyable only
+when `T` is repeatable: a copy value, a `Queue[...]` handle, or a
+recursively repeatable `Task[...]` handle. A non-copy owned result gives the
+task handle one observation right. `result`, `result_or_none`, and `result_or`
+consume that right on the first attempt, even if the attempt times out, is
+cancelled, fails, returns `None`, or selects a fallback.
 
-`random.Rng` has a stricter static rule. Task observations clone the stored
-result, so `Task.result`, `result_or_none`, and `result_or` reject a result that
-contains an `Rng` with `AU3007`. Copying the `Task[random.Rng]` handle itself is
-still valid because that does not inspect the result.
+A result that is not structurally `Transfer`, such as `random.Rng` or a live
+host resource, is rejected before the task is scheduled with `AU3008`.
+`AU3009` instead reports an operation that would duplicate a valid
+single-consumer result right.
 
 The timeout is a signed nanosecond `Duration`. Literals cover integral `ms`,
 `s`, and `m` values; `Duration.ms(n)`, `Duration.seconds(n)`, checked
@@ -114,14 +119,26 @@ with group = TaskGroup():
     print(label)
 ```
 
-Copy types (numbers, `bool`, `Duration`, queue handles, task handles) pass
-through unchanged. Bare shared parameters borrow the task-owned capture,
-`own` parameters consume it, and `mut` targets are
-rejected because detached capture has no caller-visible writeback.
+Copy types (numbers, `bool`, `Duration`, queue handles, and task handles with
+repeatable results) pass through unchanged. Bare shared parameters borrow the
+task-owned capture, `own` parameters consume it, and `mut` targets are rejected
+because detached capture has no caller-visible writeback.
+
+Every captured argument and the target result must be structurally `Transfer`
+after generic specialization. Copy data, `String`, structurally transferable
+collections and user data, and Queue/Task handle identities can cross.
+Capability views, `random.Rng`, `TaskGroup`, and live file, process, or network
+resources cannot. `Transfer` is derived by the compiler rather than implemented
+as a user trait. The current runtime remains single-worker; Phase 5.7 must make
+the state behind Queue/Task handles cross-worker thread-safe before multicore
+execution.
 
 ## `Queue[T]`: Typed Channels
 
-A queue moves values between tasks. Handles to the same queue are copy values, so passing one to a producer does not take it away from the parent.
+A queue moves values between tasks. Handles to the same queue are copy values,
+so passing one to a producer does not take it away from the parent. Queue
+construction, `put`, and `try_put` require a structurally `Transfer` payload;
+receiving moves one admitted value to the consumer.
 
 ```python
 def producer(jobs: Queue[int32]):
@@ -237,9 +254,12 @@ match wait_all(tasks, timeout=1s):
 
 The `Error(index, message)` variant reports **which** task failed. That is usually more useful than a bare error.
 
-Both wait helpers observe and clone stored task results. They therefore require
-clone-safe `T` and reject a result containing `random.Rng`; Queue receive
-operations remain valid because they transfer one owned item instead.
+With repeatable `T`, the handles and observations remain reusable. With a
+non-repeatable but transferable `T`, either helper consumes the complete task
+vector on its first attempt, including timeout, cancellation, and failure.
+`wait_any` deliberately abandons the observation rights of unchosen tasks.
+Queue receives transfer one owned item rather than observing task-result
+storage.
 
 ## Cancellation Is Cooperative
 

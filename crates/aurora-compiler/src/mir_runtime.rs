@@ -22,16 +22,16 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cast_numeric_value, clone_json_codec_source, decode_process_restart_policy,
-    decode_process_stdio, duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
-    evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
-    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    cast_numeric_value, claim_task_result_observations, clone_json_codec_source,
+    decode_process_restart_policy, decode_process_stdio, duration_to_host_timer,
+    duration_to_milliseconds, duration_to_seconds, evaluate_bytes_host_builtin_ref,
+    evaluate_host_builtin_with_program_args, evaluate_string_to_bytes_host_ref, float_floor_divmod,
+    host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
+    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -40,10 +40,11 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    spawn_lightweight_task_with_result_repeatability,
+    spawn_lightweight_task_with_stack_and_result_repeatability, task_group_cleanup_should_cancel,
+    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue,
     FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
@@ -486,6 +487,7 @@ struct EvaluatedMirArg {
 
 struct StartTaskRequest<'a> {
     returns_handle: bool,
+    result_is_repeatable: bool,
     stack_size: Option<usize>,
     task_group: &'a Operand,
     function: &'a str,
@@ -2497,7 +2499,7 @@ impl MirRuntime {
             }
             Rvalue::StartTask {
                 returns_handle,
-                result_is_copy: _,
+                result_is_copy,
                 stack_size,
                 task_group,
                 function,
@@ -2511,6 +2513,7 @@ impl MirRuntime {
                 Ok(RvalueOutcome::Value(self.start_task(
                     StartTaskRequest {
                         returns_handle: *returns_handle,
+                        result_is_repeatable: *result_is_copy,
                         stack_size,
                         task_group,
                         function,
@@ -3572,6 +3575,7 @@ impl MirRuntime {
     fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
         let StartTaskRequest {
             returns_handle,
+            result_is_repeatable,
             stack_size,
             task_group,
             function,
@@ -3631,8 +3635,12 @@ impl MirRuntime {
                 .map(|outcome| outcome.value)
         };
         let task = match stack_size {
-            Some(stack_size) => spawn_lightweight_task_with_stack(stack_size, entry),
-            None => spawn_lightweight_task(entry),
+            Some(stack_size) => spawn_lightweight_task_with_stack_and_result_repeatability(
+                stack_size,
+                result_is_repeatable,
+                entry,
+            ),
+            None => spawn_lightweight_task_with_result_repeatability(result_is_repeatable, entry),
         }?;
         group_value.register_task(task.clone());
         for queue in producer_queues {
@@ -4822,6 +4830,7 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["timeout"], values)?;
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
+                task.claim_result_observation()?;
                 let outcome = if args.is_empty() {
                     if self.cancellation.is_cancelled() {
                         TaskWaitStatus::Cancelled
@@ -4858,6 +4867,7 @@ impl MirRuntime {
                     .expect("bound Task.result_or timeout should exist");
                 let timeout =
                     expect_optional_timeout(Some(&timeout_arg.value), "result_or(timeout=...)")?;
+                task.claim_result_observation()?;
                 let outcome = if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
                     if self.cancellation.is_cancelled() {
                         TaskWaitStatus::Cancelled
@@ -6673,6 +6683,7 @@ impl MirRuntime {
     }
 
     fn join_task(&mut self, task: TaskValue, timeout: Option<StdDuration>) -> Result<Value> {
+        task.claim_result_observation()?;
         let outcome = task
             .wait_result_with_cancellation_observed(timeout, Some(&self.cancellation))
             .map_err(timer_error_to_diagnostic)?;
@@ -6687,6 +6698,7 @@ impl MirRuntime {
     }
 
     fn wait_any(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
+        claim_task_result_observations(&tasks)?;
         if tasks.is_empty() {
             return if poll_cancellation(&self.cancellation) {
                 Ok(wait_any_cancelled())
@@ -6729,6 +6741,7 @@ impl MirRuntime {
     }
 
     fn wait_all(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
+        claim_task_result_observations(&tasks)?;
         let deadline = runtime_deadline_after_timeout(timeout)?;
         let mut results = Vec::with_capacity(tasks.len());
         for (index, task) in tasks.into_iter().enumerate() {

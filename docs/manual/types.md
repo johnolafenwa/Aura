@@ -100,7 +100,8 @@ positions:
 - `bool`
 - `Duration`
 - `Queue[T]`
-- `Task[T]`
+- under Provisional ADR-0033, `Task[T]` only when `T` is repeatable as defined
+  in [Provisional Transfer Classification](#provisional-transfer-classification)
 - tuple values when every element type is copyable
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
@@ -125,7 +126,11 @@ Move values can still be shared through a bare parameter, accessed mutably
 through a `mut` parameter, or duplicated explicitly through methods such as
 `.clone()` when the type supports cloning.
 
-`Queue[T]` and `Task[T]` are copy handles to shared runtime state. Copying the handle does not copy queued values or task results; it gives another reference to the same queue or task.
+`Queue[T]` is a copy handle to shared runtime state. Under Provisional
+ADR-0033, a `Task[T]` handle is conditionally copyable so aliases cannot
+duplicate a single-consumer result right. Copying an allowed handle never
+copies queued values or task results; it gives another reference to the same
+queue or task.
 
 `TaskResult[T]`, `WaitAny[T]`, and `WaitAll[T]` are treated as move outcome values even when `T` is copyable. `Range` is also not a general copy type in Aurora 0.1; use ranges directly in iteration rather than relying on duplication.
 
@@ -162,6 +167,59 @@ an ordinary value-storing class, enum, or collection path. `Task[T]` and
 or copy its stored `T`; moving, removing, or receiving a value also transfers
 one owner instead of cloning it.
 
+## Provisional Transfer Classification
+
+Provisional ADR-0033 defines the static property used at a task boundary.
+`Transfer` means that ownership of a value may cross from one Aurora task
+worker to another; it is separate from both Copy and clone safety. `Transfer`
+is derived by the compiler and is not a builtin trait that source code can
+implement or assert. An ordinary user trait also named `Transfer` does not
+affect this structural classification.
+
+All copy types and `String` are `Transfer`. `Vec[T]`, `Set[T]`, `Map[K, V]`,
+tuples, classes, and enums are `Transfer` exactly when all of their stored
+component types are. The same recursive rule covers data wrappers such as
+`Option`, `Result`, task/queue outcomes, errors, and `json.Value`.
+`Queue[T]` and `Task[T]` handles are `Transfer` independently of `T`: moving
+the handle does not inspect or move the stored payload. Queue construction,
+`put`, and `try_put` separately require its payload `T` to be `Transfer`;
+handle copies, receives, fallback receives, and `close` do not recheck `T`.
+
+Shared and mutable capability views are not `Transfer`. Neither are
+`random.Rng`, `TaskGroup`, or live filesystem, process, pipe, supervisor,
+listener, socket, stream, HTTP-exchange, WebSocket, or TLS resources. A later
+decision may whitelist an individual host type only after its thread-safety is
+proved. Owned data returned from a host operation, such as completed output or
+a structural error value, is classified from the data it stores rather than
+from where it originated. `process.Completed`, `net.HttpResponse`, and
+`net.UdpDatagram` are explicitly Transfer owned snapshots; their live
+`process.Child`, `net.HttpExchange`, and `net.UdpSocket` sources are not.
+
+Reading a Copy value through shared or mutable access materializes an
+independent owned snapshot rather than transporting the capability. That
+snapshot may cross when its type is `Transfer`. Non-copy access cannot use this
+exception because value capture would require ownership.
+
+An unconstrained generic parameter does not prove `Transfer`. Phase 5.6 does
+not infer a deferred Transfer contract: a task or Queue boundary with an
+unresolved parameter is rejected with `AU3008`. A generic task target is usable
+when call inference has already produced complete concrete capture and result
+types. A task target may spell explicit specialization narrowly as
+`function[Types]` or `Type.associated_method[Types]`; brackets retain ordinary
+indexing meaning outside a TaskGroup start target. A bare target is valid when
+its declared/default context already makes every relevant type concrete.
+
+`Task[T]` is always `Transfer`, but ADR-0033 makes its Copy classification
+conditional. It is copyable only when `T` is copyable, when `T` is
+`Queue[...]`, or when `T` is `Task[U]` and `U` is recursively repeatable.
+This prevents a nested handle such as `Task[Task[String]]` from being copied
+to duplicate a single-consumer result right.
+
+This classification is the implemented Phase 5.6 contract. Aurora continues
+to execute task bodies on one scheduler thread until the separate Phase 5.7
+pinned-worker gate passes; that stage must make the state behind transferable
+Queue and Task handles cross-worker thread-safe before multicore execution.
+
 ## Builtin Generic Types
 
 | Type | Meaning |
@@ -173,7 +231,7 @@ one owner instead of cloning it.
 | `Set[T]` | Owned set of unique values. |
 | `MapEntry[K, V]` | Entry value returned by `Map.items()` and `Map.entries()`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
-| `Task[T]` | Copy handle to a task result. |
+| `Task[T]` | Transferable task-result handle; conditionally Copy under Provisional ADR-0033. |
 | `SendError[T]` | Queue send failure that carries the unsent value. |
 | `QueueReceive[T]` | Queue receive outcome. |
 | `TaskResult[T]` | Task result outcome. |
@@ -377,7 +435,10 @@ borrow conflict; `AU3003` reports mutation through an immutable place; and
 `AU3004` reports an invalid ownership or receiver type mode. `AU3005` reports a
 non-copy indexed read, and `AU3006` reports a non-copy indexed compound
 assignment. `AU3007` reports an operation or specialization that would
-duplicate non-cloneable `random.Rng` state. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,
+duplicate non-cloneable `random.Rng` state. `AU3008` reports a non-Transfer
+task or Queue boundary. `AU3009` rejects cloning, collection reads, or
+aggregate copies that would duplicate a single-consumer task-result right;
+using an already-consumed task binding is `AU3001`. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,
 or exactness failure, `AU4003` means a bounds or lookup violation, `AU4004` means a zero
 divisor, and `AU4005` means a trapping resource or I/O failure.
 

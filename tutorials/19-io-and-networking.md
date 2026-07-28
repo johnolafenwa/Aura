@@ -300,8 +300,9 @@ Text example:
 import io
 import net
 
-def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
-    with server = listener:
+def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server = try net.listen("127.0.0.1:0"):
+        addresses.put(try server.local_addr())
         with stream = try server.accept(timeout=1s):
             match try stream.read_line(timeout=1s):
                 case Option.Some(text):
@@ -311,6 +312,10 @@ def serve(listener: own net.TcpListener) -> Result[None, io.Error]:
                     pass
         return Result.Ok(None)
 ```
+
+Listeners and other live network resources are not `Transfer`, so a worker task
+creates and owns its listener. The copy queue handle crosses the task boundary,
+and the worker sends the listener's owned `String` address back after binding.
 
 See:
 

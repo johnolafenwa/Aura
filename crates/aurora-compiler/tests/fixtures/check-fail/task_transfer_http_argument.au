@@ -1,0 +1,7 @@
+import net
+
+def consume(exchange: own net.HttpExchange):
+    print(exchange)
+
+def launch(group: TaskGroup, exchange: own net.HttpExchange):
+    group.start_soon(consume, exchange)

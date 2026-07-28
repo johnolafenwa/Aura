@@ -1,0 +1,7 @@
+import net
+
+def consume(socket: own net.WebSocket):
+    socket.close()
+
+def launch(group: TaskGroup, socket: own net.WebSocket):
+    group.start_soon(consume, socket)

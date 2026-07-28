@@ -1,0 +1,64 @@
+copy class CopyPoint:
+    x: int32
+    y: int32
+
+def consume_copy_scalars(
+    flag: bool,
+    signed8: int8,
+    signed16: int16,
+    signed32: int32,
+    signed64: int64,
+    signed128: int128,
+    signed_size: intsize,
+    unsigned8: uint8,
+    unsigned16: uint16,
+    unsigned32: uint32,
+    unsigned64: uint64,
+    unsigned128: uint128,
+    unsigned_size: uintsize,
+    single: float32,
+    double: float64,
+    delay: Duration,
+    point: CopyPoint
+) -> int32:
+    if flag and delay == 1ms:
+        return point.x + point.y
+    return 0
+
+def main() -> int32:
+    signed8: int8 = 1
+    signed16: int16 = 2
+    signed32: int32 = 3
+    signed64: int64 = 4
+    signed128: int128 = 5
+    signed_size: intsize = 6
+    unsigned8: uint8 = 7
+    unsigned16: uint16 = 8
+    unsigned32: uint32 = 9
+    unsigned64: uint64 = 10
+    unsigned128: uint128 = 11
+    unsigned_size: uintsize = 12
+    single: float32 = 1.5
+    double: float64 = 2.5
+    with TaskGroup() as group:
+        _task = group.start(
+            consume_copy_scalars,
+            true,
+            signed8,
+            signed16,
+            signed32,
+            signed64,
+            signed128,
+            signed_size,
+            unsigned8,
+            unsigned16,
+            unsigned32,
+            unsigned64,
+            unsigned128,
+            unsigned_size,
+            single,
+            double,
+            1ms,
+            CopyPoint(x=1, y=2)
+        )
+    return 0

@@ -1,0 +1,7 @@
+error[AU3008]: task argument `group` cannot cross a task boundary because `TaskGroup` is a host resource and is not Transfer
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_group_argument.au:5:31
+  |
+5 |     group.start_soon(consume, child_group)
+  |                               ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_group_argument.au:1:13: task parameter `group` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

@@ -1,0 +1,8 @@
+import random
+
+def consume(value: own (String, random.Rng)):
+    label, _generator = value
+    print(label)
+
+def launch(group: TaskGroup, value: own (String, random.Rng)):
+    group.start_soon(consume, value)

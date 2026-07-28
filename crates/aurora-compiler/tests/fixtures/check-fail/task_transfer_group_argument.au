@@ -1,0 +1,5 @@
+def consume(group: own TaskGroup):
+    group.cancel()
+
+def launch(group: TaskGroup, child_group: own TaskGroup):
+    group.start_soon(consume, child_group)

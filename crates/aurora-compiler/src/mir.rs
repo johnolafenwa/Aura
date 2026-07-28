@@ -5,7 +5,7 @@ use crate::ast::{
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
-    BuiltinClassConstructor, BuiltinMember, CallConvention,
+    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
@@ -1012,7 +1012,10 @@ struct PatternLoweringOptions {
 struct TaskStartTarget {
     function: String,
     params: Vec<Param>,
+    param_types: Vec<Type>,
     return_type: Type,
+    type_params: Vec<String>,
+    substitutions: std::collections::HashMap<String, Type>,
     display_name: String,
 }
 
@@ -4222,35 +4225,50 @@ impl<'a> Lowerer<'a> {
     }
 
     fn resolve_task_start_target(&self, callee: &Expr) -> Option<TaskStartTarget> {
-        let base_callee = match &callee.kind {
-            ExprKind::Specialize { expr, .. } => &**expr,
-            _ => callee,
-        };
+        let (base_callee, callable_type_args) = self.task_callable_specialization(callee);
         match &base_callee.kind {
-            ExprKind::Name(function) => {
-                self.program
-                    .functions
-                    .get(function)
-                    .map(|function_info| TaskStartTarget {
-                        function: function.clone(),
-                        params: function_info.decl.params.clone(),
-                        return_type: function_info.signature.return_type.clone(),
-                        display_name: format!("function `{}`", function),
-                    })
-            }
+            ExprKind::Name(function) => self.program.functions.get(function).map(|function_info| {
+                let substitutions = self.task_explicit_type_substitutions(
+                    &function_info.decl.type_params,
+                    callable_type_args.as_deref(),
+                );
+                TaskStartTarget {
+                    function: function.clone(),
+                    params: function_info.decl.params.clone(),
+                    param_types: function_info.signature.params.clone(),
+                    return_type: function_info.signature.return_type.clone(),
+                    type_params: function_info.decl.type_params.clone(),
+                    substitutions,
+                    display_name: format!("function `{}`", function),
+                }
+            }),
             ExprKind::Member { object, field } => {
+                let (base_object, object_type_args) = self.task_callable_specialization(object);
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
                             if let Some(method) = class_info.methods.get(field) {
                                 if method.decl.receiver.is_none() {
+                                    let mut substitutions = self.task_explicit_type_substitutions(
+                                        &class_info.decl.type_params,
+                                        object_type_args.as_deref(),
+                                    );
+                                    substitutions.extend(self.task_explicit_type_substitutions(
+                                        &method.decl.type_params,
+                                        callable_type_args.as_deref(),
+                                    ));
+                                    let mut type_params = class_info.decl.type_params.clone();
+                                    type_params.extend(method.decl.type_params.iter().cloned());
                                     return Some(TaskStartTarget {
                                         function: format!(
                                             "{}::{}.{}",
                                             module_path, item_name, field
                                         ),
                                         params: method.decl.params.clone(),
+                                        param_types: method.signature.params.clone(),
                                         return_type: method.signature.return_type.clone(),
+                                        type_params,
+                                        substitutions,
                                         display_name: format!("method `{}.{}`", item_name, field),
                                     });
                                 }
@@ -4258,20 +4276,28 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                if let Some((module_path, function_name)) = self.qualified_module_item(callee) {
+                if let Some((module_path, function_name)) = self.qualified_module_item(base_callee)
+                {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(function) = namespace
                             .functions
                             .get(&function_name)
                             .or_else(|| namespace.all_functions.get(&function_name))
                         {
+                            let substitutions = self.task_explicit_type_substitutions(
+                                &function.decl.type_params,
+                                callable_type_args.as_deref(),
+                            );
                             return Some(TaskStartTarget {
                                 function: imported_module_function_name(
                                     &module_path,
                                     &function_name,
                                 ),
                                 params: function.decl.params.clone(),
+                                param_types: function.signature.params.clone(),
                                 return_type: function.signature.return_type.clone(),
+                                type_params: function.decl.type_params.clone(),
+                                substitutions,
                                 display_name: format!(
                                     "function `{}.{}`",
                                     module_path, function_name
@@ -4280,14 +4306,20 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                let base_object = match &object.kind {
-                    ExprKind::Specialize { expr, .. } => &**expr,
-                    _ => &**object,
-                };
                 if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_none() {
+                                let mut substitutions = self.task_explicit_type_substitutions(
+                                    &class_info.decl.type_params,
+                                    object_type_args.as_deref(),
+                                );
+                                substitutions.extend(self.task_explicit_type_substitutions(
+                                    &method.decl.type_params,
+                                    callable_type_args.as_deref(),
+                                ));
+                                let mut type_params = class_info.decl.type_params.clone();
+                                type_params.extend(method.decl.type_params.iter().cloned());
                                 return Some(TaskStartTarget {
                                     function: mir_class_method_name(
                                         self.program,
@@ -4295,7 +4327,10 @@ impl<'a> Lowerer<'a> {
                                         field,
                                     ),
                                     params: method.decl.params.clone(),
+                                    param_types: method.signature.params.clone(),
                                     return_type: method.signature.return_type.clone(),
+                                    type_params,
+                                    substitutions,
                                     display_name: format!("method `{}.{}`", class_name, field),
                                 });
                             }
@@ -4306,6 +4341,150 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Task targets are expressions rather than ordinary calls, so the parser
+    /// cannot use its call-suffix lookahead to distinguish `worker[T]` from an
+    /// indexed read. Semantic checking has already established that this
+    /// expression names a spawnable callable; reinterpret that one contextual
+    /// shape here while leaving every ordinary index expression unchanged.
+    fn task_callable_specialization<'b>(&self, callee: &'b Expr) -> (&'b Expr, Option<Vec<Type>>) {
+        match &callee.kind {
+            ExprKind::Specialize { expr, type_args } => (
+                expr,
+                Some(
+                    type_args
+                        .iter()
+                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                        .collect(),
+                ),
+            ),
+            ExprKind::Index { object, index } => {
+                let type_args = self.task_type_args_from_index_expr(index);
+                match type_args {
+                    Some(type_args) => (object, Some(type_args)),
+                    None => (callee, None),
+                }
+            }
+            _ => (callee, None),
+        }
+    }
+
+    fn task_type_args_from_index_expr(&self, expr: &Expr) -> Option<Vec<Type>> {
+        match &expr.kind {
+            ExprKind::Tuple(elements) => elements
+                .iter()
+                .map(|element| self.task_type_from_expr(element))
+                .collect(),
+            _ => self.task_type_from_expr(expr).map(|ty| vec![ty]),
+        }
+    }
+
+    fn task_type_from_expr(&self, expr: &Expr) -> Option<Type> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some(self.lower_type_ref_with_provenance(
+                &crate::ast::TypeRef::named(name, Vec::new(), false, expr.span),
+            )),
+            ExprKind::Member { .. } => {
+                let name = self.render_expr_place(expr);
+                Some(
+                    self.lower_type_ref_with_provenance(&crate::ast::TypeRef::named(
+                        name,
+                        Vec::new(),
+                        false,
+                        expr.span,
+                    )),
+                )
+            }
+            ExprKind::Index { object, index } => {
+                let name = self.render_expr_place(object);
+                let args = self.task_type_args_from_index_expr(index)?;
+                Some(Type::Named(name, args))
+            }
+            ExprKind::Tuple(elements) => elements
+                .iter()
+                .map(|element| self.task_type_from_expr(element))
+                .collect::<Option<Vec<_>>>()
+                .map(Type::Tuple),
+            ExprKind::Group(inner) => self.task_type_from_expr(inner),
+            _ => None,
+        }
+    }
+
+    fn task_explicit_type_substitutions(
+        &self,
+        type_params: &[String],
+        type_args: Option<&[Type]>,
+    ) -> std::collections::HashMap<String, Type> {
+        type_args
+            .map(|type_args| substitutions_from_decl_type_args(type_params, type_args))
+            .unwrap_or_default()
+    }
+
+    fn specialize_task_start_target(
+        &self,
+        mut target: TaskStartTarget,
+        args: &[Argument],
+        span: Span,
+    ) -> TaskStartTarget {
+        let ordered_args = bind_call_arguments(
+            &target.display_name,
+            &callable_params_from_decl(&target.params),
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )
+        .expect("checked task-start arguments should bind during MIR lowering");
+        let type_params = target.type_params.iter().cloned().collect::<BTreeSet<_>>();
+
+        // Match semantic inference: concrete non-literal evidence wins before
+        // integer literals get their standalone int64 default. Defaults also
+        // participate, including explicit specializations whose only mention
+        // of a type parameter is in a contextual default.
+        for literal_pass in [false, true] {
+            for ((argument, param), param_type) in ordered_args
+                .iter()
+                .zip(&target.params)
+                .zip(&target.param_types)
+            {
+                if target
+                    .type_params
+                    .iter()
+                    .all(|name| target.substitutions.contains_key(name))
+                {
+                    break;
+                }
+                let value = match argument {
+                    Some(argument) => &argument.value,
+                    None => match param.default.as_ref() {
+                        Some(default) if !matches!(default.kind, ExprKind::BuiltinOmitted) => {
+                            default
+                        }
+                        _ => continue,
+                    },
+                };
+                if is_integer_literal_expr(value) != literal_pass {
+                    continue;
+                }
+                let Some(actual) = self.infer_expr_type(value) else {
+                    continue;
+                };
+                let _ = crate::sema::type_pattern_matches(
+                    param_type,
+                    &actual,
+                    &type_params,
+                    &mut target.substitutions,
+                );
+            }
+        }
+
+        target.param_types = target
+            .param_types
+            .iter()
+            .map(|param| substitute_type(param, &target.substitutions))
+            .collect();
+        target.return_type = substitute_type(&target.return_type, &target.substitutions);
+        target
     }
 
     fn lower_call(
@@ -4886,6 +5065,11 @@ impl<'a> Lowerer<'a> {
                     let target = self
                         .resolve_task_start_target(&args[target_index].value)
                         .expect("task-group start should lower from a supported callable target");
+                    let target = self.specialize_task_start_target(
+                        target,
+                        &args[first_target_arg..],
+                        callee.span,
+                    );
                     let group = self.lower_expr_at_sequence_point(object, None);
                     let stack_size = has_stack_override.then(|| {
                         self.lower_expr_at_sequence_point(
@@ -4898,11 +5082,12 @@ impl<'a> Lowerer<'a> {
                     // regardless of whether the eventual target parameter is a shared
                     // borrow or an owning parameter.
                     let capture_passings = vec![ReceiverKind::Value; target.params.len()];
-                    let lowered_args = self.lower_user_args(
+                    let lowered_args = self.lower_user_args_with_types(
                         &target.display_name,
                         &target.params,
                         &args[first_target_arg..],
                         callee.span,
+                        Some(&target.param_types),
                         Some(&capture_passings),
                     );
                     self.emit(Instruction::Assign {
@@ -5016,12 +5201,28 @@ impl<'a> Lowerer<'a> {
                 }
 
                 let receiver_place = self.render_place_expr_option(object);
-                let lowered_object =
-                    if let Some(passing) = self.user_member_receiver_passing(object, field) {
-                        self.lower_expr_for_passing(object, None, passing)
-                    } else {
-                        self.lower_expr_at_sequence_point(object, None)
-                    };
+                let receiver_type = self.infer_expr_type(object);
+                let consumes_task_observation = matches!(
+                    receiver_type.as_ref(),
+                    Some(Type::Named(name, args))
+                        if name == "Task"
+                            && args.len() == 1
+                            && matches!(
+                                field.as_str(),
+                                "result" | "result_or_none" | "result_or"
+                            )
+                            && !type_is_copy_in_program(
+                                &Type::Named(name.clone(), args.clone()),
+                                self.program,
+                            )
+                );
+                let lowered_object = if consumes_task_observation {
+                    self.lower_expr_for_owned_value(object, receiver_type.as_ref())
+                } else if let Some(passing) = self.user_member_receiver_passing(object, field) {
+                    self.lower_expr_for_passing(object, None, passing)
+                } else {
+                    self.lower_expr_at_sequence_point(object, None)
+                };
                 let lowered_args = self.lower_member_call_args(callee.span, object, field, args);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -5031,6 +5232,56 @@ impl<'a> Lowerer<'a> {
                             field: field.clone(),
                             receiver_place,
                         },
+                        args: lowered_args,
+                    },
+                });
+            }
+            ExprKind::Name(name) if matches!(name.as_str(), "wait_any" | "wait_all") => {
+                let builtin = BuiltinFunction::from_name(name)
+                    .expect("wait builtins should have maintained call metadata");
+                let ordered_args = builtin
+                    .bind_args(args, callee.span)
+                    .expect("checked wait arguments should bind during MIR lowering");
+                let tasks_argument =
+                    ordered_args[0].expect("checked wait call should provide tasks");
+                let tasks_type = self.infer_expr_type(&tasks_argument.value);
+                let consumes_tasks = matches!(
+                    tasks_type.as_ref(),
+                    Some(Type::Named(container, elements))
+                        if container == "Vec"
+                            && matches!(
+                                elements.as_slice(),
+                                [Type::Named(task, result)]
+                                    if task == "Task"
+                                        && result.len() == 1
+                                        && !type_is_copy_in_program(
+                                            &Type::Named(task.clone(), result.clone()),
+                                            self.program,
+                                        )
+                            )
+                );
+                let lowered_args = args
+                    .iter()
+                    .map(|argument| {
+                        let is_tasks = std::ptr::eq(argument, tasks_argument);
+                        MirArg {
+                            name: argument.name.clone(),
+                            value: if is_tasks && consumes_tasks {
+                                self.lower_expr_for_owned_value(
+                                    &argument.value,
+                                    tasks_type.as_ref(),
+                                )
+                            } else {
+                                self.lower_expr_at_sequence_point(&argument.value, None)
+                            },
+                            writeback_place: None,
+                        }
+                    })
+                    .collect();
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name.clone()),
                         args: lowered_args,
                     },
                 });
@@ -5969,6 +6220,11 @@ impl<'a> Lowerer<'a> {
                                 args.get(target_index).and_then(|argument| {
                                     self.resolve_task_start_target(&argument.value)
                                         .map(|target| {
+                                            let target = self.specialize_task_start_target(
+                                                target,
+                                                &args[target_index + 1..],
+                                                callee.span,
+                                            );
                                             Type::Named(
                                                 "Task".to_string(),
                                                 vec![target.return_type],

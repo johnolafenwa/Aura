@@ -1,0 +1,8 @@
+def make_text() -> String:
+    return "once"
+
+def main() -> int32:
+    with TaskGroup() as group:
+        tasks = [group.start(make_text)]
+        _alias = tasks.get(0)
+    return 0

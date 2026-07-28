@@ -1,0 +1,13 @@
+import random
+
+class Holder:
+    label: String
+    generator: random.Rng
+
+def make_holder() -> Holder:
+    return Holder(label="rng", generator=random.Rng(seed=7))
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _task = group.start(make_holder)
+    return 0

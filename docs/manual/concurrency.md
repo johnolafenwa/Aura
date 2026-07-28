@@ -53,16 +53,17 @@ with group = TaskGroup():
 | API | Signature | Contract |
 | --- | --- | --- |
 | constructor | `TaskGroup()` | Creates a task group resource. |
-| `start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage, starts a child task, and returns its handle. |
-| `start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child task without returning a handle. |
-| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Starts a child with an explicit guarded stack-capacity request and returns its handle. |
-| `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Starts a child with an explicit guarded stack-capacity request without returning a handle. |
+| `start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`, starts the specialized target, and returns its handle. |
+| `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and result to be `Transfer` and starts the specialized target without returning a handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. |
+| `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
 All four start methods accept named functions and associated methods without
-`self`. Every target argument is copied or moved into task-owned capture
-storage. A bare shared target parameter borrows from that storage for the
-child call; an `own` parameter consumes it. `mut`
+`self`, including explicit generic targets written as `function[Types]` or
+`Type.associated_method[Types]` in the callable slot. Every target argument is
+copied or moved into task-owned capture storage. A bare shared target parameter
+borrows from that storage for the child call; an `own` parameter consumes it. `mut`
 targets are rejected because detached mutable capture has no caller-visible
 writeback.
 
@@ -96,13 +97,15 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 
 ## Task[T]
 
-`Task[T]` is a copy handle to a child task result.
+`Task[T]` is a transferable handle to a child task result. Under Provisional
+ADR-0033 it is copyable only when `T` is repeatable, so aliases cannot
+duplicate one result right.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome; requires clone-safe `T`. |
-| `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation; requires clone-safe `T`. Without an explicit timeout, this helper performs an immediate check. |
-| `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation; requires clone-safe `T`. Without an explicit timeout, this helper performs an immediate check. |
+| `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome; a non-repeatable `T` consumes the observation right on this call. |
+| `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation; a non-repeatable `T` consumes the observation right even when `None` is returned. Without an explicit timeout, this helper performs an immediate check. |
+| `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation; a non-repeatable `T` consumes the observation right. Without an explicit timeout, this helper performs an immediate check. |
 
 `TaskResult[T]` variants:
 
@@ -115,12 +118,14 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 
 Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
 
-The completed value is stored by the task and cloned for each observation. Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime-backed resource is single-observer-only in 0.1. That restriction is not yet enforced statically, so a second observation can alias the same host resource; transfer such a result to exactly one designated observer.
-
-`random.Rng` is stricter: every task-result observation that could return a
-generator, including through a wrapper, is rejected statically with `AU3007`.
-For unresolved generic `T`, these methods infer a clone-safety obligation that
-is checked after specialization.
+The completed value is stored by the task. Under Provisional ADR-0033,
+`Task[T]` is copyable only when `T` is copyable, `T` is a `Queue[...]` handle,
+or `T` is a recursively repeatable `Task[...]`. For every
+other transferable result, `result`, `result_or_none`, and `result_or` consume
+the unique observation right on any outcome. The consumption is conservative:
+timeout, cancellation, failure, and a collapsed `None` do not restore it.
+`wait_any` and `wait_all` consume the whole task vector for such a `T`;
+`wait_any` abandons the unchosen observation rights.
 
 ## Queue[T]
 
@@ -133,9 +138,9 @@ bounded = Queue[String](capacity=8)
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| constructor | `Queue[T](capacity: int32 = ...)` | Creates an unbounded queue when omitted or a bounded queue for a positive capacity; zero or negative capacity traps with `AU4001`. |
-| `put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends `value`, waiting for capacity when needed. Returns the unsent value in the error variant. |
-| `try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Attempts to send without waiting. Returns `Full(value)` when a bounded queue is full. |
+| constructor | `Queue[T](capacity: int32 = ...)` | Creates an unbounded queue when omitted or a bounded queue for a positive capacity; requires `T: Transfer`; zero or negative capacity traps with `AU4001`. |
+| `put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a `Transfer` value, waiting for capacity when needed. Returns the unsent value in the error variant. |
+| `try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Attempts to send a `Transfer` value without waiting. Returns `Full(value)` when a bounded queue is full. |
 | `get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives one structured queue outcome. |
 | `get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` for an item and `None` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
 | `get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Returns an item or `default` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
@@ -186,8 +191,8 @@ explicitly is still the clearest program shape.
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
 | `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task so other runnable work can proceed. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
-| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait; requires clone-safe `T`. |
+| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout. For non-repeatable `T`, consumes the vector and abandons unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait. For non-repeatable `T`, consumes the vector. |
 
 ### Explicit Cooperative Yielding
 
@@ -274,20 +279,44 @@ and the relevant statement and call productions are in
 
 ## Typing Rules
 
-`Queue[T]` and `Task[T]` are copy handles; `TaskGroup` is a managed move
-resource. Queue sends, fallback values, task captures, and returned outcome
-payloads use the exact owned positions shown in the API tables above. Task
-targets are named functions or associated methods without `self`; generic
-targets must infer all type arguments. Bare shared and `own` target parameters
-are supported, while `mut` targets are rejected. An explicit stack capacity
+`Queue[T]` is a copy handle; `Task[T]` is conditionally Copy under Provisional
+ADR-0033; `TaskGroup` is a managed move resource. Queue sends, fallback values,
+task captures, and returned outcome payloads use the exact owned positions
+shown in the API tables above. Task targets are named functions or associated
+methods without `self`; generic targets may infer every type argument or use
+explicit `function[Types]` and `Type.associated_method[Types]` specialization
+in the callable slot. Bare shared and `own` target parameters are supported,
+while `mut` targets are rejected. An explicit stack capacity
 must have exact type `int64`; the first callable argument and every capture
 retain the same typing rules as an ordinary start. Queue
 iteration yields `T` by ownership transfer: the bare form is accepted, while
 the `own` and `mut` modifiers are rejected. Timeout and capacity expressions
-must have the documented exact types. Task-result and multi-task observations infer clone-safety obligations
-for unresolved result types and reject a concrete result containing
-`random.Rng`. Queue receive operations transfer one owned value and do not
-require clone safety. A supplied Queue capacity must be greater than zero.
+must have the documented exact types. Queue receive operations transfer one
+owned value and do not recheck payload Transfer. A supplied Queue capacity
+must be greater than zero.
+
+The Provisional Phase 5.6 boundary adds a structural `Transfer` obligation to
+every captured argument and target result for all four task-start methods,
+after generic specialization and before scheduling. A fully concrete generic
+call is checked after inference; an unresolved type parameter is rejected
+rather than becoming a deferred Transfer contract. The obligation applies to
+the owned capture even when the target declares a bare shared parameter and
+borrows that child-owned storage during its call. Queue construction, `put`,
+and `try_put` likewise require `T: Transfer`; handle copies, receive/fallback
+methods, and `close` do not recheck the payload. Copy types, `String`, recursively
+transferable collections/tuples/classes/enums, and `Queue`/`Task` handles pass;
+capability views, `random.Rng`, `TaskGroup`, and live host resources do not.
+`Transfer` is compiler-derived rather than a user trait.
+
+Reading a Copy value through shared or mutable access for a task argument
+captures an owned snapshot rather than the access capability, so that snapshot
+is permitted when its type is Transfer. A non-copy access cannot be captured
+this way because the child would need ownership.
+
+Explicit generic task targets may use `function[Types]` or
+`Type.associated_method[Types]` in the callable-target slot. Brackets remain
+ordinary indexing elsewhere. A bare target is accepted when its declarations
+and defaults already resolve complete concrete types.
 
 ## Runtime Semantics
 
@@ -337,10 +366,10 @@ The child then borrows or consumes that storage according to the target's
 declaration-stable parameter mode. `put` owns its offered value and returns it
 inside `SendError` when no send occurs. Queue iteration captures the copyable
 handle once at loop entry, produces already-owned items, and never freezes or
-borrows the source binding. Task result observation
-clones the stored runtime value after satisfying its clone-safety obligation;
-the single-observer resource limitation below
-is therefore significant.
+borrows the source binding. Task result observation clones a stored value only
+when the result is repeatable. A non-repeatable result instead carries one
+statically enforced observation right, and no alias may produce a second
+value.
 
 ## Diagnostics
 
@@ -369,6 +398,25 @@ violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
 `AU4005` reports the exact same range violation for a dynamic request and
 reports task-stack allocation or platform-size failure; neither path clamps or
 falls back to the default.
+
+`AU3008` is reserved by the Provisional Phase 5.6 contract for a value that
+cannot cross a task or Queue boundary. The diagnostic identifies the boundary,
+then names the nested field, element, or payload path to the non-transferable
+leaf. Guidance recommends passing owned transferable data instead of a
+capability view, or keeping a host resource or `random.Rng` on its owning task
+and sending transferable input/output data. It never suggests implementing
+`Transfer`, because there is no user implementation surface.
+
+`AU3009` is different: the value has already passed the boundary, but a clone,
+clone-producing collection read, or implicit aggregate copy would duplicate a
+single-consumer task-result right. After a direct observation consumes that
+right, a second use of the same task binding is ordinary moved-value `AU3001`;
+attempting consumption through shared access is `AU3002`.
+
+The runtime's atomic defense rejects a second claim of a non-repeatable result
+with `AU4001`: `task result has already been observed; non-repeatable task
+results allow exactly one observing attempt`. A correctly checked Aurora
+program should be stopped earlier by the static ownership diagnostics.
 
 ## Backend Support
 
@@ -404,8 +452,8 @@ deadline when idle; it does not use a periodic readiness scan. Nested Aurora
 calls stop at 256 frames. The process-wide blocking pool uses 2
 through 8 host threads selected from host parallelism; it has no 0.1
 configuration or queue backpressure, so slow or stuck jobs can delay unrelated
-work behind them. A result holding an exclusive runtime resource is
-single-observer-only, but the checker does not yet enforce that rule.
+work behind them. Non-repeatable transferable task results have one statically
+enforced observation right.
 Cancelling a blocking-worker wait cannot retract an OS side effect already in
 progress. If the scheduler itself stops with tasks still suspended, it disarms
 their waits, publishes cancellation to their handles and observers, and
@@ -446,10 +494,9 @@ failure synchronous, and contains scheduler teardown across MIR and direct
 tasks. It does not make the broker thread-safe or promise FIFO task execution.
 Multicore Aurora task execution is reserved for the later
 pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
-`mut` task targets, statically enforced single-observer resource
-results, Transfer boundary checks, typed heterogeneous selection, configurable
-blocking-pool sizing, native frame parity, and detached task syntax are
-unavailable. On the clean Mac14,9 measurement, 10,000 parked sleepers used
+`mut` task targets, typed heterogeneous selection, configurable blocking-pool
+sizing, native frame parity, and detached task syntax are unavailable. On the
+clean Mac14,9 measurement, 10,000 parked sleepers used
 205,389,824 bytes of worst whole-process RSS and 197,836,800 bytes above their
 same-process pre-spawn baseline: an amortized upper bound of 19,784 bytes
 (19.32 KiB) per requested sleeper, including scheduler metadata and shared
@@ -465,3 +512,9 @@ The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
 both backends.
+
+Provisional ADR-0033 specifies the implemented Phase 5.6 contract: structural
+Transfer checks for task captures, task results, and Queue payloads, plus
+static repeatable/single-consumer task results. This does not make task
+execution parallel. Pinned workers and cross-worker-thread-safe Queue/Task
+internals remain the separate Phase 5.7 gate.

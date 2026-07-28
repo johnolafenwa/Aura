@@ -1,0 +1,11 @@
+import random
+
+enum GeneratorState:
+    Empty
+    Ready(random.Rng)
+
+def consume(state: own GeneratorState):
+    print(state)
+
+def launch(group: TaskGroup, state: own GeneratorState):
+    group.start_soon(consume, state)

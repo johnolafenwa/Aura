@@ -1,0 +1,8 @@
+error[AU3002]: parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_shared_access_capture.au:5:31
+  |
+5 |     group.start_soon(consume, value)
+  |                               ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_shared_access_capture.au:4:30: parameter `value` is borrowed here
+  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_shared_access_capture.au:5:36-5:36 with `.clone()`

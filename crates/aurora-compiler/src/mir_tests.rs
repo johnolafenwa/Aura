@@ -1811,6 +1811,403 @@ def main():
 }
 
 #[test]
+fn task_group_generic_starts_preserve_specialized_result_types_and_repeatability() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def relay[T](value: own T) -> T:
+    return value
+
+def defaulted[T](value: own Option[T] = None) -> Option[T]:
+    return value
+
+class Factory[T]:
+    def relay(value: own T) -> T:
+        return value
+
+def int_worker() -> int64:
+    return 1
+
+def string_worker() -> String:
+    return "value"
+
+def main():
+    with TaskGroup() as group:
+        explicit_int = group.start(relay[int64], 1)
+        group.start_soon(relay[String], "value")
+        default_int = group.start_with_stack(262144, defaulted[int64])
+        group.start_soon_with_stack(262144, relay[Queue[int64]], Queue[int64]())
+        static_int = group.start(Factory[int64].relay, 2)
+        int_task = group.start(int_worker)
+        nested_int = group.start(relay[Task[int64]], int_task)
+        string_task = group.start(string_worker)
+        nested_string = group.start(relay[Task[String]], string_task)
+"#,
+    )
+    .expect("generic task starts should lower after semantic specialization");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let starts = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::StartTask {
+                        returns_handle,
+                        result_is_copy,
+                        stack_size,
+                        function,
+                        ..
+                    },
+            } => Some((
+                target.as_str(),
+                function.as_str(),
+                *returns_handle,
+                *result_is_copy,
+                stack_size.is_some(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(starts.len(), 9);
+    assert_eq!(
+        starts
+            .iter()
+            .map(|(_, _, returns_handle, result_is_copy, has_stack)| (
+                *returns_handle,
+                *result_is_copy,
+                *has_stack,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (true, true, false),
+            (false, false, false),
+            (true, true, true),
+            (false, true, true),
+            (true, true, false),
+            (true, true, false),
+            (true, true, false),
+            (true, false, false),
+            (true, false, false),
+        ]
+    );
+    assert!(
+        starts
+            .iter()
+            .any(|(_, function, _, _, _)| function == &"Factory.relay"),
+        "associated generic task targets should retain their direct symbol"
+    );
+
+    let named_types = main
+        .local_types
+        .iter()
+        .filter(|local| {
+            matches!(
+                local.name.as_str(),
+                "explicit_int" | "default_int" | "static_int" | "nested_int" | "nested_string"
+            )
+        })
+        .map(|local| (local.name.as_str(), local.ty.clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        named_types["explicit_int"],
+        Type::Named("Task".to_string(), vec![Type::named("int64")])
+    );
+    assert_eq!(
+        named_types["default_int"],
+        Type::Named(
+            "Task".to_string(),
+            vec![Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int64")]
+            )]
+        )
+    );
+    assert_eq!(
+        named_types["static_int"],
+        Type::Named("Task".to_string(), vec![Type::named("int64")])
+    );
+    assert_eq!(
+        named_types["nested_int"],
+        Type::Named(
+            "Task".to_string(),
+            vec![Type::Named("Task".to_string(), vec![Type::named("int64")])]
+        )
+    );
+    assert_eq!(
+        named_types["nested_string"],
+        Type::Named(
+            "Task".to_string(),
+            vec![Type::Named("Task".to_string(), vec![Type::named("String")])]
+        )
+    );
+}
+
+#[test]
+fn task_target_specialization_preserves_tuple_qualified_and_inferred_types() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import io
+
+def empty[T]() -> Option[T]:
+    return Option.None
+
+def pair[A, B](first: own A, second: own B) -> (A, B):
+    return (first, second)
+
+def main():
+    explicit_label: String = "explicit"
+    inferred_label: String = "inferred"
+    with TaskGroup() as group:
+        tuple_task = group.start(empty[((String, int32),)])
+        qualified_task = group.start(empty[io.Error])
+        explicit_pair = group.start(pair[String, int64], explicit_label, 2)
+        inferred_pair = group.start(pair, inferred_label, 3)
+"#,
+    )
+    .expect("task targets should preserve every supported specialization form");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let named_types = main
+        .local_types
+        .iter()
+        .filter(|local| {
+            matches!(
+                local.name.as_str(),
+                "tuple_task" | "qualified_task" | "explicit_pair" | "inferred_pair"
+            )
+        })
+        .map(|local| (local.name.as_str(), local.ty.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(
+        named_types["tuple_task"],
+        Type::Named(
+            "Task".to_string(),
+            vec![Type::Named(
+                "Option".to_string(),
+                vec![Type::Tuple(vec![
+                    Type::named("String"),
+                    Type::named("int32")
+                ])]
+            )]
+        )
+    );
+    assert_eq!(
+        named_types["qualified_task"],
+        Type::Named(
+            "Task".to_string(),
+            vec![Type::Named(
+                "Option".to_string(),
+                vec![Type::named("io.Error")]
+            )]
+        )
+    );
+    let expected_pair = Type::Named(
+        "Task".to_string(),
+        vec![Type::Tuple(vec![
+            Type::named("String"),
+            Type::named("int64"),
+        ])],
+    );
+    assert_eq!(named_types["explicit_pair"], expected_pair);
+    assert_eq!(named_types["inferred_pair"], expected_pair);
+
+    let starts = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::StartTask {
+                        result_is_copy,
+                        function,
+                        args,
+                        ..
+                    },
+                ..
+            } => Some((function.as_str(), *result_is_copy, args)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 4);
+    assert_eq!(
+        starts
+            .iter()
+            .map(|(_, result_is_copy, _)| *result_is_copy)
+            .collect::<Vec<_>>(),
+        vec![false, false, false, false]
+    );
+    assert_eq!(
+        starts[3].2[0].value,
+        Operand::MovePlace("inferred_label".to_string()),
+        "inferred String capture must use the specialized non-copy parameter type"
+    );
+    assert!(
+        matches!(starts[3].2[1].value, Operand::Place(_)),
+        "inferred int64 capture must be materialized in its contextual type"
+    );
+}
+
+#[test]
+fn task_target_context_does_not_reinterpret_ordinary_or_invalid_indices() {
+    let lowerer = lowerer_with_imported_modules();
+    let indexed_value = expr(ExprKind::Index {
+        object: Box::new(name_expr("values")),
+        index: Box::new(expr(ExprKind::Int(0))),
+    });
+    let (base, type_args) = lowerer.task_callable_specialization(&indexed_value);
+    assert!(
+        std::ptr::eq(base, &indexed_value),
+        "an ordinary value index must remain the original callable expression"
+    );
+    assert!(type_args.is_none());
+    assert!(lowerer.resolve_task_start_target(&indexed_value).is_none());
+
+    let invalid = crate::lower_source_to_mir(
+        r#"
+def main():
+    values = [1]
+    with TaskGroup() as group:
+        group.start(values[0])
+"#,
+    )
+    .expect_err("an indexed value is not a statically resolved task target");
+    assert!(
+        invalid
+            .message
+            .contains("task target indexing is not a callable type specialization"),
+        "{invalid:?}"
+    );
+}
+
+#[test]
+fn task_target_inference_rejects_conflicting_argument_types_before_lowering() {
+    let invalid = crate::lower_source_to_mir(
+        r#"
+def same[T](left: own T, right: own T) -> T:
+    return left
+
+def main():
+    label: String = "value"
+    with TaskGroup() as group:
+        group.start(same, label, 1)
+"#,
+    )
+    .expect_err("one generic target parameter cannot infer two concrete types");
+    assert!(
+        invalid
+            .message
+            .contains("conflicting inferred types for `T`: `String` and `int64`"),
+        "{invalid:?}"
+    );
+}
+
+#[test]
+fn task_observations_and_waits_move_only_nonrepeatable_rights() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def int_worker() -> int64:
+    return 1
+
+def string_worker() -> String:
+    return "value"
+
+def queue_worker() -> Queue[int64]:
+    return Queue[int64]()
+
+def main():
+    with TaskGroup() as group:
+        int_result_task = group.start(int_worker)
+        int_result = int_result_task.result()
+        queue_result_task = group.start(queue_worker)
+        queue_result = queue_result_task.result_or_none()
+        string_result_task = group.start(string_worker)
+        string_result = string_result_task.result_or("")
+
+        int_tasks = [group.start(int_worker)]
+        any_int = wait_any(int_tasks)
+        string_tasks = [group.start(string_worker)]
+        all_strings = wait_all(string_tasks)
+"#,
+    )
+    .expect("task observation ownership should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    let member_receivers = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Member { object, field, .. },
+                        ..
+                    },
+                ..
+            } if matches!(field.as_str(), "result" | "result_or_none" | "result_or") => {
+                Some((field.as_str(), object))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(member_receivers.len(), 3);
+    assert!(matches!(member_receivers[0], ("result", Operand::Place(_))));
+    assert!(matches!(
+        member_receivers[1],
+        ("result_or_none", Operand::Place(_))
+    ));
+    assert_eq!(
+        member_receivers[2],
+        (
+            "result_or",
+            &Operand::MovePlace("string_result_task".to_string())
+        )
+    );
+
+    let wait_operands = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                ..
+            } if matches!(name.as_str(), "wait_any" | "wait_all") => {
+                Some((name.as_str(), &args[0].value))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wait_operands,
+        vec![
+            ("wait_any", &Operand::Place("int_tasks".to_string())),
+            ("wait_all", &Operand::MovePlace("string_tasks".to_string())),
+        ]
+    );
+}
+
+#[test]
 fn task_group_stack_override_lowers_stack_operand_and_named_target_arguments() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -2353,6 +2750,13 @@ class Thing:
     def get(self) -> int32:
         return self.value
 
+class GenericThing[T]:
+    def relay(value: own T) -> T:
+        return value
+
+    def choose[U](value: own U) -> U:
+        return value
+
 enum Status:
     Ok
     Value(int32)
@@ -2362,6 +2766,9 @@ trait RemoteTrait:
 
 def helper() -> int32:
     return 7
+
+def generic_helper[T](value: own T) -> T:
+    return value
 "#;
 
     let mut program = checked_program(main_source);
@@ -3134,12 +3541,76 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         .iter()
         .flat_map(|block| block.instructions.iter())
         .any(|instruction| matches!(
-            instruction,
-            Instruction::PopCleanup {
-                place,
-                cancel_before_cleanup: true
-            } if place == "resource"
+                instruction,
+                Instruction::PopCleanup {
+                    place,
+                    cancel_before_cleanup: true
+                } if place == "resource"
         )));
+}
+
+#[test]
+fn imported_task_targets_preserve_contextual_and_static_specialization() {
+    let lowerer = lowerer_with_imported_modules();
+    let imported_function = member_expr(member_expr(name_expr("pkg"), "helpers"), "generic_helper");
+    let contextual_specialization = expr(ExprKind::Index {
+        object: Box::new(imported_function),
+        index: Box::new(name_expr("int32")),
+    });
+    let target = lowerer
+        .resolve_task_start_target(&contextual_specialization)
+        .expect("an imported generic function should resolve as a task target");
+    let target = lowerer.specialize_task_start_target(
+        target,
+        &[arg(expr(ExprKind::Int(1)))],
+        Span::new(1, 1),
+    );
+    assert_eq!(target.function, "pkg.helpers::generic_helper");
+    assert_eq!(target.param_types, vec![Type::named("int32")]);
+    assert_eq!(target.return_type, Type::named("int32"));
+
+    let imported_class = member_expr(member_expr(name_expr("pkg"), "helpers"), "GenericThing");
+    let specialized_class = expr(ExprKind::Specialize {
+        expr: Box::new(imported_class),
+        type_args: vec![type_ref("String")],
+    });
+    let static_target = member_expr(specialized_class, "relay");
+    let target = lowerer
+        .resolve_task_start_target(&static_target)
+        .expect("an imported specialized associated method should resolve");
+    let target = lowerer.specialize_task_start_target(
+        target,
+        &[arg(expr(ExprKind::String("value".to_string())))],
+        Span::new(1, 1),
+    );
+    assert_eq!(target.function, "pkg.helpers::GenericThing.relay");
+    assert_eq!(target.param_types, vec![Type::named("String")]);
+    assert_eq!(target.return_type, Type::named("String"));
+
+    let generic_static_target = expr(ExprKind::Index {
+        object: Box::new(member_expr(
+            expr(ExprKind::Specialize {
+                expr: Box::new(member_expr(
+                    member_expr(name_expr("pkg"), "helpers"),
+                    "GenericThing",
+                )),
+                type_args: vec![type_ref("String")],
+            }),
+            "choose",
+        )),
+        index: Box::new(name_expr("int32")),
+    });
+    let target = lowerer
+        .resolve_task_start_target(&generic_static_target)
+        .expect("class and method specializations should both survive import resolution");
+    let target = lowerer.specialize_task_start_target(
+        target,
+        &[arg(expr(ExprKind::Int(7)))],
+        Span::new(1, 1),
+    );
+    assert_eq!(target.function, "pkg.helpers::GenericThing.choose");
+    assert_eq!(target.param_types, vec![Type::named("int32")]);
+    assert_eq!(target.return_type, Type::named("int32"));
 }
 
 #[test]

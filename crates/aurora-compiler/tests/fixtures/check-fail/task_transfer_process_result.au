@@ -1,0 +1,9 @@
+import process
+
+def start_process() -> Result[process.Child, process.Error]:
+    return process.start(["/usr/bin/true"])
+
+def main() -> int32:
+    with TaskGroup() as group:
+        _task = group.start(start_process)
+    return 0

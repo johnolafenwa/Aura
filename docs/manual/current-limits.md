@@ -126,10 +126,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   and mutable-Vec shuffle operations. There is no global generator, state
   serialization, reseeding, jump/substream operation, distribution library,
   choice helper, public direct or transitive clone route, secure floating
-  function, or `random.Error`. Clone-producing collection and task-result
-  observations are rejected with `AU3007` when their produced value contains
-  or may contain an `Rng`; copying a task/queue handle and transferring one
-  owned generator remain valid.
+  function, or `random.Error`. Clone-producing collection operations are
+  rejected with `AU3007` when their produced value contains or may contain an
+  `Rng`. An owned generator may move within one owning task, but it is not
+  `Transfer`: it cannot be a task result or Queue payload. Queue handle copies
+  remain valid; a Task handle is copyable only for a repeatable result.
   Generic clone-safety requirements are inferred from callable bodies,
   propagated through generic calls and imports, and checked after
   specialization; there is no source annotation for them. Trait defaults may
@@ -149,7 +150,12 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
 - High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
-- Resource-bearing task results are single-observer-only in Aurora 0.1. This restriction is not yet enforced statically for general resource types: each observation clones the stored runtime value and can alias one host resource through shared handles, so use exactly one designated observer. `random.Rng` is a stricter exception: clone-producing task-result observations are rejected statically with `AU3007`. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
+- Provisional ADR-0033 rejects non-Transfer task captures, task results, and
+  Queue payloads with `AU3008`. Every other non-repeatable transferable task
+  result has one statically enforced observation right: direct result methods
+  consume it on every outcome, and multi-task waits consume the complete task
+  vector. A second runtime claim that reaches the atomic containment check
+  traps with `AU4001` rather than returning or cloning the stored value.
 - Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait, not an operating-system call already in progress. External side effects may still complete.
 - The process-wide blocking pool uses 2 through 8 host threads, selected from host parallelism, with no 0.1 configuration or queue backpressure. A timed-out or cancelled host job keeps its worker until the underlying call returns; enough slow or stuck DNS/filesystem jobs can occupy the whole pool and delay unrelated blocking operations queued behind them.
 - `WebSocketListener` has no explicit `close()` method, and WebSocket cancellation/error propagation is not yet fully aligned with TCP and UDP.

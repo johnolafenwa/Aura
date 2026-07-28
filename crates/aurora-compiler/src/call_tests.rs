@@ -333,7 +333,7 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
     assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
     assert_eq!(
         BuiltinMember::QueueTryPut.detail(),
-        "try_put(value: own T) -> Result[None, SendError[T]]"
+        "try_put(value: own T) -> Result[None, SendError[T]] [T must be Transfer]"
     );
     assert_eq!(
         BuiltinMember::TaskGroupStartSoon.detail(),
@@ -1505,11 +1505,11 @@ fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
     );
     assert_eq!(
         BuiltinMember::QueueGet.detail(),
-        "get(timeout: Duration = ...) -> QueueReceive[T]"
+        "get(timeout: Duration = ...) -> QueueReceive[T] [T must be Transfer]"
     );
     assert_eq!(
         BuiltinMember::TaskResult.detail(),
-        "result(timeout: Duration = ...) -> TaskResult[T]"
+        "result(timeout: Duration = ...) -> TaskResult[T] [consumes Task[T] when T is non-repeatable]"
     );
     assert_eq!(
         BuiltinMember::TaskGroupStartSoon.detail(),
@@ -1519,4 +1519,76 @@ fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
         .docs()
         .contains("first task to complete"));
     assert!(BuiltinFunction::WaitAll.docs().contains("every task"));
+}
+
+#[test]
+fn concurrency_builtin_docs_teach_transfer_and_single_consumer_contracts() {
+    for member in [
+        BuiltinMember::TaskResult,
+        BuiltinMember::TaskResultOrNone,
+        BuiltinMember::TaskResultOr,
+    ] {
+        assert!(
+            member
+                .detail()
+                .contains("consumes Task[T] when T is non-repeatable"),
+            "{member:?} completion detail must expose conditional consumption: {}",
+            member.detail()
+        );
+        let docs = member.docs();
+        assert!(
+            docs.contains("non-repeatable `T` consumes the unique `Task[T]` observation right"),
+            "{member:?} must teach conditional task-result consumption: {docs}"
+        );
+        assert!(
+            docs.contains("Copy data, `Queue` handles, and recursively repeatable `Task` handles"),
+            "{member:?} must teach which task results remain repeatable: {docs}"
+        );
+        assert!(
+            docs.contains("`Task[T]` is copyable only when `T` is repeatable"),
+            "{member:?} must teach conditional Task copyability: {docs}"
+        );
+    }
+
+    for builtin in [BuiltinFunction::WaitAny, BuiltinFunction::WaitAll] {
+        assert!(
+            builtin
+                .detail()
+                .contains("consumes tasks when T is non-repeatable"),
+            "{builtin:?} completion detail must expose conditional consumption: {}",
+            builtin.detail()
+        );
+        let docs = builtin.docs();
+        assert!(
+            docs.contains("non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right"),
+            "{builtin:?} must teach whole-vector consumption: {docs}"
+        );
+        assert!(
+            docs.contains("repeatable `T` leaves the vector reusable"),
+            "{builtin:?} must distinguish repeatable task results: {docs}"
+        );
+    }
+
+    for member in [
+        BuiltinMember::QueuePut,
+        BuiltinMember::QueueTryPut,
+        BuiltinMember::QueueGet,
+        BuiltinMember::QueueGetOrNone,
+        BuiltinMember::QueueGetOr,
+    ] {
+        assert!(
+            member.detail().contains("T must be Transfer"),
+            "{member:?} completion detail must expose the Queue boundary: {}",
+            member.detail()
+        );
+        let docs = member.docs();
+        assert!(
+            docs.contains("Queue payload type `T` must be Transfer"),
+            "{member:?} must teach the Queue transfer boundary: {docs}"
+        );
+        assert!(
+            !docs.contains("multiple workers"),
+            "{member:?} must not claim the multicore stage is implemented: {docs}"
+        );
+    }
 }

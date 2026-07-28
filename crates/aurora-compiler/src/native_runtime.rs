@@ -21,27 +21,26 @@ use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, clone_json_codec_source,
-    collect_queue_values, current_lightweight_task_cancellation, current_lightweight_task_id,
-    decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
-    evaluate_bytes_host_builtin_ref, evaluate_host_builtin, fail_current_lightweight_task,
-    float_floor_divmod, io_error, io_read_line, json_array_metadata_is_exact,
-    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
-    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
+    clone_json_codec_source, collect_queue_values, current_lightweight_task_cancellation,
+    current_lightweight_task_id, decode_process_restart_policy, decode_process_stdio,
+    embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref, evaluate_host_builtin,
+    fail_current_lightweight_task, float_floor_divmod, io_error, io_read_line,
+    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
+    json_object_metadata_is_exact, json_parse_owned_to_runtime, nominal_runtime_base_name,
+    option_none, option_some, poll_cancellation, prepare_json_codec_source,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
     sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
-    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
-    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack,
+    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -5298,6 +5297,9 @@ pub extern "C-unwind" fn aurora_direct_channel_close(
 pub extern "C-unwind" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(task) } {
         Value::Task(task) => {
+            if let Err(error) = task.claim_result_observation() {
+                runtime_diagnostic_error(error);
+            }
             match direct_timer_result_or_trap(
                 task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())),
             ) {
@@ -5325,6 +5327,9 @@ pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
         let timeout = duration_from_ptr(duration, "result(timeout=...)");
         match unsafe { value_ref(task) } {
             Value::Task(task) => {
+                if let Err(error) = task.claim_result_observation() {
+                    runtime_diagnostic_error(error);
+                }
                 match direct_timer_result_or_trap(task.wait_result_with_cancellation_observed(
                     Some(timeout),
                     Some(&current_cancellation()),
@@ -5352,26 +5357,33 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_none(
     task_runtime_boundary(|| {
         let cancellation = current_cancellation();
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match if cancellation.is_cancelled() {
-                TaskWaitStatus::Cancelled
-            } else if let Some(result) = task.completed_result_observed() {
-                match result {
-                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                        TaskWaitStatus::Ready(result)
+            Value::Task(task) => {
+                if let Err(error) = task.claim_result_observation() {
+                    runtime_diagnostic_error(error);
+                }
+                match if cancellation.is_cancelled() {
+                    TaskWaitStatus::Cancelled
+                } else if let Some(result) = task.completed_result_observed() {
+                    match result {
+                        crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                            TaskWaitStatus::Ready(result)
+                        }
+                        crate::runtime_value::TaskExecutionResult::Cancelled => {
+                            TaskWaitStatus::Cancelled
+                        }
                     }
-                    crate::runtime_value::TaskExecutionResult::Cancelled => {
-                        TaskWaitStatus::Cancelled
+                } else {
+                    TaskWaitStatus::TimedOut
+                } {
+                    TaskWaitStatus::Ready(result) => match result {
+                        Ok(value) => boxed_value(option_some(value)),
+                        Err(_) => boxed_value(option_none()),
+                    },
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {
+                        boxed_value(option_none())
                     }
                 }
-            } else {
-                TaskWaitStatus::TimedOut
-            } {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(option_some(value)),
-                    Err(_) => boxed_value(option_none()),
-                },
-                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
-            },
+            }
             other => runtime_error(format!(
                 "expected `Task`, found `{}`",
                 value_type_name(other)
@@ -5388,18 +5400,23 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_none_timeout_value(
     task_runtime_boundary(|| {
         let timeout = duration_from_ptr(duration, "result_or_none(timeout=...)");
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match direct_timer_result_or_trap(
-                task.wait_result_with_cancellation_observed(
+            Value::Task(task) => {
+                if let Err(error) = task.claim_result_observation() {
+                    runtime_diagnostic_error(error);
+                }
+                match direct_timer_result_or_trap(task.wait_result_with_cancellation_observed(
                     Some(timeout),
                     Some(&current_cancellation()),
-                ),
-            ) {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(option_some(value)),
-                    Err(_) => boxed_value(option_none()),
-                },
-                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
-            },
+                )) {
+                    TaskWaitStatus::Ready(result) => match result {
+                        Ok(value) => boxed_value(option_some(value)),
+                        Err(_) => boxed_value(option_none()),
+                    },
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {
+                        boxed_value(option_none())
+                    }
+                }
+            }
             other => runtime_error(format!(
                 "expected `Task`, found `{}`",
                 value_type_name(other)
@@ -5417,26 +5434,31 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value(
         let cancellation = current_cancellation();
         let default = unsafe { consume_owned_value(default) };
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match if cancellation.is_cancelled() {
-                TaskWaitStatus::Cancelled
-            } else if let Some(result) = task.completed_result_observed() {
-                match result {
-                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                        TaskWaitStatus::Ready(result)
-                    }
-                    crate::runtime_value::TaskExecutionResult::Cancelled => {
-                        TaskWaitStatus::Cancelled
-                    }
+            Value::Task(task) => {
+                if let Err(error) = task.claim_result_observation() {
+                    runtime_diagnostic_error(error);
                 }
-            } else {
-                TaskWaitStatus::TimedOut
-            } {
-                TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(value),
-                    Err(_) => boxed_value(default),
-                },
-                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
-            },
+                match if cancellation.is_cancelled() {
+                    TaskWaitStatus::Cancelled
+                } else if let Some(result) = task.completed_result_observed() {
+                    match result {
+                        crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                            TaskWaitStatus::Ready(result)
+                        }
+                        crate::runtime_value::TaskExecutionResult::Cancelled => {
+                            TaskWaitStatus::Cancelled
+                        }
+                    }
+                } else {
+                    TaskWaitStatus::TimedOut
+                } {
+                    TaskWaitStatus::Ready(result) => match result {
+                        Ok(value) => boxed_value(value),
+                        Err(_) => boxed_value(default),
+                    },
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
+                }
+            }
             other => runtime_error(format!(
                 "expected `Task`, found `{}`",
                 value_type_name(other)
@@ -5456,6 +5478,9 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
         let timeout = duration_from_ptr(duration, "result_or(timeout=...)");
         match unsafe { value_ref(task) } {
             Value::Task(task) => {
+                if let Err(error) = task.claim_result_observation() {
+                    runtime_diagnostic_error(error);
+                }
                 match direct_timer_result_or_trap(task.wait_result_with_cancellation_observed(
                     Some(timeout),
                     Some(&current_cancellation()),
@@ -5501,6 +5526,7 @@ fn wait_any_tasks(
     tasks: Vec<TaskValue>,
     timeout: Option<StdDuration>,
 ) -> Result<Value, Diagnostic> {
+    claim_task_result_observations(&tasks)?;
     let deadline = checked_timeout_deadline_at(timeout, Instant::now(), "wait_any(timeout=...)")?;
     let cancellation = current_cancellation();
     if tasks.is_empty() {
@@ -5546,6 +5572,7 @@ fn wait_all_tasks(
     tasks: Vec<TaskValue>,
     timeout: Option<StdDuration>,
 ) -> Result<Value, Diagnostic> {
+    claim_task_result_observations(&tasks)?;
     let deadline = checked_timeout_deadline_at(timeout, Instant::now(), "wait_all(timeout=...)")?;
     let cancellation = current_cancellation();
     let mut results = Vec::with_capacity(tasks.len());
@@ -8656,21 +8683,13 @@ unsafe fn spawn_direct_task_with_external_state(
         }
     };
     let task = unsafe {
-        match stack_size {
-            Some(stack_size) => {
-                spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack(
-                    cancellation,
-                    Some(stack_size),
-                    entry,
-                    forced_exit_cleanup,
-                )
-            }
-            None => spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
-                cancellation,
-                entry,
-                forced_exit_cleanup,
-            ),
-        }
+        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability(
+            cancellation,
+            stack_size,
+            result_is_copy,
+            entry,
+            forced_exit_cleanup,
+        )
     };
     match task {
         Ok(task) => Ok(task),

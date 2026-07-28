@@ -1,0 +1,7 @@
+import random
+
+def consume(generator: own random.Rng):
+    print(generator)
+
+def launch(group: TaskGroup, generator: own random.Rng):
+    group.start_soon_with_stack(262144, consume, generator)

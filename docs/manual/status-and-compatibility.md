@@ -82,9 +82,13 @@ still delay siblings. Ordinary tasks request a guarded 512 KiB coroutine stack;
 explicit requests may range through 64 MiB. Waits
 use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle scheduler
-blocks until an event or deadline without a periodic tick. Results containing
-exclusive runtime resources are single-observer-only, although that
-restriction is not yet statically enforced. See [Execution
+blocks until an event or deadline without a periodic tick.
+
+Provisional ADR-0033 implements compiler-derived structural Transfer checks for
+task captures, task results, and Queue payloads, plus conditional task-handle
+Copy and statically single-consumer non-repeatable results. It does not enable
+parallel task execution. Multiple pinned workers and cross-worker-thread-safe
+runtime-handle internals remain the distinct Phase 5.7 gate. See [Execution
 Model](/manual/execution-model) and [Current Limits](/manual/current-limits).
 
 ## Platform And Distribution Support

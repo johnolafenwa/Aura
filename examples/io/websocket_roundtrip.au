@@ -1,8 +1,9 @@
 import io
 import net
 
-def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
-    with server_listener = listener:
+def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.websocket_listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=5s)
         with server_socket = socket:
             match try server_socket.recv_text(timeout=5s):
@@ -14,9 +15,9 @@ def serve_ws(listener: own net.WebSocketListener) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        listener = try net.websocket_listen("127.0.0.1:0")
-        address = try listener.local_addr()
-        server = group.start(serve_ws, listener)
+        addresses = Queue[String](capacity=1)
+        server = group.start(serve_ws, addresses)
+        address = try receive_address(addresses)
 
         socket = try net.websocket_connect_timeout("ws://" + address + "/", 5s)
         with client_socket = socket:
@@ -37,6 +38,17 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
         return Result.Ok(None)
+
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="WebSocket address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
 
 def main() -> int32:
     match run():

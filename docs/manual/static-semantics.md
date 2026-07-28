@@ -310,6 +310,49 @@ storage for the child call; `own` parameters
 consume it. Generic targets also enforce their inferred clone-safety
 obligations after specialization. `mut` target parameters are rejected.
 
+Under the Provisional ADR-0033 Phase 5.6 contract, each value captured by
+these four start methods and the specialized target return type must be
+`Transfer`. This is a compiler-derived structural obligation, not a builtin
+user trait. A same-named ordinary user trait cannot confer the property.
+It follows collection, tuple, class, and enum storage to the first
+non-transferable leaf. All copy types and `String` qualify; aggregates qualify
+when every stored component does; `Queue[T]` and `Task[T]` handles qualify
+without traversing `T`. Capability views, `random.Rng`, `TaskGroup`, and live
+host resources do not qualify unless a later compiler-owned whitelist names a
+specific type.
+
+A task-start expression that reads a Copy value through shared or mutable
+access captures an owned Copy snapshot, not the access capability, and is
+allowed when that value type is Transfer. Non-copy access cannot be captured
+by value without ownership, and the capability itself never crosses.
+
+Queue construction, `put`, and `try_put` require the payload `T` to be
+`Transfer`; handle-only receive/fallback/close operations do not recheck it. A
+fully concrete generic specialization is checked structurally,
+but an unresolved type parameter at a task or Queue boundary is rejected
+conservatively; Phase 5.6 does not infer a deferred Transfer contract. A
+rejection uses `AU3008`, identifies the task or Queue boundary, and gives the
+nested component path that caused it, such as a field that contains `fs.File`;
+it does not suggest implementing a `Transfer` trait.
+
+Task-target resolution narrowly accepts explicit callable specialization as
+`function[Types]` or `Type.associated_method[Types]`; the same syntax remains
+ordinary indexing outside the callable-target slot of a TaskGroup start. A
+bare target whose declared/default context already resolves its complete types
+is also concrete.
+
+ADR-0008 also distinguishes repeatable and single-consumer task results.
+`Task[T]` is copyable only when `T` is copyable, `T` is `Queue[...]`, or `T`
+is a recursively repeatable `Task[...]`. For any other transferable `T`,
+`result`, `result_or_none`, and `result_or` consume the unique observation
+right on every outcome. `wait_any` and `wait_all` consume the complete task
+vector; `wait_any` abandons the unchosen rights. This prevents handle aliases,
+including nested `Task[Task[String]]`, from producing a second value.
+Attempts to clone, read through a clone-producing collection method, or copy
+an aggregate containing such a right use `AU3009`. Reusing the task binding
+after a consuming observation uses ordinary moved-value `AU3001`; consuming
+through shared access is `AU3002`.
+
 Task, queue, and cancellation runtime semantics are defined by [Concurrency](/manual/concurrency).
 
 ## Entrypoint Rules

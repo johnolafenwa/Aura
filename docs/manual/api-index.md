@@ -15,8 +15,8 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `cancelled` | `cancelled() -> bool` | Returns the current task cancellation state. |
 | `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task to the scheduler. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task using the scheduler. |
-| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; requires clone-safe `T`. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; requires clone-safe `T`. |
+| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; consumes the vector and abandons unchosen rights when `T` is non-repeatable. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; consumes the vector when `T` is non-repeatable. |
 | `abs` | `abs(value: number) -> number` | Absolute value for integers and floats. |
 | `min` | `min(left: number, right: number) -> number` | Smaller value of the same numeric type. |
 | `max` | `max(left: number, right: number) -> number` | Larger value of the same numeric type. |
@@ -78,9 +78,11 @@ algorithm, seed-42 vectors, ownership, secure-source boundary, and diagnostics.
 `random.Rng` has no public clone route. `AU3007` rejects the clone-producing
 collection and task APIs indexed below when their produced value contains, or
 may contain, an `Rng`, including through a user-defined wrapper. Cloning
-`Task[random.Rng]` or `Queue[random.Rng]` handles is valid because that copies
-only the handle; moves, collection removals, queue receives, and in-place
-shuffle transfer or rearrange values without duplicating generator state.
+an allowed Task or Queue handle copies only the handle. Provisional ADR-0033
+nevertheless rejects `random.Rng` as a task result or Queue payload with
+`AU3008`, and makes a Task with a non-repeatable result non-copyable. Moves,
+collection removals, and in-place shuffle within one owning task transfer or
+rearrange values without duplicating generator state.
 Generic clone-producing calls infer clone-safety obligations and discharge them
 after specialization; the obligation is retained through generic callers and
 module imports.
@@ -170,21 +172,21 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied. |
-| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error. |
-| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting. |
-| `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome. |
+| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied; Provisional ADR-0033 requires `T: Transfer`. |
+| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error; Provisional ADR-0033 requires `T: Transfer`. |
+| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting; Provisional ADR-0033 requires `T: Transfer`. |
+| `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome; does not itself recheck payload Transfer. |
 | `Queue.get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for closed, timeout, cancellation, or immediate absence. |
 | `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
 | `Queue.close` | `close() -> None` | Closes the queue and wakes waiters. |
-| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome; requires clone-safe `T`. |
-| `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; requires clone-safe `T`. |
-| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; requires clone-safe `T`. |
+| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome; consumes the observation right when `T` is non-repeatable. |
+| `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `None`. |
+| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; consumes the observation right when `T` is non-repeatable. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Captures arguments and starts a child on the guarded 512 KiB default stack. |
-| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Starts a child on the guarded 512 KiB default stack without returning a handle. |
-| `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Starts a child with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
-| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Same explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 512 KiB default stack. |
+| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Applies the same Transfer and target-specialization rules without returning a handle. |
+| `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer and target-specialization rules with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
+| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same rules and explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
 | `TaskGroup.cancel` | `cancel() -> None` | Signals cancellation to children. |
 
 ## I/O And Filesystem

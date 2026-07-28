@@ -225,7 +225,54 @@ Last updated: 2026-07-28
   `work/2026-07-27-phase5-runtime-benchmarks.md`. The soundness refactor shows
   no material performance regression and makes no new performance claim.
 - Phase 5.6 structural Transfer and static single-consumer task-result
-  enforcement is next. It has not started.
+  enforcement has passed its complete implementation gate. The checker derives
+  Transfer from fully resolved specialized types: copy values, `String`, and
+  recursively transferable collections, tuples, classes, and enums pass;
+  capability views, `random.Rng`, `TaskGroup`, and live host resources fail.
+  `Queue[T]` and `Task[T]` handles are transferable independently of their
+  payload, while Queue construction and send operations require a transferable
+  payload. All four TaskGroup start surfaces check captured arguments and task
+  results before scheduling and issue nested-path `AU3008` diagnostics.
+- Static result repeatability is enforced at the same boundary. `Task[T]` is
+  copyable only for copy results, Queue handles, and recursively repeatable
+  Task handles. Observing a non-repeatable result consumes the Task binding;
+  `wait_any` and `wait_all` consume the complete task vector. `AU3009` covers
+  clone/container operations that would duplicate a result right, while the
+  existing moved-value and shared-access diagnostics cover later use and
+  borrowed consumption. MIR and direct lowering carry the repeatability bit
+  into task creation, and both runtimes use an atomic one-winner claim as
+  defense in depth for every observation surface.
+- Phase 5.6 maintained surfaces now include provisional ADR-0033, amendments
+  to ADR-0008 and ADR-0020, semantic/runtime architecture notes, the language
+  manual and diagnostics, compiler-service/LSP expectations, and an extensive
+  positive/negative fixture matrix for structural aggregates, generic
+  specialization, Queue payloads, capability/host-resource leaves, repeated
+  observations, aliases, branches, loops, container access, and both
+  multi-wait helpers. Final review also made `Range` explicitly Transfer
+  without making it Copy, and removed prose that prematurely called Queue/Task
+  internals synchronized before the multicore implementation. Focused evidence
+  is green for 9/9 compiler fixture
+  harness tests, 19/19 call-metadata tests, 85/85 LSP tests at 100% coverage
+  (895 statements and lines, 246 branches, 49 functions), 13/13 MIR
+  `task_group_` tests plus four specialization/move tests, imported-class,
+  associated-method, and native-object tests, CLI structural-Transfer
+  MIR/direct parity, the single-observer JSON MIR/direct cleanup regression,
+  direct TCP/Unix ownership smoke tests, reference integrity, and the docs
+  build.
+- Exact Phase 5.6 full CI is green: 282 CLI tests, 1,056 compiler-library
+  tests, the 565.37-second forced MIR/direct matrix, 85 LSP tests at 100%
+  coverage, 13 extension tests, both coverage gates, executable reference
+  integrity, all 683 migration manifests, docs, audits, warning-denied Clippy,
+  and hygiene. Frozen compiler coverage passes at 68,580/71,330 lines
+  (96.144680%), 4,525/4,670 functions (96.895075%), and 101,189/107,171
+  regions (94.418266%). New tests pin observable behavior; no synthetic
+  coverage test or exclusion was added. Redundant checked-MIR and
+  validated-type defensive branches were restructured into explicit
+  invariants instead of receiving artificial tests.
+- Phase 5.6 now needs only its implementation commit followed by the
+  contractual after-stage benchmark/provenance commit. Phase 5.7 pinned-worker
+  multicore remains pending and no Phase 5.6 text or test claims parallel task
+  execution.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

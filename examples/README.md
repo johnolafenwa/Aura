@@ -220,7 +220,9 @@ The examples are organized by topic so they can serve both as quick references a
     jitter or sleeping after the attempt budget is exhausted
   - uses `random.Rng(42)`, exponential `Duration` backoff with deterministic
     jitter, explicit five-second network/task deadlines, and scoped
-    `TaskGroup`, listener, exchange, and response resources
+    `TaskGroup`, worker-owned listener, exchange, and response resources; the
+    live listener stays on its owning task while a `Queue[String]` carries its
+    transferable bound address to the client task
   - the maintained CLI regression runs the example through both the MIR and
     forced-direct backends and pins seven real loopback requests
   - prints:
@@ -582,6 +584,12 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `9`
 
 ### `concurrency/`
+
+The concurrency examples use only structurally `Transfer` task captures,
+results, and Queue payloads. Queue handles are copy values. Task handles are
+copyable for repeatable results (copy values, Queue handles, and recursively
+repeatable Task handles); observing any other transferable result consumes its
+single task-result right on the first attempt.
 
 - `task_group_start.au`
   - structured task startup with `TaskGroup.start(...)`, `Queue[T]().get_or_none()`, and `Task.result_or(...)`

@@ -1,0 +1,12 @@
+import random
+
+class Node:
+    value: String
+    next: indirect Node?
+    generator: random.Rng
+
+def consume(node: own Node):
+    print(node.value)
+
+def launch(group: TaskGroup, node: own Node):
+    group.start_soon(consume, node)

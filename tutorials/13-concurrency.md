@@ -100,7 +100,15 @@ for job in jobs:
 
 See [examples/concurrency/queue_iteration.au](../examples/concurrency/queue_iteration.au).
 
-Queue and task handles are cheap copy-like references. Passing the same queue into multiple tasks shares the underlying queue without requiring `.clone()` in the common case.
+Queue handles are copy references. Passing the same queue into multiple tasks
+shares the underlying queue without requiring `.clone()`.
+
+The payload is checked separately. `Queue[T](...)`, `put(...)`, and
+`try_put(...)` require `T` to be structurally `Transfer`: every stored field,
+collection element, tuple element, or enum payload must ultimately be safe to
+move to another task. `random.Rng`, `TaskGroup`, capability views, and live
+file, process, or network resources are not `Transfer`. Queue receive and
+handle-only operations do not duplicate or recheck a payload.
 
 Queue iteration accepts only the bare form shown above. `for item in own
 queue:` and `for item in mut queue:` are rejected because receiving already
@@ -139,6 +147,28 @@ with TaskGroup() as group:
 That is Aurora's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
+
+All four start methods apply the same boundary before a task is scheduled:
+every captured argument and the target's result must be structurally
+`Transfer`. The compiler derives that property from the fully specialized
+type; source code cannot declare or implement a `Transfer` trait. Copy data,
+`String`, structurally transferable collections, tuples, classes, enums, and
+Queue/Task handle identities can cross. Shared or mutable access,
+`random.Rng`, `TaskGroup`, and live host resources cannot.
+
+This is a static boundary established before multicore execution. Phase 5.7
+must make the state behind Queue and Task handles cross-worker thread-safe
+before more than one Aurora worker may use them.
+
+A bare target parameter still grants shared access, but it borrows from the
+child's owned capture rather than the caller's value. An `own` parameter may
+consume that capture. A `mut` target remains invalid because there is no
+caller-visible writeback.
+
+Generic task targets must be concrete at the boundary. Inference and defaults
+may provide the types, or the callable slot may use the narrow forms
+`function[Types]` and `Type.associated_method[Types]`. Aurora rejects an
+unresolved type parameter instead of assuming it can cross.
 
 ### Per-task Stack Overrides
 
@@ -182,11 +212,23 @@ See [examples/concurrency/task_group_associated_method.au](../examples/concurren
 
 ### Task Results
 
-Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
+`Task[T]` is always a `Transfer` handle, but it is copyable only when `T` is
+repeatable. Repeatable results are copy values, `Queue[...]` handles, and
+recursively repeatable `Task[...]` handles. A task returning
+`String`, `Vec[...]`, or another non-copy transferable value therefore has a
+move-only task handle.
 
-`random.Rng` is different: task observations clone the stored result, so
-`Task.result`, `result_or_none`, and `result_or` reject a result containing an
-`Rng` with `AU3007`. Copying the task handle remains valid.
+For a non-repeatable result, each of `result`, `result_or_none`, and
+`result_or` consumes the task handle on its first attempt. Timeout,
+cancellation, task failure, `Option.None`, and a fallback do not restore the
+observation right. Use a repeatable result or a separate Queue protocol when a
+program needs retries or fan-out.
+
+Results that are not structurally `Transfer`, including `random.Rng` and live
+host resources, are rejected at the task-start boundary with `AU3008`.
+`AU3009` instead reports an attempted clone or collection copy that would
+duplicate a valid single-consumer result right. A later use after direct
+observation is the ordinary moved-value diagnostic `AU3001`.
 
 For ordinary code, use:
 
@@ -251,8 +293,12 @@ match wait_all(task_list, timeout=20ms):
         print("cancelled")
 ```
 
-`wait_any` and `wait_all` also clone successful stored results and require
-clone-safe `T`. Queue receive APIs transfer ownership and can carry an `Rng`.
+For repeatable `T`, the task handles and observations remain reusable. For a
+non-repeatable `T`, both helpers consume the complete `Vec[Task[T]]` on the
+first attempt, including timeout, cancellation, and task failure.
+`wait_any` deliberately abandons the observation rights of the tasks it did
+not choose. Queue receive APIs always transfer one owned payload, but Queue
+construction and sends admit only `Transfer` payloads.
 
 See [examples/concurrency/task_group_wait_helpers.au](../examples/concurrency/task_group_wait_helpers.au).
 

@@ -118,8 +118,18 @@ through its generic-to-generic call. The inferred contract also survives a
 module import; callers do not gain a clone route by moving the helper to
 another file.
 
-Copying `Task[random.Rng]` or `Queue[random.Rng]` handles remains valid because
-that duplicates a synchronization handle rather than the generator value.
+Clone safety and task transport are separate rules. A `Queue[T]` handle has
+copyable identity, but constructing or sending through the queue requires
+concrete `T: Transfer`, so `Queue[random.Rng]()` is rejected
+with `AU3008`. `Task[T]` is always a transferable handle, but is copyable only
+when `T` is repeatable; `random.Rng` is neither `Transfer` nor repeatable, so a
+task may not return it.
+
+Aurora does not infer a deferred `Transfer` obligation for an unresolved type
+parameter. A generic task target must be fully specialized by inference,
+defaults, or the narrow explicit target form `function[Types]` (and the
+equivalent associated-method form) before `TaskGroup.start(...)` can validate
+its captured arguments and result.
 
 ## Current Limits
 

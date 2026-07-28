@@ -1,0 +1,96 @@
+import io
+
+class TransferRecord:
+    name: String
+    values: Vec[int32]
+    labels: Map[String, Set[int32]]
+    pair: (String, int32)
+
+enum TransferEnvelope:
+    Empty
+    Record(TransferRecord)
+
+def consume_transfer_values(
+    flag: bool,
+    count: int64,
+    delay: Duration,
+    text: own String,
+    values: own Vec[String],
+    labels: own Map[String, Set[int32]],
+    pair: own (String, int32),
+    record: own TransferRecord,
+    envelope: own TransferEnvelope,
+    errors: own Vec[io.Error],
+    queue: Queue[int32],
+    task: Task[String]
+) -> int32:
+    pair_name, pair_value = pair
+    if flag and count == 7 and delay == 5ms:
+        return text.len() as int32 + values.len() as int32 + labels.len() as int32 + pair_value + record.values.len() as int32 + pair_name.len() as int32
+    match own envelope:
+        case TransferEnvelope.Empty:
+            return 0
+        case TransferEnvelope.Record(value):
+            return value.values.len() as int32 + errors.len() as int32
+
+def make_text() -> String:
+    return "ready"
+
+def make_values() -> Vec[String]:
+    return ["one", "two"]
+
+def make_labels() -> Map[String, Set[int32]]:
+    return {"numbers": {1, 2}}
+
+def make_pair() -> (String, int32):
+    return ("pair", 3)
+
+def make_record() -> TransferRecord:
+    return TransferRecord(
+        name="record",
+        values=[1, 2],
+        labels={"numbers": {1, 2}},
+        pair=("pair", 3)
+    )
+
+def make_envelope() -> TransferEnvelope:
+    return TransferEnvelope.Record(make_record())
+
+def make_queue() -> Queue[int32]:
+    return Queue[int32]()
+
+def make_error() -> io.Error:
+    return io.Error.NotFound
+
+def echo_task(task: own Task[String]) -> Task[String]:
+    return task
+
+def main() -> int32:
+    queue = Queue[int32]()
+    with TaskGroup() as group:
+        seed = group.start(make_text)
+        handle_seed = group.start(make_text)
+        _values_task = group.start(make_values)
+        _labels_task = group.start(make_labels)
+        _pair_task = group.start(make_pair)
+        _record_task = group.start(make_record)
+        _envelope_task = group.start(make_envelope)
+        _queue_task = group.start(make_queue)
+        _error_task = group.start(make_error)
+        _task_handle_task = group.start(echo_task, handle_seed)
+        _matrix_task = group.start(
+            consume_transfer_values,
+            true,
+            7,
+            5ms,
+            "text",
+            ["value"],
+            {"numbers": {1}},
+            ("pair", 2),
+            make_record(),
+            make_envelope(),
+            [io.Error.NotFound],
+            queue,
+            seed
+        )
+    return 0

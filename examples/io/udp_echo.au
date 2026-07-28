@@ -1,8 +1,9 @@
 import io
 import net
 
-def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
-    with server_socket = socket:
+def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
+    with server_socket = try net.udp_bind("127.0.0.1:0"):
+        addresses.put(try server_socket.local_addr())
         match try server_socket.recv_from(1024, timeout=5s):
             case Option.Some(packet):
                 text = try packet.text()
@@ -13,9 +14,9 @@ def serve_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        listener = try net.udp_bind("127.0.0.1:0")
-        address = try listener.local_addr()
-        server = group.start(serve_udp, listener)
+        addresses = Queue[String](capacity=1)
+        server = group.start(serve_udp, addresses)
+        address = try receive_address(addresses)
 
         client = try net.udp_bind("127.0.0.1:0")
         with socket = client:
@@ -40,6 +41,17 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
         return Result.Ok(None)
+
+def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case QueueReceive.Closed:
+            return Result.Err(io.Error.Other(message="UDP address queue closed"))
+        case QueueReceive.TimedOut:
+            return Result.Err(io.Error.TimedOut)
+        case QueueReceive.Cancelled:
+            return Result.Err(io.Error.Cancelled)
 
 def main() -> int32:
     match run():
