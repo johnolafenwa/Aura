@@ -289,11 +289,14 @@ binding continue through the generic blocking-I/O pool. For TLS assets, that
 generic pool reads the bytes and the protocol workers perform PEM parsing and
 rustls construction.
 
-The clean same-process incremental RSS per parked task and the combined
-100,000-sleeper timer/RSS result are still pending the contractual Mac14,9
-measurement. A whole-process peak divided by the task count would include the
-runtime, executable, root task, pools, and queues, so it is not presented as
-the per-task cost.
+On the clean Mac14,9 measurement, 10,000 parked sleepers used 197,836,800
+incremental bytes above their same-process baseline: an amortized upper bound
+of 19,784 bytes (19.32 KiB) per requested sleeper, including scheduler
+metadata and shared workload growth. The combined 100,000-sleeper plus
+1,000-timer run kept timer arm span and p99 at 3 ms but reached
+1,978,384,384 bytes worst whole-process RSS, so Aurora does not claim that
+population fits in 1.5 GiB. A 16 KiB resident page per stackful child already
+exceeds that ceiling before metadata.
 
 MIR execution checks every loop backedge and yields every 8 backedges. Native
 concurrent programs use a function-local 4,096-iteration fuel budget, and

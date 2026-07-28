@@ -358,6 +358,30 @@ compiler coverage is 67,159/69,851 lines (96.146082%), 4,446/4,587 functions
 (96.926095%), and 99,186/105,100 regions (94.372978%); LSP coverage remains
 100%. No synthetic coverage test or exclusion was added.
 
-No post-change measurement is recorded yet. A clean contractual post-change
-report and its evidence commit remain required before this stage can be
-accepted.
+The contractual post-change report was captured from clean commit
+`0dddb43ff83d96d9b1f847e62afb9aa0edf5fb92` on the same Mac14,9 M2 Pro,
+with the same runner, workload hashes, parameters, and quiet-process checks as
+the pre-change report. The fresh locked release `aura` SHA-256 is
+`972e29088fc34d12cd0373e21d3d7a4f33bd4e3dd635f13eaeb51bb44bc306f0`.
+Raw report: `/private/tmp/aurora-phase54-after.json`; SHA-256:
+`5245595a6675dba0cc1e39383dda505e50d7333cb59fbc3afea4c648fcca0ab4`.
+
+| Workload | Repetitions | Contractual post-change result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 205,389,824 bytes worst whole-process peak RSS; 197,836,800 bytes worst incremental peak RSS; amortized incremental upper bound 19,784 bytes (19.32 KiB) per requested sleeper | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,571,995,648 bytes best and 1,978,384,384 bytes worst whole-process peak RSS; 1,970,782,208 bytes worst incremental peak RSS; 3 ms worst arm span; 3 ms worst p99 | RSS FAIL against 1.5 GiB; timer gates PASS; escape hatch recorded |
+| 1,000 timers | 3 | 3 ms worst arm span; 3 ms worst p99 | PASS |
+| 10 idle tasks | 3 | 0.000013142653912887135% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 14 ms worst result | PASS, at most 50 ms |
+| V6 int64 loop | 5 plus warmup | median 11.884417 ms; MAD 0.974750 ms; p95 12.859167 ms; best 10.044125 ms | recorded stage evidence |
+
+Every workload process completed naturally with its expected marker, zero
+status, empty standard error, and no sampling error. All controls pass. The
+massive-concurrency marketing claim remains unavailable under the explicit
+escape hatch: this 16 KiB-page host needs at least 1,654,784,000 bytes for one
+resident page across the workload's 101,000 stackful children, already above
+1.5 GiB before task metadata. The 1 MiB-to-512 KiB change halves virtual
+reservation but cannot remove that physical-page floor; the occasional lower
+RSS run reflects macOS reclaim/compression variability and is not a stable
+contract. Beating the ceiling requires a later stackless or safely
+copy-and-decommit architecture, not a smaller Phase 5.4 reservation.

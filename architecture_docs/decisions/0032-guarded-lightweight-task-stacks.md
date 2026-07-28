@@ -153,11 +153,20 @@ service. The legacy compatibility helpers remain caller-side. Iterative
 runtime-tree operations keep the remaining dynamic JSON work on the calling
 task without making its host stack depth proportional to JSON nesting.
 
-The manual must publish the contractual Mac14,9 measurements only after a
-clean benchmark run records a same-process baseline and parked-task plateau.
-Until then, incremental RSS per parked task and the 100,000-task result remain
-explicitly pending; no massive-concurrency claim follows from this decision
-alone.
+The clean committed Mac14,9 benchmark at `0dddb43` records 205,389,824 bytes
+of worst whole-process RSS and 197,836,800 bytes of worst same-process
+incremental RSS for 10,000 parked sleepers. The latter is an amortized upper
+bound of 19,784 bytes (19.32 KiB) per requested sleeper, including scheduler
+metadata and shared workload growth rather than only stack pages.
+
+The 100,000-sleeper plus 1,000-timer gate remains unavailable under the
+benchmark escape hatch: worst whole-process RSS was 1,978,384,384 bytes
+against the 1.5 GiB ceiling, although the timer arm span and p99 both passed
+at 3 ms. This host has 16 KiB pages, and one resident page for each of those
+101,000 stackful child coroutines alone requires 1,654,784,000 bytes before
+task metadata or the root runtime. Halving the demand-paged virtual stack
+reservation therefore cannot make that RSS ceiling robust. No
+massive-concurrency claim follows from this decision.
 
 ## Completion tests
 
@@ -191,5 +200,6 @@ alone.
   both override methods.
 - The scalable-runtime runner records same-process baseline RSS, parked RSS,
   incremental bytes per task, total 10,000-task peak RSS, and the combined
-  100,000-sleeper timer/RSS result before the checkpoint claims a measured
-  per-task cost.
+  100,000-sleeper timer/RSS result. The clean `0dddb43` report publishes the
+  measured 10,000-task cost and records the explicit massive-concurrency
+  escape-hatch result without turning it into a product claim.

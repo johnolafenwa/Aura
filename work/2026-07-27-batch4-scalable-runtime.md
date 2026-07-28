@@ -333,13 +333,30 @@ before-reactor baseline is recorded in
   100% across statements, branches, functions, and lines. Every closure test
   pins observable behavior, a stable diagnostic, or backend parity; no
   synthetic line-execution test or exclusion was added.
-- The clean contractual post-change benchmark and its evidence commit remain
-  pending. Phase 5.4 is not accepted until that report is recorded.
+- The clean contractual post-change report at commit `0dddb43` is
+  `/private/tmp/aurora-phase54-after.json` (SHA-256
+  `5245595a6675dba0cc1e39383dda505e50d7333cb59fbc3afea4c648fcca0ab4`).
+  Its fresh release `aura` SHA-256 is
+  `972e29088fc34d12cd0373e21d3d7a4f33bd4e3dd635f13eaeb51bb44bc306f0`.
+  The 10,000-sleeper gate passes at 205,389,824 bytes worst whole-process RSS
+  and 197,836,800 bytes worst incremental RSS, an amortized upper bound of
+  19,784 bytes (19.32 KiB) per requested sleeper. Independent timers pass at
+  3 ms arm span and 3 ms p99, idle CPU at
+  0.000013142653912887135%, starvation at 14 ms, and the V6 int64 median is
+  11.884417 ms.
+- The 100,000-sleeper plus 1,000-timer workload passes its 3 ms timer gates but
+  reaches 1,978,384,384 bytes worst whole-process RSS and 1,970,782,208 bytes
+  worst incremental RSS. Phase 5's explicit benchmark escape hatch applies:
+  on this 16 KiB-page host, one resident page for each of the 101,000
+  stackful children alone is 1,654,784,000 bytes, already above 1.5 GiB before
+  metadata. Lowering the demand-paged virtual reservation cannot make the
+  ceiling robust. The massive-concurrency claim remains out of maintained
+  product documentation; a later stackless or safe stack-copy/decommit
+  architecture is required to revisit it.
 
 ## Follow-up
 
-Commit the fully gated implementation, then capture the clean contractual
-post-change report and publish the measured whole-process and incremental cost
-per parked task. Do not advance to scheduler soundness until that benchmark
-and its evidence commit are recorded. Coverage floors remain frozen until the
-one-time Batch 4 sign-off re-ratchet.
+Commit this benchmark evidence, then advance to scheduler soundness. The
+massive-concurrency memory claim remains unavailable under the recorded escape
+hatch. Coverage floors remain frozen until the one-time Batch 4 sign-off
+re-ratchet.

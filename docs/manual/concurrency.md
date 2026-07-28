@@ -432,9 +432,18 @@ pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
 `mut` task targets, statically enforced single-observer resource
 results, Transfer boundary checks, typed heterogeneous selection, configurable
 blocking-pool sizing, native frame parity, and detached task syntax are
-unavailable. The clean Mac14,9 same-process incremental RSS per parked task
-and the combined 100,000-sleeper timer/RSS result are pending measurement;
-whole-process peak RSS divided by task count is not published as that cost.
+unavailable. On the clean Mac14,9 measurement, 10,000 parked sleepers used
+205,389,824 bytes of worst whole-process RSS and 197,836,800 bytes above their
+same-process pre-spawn baseline: an amortized upper bound of 19,784 bytes
+(19.32 KiB) per requested sleeper, including scheduler metadata and shared
+workload growth.
+
+The combined 100,000-sleeper plus 1,000-timer run passed its 3 ms arm-span and
+3 ms p99 timer gates but reached 1,978,384,384 bytes worst whole-process RSS,
+so Aurora does not claim that population fits in 1.5 GiB. On this 16 KiB-page
+host, one resident stack page per 101,000 stackful children already exceeds
+that ceiling before task metadata. This measured escape-hatch result cannot be
+repaired by reducing only the demand-paged virtual stack reservation.
 The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on

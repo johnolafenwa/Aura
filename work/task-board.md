@@ -163,8 +163,16 @@ Last updated: 2026-07-28
   Frozen compiler coverage passes at 67,159/69,851 lines (96.146082%),
   4,446/4,587 functions (96.926095%), and 99,186/105,100 regions
   (94.372978%), with no synthetic coverage test or exclusion. The clean
-  contractual post-change benchmark and its evidence commit remain pending;
-  Phase 5.4 must not be marked complete until both are recorded.
+  `0dddb43` post-change benchmark passes the 10,000-sleeper, timer, idle,
+  starvation, and V6 controls. Ten thousand parked sleepers use 205,389,824
+  bytes worst whole-process and 197,836,800 bytes worst incremental RSS, an
+  amortized 19,784-byte (19.32 KiB) upper bound per requested sleeper.
+  The 100,000-sleeper plus 1,000-timer run passes 3 ms timer gates but reaches
+  1,978,384,384 bytes worst RSS, so the explicit escape hatch applies: one
+  16 KiB resident page for each of 101,000 stackful children already exceeds
+  1.5 GiB before metadata. The massive-concurrency claim remains unavailable.
+  Raw report `/private/tmp/aurora-phase54-after.json`, SHA-256
+  `5245595a6675dba0cc1e39383dda505e50d7333cb59fbc3afea4c648fcca0ab4`.
 - Stack evidence is scope-qualified: the complete compiled Aurora HTTP
   example, including MIR/direct language-execution frames, `SIGBUS`ed with an
   experimental 256 KiB global default and completed at 512 KiB. The isolated

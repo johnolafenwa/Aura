@@ -463,7 +463,8 @@ grep -Fq 'distinct bounded protocol-step service' docs/manual/execution-model.md
 grep -Fq 'process-global pool is lazily initialized and shared by every' docs/manual/execution-model.md
 grep -Fq 'file reads use the generic blocking-I/O pool' docs/manual/execution-model.md
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
-grep -Fq 'pending measurement' docs/manual/current-limits.md
+grep -Fq 'upper bound of 19,784 bytes (19.32 KiB) per requested sleeper' docs/manual/current-limits.md
+grep -Fq 'memory claim. The host uses 16 KiB pages' docs/manual/current-limits.md
 grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md

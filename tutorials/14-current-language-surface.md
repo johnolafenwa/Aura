@@ -684,9 +684,12 @@ deadline without a periodic tick. Resource-bearing task results are
 single-observer-only; the checker does not yet enforce that restriction.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
-protocol-step service with deep native worker stacks. The clean incremental
-RSS per parked task and the combined 100,000-sleeper timer/RSS result are
-pending the contractual Mac14,9 measurement.
+protocol-step service with deep native worker stacks. The clean Mac14,9
+10,000-sleeper measurement records 197,836,800 incremental bytes, an
+amortized upper bound of 19,784 bytes (19.32 KiB) per requested sleeper
+including scheduler metadata and shared workload growth. The 100,000-sleeper
+plus 1,000-timer run passed 3 ms timer gates but reached 1,978,384,384 bytes
+worst RSS, so Aurora does not claim that population fits in 1.5 GiB.
 
 The protocol service is lazily initialized and remains alive until process
 exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
