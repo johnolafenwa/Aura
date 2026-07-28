@@ -132,7 +132,8 @@ Last updated: 2026-07-28
   tests, 13 extension tests, both coverage gates, reference/docs, audits,
   warning-denied Clippy, and hygiene. Phase 5.3 is complete; Phase 5.4 stack
   diet is next.
-- Phase 5.4 stack diet is active. The contractual pre-change report was
+- Phase 5.4 stack diet is complete through `f72fd2f`. The contractual
+  pre-change report was
   captured from clean baseline commit `5af134a` at
   `/tmp/aurora-phase54-before.json` (SHA-256
   `405f3acb61126aed87ee6bebdb0d2abb3e98feef9f3992f6f0d42e32bffdfb2f`).
@@ -179,6 +180,48 @@ Last updated: 2026-07-28
   Rust runtime HTTP round trip now succeeds when only its protocol-calling
   children are forced to 256 KiB; that proves deep host frames are offloaded
   to protocol workers, not that 256 KiB is a safe whole-program default.
+- Phase 5.5 scheduler soundness is active. The raw
+  `*mut LightweightTaskScheduler` and reconstructed `&mut *scheduler`
+  nested-spawn path has been replaced by an owned FIFO request broker, leaving
+  the scheduler driver as the only mutable scheduler owner. FIFO describes
+  broker admission only; ready-task ordering remains unspecified. Guarded
+  stack allocation and task-state construction happen synchronously before a
+  nested start is published, so failure is immediate and enqueues nothing.
+  The scheduler drains requests after each resume, after cleanup/unwind, and
+  throughout teardown. Unbounded-wait state is now published atomically on
+  `TaskState` after successful registration and cleared on disarm, avoiding
+  shared inspection of scheduler internals.
+- Phase 5.5 teardown work disarms waits, drains pending starts, retires all
+  admitted and prepared tasks, publishes `Cancelled` completion, and wakes
+  task/group/reactor observers. Pure Rust/MIR frames use force-unwind.
+  Generated direct children and roots use stack reset plus exact-once release
+  of scheduler-owned argument storage, claim flags, retained opaque values,
+  and task-local direct-runtime state; unstarted direct tasks drop their entry
+  closure and external state once. This abandonment fallback contains
+  host/runtime state only. It does not run arbitrary Aurora cleanup code, so
+  it is not a source-level cleanup guarantee.
+- Phase 5.5 verification so far: the 1,017-test compiler library suite is
+  green; focused scheduler and native-runtime tests cover synchronous
+  preparation failure, nested immediate waits, wait publication, teardown
+  cancellation/wakeup, pure-Rust unwind, direct child/root containment, and
+  no double release. `scheduler_nested_spawns.au` passes the targeted CLI
+  parity test on MIR and forced-direct backends. The hygiene gate was first
+  proven red against the old aliases and now rejects reintroduction of either
+  raw scheduler pointers or `&mut *scheduler` reconstruction.
+- Phase 5.5 exact full CI is green on the settled implementation tree: 281 CLI
+  tests, 1,017 compiler-library tests, the 547.91-second forced MIR/direct
+  matrix, 81 language-server tests, 13 extension tests, reference integrity,
+  documentation build, both audits, warning-denied Clippy, and hygiene.
+  Frozen compiler coverage passes at 67,266/69,957 lines (96.153351%),
+  4,454/4,596 functions (96.910357%), and 99,304/105,216 regions
+  (94.381083%); LSP coverage remains 100%. No synthetic coverage test or
+  justified exclusion was added.
+- Remaining Phase 5.5 gates: create the verified implementation commit,
+  capture and validate the clean contractual after-stage benchmark, update the
+  benchmark evidence and final stage status, and close the isolated commit
+  family. No performance claim has been made. Phase 5.6 structural Transfer and static
+  single-consumer task-result enforcement begins only after Phase 5.5 is green
+  and committed.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

@@ -1773,9 +1773,9 @@ fn lightweight_scheduler_helpers_cover_unbounded_waits_and_defensive_exit() {
         })
         .expect("lightweight task should spawn");
     scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
-    assert!(scheduler.task_wait_is_unbounded(&waiting_task));
+    assert!(waiting_task.waits_without_deadline());
     scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
-    assert!(!scheduler.task_wait_is_unbounded(&waiting_task));
+    assert!(!waiting_task.waits_without_deadline());
     match waiting_task.completed_result() {
         Some(TaskExecutionResult::Ready(Ok(Value::Unit))) => {}
         other => panic!("expected completed unit task, got {other:?}"),
@@ -1796,7 +1796,7 @@ fn lightweight_scheduler_helpers_cover_unbounded_waits_and_defensive_exit() {
         })
         .expect("lightweight task should spawn");
     scheduler.resume_task(2, super::RuntimeSchedulerWakeReason::Ready);
-    assert!(!scheduler.task_wait_is_unbounded(&timed_wait_task));
+    assert!(!timed_wait_task.waits_without_deadline());
     scheduler.resume_task(2, super::RuntimeSchedulerWakeReason::Ready);
     match timed_wait_task.completed_result() {
         Some(TaskExecutionResult::Ready(Ok(Value::Unit))) => {}
@@ -1817,36 +1817,366 @@ fn lightweight_scheduler_helpers_cover_unbounded_waits_and_defensive_exit() {
         other => panic!("expected defensive missing-result error, got {other:?}"),
     }
 
-    let mut manual_scheduler = super::LightweightTaskScheduler::new();
-    let context = super::LightweightTaskContext {
-        scheduler: &mut manual_scheduler as *mut _,
-        task_id: 99,
-        yielder: std::cell::Cell::new(std::ptr::null()),
-        cancellation: None,
-    };
-    let _guard = super::enter_lightweight_task_context(&context);
+    let ready_queue = ChannelValue::new();
     assert_eq!(
-        super::yield_current_lightweight_task(super::TaskYield::YieldNow),
-        None
+        ready_queue.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let immediately_ready = scheduler
+        .spawn_task(None, move || {
+            let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                recv_channels: vec![ready_queue],
+                ignore_closed_recv_channels: false,
+                send_channels: Vec::new(),
+                task_waits: Vec::new(),
+                deadline: None,
+                cancellation: None,
+                fd_wait: None,
+            });
+            Ok(Value::Unit)
+        })
+        .expect("immediately-ready task should spawn");
+    scheduler.resume_task(4, super::RuntimeSchedulerWakeReason::Ready);
+    assert!(
+        !immediately_ready.waits_without_deadline(),
+        "a source that wins the final readiness check must not report an armed unbounded wait"
+    );
+
+    #[cfg(unix)]
+    {
+        let failed_registration = scheduler
+            .spawn_task(None, || {
+                let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                    recv_channels: Vec::new(),
+                    ignore_closed_recv_channels: false,
+                    send_channels: Vec::new(),
+                    task_waits: Vec::new(),
+                    deadline: None,
+                    cancellation: None,
+                    fd_wait: Some(super::FdWaitRegistration { fd: -1, events: 0 }),
+                });
+                Ok(Value::Unit)
+            })
+            .expect("registration-failure task should spawn");
+        scheduler.resume_task(5, super::RuntimeSchedulerWakeReason::Ready);
+        assert!(
+            !failed_registration.waits_without_deadline(),
+            "a failed reactor registration must not leave stale unbounded-wait state"
+        );
+    }
+}
+
+#[test]
+fn lightweight_scheduler_teardown_cancels_abandoned_tasks_and_runs_cleanup_once() {
+    let cleanup_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cleanup_probe = cleanup_count.clone();
+    let task_slot = Arc::new(Mutex::new(None));
+    let task_probe = task_slot.clone();
+    let cleanup_child_slot = Arc::new(Mutex::new(None));
+    let cleanup_child_probe = cleanup_child_slot.clone();
+
+    assert_eq!(
+        run_lightweight_root_task(move || {
+            let task = unsafe {
+                spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                    CancellationContext::default(),
+                    || {
+                        let _ =
+                            super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                                recv_channels: Vec::new(),
+                                ignore_closed_recv_channels: false,
+                                send_channels: Vec::new(),
+                                task_waits: Vec::new(),
+                                deadline: None,
+                                cancellation: None,
+                                fd_wait: None,
+                            });
+                        Ok(Value::Unit)
+                    },
+                    move || {
+                        cleanup_probe.fetch_add(1, Ordering::SeqCst);
+                        let child = spawn_lightweight_task(|| Ok(Value::Unit))
+                            .expect("teardown cleanup should retain its task context");
+                        *lock_mutex(&cleanup_child_probe) = Some(child);
+                    },
+                )?
+            };
+            *lock_mutex(&task_probe) = Some(task);
+            let _ = super::yield_now_current_lightweight_task();
+            Ok(Value::Unit)
+        })
+        .expect("root completion should tear down abandoned children safely"),
+        Value::Unit
+    );
+
+    assert_eq!(
+        cleanup_count.load(Ordering::SeqCst),
+        1,
+        "a direct task's externalized cleanup must run exactly once"
+    );
+    let task = lock_mutex(&task_slot)
+        .take()
+        .expect("the root should publish its child handle");
+    assert!(
+        matches!(
+            task.completed_result(),
+            Some(TaskExecutionResult::Cancelled)
+        ),
+        "scheduler teardown must not leave abandoned task handles running"
+    );
+    let cleanup_child = lock_mutex(&cleanup_child_slot)
+        .take()
+        .expect("teardown should drain a child prepared by direct cleanup");
+    assert!(
+        matches!(
+            cleanup_child.completed_result(),
+            Some(TaskExecutionResult::Cancelled)
+        ),
+        "a cleanup-spawned child must also reach a terminal state during teardown"
     );
 }
 
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic(
-    expected = "structured concurrency invariant violated: direct task remained suspended at scheduler teardown"
-)]
-fn lightweight_scheduler_rejects_abandoned_direct_tasks_at_teardown() {
-    let _ = run_lightweight_root_task(|| {
+fn force_reset_releases_the_task_context_and_spawn_buffer() {
+    let spawn_buffer = {
+        let mut scheduler = super::LightweightTaskScheduler::new();
+        let spawn_buffer = std::rc::Rc::downgrade(&scheduler.spawn_requests);
+        scheduler
+            .spawn_task_with_forced_exit_cleanup(
+                Some(CancellationContext::default()),
+                None,
+                || {
+                    let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                        recv_channels: Vec::new(),
+                        ignore_closed_recv_channels: false,
+                        send_channels: Vec::new(),
+                        task_waits: Vec::new(),
+                        deadline: None,
+                        cancellation: None,
+                        fd_wait: None,
+                    });
+                    Ok(Value::Unit)
+                },
+                Some(Box::new(|| {})),
+            )
+            .expect("direct cleanup task should spawn");
+        scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
+        assert!(
+            spawn_buffer.upgrade().is_some(),
+            "the scheduler should own its live spawn buffer"
+        );
+        spawn_buffer
+    };
+
+    assert!(
+        spawn_buffer.upgrade().is_none(),
+        "force-reset must not abandon a task-context Rc on the coroutine stack"
+    );
+}
+
+#[test]
+fn nested_spawns_are_fifo_and_an_immediate_child_wait_is_safe() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let root_order = order.clone();
+    let result = run_lightweight_root_task(move || {
+        let first_order = root_order.clone();
+        let first = spawn_lightweight_task(move || {
+            lock_mutex(&first_order).push("first");
+            let nested_order = first_order.clone();
+            let nested = spawn_lightweight_task(move || {
+                lock_mutex(&nested_order).push("nested");
+                Ok(Value::Int(IntegerValue::from_signed(7)))
+            })?;
+            let nested_result = wait_task_ready(&nested)?;
+            lock_mutex(&first_order).push("first-after-wait");
+            Ok(nested_result)
+        })?;
+
+        let second_order = root_order.clone();
+        let second = spawn_lightweight_task(move || {
+            lock_mutex(&second_order).push("second");
+            Ok(Value::Unit)
+        })?;
+
+        assert_eq!(
+            wait_task_ready(&first)?,
+            Value::Int(IntegerValue::from_signed(7))
+        );
+        wait_task_ready(&second)?;
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("nested spawn probe should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        &*lock_mutex(&order),
+        &["first", "second", "nested", "first-after-wait"],
+        "spawn requests must join the ready queue in FIFO order before their parent resumes"
+    );
+}
+
+#[test]
+fn nested_stack_allocation_failure_is_synchronous_and_does_not_enqueue_a_task() {
+    let result = run_lightweight_root_task(|| {
+        super::fail_next_lightweight_task_stack_allocation();
+        let error = spawn_lightweight_task(|| Ok(Value::Unit))
+            .expect_err("the injected stack allocation failure must be returned by spawn");
+        assert_eq!(error.code, "AU4005");
+
+        let healthy = spawn_lightweight_task(|| Ok(Value::Bool(true)))?;
+        wait_task_ready(&healthy)
+    });
+    assert_eq!(
+        result.expect("the scheduler should remain usable after rejected admission"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown() {
+    struct DropProbe(Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let task_drops = drops.clone();
+    run_lightweight_root_task(move || {
+        spawn_lightweight_task(move || {
+            let _probe = DropProbe(task_drops);
+            let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                recv_channels: Vec::new(),
+                ignore_closed_recv_channels: false,
+                send_channels: Vec::new(),
+                task_waits: Vec::new(),
+                deadline: None,
+                cancellation: None,
+                fd_wait: None,
+            });
+            Ok(Value::Unit)
+        })?;
+        let _ = super::yield_now_current_lightweight_task();
+        Ok(Value::Unit)
+    })
+    .expect("root completion should unwind an abandoned pure-Rust child");
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "an abandoned pure-Rust task's owned values must be dropped exactly once"
+    );
+}
+
+#[test]
+fn direct_cleanup_can_spawn_a_child_before_the_parent_is_retired() {
+    let spawned = Arc::new(Mutex::new(None));
+    let spawned_probe = spawned.clone();
+    let result = run_lightweight_root_task(move || {
         unsafe {
             spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
                 CancellationContext::default(),
-                || Ok(Value::Unit),
-                || {},
+                || {
+                    super::exit_current_lightweight_task(TaskExecutionResult::Cancelled);
+                },
+                move || {
+                    let child = spawn_lightweight_task(|| Ok(Value::Bool(true)))
+                        .expect("cleanup should retain the active spawn context");
+                    *lock_mutex(&spawned_probe) = Some(child);
+                },
             )?;
         }
-        Ok(Value::Unit)
+        let _ = super::yield_now_current_lightweight_task();
+        let task = lock_mutex(&spawned)
+            .take()
+            .expect("direct cleanup should publish its child");
+        wait_task_ready(&task)
     });
+    assert_eq!(
+        result.expect("a cleanup-spawned child should be drained safely"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn generated_root_cleanup_runs_once_on_forced_exit_and_not_on_normal_return() {
+    let normal_cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let normal_probe = normal_cleanups.clone();
+    let normal = unsafe {
+        super::run_lightweight_root_task_with_forced_exit_cleanup(
+            || Ok(Value::Bool(true)),
+            move || {
+                normal_probe.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+    };
+    assert_eq!(
+        normal.expect("a generated root should return normally"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        normal_cleanups.load(Ordering::SeqCst),
+        0,
+        "forced cleanup must not run after a normal generated-root return"
+    );
+
+    let forced_cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let forced_probe = forced_cleanups.clone();
+    let forced = unsafe {
+        super::run_lightweight_root_task_with_forced_exit_cleanup(
+            || {
+                super::exit_current_lightweight_task(TaskExecutionResult::Ready(Err(
+                    Diagnostic::new("generated root failed"),
+                )));
+            },
+            move || {
+                forced_probe.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+    }
+    .expect_err("the generated root should preserve its forced failure");
+    assert_eq!(forced.message, "generated root failed");
+    assert_eq!(
+        forced_cleanups.load(Ordering::SeqCst),
+        1,
+        "generated-root forced cleanup must run exactly once"
+    );
+
+    #[cfg(unix)]
+    {
+        let abandoned_cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let abandoned_probe = abandoned_cleanups.clone();
+        let abandoned = unsafe {
+            super::run_lightweight_root_task_with_forced_exit_cleanup(
+                || {
+                    let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                        recv_channels: Vec::new(),
+                        ignore_closed_recv_channels: false,
+                        send_channels: Vec::new(),
+                        task_waits: Vec::new(),
+                        deadline: None,
+                        cancellation: None,
+                        fd_wait: Some(super::FdWaitRegistration { fd: -1, events: 0 }),
+                    });
+                    Ok(Value::Unit)
+                },
+                move || {
+                    abandoned_probe.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+        }
+        .expect_err("a reactor registration failure should abandon the generated root");
+        assert!(abandoned
+            .message
+            .contains("descriptor wait has no supported interest"));
+        assert_eq!(
+            abandoned_cleanups.load(Ordering::SeqCst),
+            1,
+            "generated-root cleanup must run exactly once on scheduler abandonment"
+        );
+    }
 }
 
 #[cfg(unix)]

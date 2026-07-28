@@ -181,6 +181,33 @@ They both depend on the same language-level concepts:
 - file and networking behavior
 - numeric overflow and division diagnostics
 
+## Generated task exit and scheduler teardown
+
+Generated direct tasks suspend below Cranelift frames. Rust unwinding cannot
+safely cross those frames on every supported platform, so the scheduler never
+pretends that a forced reset is an ordinary unwind.
+
+On normal return, direct task scope guards release the task's runtime state in
+the usual way. A runtime trap or cooperative cancellation first uses the
+direct-runtime boundary to run the language cleanup stack that the generated
+program registered. The scheduler then resets the generated coroutine stack
+and runs an exact-once containment callback. That callback releases the
+argument buffer, its claim flag, tracked opaque-value references, and remaining
+task-local direct-runtime state.
+
+Scheduler teardown also covers both admission states. An unstarted prepared
+direct task drops its entry closure and releases its external state exactly
+once. A started but suspended direct task resets its generated stack and uses
+the same containment callback. Direct root tasks use the forced-exit runner as
+well, so a trapped, cancelled, or internally abandoned root cannot leave its
+task-local ownership ledger behind.
+
+This fallback is for host/runtime containment only. Once the generated stack
+has been reset, it must not invoke arbitrary Aurora cleanup thunks. Ordinary
+source-level cleanup remains the responsibility of generated control flow and
+the direct-runtime error boundary before forced exit; scheduler abandonment is
+not a second language-level cleanup mechanism.
+
 ## Files to study
 
 - [`native_codegen.rs`](../crates/aurora-compiler/src/native_codegen.rs)

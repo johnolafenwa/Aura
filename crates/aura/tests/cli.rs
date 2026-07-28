@@ -1127,6 +1127,26 @@ fn scheduler_mixed_wakeups_complete_in_mir_and_direct_backends() {
 }
 
 #[test]
+fn nested_scheduler_spawns_preserve_fifo_join_and_backend_parity() {
+    // A child spawned by a running task must enter the same scheduler queue
+    // before its parent can resume from waiting on that child. The fixture also
+    // pins the 256 KiB nested-stack override and structured cleanup at the
+    // nested TaskGroup boundary.
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.stdout"
+    );
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-scheduler-nested-spawns",
+        source,
+        std::time::Duration::from_secs(20),
+        expected,
+    );
+}
+
+#[test]
 fn large_http_responses_complete_without_timing_out() {
     let temp = TempDir::new("aurora-http-large-response");
     let body_path = temp.path().join("body.txt");

@@ -5465,6 +5465,299 @@ unsafe extern "C-unwind" fn direct_task_panics_before_result_handoff(
     panic!("ordinary task panic before result handoff")
 }
 
+static DIRECT_ROOT_TEST_OWNED_VALUE: AtomicUsize = AtomicUsize::new(0);
+static DIRECT_TEARDOWN_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C-unwind" fn direct_root_returns_unit(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(arg_count, 0);
+    super::aurora_direct_box_unit()
+}
+
+unsafe extern "C-unwind" fn direct_root_traps_with_owned_value(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(arg_count, 0);
+    let owned = DIRECT_ROOT_TEST_OWNED_VALUE.load(Ordering::Acquire) as *mut OpaqueValue;
+    assert!(!owned.is_null());
+    unsafe {
+        super::aurora_direct_retain_value(owned);
+    }
+    super::aurora_direct_fail_division_by_zero(0, 0)
+}
+
+unsafe extern "C-unwind" fn direct_root_cancels_with_owned_value(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(arg_count, 0);
+    let owned = DIRECT_ROOT_TEST_OWNED_VALUE.load(Ordering::Acquire) as *mut OpaqueValue;
+    assert!(!owned.is_null());
+    unsafe {
+        super::aurora_direct_retain_value(owned);
+    }
+    super::task_runtime_boundary(|| std::panic::panic_any(TaskCancelledSignal));
+    unreachable!("the cancellation boundary must force-exit the direct root")
+}
+
+unsafe extern "C-unwind" fn direct_task_must_not_start(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    panic!("queued direct task unexpectedly started before root completion")
+}
+
+unsafe extern "C-unwind" fn direct_task_waits_while_holding_arguments(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 2);
+    DIRECT_TEARDOWN_TASK_STARTED.store(true, Ordering::Release);
+    let queue = unsafe { *args.add(1) } as *mut OpaqueValue;
+    let received = super::aurora_direct_channel_recv(queue);
+    unsafe {
+        release_value(received);
+    }
+    super::aurora_direct_box_unit()
+}
+
+#[test]
+fn native_runtime_direct_root_forced_exit_discards_state_once_but_normal_return_does_not_clean() {
+    let normal_cleanup_count = Arc::new(AtomicUsize::new(0));
+    let normal_cleanup_probe = normal_cleanup_count.clone();
+    let normal = unsafe {
+        super::run_direct_root_task_with_forced_exit_cleanup(direct_root_returns_unit, move || {
+            normal_cleanup_probe.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    assert_eq!(
+        normal.expect("normal direct root should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        normal_cleanup_count.load(Ordering::SeqCst),
+        0,
+        "normal root return must unwind its scope and must not run forced cleanup"
+    );
+
+    let external = string_value("owned by a trapping direct root frame");
+    DIRECT_ROOT_TEST_OWNED_VALUE.store(external as usize, Ordering::Release);
+    let forced_cleanup_count = Arc::new(AtomicUsize::new(0));
+    let forced_cleanup_probe = forced_cleanup_count.clone();
+    let failed = unsafe {
+        super::run_direct_root_task_with_forced_exit_cleanup(
+            direct_root_traps_with_owned_value,
+            move || {
+                forced_cleanup_probe.fetch_add(1, Ordering::SeqCst);
+                super::discard_current_direct_task_runtime_state();
+            },
+        )
+    }
+    .expect_err("trapping direct root should fail through the scheduler boundary");
+    assert_eq!(failed.message, "division by zero");
+    assert_eq!(
+        forced_cleanup_count.load(Ordering::SeqCst),
+        1,
+        "a forced direct-root exit must run scheduler-owned cleanup exactly once"
+    );
+    assert_eq!(
+        unsafe { &*external }.ref_count.load(Ordering::Acquire),
+        1,
+        "root forced cleanup must release the reference retained by the abandoned generated frame"
+    );
+    DIRECT_ROOT_TEST_OWNED_VALUE.store(0, Ordering::Release);
+    unsafe {
+        release_value(external);
+    }
+
+    let cancelled_external = string_value("owned by a cancelled direct root frame");
+    DIRECT_ROOT_TEST_OWNED_VALUE.store(cancelled_external as usize, Ordering::Release);
+    let cancellation_cleanup_count = Arc::new(AtomicUsize::new(0));
+    let cancellation_cleanup_probe = cancellation_cleanup_count.clone();
+    let cancelled = unsafe {
+        super::run_direct_root_task_with_forced_exit_cleanup(
+            direct_root_cancels_with_owned_value,
+            move || {
+                cancellation_cleanup_probe.fetch_add(1, Ordering::SeqCst);
+                super::discard_current_direct_task_runtime_state();
+            },
+        )
+    }
+    .expect_err("cancelled direct root should exit through the scheduler boundary");
+    assert_eq!(cancelled.message, "root Aurora task was cancelled");
+    assert_eq!(
+        cancellation_cleanup_count.load(Ordering::SeqCst),
+        1,
+        "direct-root cancellation must run scheduler-owned cleanup exactly once"
+    );
+    assert_eq!(
+        unsafe { &*cancelled_external }
+            .ref_count
+            .load(Ordering::Acquire),
+        1,
+        "root cancellation cleanup must release the abandoned frame's retained reference"
+    );
+    DIRECT_ROOT_TEST_OWNED_VALUE.store(0, Ordering::Release);
+    unsafe {
+        release_value(cancelled_external);
+    }
+}
+
+#[test]
+fn native_runtime_scheduler_teardown_releases_unstarted_direct_task_external_state() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("queued direct task argument");
+    unsafe {
+        super::retain_untracked_value(argument);
+    }
+    let args_address = Box::into_raw(Box::new(vec![argument as i64])) as usize;
+    let claim_flag_address = super::allocate_direct_task_claim_flag();
+
+    let result = run_lightweight_root_task(move || {
+        let task = unsafe {
+            super::spawn_direct_task_with_external_state(
+                CancellationContext::default(),
+                direct_task_must_not_start,
+                args_address,
+                claim_flag_address,
+                true,
+                None,
+            )?
+        };
+        drop(task);
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+        1,
+        "teardown must release a queued direct task's unclaimed argument-buffer reference"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "teardown must free a queued direct task's claim flag"
+    );
+    unsafe {
+        release_value(argument);
+    }
+}
+
+#[test]
+fn native_runtime_scheduler_teardown_releases_started_direct_task_ledger_exactly_once() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    DIRECT_TEARDOWN_TASK_STARTED.store(false, Ordering::Release);
+    let argument = string_value("started direct task argument");
+    let queue = boxed_value(Value::Channel(ChannelValue::new()));
+    unsafe {
+        super::retain_untracked_value(argument);
+        super::retain_untracked_value(queue);
+    }
+    let args_address = Box::into_raw(Box::new(vec![argument as i64, queue as i64])) as usize;
+    let claim_flag_address = super::allocate_direct_task_claim_flag();
+
+    let result = run_lightweight_root_task(move || {
+        let task = unsafe {
+            super::spawn_direct_task_with_external_state(
+                CancellationContext::default(),
+                direct_task_waits_while_holding_arguments,
+                args_address,
+                claim_flag_address,
+                true,
+                None,
+            )?
+        };
+        drop(task);
+        crate::runtime_value::yield_now_with_runtime_scheduler();
+        assert!(
+            DIRECT_TEARDOWN_TASK_STARTED.load(Ordering::Acquire),
+            "the child must claim its ledger before root completion triggers teardown"
+        );
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+        1,
+        "teardown must release the claimed argument exactly once"
+    );
+    assert_eq!(
+        unsafe { &*queue }.ref_count.load(Ordering::Acquire),
+        1,
+        "teardown must release the claimed queue exactly once"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "teardown must free a started direct task's claim flag"
+    );
+    unsafe {
+        release_value(argument);
+        release_value(queue);
+    }
+}
+
+#[test]
+fn native_runtime_normal_direct_task_completion_releases_external_state_once() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let argument = int_value(17);
+    unsafe {
+        super::retain_untracked_value(argument);
+    }
+    let args_address = Box::into_raw(Box::new(vec![argument as i64])) as usize;
+    let claim_flag_address = super::allocate_direct_task_claim_flag();
+
+    let result = run_lightweight_root_task(move || {
+        let task = unsafe {
+            super::spawn_direct_task_with_external_state(
+                CancellationContext::default(),
+                test_native_thunk,
+                args_address,
+                claim_flag_address,
+                true,
+                None,
+            )?
+        };
+        match task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
+            TaskWaitStatus::Ready(Ok(Value::Int(value))) => {
+                assert_eq!(value.as_i128(), Some(17));
+            }
+            other => {
+                return Err(Diagnostic::new(format!(
+                    "normal direct child did not return its result: {other:?}"
+                )));
+            }
+        }
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+        1,
+        "normal completion must release the transferred argument exactly once"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "normal completion must free its external claim flag exactly once"
+    );
+    unsafe {
+        release_value(argument);
+    }
+}
+
 #[test]
 fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
     let baseline = super::direct_task_claim_flag_live_count();

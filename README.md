@@ -221,7 +221,7 @@ Current compiler workflow:
 - `npm run coverage:compiler:check`
   - enforce the current compiler coverage floor
 - `npm run test:rust`
-  - run the Rust test suite with one test thread and a larger test stack so direct-backend CLI binaries do not contend with each other and deep parser-limit regressions do not overflow the host test harness
+  - run the Rust test suite at Cargo/libtest's default parallelism with a larger test stack so deep parser-limit regressions do not overflow the host test harness
 - `npm run coverage:lsp:check`
   - enforce the current LSP coverage floor
 - `npm run check:format`
@@ -239,7 +239,7 @@ Current compiler workflow:
 - `npm run check:reference`
   - verify that the normative language-reference pages, navigation, and core conformance statements stay present
 - `npm run ci`
-  - run the current repo-quality gate locally, including formatting, serialized Rust tests, Node tests, coverage floors, docs build, audit, Clippy warnings-as-errors, and diff hygiene
+  - run the current repo-quality gate locally, including formatting, the default-parallel main Rust suite, the separately serialized backend-parity gate, Node tests, coverage floors, docs build, audit, Clippy warnings-as-errors, and diff hygiene; the instrumented compiler-coverage wrapper also retains its own narrow single-threaded test setting for stable coverage collection
 
 GitHub Actions:
 

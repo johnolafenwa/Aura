@@ -187,8 +187,48 @@ Important details:
 - task groups provide child cancellation scopes
 - `wait_any(...)` and `wait_all(...)` reuse the shared runtime scheduler deadline helpers
 - `Queue.get(timeout=...)` and I/O methods use deadline-aware helpers
-- scheduling is cooperative, so CPU code without a yield boundary can starve sibling tasks
-- waiter readiness is scanned and a host `poll` set is rebuilt linearly in the number of waiters/descriptors
+- compiler-inserted loop-backedge safepoints eventually yield from a hot loop, but one long iteration or straight-line CPU region can still starve sibling tasks
+- descriptor registrations persist in the reactor, deadlines live in a timer heap, and Queue, task-completion, and worker-pool events notify the scheduler directly
+
+### Scheduler ownership and nested starts
+
+The scheduler driver is the sole mutable owner of
+`LightweightTaskScheduler`. A running coroutine does not keep a pointer or
+reference to that scheduler. When a running task starts a child, it first
+allocates the guarded coroutine stack and `TaskState`; failure is synchronous,
+returns no handle, and enqueues nothing. A successful start places an owned
+prepared-task request into a scheduler-owned broker. The driver drains that
+broker after each coroutine resume, after forced cleanup or Rust unwinding, and
+repeatedly while tearing the scheduler down.
+
+The broker is FIFO so admission is deterministic inside the current runtime
+implementation. That is not a public ready-task or execution-order guarantee:
+reactor events, yields, and other wakeups can interleave, and Aurora leaves
+scheduling order unspecified.
+
+Task-local context uses reference-counted ownership and is cloned out of its
+thread-local slot before callbacks or suspension. No `RefCell` borrow and no
+borrow of the scheduler crosses a coroutine yield. Whether a lightweight task
+is armed in an unbounded wait is stored on its shared `TaskState`, so group
+cleanup can inspect it without reaching into the scheduler.
+
+If the scheduler itself is torn down, it disarms registered waits, drains
+prepared starts, and retires every remaining task as cancelled so handles and
+waiters are notified. MIR and other pure-Rust task closures are force-unwound,
+which drops their Rust-owned captures. A started direct-native task cannot
+safely unwind through generated Cranelift frames; its stack is reset and its
+scheduler-owned host/runtime state is released instead. An unstarted direct
+task drops its entry closure and external state once. The scheduler invokes
+forced cleanup and Rust destructors with the task context installed, so any
+child start they perform enters the same broker and is drained before teardown
+completes. Scheduler-owned containment callbacks are non-panicking host
+cleanup; a panic would interrupt retirement of the remaining task records and
+is forbidden by their internal safety contract.
+
+This design removes the aliased mutable-scheduler pattern, but it is still
+single-threaded: the task context and broker deliberately use `Rc`/`RefCell`.
+It does not implement structural Transfer checking, pinned workers, or
+multicore task execution.
 
 ## Networking and I/O
 

@@ -36,9 +36,10 @@ use crate::runtime_value::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
-    render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    render_float32, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
+    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
+    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
@@ -2215,23 +2216,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
             runtime_error("invalid direct root thunk pointer");
         }
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-        let result = std::thread::Builder::new()
-            .stack_size(DIRECT_RUNTIME_STACK_SIZE)
-            .spawn(move || {
-                run_lightweight_root_task(move || {
-                    with_direct_task_runtime_scope(|| {
-                        with_cancellation_scope(CancellationContext::default(), || {
-                            let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
-                            Ok(unsafe { consume_value(result_ptr) })
-                        })
-                    })
-                })
-            })
-            .unwrap_or_else(|error| {
-                runtime_error(format!("failed to start direct runtime thread: {}", error))
-            })
-            .join()
-            .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+        let result = run_direct_root_task(thunk);
         match result {
             Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
             Ok(Value::Unit) => 0,
@@ -2242,6 +2227,55 @@ pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
             Err(error) => runtime_diagnostic_error(error),
         }
     })
+}
+
+fn run_direct_root_task(thunk: NativeThunk) -> std::result::Result<Value, Diagnostic> {
+    unsafe {
+        run_direct_root_task_with_forced_exit_cleanup(thunk, || {
+            discard_current_direct_task_runtime_state();
+        })
+    }
+}
+
+/// Runs a generated direct root whose frames cannot be unwound after a
+/// scheduler boundary turns a trap or cancellation into a forced exit.
+///
+/// # Safety
+///
+/// `forced_exit_cleanup` must release every direct-runtime resource that is
+/// externalized from the generated root's abandoned coroutine frames. It must
+/// not call language cleanup thunks, because the generated stack has already
+/// been reset when the callback runs, and it must not panic because scheduler
+/// teardown must continue retiring the remaining task records.
+unsafe fn run_direct_root_task_with_forced_exit_cleanup<C>(
+    thunk: NativeThunk,
+    forced_exit_cleanup: C,
+) -> std::result::Result<Value, Diagnostic>
+where
+    C: FnOnce() + Send + 'static,
+{
+    std::thread::Builder::new()
+        .stack_size(DIRECT_RUNTIME_STACK_SIZE)
+        .spawn(move || unsafe {
+            run_lightweight_root_task_with_forced_exit_cleanup(
+                move || {
+                    with_direct_task_runtime_scope(|| {
+                        with_cancellation_scope(CancellationContext::default(), || {
+                            Ok(with_task_runtime_error_capture(|| {
+                                let result_ptr = thunk(std::ptr::null(), 0);
+                                consume_value(result_ptr)
+                            }))
+                        })
+                    })
+                },
+                forced_exit_cleanup,
+            )
+        })
+        .map_err(|error| {
+            Diagnostic::new(format!("failed to start direct runtime thread: {}", error))
+        })?
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

@@ -259,6 +259,17 @@ Nested active cleanups run in reverse registration order. If a body is already f
 
 Explicitly closing a resource before scope exit is permitted only where the resource contract makes repeated close harmless; otherwise programs should let the lexical owner perform cleanup.
 
+These cleanup rules apply while Aurora control flow or a maintained runtime
+failure exits the task through the language cleanup machinery. Internal
+scheduler abandonment is a last-resort containment path used when the whole
+scheduler stops with a child still suspended, such as after root completion or
+a fatal reactor failure. It marks the remaining task cancelled and releases
+scheduler-owned and direct-runtime host state, but it does not invoke arbitrary
+Aurora cleanup thunks. A direct generated stack may be reset on that path
+because it cannot be safely Rust-unwound across Cranelift frames. Programs must
+use structured `TaskGroup` scopes rather than depend on scheduler abandonment
+as a cleanup mechanism.
+
 ## Tasks And Scheduler
 
 Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. A task can also yield explicitly with `yield_now()`. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
@@ -311,6 +322,15 @@ not resume a later wait. If no task is ready, the scheduler blocks until the
 next event or deadline; there is no periodic park tick.
 
 Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
+
+Starting a child from a running task does not mutate the live scheduler
+through an alias. The runtime first prepares the child's guarded stack and
+task state, then transfers that prepared request to the scheduler for
+admission. If preparation fails, the start fails synchronously before a handle
+is returned and no child is admitted. A task may immediately wait on a
+successfully returned child handle, including inside a nested `TaskGroup`.
+The current admission broker preserves its own FIFO request order, but that is
+an internal safety property and does not promise FIFO child execution.
 
 Deep HTTP parsing/construction, TLS operations, and maintained Unix WebSocket
 protocol steps run on a distinct bounded protocol-step service. Its two named

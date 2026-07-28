@@ -21,3 +21,21 @@ while IFS= read -r -d '' path; do
       ;;
   esac
 done < <(git ls-files -z)
+
+compiler_source="crates/aurora-compiler/src"
+
+if rg --pcre2 --line-number \
+  'scheduler\s*:\s*\*mut\s+LightweightTaskScheduler' \
+  "$compiler_source" --glob '*.rs'; then
+  echo "raw LightweightTaskScheduler pointers are forbidden in maintained compiler source" >&2
+  echo "use the scheduler-owned spawn-request broker instead" >&2
+  exit 1
+fi
+
+if rg --pcre2 --line-number \
+  '&mut\s*\*\s*(?:\(\s*)?scheduler\b' \
+  "$compiler_source" --glob '*.rs'; then
+  echo "unsafe mutable scheduler reconstruction is forbidden in maintained compiler source" >&2
+  echo "route scheduler mutations through an owned safe interface instead" >&2
+  exit 1
+fi

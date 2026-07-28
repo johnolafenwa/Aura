@@ -306,6 +306,15 @@ task-completion, and blocking-pool readiness is delivered by direct
 notification. With no ready work, the scheduler blocks until an event or
 deadline rather than polling on a fixed tick.
 
+A running child may create a nested `TaskGroup`, start grandchildren, and
+immediately wait on their returned handles on both backends. Child preparation
+allocates the guarded stack and task state before the handle is returned; a
+preparation failure is synchronous and admits no child. Successful nested
+starts are transferred through the scheduler's internal admission broker
+rather than mutating the scheduler through a second live reference. The broker
+preserves request FIFO internally, but ready-task and child execution order
+remain deliberately unspecified.
+
 Dynamic `json.parse` uses a separate process-global codec service with two
 2 MiB-stack workers and total in-flight capacity two. The runtime reserves one
 of those slots before it makes the fallible owned source copy. A saturated
@@ -398,7 +407,12 @@ configuration or queue backpressure, so slow or stuck jobs can delay unrelated
 work behind them. A result holding an exclusive runtime resource is
 single-observer-only, but the checker does not yet enforce that rule.
 Cancelling a blocking-worker wait cannot retract an OS side effect already in
-progress. Detached lightweight tasks are unavailable.
+progress. If the scheduler itself stops with tasks still suspended, it disarms
+their waits, publishes cancellation to their handles and observers, and
+reclaims scheduler-owned and direct-runtime host state. That abandonment path
+does not run arbitrary Aurora cleanup thunks; direct generated stacks may be
+reset because they cannot safely be unwound through Cranelift frames. Detached
+lightweight tasks are unavailable.
 
 ## Status
 
@@ -426,7 +440,10 @@ TLS asset bytes are read there, while PEM parsing and rustls construction run
 on protocol workers. Phase 5.4 also adds the bounded dynamic-`json.parse`
 service and scheduler-aware admission described above; it does not move the
 legacy JSON compatibility helpers. The host-timer policy recorded by ADR-0019
-is Accepted.
+is Accepted. Phase 5.5 gives the scheduler driver unique mutable ownership,
+routes nested starts through an owned internal broker, makes preparation
+failure synchronous, and contains scheduler teardown across MIR and direct
+tasks. It does not make the broker thread-safe or promise FIFO task execution.
 Multicore Aurora task execution is reserved for the later
 pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
 `mut` task targets, statically enforced single-observer resource

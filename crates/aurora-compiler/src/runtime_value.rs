@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
@@ -15,6 +15,7 @@ use std::process::{
     ChildStdout as StdChildStdout, Command as StdCommand, ExitStatus as StdExitStatus,
     Stdio as StdProcessStdio,
 };
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
@@ -484,6 +485,7 @@ struct TaskState {
     handle: Mutex<TaskHandle>,
     ready: Condvar,
     lightweight: bool,
+    waits_without_deadline: AtomicBool,
     observed_failure: AtomicBool,
     completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
@@ -792,7 +794,7 @@ struct FdWaitRegistration {
 }
 
 struct LightweightTaskContext {
-    scheduler: *mut LightweightTaskScheduler,
+    spawn_requests: Rc<RefCell<VecDeque<PreparedLightweightTask>>>,
     task_id: u64,
     yielder: Cell<*const Yielder<RuntimeSchedulerWakeReason, TaskYield>>,
     cancellation: Option<CancellationContext>,
@@ -800,8 +802,18 @@ struct LightweightTaskContext {
 
 struct LightweightTaskRecord {
     state: Arc<TaskState>,
-    context: Box<LightweightTaskContext>,
+    context: Rc<LightweightTaskContext>,
     coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskExecutionResult>,
+    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+}
+
+type LightweightTaskEntry = Box<dyn FnOnce() -> std::result::Result<Value, Diagnostic> + 'static>;
+
+struct PreparedLightweightTask {
+    state: Arc<TaskState>,
+    stack: DefaultStack,
+    cancellation: Option<CancellationContext>,
+    entry: LightweightTaskEntry,
     forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
 }
 
@@ -814,6 +826,7 @@ struct LightweightTaskWait {
 struct LightweightTaskScheduler {
     next_task_id: u64,
     next_wait_epoch: u64,
+    spawn_requests: Rc<RefCell<VecDeque<PreparedLightweightTask>>>,
     ready: VecDeque<(u64, RuntimeSchedulerWakeReason)>,
     waiting: BTreeMap<u64, LightweightTaskWait>,
     tasks: BTreeMap<u64, LightweightTaskRecord>,
@@ -1843,8 +1856,8 @@ pub(crate) fn sleep_with_runtime_scheduler(
 }
 
 thread_local! {
-    static CURRENT_LIGHTWEIGHT_TASK_CONTEXT: Cell<*const LightweightTaskContext> =
-        const { Cell::new(std::ptr::null()) };
+    static CURRENT_LIGHTWEIGHT_TASK_CONTEXT: RefCell<Option<Rc<LightweightTaskContext>>> =
+        const { RefCell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
         const { std::cell::RefCell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_EXIT: std::cell::RefCell<Option<TaskExecutionResult>> =
@@ -1854,22 +1867,25 @@ thread_local! {
 static LIGHTWEIGHT_TASK_PANIC_HOOK: Once = Once::new();
 
 struct LightweightTaskContextGuard {
-    previous: *const LightweightTaskContext,
+    previous: Option<Rc<LightweightTaskContext>>,
     previous_cancellation: Option<CancellationContext>,
 }
 
 impl Drop for LightweightTaskContextGuard {
     fn drop(&mut self) {
-        CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| slot.set(self.previous));
+        CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| *slot.borrow_mut() = self.previous.take());
         CURRENT_LIGHTWEIGHT_TASK_CANCELLATION
             .with(|slot| *slot.borrow_mut() = self.previous_cancellation.take());
     }
 }
 
-fn enter_lightweight_task_context(context: &LightweightTaskContext) -> LightweightTaskContextGuard {
+fn enter_lightweight_task_context(
+    context: &Rc<LightweightTaskContext>,
+) -> LightweightTaskContextGuard {
     let previous = CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| {
-        let previous = slot.get();
-        slot.set(context as *const _);
+        let mut slot = slot.borrow_mut();
+        let previous = slot.take();
+        *slot = Some(context.clone());
         previous
     });
     let previous_cancellation = CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| {
@@ -1887,14 +1903,8 @@ fn enter_lightweight_task_context(context: &LightweightTaskContext) -> Lightweig
 fn with_current_lightweight_task_context<T>(
     f: impl FnOnce(&LightweightTaskContext) -> T,
 ) -> Option<T> {
-    CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| {
-        let ptr = slot.get();
-        if ptr.is_null() {
-            None
-        } else {
-            Some(f(unsafe { &*ptr }))
-        }
-    })
+    let context = CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| slot.borrow().clone());
+    context.as_deref().map(f)
 }
 
 pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
@@ -2148,16 +2158,17 @@ where
 }
 
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
-    with_current_lightweight_task_context(|context| {
-        let yielder_ptr = context.yielder.get();
-        if yielder_ptr.is_null() {
-            None
-        } else {
-            let yielder = unsafe { &*yielder_ptr };
-            Some(yielder.suspend(wait))
-        }
-    })
-    .flatten()
+    // Do not keep the task context's Rc alive on the coroutine stack across a
+    // suspension. A generated task may be force-reset at that point, and any
+    // stack-owned Rc would be deliberately abandoned with its generated
+    // frames.
+    let yielder_ptr = with_current_lightweight_task_context(|context| context.yielder.get())?;
+    if yielder_ptr.is_null() {
+        None
+    } else {
+        let yielder = unsafe { &*yielder_ptr };
+        Some(yielder.suspend(wait))
+    }
 }
 
 fn yield_current_lightweight_wait(
@@ -2255,11 +2266,49 @@ impl TaskWaitRegistration {
     }
 }
 
+fn new_lightweight_task_state() -> Arc<TaskState> {
+    Arc::new(TaskState {
+        handle: Mutex::new(TaskHandle::Running),
+        ready: Condvar::new(),
+        lightweight: true,
+        waits_without_deadline: AtomicBool::new(false),
+        observed_failure: AtomicBool::new(false),
+        completion_reactor_subscribers: Mutex::new(HashMap::new()),
+        group_failure_wake_flags: Mutex::new(Vec::new()),
+        group_completion_wake_flags: Mutex::new(Vec::new()),
+        runtime_type_name: Mutex::new(None),
+    })
+}
+
+fn prepare_lightweight_task(
+    cancellation: Option<CancellationContext>,
+    stack_size: Option<usize>,
+    entry: LightweightTaskEntry,
+    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+) -> std::result::Result<(TaskValue, PreparedLightweightTask), Diagnostic> {
+    let stack = allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
+    let state = new_lightweight_task_state();
+    let task = TaskValue {
+        inner: state.clone(),
+    };
+    Ok((
+        task,
+        PreparedLightweightTask {
+            state,
+            stack,
+            cancellation,
+            entry,
+            forced_exit_cleanup,
+        },
+    ))
+}
+
 impl LightweightTaskScheduler {
     fn new() -> Self {
         Self {
             next_task_id: 1,
             next_wait_epoch: 1,
+            spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
             ready: VecDeque::new(),
             waiting: BTreeMap::new(),
             tasks: BTreeMap::new(),
@@ -2304,46 +2353,59 @@ impl LightweightTaskScheduler {
     where
         F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
     {
+        let (task, request) = prepare_lightweight_task(
+            cancellation,
+            stack_size,
+            Box::new(entry),
+            forced_exit_cleanup,
+        )?;
+        self.admit_spawn_request(request);
+        Ok(task)
+    }
+
+    fn admit_spawn_request(&mut self, request: PreparedLightweightTask) {
         let task_id = self.next_task_id;
         self.next_task_id += 1;
 
-        let state = Arc::new(TaskState {
-            handle: Mutex::new(TaskHandle::Running),
-            ready: Condvar::new(),
-            lightweight: true,
-            observed_failure: AtomicBool::new(false),
-            completion_reactor_subscribers: Mutex::new(HashMap::new()),
-            group_failure_wake_flags: Mutex::new(Vec::new()),
-            group_completion_wake_flags: Mutex::new(Vec::new()),
-            runtime_type_name: Mutex::new(None),
-        });
-        let context = Box::new(LightweightTaskContext {
-            scheduler: self as *mut _,
+        let context = Rc::new(LightweightTaskContext {
+            spawn_requests: self.spawn_requests.clone(),
             task_id,
             yielder: Cell::new(std::ptr::null()),
-            cancellation,
+            cancellation: request.cancellation,
         });
-        let context_ptr = &*context as *const LightweightTaskContext;
-        let stack =
-            allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
-        let coroutine = Coroutine::with_stack(stack, move |yielder, _| {
-            let context = unsafe { &*context_ptr };
-            context.yielder.set(yielder as *const _);
-            finalize_task_execution(entry)
+        let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
+            let context_was_installed = with_current_lightweight_task_context(|context| {
+                context.yielder.set(yielder as *const _);
+            })
+            .is_some();
+            debug_assert!(
+                context_was_installed,
+                "a lightweight coroutine must resume inside its owned task context"
+            );
+            finalize_task_execution(request.entry)
         });
 
         self.tasks.insert(
             task_id,
             LightweightTaskRecord {
-                state: state.clone(),
+                state: request.state,
                 context,
                 coroutine,
-                forced_exit_cleanup,
+                forced_exit_cleanup: request.forced_exit_cleanup,
             },
         );
         self.ready
             .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
-        Ok(TaskValue { inner: state })
+    }
+
+    fn drain_spawn_requests(&mut self) {
+        loop {
+            let request = self.spawn_requests.borrow_mut().pop_front();
+            let Some(request) = request else {
+                return;
+            };
+            self.admit_spawn_request(request);
+        }
     }
 
     fn complete_task(
@@ -2353,6 +2415,9 @@ impl LightweightTaskScheduler {
         result: TaskExecutionResult,
     ) {
         self.disarm_wait(task_id);
+        task_state
+            .waits_without_deadline
+            .store(false, Ordering::SeqCst);
         {
             let mut state = lock_mutex(&task_state.handle);
             *state = TaskHandle::Completed(result.clone());
@@ -2369,8 +2434,18 @@ impl LightweightTaskScheduler {
             return;
         };
         self.disarm_wait(task_id);
+        record
+            .state
+            .waits_without_deadline
+            .store(false, Ordering::SeqCst);
         let _guard = enter_lightweight_task_context(&record.context);
-        match record.coroutine.resume(reason) {
+        let outcome = record.coroutine.resume(reason);
+        // A running coroutine may prepare children, but it never aliases the
+        // scheduler itself. Admit those owned requests before deciding what
+        // happens to the parent so a child can be waited immediately and FIFO
+        // order remains child-before-parent on a yielding turn.
+        self.drain_spawn_requests();
+        match outcome {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
                 self.tasks.insert(task_id, record);
                 if let Some(reason) = wait.ready_reason(false) {
@@ -2385,6 +2460,7 @@ impl LightweightTaskScheduler {
                     .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
             }
             CoroutineResult::Yield(TaskYield::Exit) => {
+                record.context.yielder.set(std::ptr::null());
                 let result = CURRENT_LIGHTWEIGHT_TASK_EXIT
                     .with(|slot| slot.borrow_mut().take())
                     .unwrap_or_else(|| {
@@ -2406,9 +2482,14 @@ impl LightweightTaskScheduler {
                     // cancellation and failure.
                     record.coroutine.force_unwind();
                 }
+                // Forced cleanup and Rust destructors run while the task
+                // context is still active and may synchronously start owned
+                // child work. Admit those requests before retiring the parent.
+                self.drain_spawn_requests();
                 self.complete_task(task_id, &record.state, result);
             }
             CoroutineResult::Return(result) => {
+                record.context.yielder.set(std::ptr::null());
                 self.complete_task(task_id, &record.state, result);
             }
         }
@@ -2446,6 +2527,7 @@ impl LightweightTaskScheduler {
             return;
         }
 
+        let waits_without_deadline = registration.deadline.is_none();
         self.waiting.insert(
             task_id,
             LightweightTaskWait {
@@ -2454,6 +2536,12 @@ impl LightweightTaskScheduler {
                 subscription,
             },
         );
+        if let Some(record) = self.tasks.get(&task_id) {
+            record
+                .state
+                .waits_without_deadline
+                .store(waits_without_deadline, Ordering::SeqCst);
+        }
     }
 
     fn arm_fd_wait(&mut self, key: WaitKey, fd_wait: Option<FdWaitRegistration>) -> io::Result<()> {
@@ -2497,6 +2585,12 @@ impl LightweightTaskScheduler {
         cancel_reactor_wait: bool,
     ) -> Option<TaskWaitRegistration> {
         let waiting = self.waiting.remove(&task_id)?;
+        if let Some(record) = self.tasks.get(&task_id) {
+            record
+                .state
+                .waits_without_deadline
+                .store(false, Ordering::SeqCst);
+        }
         waiting
             .registration
             .unsubscribe_reactor(&waiting.subscription);
@@ -2557,12 +2651,6 @@ impl LightweightTaskScheduler {
                 return Err(diagnostic);
             }
             if let Some(result) = root.completed_result() {
-                debug_assert!(
-                    self.tasks
-                        .values()
-                        .all(|record| record.forced_exit_cleanup.is_none()),
-                    "structured concurrency invariant violated: direct task remained suspended at scheduler teardown"
-                );
                 return match result {
                     TaskExecutionResult::Ready(result) => result,
                     TaskExecutionResult::Cancelled => {
@@ -2606,16 +2694,30 @@ impl LightweightTaskScheduler {
         }
     }
 
-    fn task_wait_is_unbounded(&self, task: &TaskValue) -> bool {
-        for (task_id, record) in &self.tasks {
-            if Arc::ptr_eq(&record.state, &task.inner) {
-                return self
-                    .waiting
-                    .get(task_id)
-                    .is_some_and(|wait| wait.registration.deadline.is_none());
+    fn cancel_task_record(&mut self, task_id: u64, mut record: LightweightTaskRecord) {
+        record
+            .state
+            .waits_without_deadline
+            .store(false, Ordering::SeqCst);
+        let _guard = enter_lightweight_task_context(&record.context);
+        record.context.yielder.set(std::ptr::null());
+        if let Some(cleanup) = record.forced_exit_cleanup.take() {
+            if record.coroutine.started() {
+                // Direct-backend frames cannot be crossed by a Rust unwind.
+                unsafe {
+                    record.coroutine.force_reset();
+                }
+            } else {
+                // Before its first resume the coroutine contains only the
+                // owned initial closure, so release those captures normally.
+                record.coroutine.force_unwind();
             }
+            cleanup();
+        } else {
+            record.coroutine.force_unwind();
         }
-        false
+        self.drain_spawn_requests();
+        self.complete_task(task_id, &record.state, TaskExecutionResult::Cancelled);
     }
 }
 
@@ -2625,20 +2727,42 @@ impl Drop for LightweightTaskScheduler {
         for task_id in task_ids {
             self.disarm_wait(task_id);
         }
+        // Root completion and reactor failures may leave structured children
+        // suspended. Retire every admitted or prepared request explicitly so
+        // no task handle stays Running and direct-task external state is never
+        // abandoned.
+        self.drain_spawn_requests();
+        while let Some((task_id, record)) = self.tasks.pop_first() {
+            self.cancel_task_record(task_id, record);
+            self.drain_spawn_requests();
+        }
     }
+}
+
+fn enqueue_lightweight_task(
+    cancellation: Option<CancellationContext>,
+    stack_size: Option<usize>,
+    entry: LightweightTaskEntry,
+    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+) -> std::result::Result<TaskValue, Diagnostic> {
+    let Some(spawn_requests) =
+        with_current_lightweight_task_context(|context| context.spawn_requests.clone())
+    else {
+        return Err(Diagnostic::new(
+            "lightweight Aurora task start requires an active task scheduler",
+        ));
+    };
+    let (task, request) =
+        prepare_lightweight_task(cancellation, stack_size, entry, forced_exit_cleanup)?;
+    spawn_requests.borrow_mut().push_back(request);
+    Ok(task)
 }
 
 pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
-        return Err(Diagnostic::new(
-            "lightweight Aurora task start requires an active task scheduler",
-        ));
-    };
-    let scheduler = unsafe { &mut *scheduler };
-    scheduler.spawn_task(None, entry)
+    enqueue_lightweight_task(None, None, Box::new(entry), None)
 }
 
 pub(crate) fn spawn_lightweight_task_with_stack<F>(
@@ -2648,13 +2772,7 @@ pub(crate) fn spawn_lightweight_task_with_stack<F>(
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
-        return Err(Diagnostic::new(
-            "lightweight Aurora task start requires an active task scheduler",
-        ));
-    };
-    let scheduler = unsafe { &mut *scheduler };
-    scheduler.spawn_task_with_stack(None, Some(stack_size), entry)
+    enqueue_lightweight_task(None, Some(stack_size), Box::new(entry), None)
 }
 
 fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutionResult) {
@@ -2689,13 +2807,7 @@ pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
-        return Err(Diagnostic::new(
-            "lightweight Aurora task start requires an active task scheduler",
-        ));
-    };
-    let scheduler = unsafe { &mut *scheduler };
-    scheduler.spawn_task(Some(cancellation), entry)
+    enqueue_lightweight_task(Some(cancellation), None, Box::new(entry), None)
 }
 
 /// Starts a task whose generated stack must be reset instead of force-unwound.
@@ -2703,7 +2815,9 @@ where
 /// # Safety
 ///
 /// On a forced exit, every resource that cannot safely be abandoned with the
-/// coroutine stack must be owned and released by `forced_exit_cleanup`.
+/// coroutine stack must be owned and released by `forced_exit_cleanup`. The
+/// callback must not panic: scheduler teardown relies on it completing so the
+/// remaining task records can also be retired.
 pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup<F, C>(
     cancellation: CancellationContext,
     entry: F,
@@ -2742,16 +2856,10 @@ where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
     C: FnOnce() + 'static,
 {
-    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
-        return Err(Diagnostic::new(
-            "lightweight Aurora task start requires an active task scheduler",
-        ));
-    };
-    let scheduler = unsafe { &mut *scheduler };
-    scheduler.spawn_task_with_forced_exit_cleanup(
+    enqueue_lightweight_task(
         Some(cancellation),
         stack_size,
-        entry,
+        Box::new(entry),
         Some(Box::new(forced_exit_cleanup)),
     )
 }
@@ -2763,6 +2871,36 @@ where
     install_lightweight_task_panic_hook();
     let mut scheduler = Box::new(LightweightTaskScheduler::new());
     let root = scheduler.spawn_task(None, entry)?;
+    scheduler.run_until_root(&root)
+}
+
+/// Runs a generated root task whose stack must be reset on forced exit.
+///
+/// The cleanup is deliberately not a language cleanup thunk: it may only
+/// discard externalized direct-runtime state and release host-owned state.
+///
+/// # Safety
+///
+/// On a forced exit, every resource that cannot safely be abandoned with the
+/// coroutine stack must be owned and released by `forced_exit_cleanup`. The
+/// callback must not panic: scheduler teardown relies on it completing so the
+/// remaining task records can also be retired.
+pub(crate) unsafe fn run_lightweight_root_task_with_forced_exit_cleanup<F, C>(
+    entry: F,
+    forced_exit_cleanup: C,
+) -> std::result::Result<Value, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    C: FnOnce() + 'static,
+{
+    install_lightweight_task_panic_hook();
+    let mut scheduler = Box::new(LightweightTaskScheduler::new());
+    let root = scheduler.spawn_task_with_forced_exit_cleanup(
+        None,
+        None,
+        entry,
+        Some(Box::new(forced_exit_cleanup)),
+    )?;
     scheduler.run_until_root(&root)
 }
 
@@ -8960,6 +9098,7 @@ impl TaskValue {
             handle: Mutex::new(TaskHandle::Running),
             ready: Condvar::new(),
             lightweight: false,
+            waits_without_deadline: AtomicBool::new(false),
             observed_failure: AtomicBool::new(false),
             completion_reactor_subscribers: Mutex::new(HashMap::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
@@ -9039,11 +9178,7 @@ impl TaskValue {
         if self.completed_result().is_some() || !self.inner.lightweight {
             return false;
         }
-        with_current_lightweight_task_context(|context| {
-            let scheduler = unsafe { &*context.scheduler };
-            scheduler.task_wait_is_unbounded(self)
-        })
-        .unwrap_or(false)
+        self.inner.waits_without_deadline.load(Ordering::SeqCst)
     }
 }
 

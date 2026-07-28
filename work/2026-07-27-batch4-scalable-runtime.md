@@ -353,10 +353,74 @@ before-reactor baseline is recorded in
   ceiling robust. The massive-concurrency claim remains out of maintained
   product documentation; a later stackless or safe stack-copy/decommit
   architecture is required to revisit it.
+- Phase 5.4 is complete through `f72fd2f`. The implementation, exact full CI,
+  frozen coverage result, contractual after-stage benchmark, scope-qualified
+  512 KiB default, and massive-concurrency escape-hatch evidence are all
+  recorded above. Coverage floors remain frozen at 96.13/96.89/94.35.
+- Phase 5.5 scheduler-soundness implementation is in progress. The previous
+  nested-spawn path reconstructed a second live mutable scheduler reference
+  from a raw `*mut LightweightTaskScheduler`; that aliased
+  `&mut *scheduler` pattern is replaced by an owned FIFO request broker
+  whose only mutable scheduler consumer is the scheduler driver. FIFO is an
+  internal admission invariant, not a language scheduling-order guarantee.
+- A nested start now prepares its guarded stack and task state synchronously
+  before publishing an owned request. Preparation failure returns the existing
+  error immediately and publishes no request. The scheduler drains prepared
+  requests after each task resume, after forced cleanup or unwind, and
+  repeatedly during teardown, preserving nested start followed by immediate
+  wait without exposing scheduler mutation to the running task.
+- Unbounded-wait state is published atomically on `TaskState` only after wait
+  registration succeeds and is cleared when that registration is removed.
+  Group cleanup therefore no longer reads scheduler internals through a shared
+  raw alias. Task context is owned and cloned around callbacks and suspension;
+  no `RefCell` borrow is retained across a coroutine yield.
+- Scheduler teardown disarms waits, drains pending starts, retires admitted and
+  prepared tasks, transitions exposed task handles to `Cancelled`, and
+  notifies completion, group, and reactor observers. Pure Rust/MIR coroutine
+  frames are force-unwound. Generated direct frames are never Rust-unwound:
+  started child tasks and direct roots reset their coroutine stack and then
+  release scheduler-owned argument storage, claim flags, retained opaque
+  values, and task-local direct-runtime state exactly once. Unstarted direct
+  tasks drop their entry closure normally and release external state exactly
+  once. Cleanup runs with the task context installed, so requests produced by
+  host-state cleanup are admitted and retired before teardown finishes.
+- This forced-abandonment path is host/runtime-state containment, not a new
+  Aurora cleanup mechanism. It does not execute arbitrary Aurora cleanup code
+  in an abandoned generated task, and programs must not rely on it as an
+  alternative to maintained control-flow, cancellation, or runtime-failure
+  cleanup.
+- Current Phase 5.5 focused verification is green: the compiler library suite
+  passes 1,017 tests; scheduler regressions cover synchronous preparation
+  failure, nested admission and immediate wait, wait-state publication,
+  teardown cancellation/wakeup, broker release, pure-Rust unwind, and cleanup
+  that publishes another request; native-runtime regressions cover direct
+  child/root forced exit, queued and suspended teardown, retained-reference
+  release, and normal completion without double release. The targeted
+  `scheduler_nested_spawns.au` CLI regression passes on MIR and forced-direct
+  backends, and the hygiene gate rejects both a raw scheduler pointer and
+  reconstructed `&mut *scheduler`.
+- The exact Phase 5.5 full CI is green on the settled implementation tree:
+  281 CLI tests, 1,017 compiler-library tests, the 547.91-second forced
+  MIR/direct fixture matrix, 81 language-server tests, 13 extension tests,
+  reference integrity (34 pages, 247 fences, 118 verified blocks, 59 migration
+  tests, and 683 migrated manifests), documentation build, both audits,
+  warning-denied Clippy, and hygiene. `cargo audit` reports only the accepted
+  `rustls-pemfile 2.2.0` unmaintained warning.
+- Frozen compiler coverage passes without a synthetic line-execution test or
+  justified exclusion: 67,266/69,957 lines (96.153351%), 4,454/4,596
+  functions (96.910357%), and 99,304/105,216 regions (94.381083%), above the
+  frozen 96.13/96.89/94.35 floors. LSP coverage remains 100%: 895/895
+  statements and lines, 246/246 branches, and 49/49 functions.
+- Phase 5.5 is not yet complete. The clean contractual after-stage benchmark,
+  benchmark-note update, and isolated stage commit family remain pending. No
+  performance claim is recorded until that benchmark runs on the clean commit.
 
 ## Follow-up
 
-Commit this benchmark evidence, then advance to scheduler soundness. The
-massive-concurrency memory claim remains unavailable under the recorded escape
-hatch. Coverage floors remain frozen until the one-time Batch 4 sign-off
-re-ratchet.
+Commit the verified Phase 5.5 implementation, capture and record its clean
+contractual after-stage benchmark, and close the scheduler-soundness stage.
+Advance next to structural
+Transfer and static single-consumer task-result enforcement only after that
+commit is green. The massive-concurrency memory claim remains unavailable
+under the recorded escape hatch. Coverage floors remain frozen until the
+one-time Batch 4 sign-off re-ratchet.

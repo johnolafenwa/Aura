@@ -1,0 +1,85 @@
+def child(events: Queue[String], label: own String, value: int32) -> int32:
+    events.put(label)
+    return value
+
+def cleanup_after_release(events: Queue[String], release: Queue[int32]) -> None:
+    match release.get():
+        case QueueReceive.Item(_):
+            events.put("cleanup")
+        case QueueReceive.Closed:
+            events.put("cleanup-closed")
+        case QueueReceive.TimedOut:
+            events.put("cleanup-timed-out")
+        case QueueReceive.Cancelled:
+            events.put("cleanup-cancelled")
+
+def nested_parent(events: Queue[String]) -> int32:
+    events.put("parent-start")
+    release = Queue[int32]()
+    mut total: int32 = 0
+
+    with TaskGroup() as children:
+        first = children.start_with_stack(262144, child, events, "child-first", 11)
+        second = children.start(child, events, "child-second", 22)
+        children.start_soon(cleanup_after_release, events, release)
+
+        events.put("parent-wait")
+        match first.result(timeout=2s):
+            case TaskResult.Ready(value):
+                total += value
+                events.put("parent-after-first")
+            case TaskResult.Error(_):
+                return -1
+            case TaskResult.TimedOut:
+                return -2
+            case TaskResult.Cancelled:
+                return -3
+
+        match second.result(timeout=2s):
+            case TaskResult.Ready(value):
+                total += value
+                events.put("parent-after-second")
+            case TaskResult.Error(_):
+                return -4
+            case TaskResult.TimedOut:
+                return -5
+            case TaskResult.Cancelled:
+                return -6
+
+        release.put(1)
+        events.put("parent-leaving-scope")
+
+    events.put("parent-joined")
+    return total
+
+def print_event(events: Queue[String]) -> None:
+    match events.get(timeout=2s):
+        case QueueReceive.Item(event):
+            print(event)
+        case QueueReceive.Closed:
+            print("event-closed")
+        case QueueReceive.TimedOut:
+            print("event-timed-out")
+        case QueueReceive.Cancelled:
+            print("event-cancelled")
+
+def main() -> int32:
+    events = Queue[String]()
+    mut total: int32 = 0
+
+    with TaskGroup() as parents:
+        parent = parents.start(nested_parent, events)
+        match parent.result(timeout=2s):
+            case TaskResult.Ready(value):
+                total = value
+            case TaskResult.Error(_):
+                return 1
+            case TaskResult.TimedOut:
+                return 2
+            case TaskResult.Cancelled:
+                return 3
+
+    for _ in range(9):
+        print_event(events)
+    print(total)
+    return 0
