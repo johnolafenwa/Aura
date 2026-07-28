@@ -602,6 +602,22 @@ manifests and the stale-syntax sweep; docs build; npm and Rust audits;
 warning-denied Clippy; and hygiene. Cargo audit retains only the repository's
 allowed `rustls-pemfile` unmaintained warning.
 
+Phase 5.7 is committed at `6fb5efb`. Its clean-tree contractual benchmark is
+also complete. The report records the exact implementation commit, no dirty
+files, empty competing-process inventories, and `contractual: true`. The
+mandatory four-worker gate passes all seven paired samples: paired median
+ratio `1.077123x` against the `1.6x` ceiling, ratio of medians `1.056700x`,
+four-task median `0.593762s`, one-task median `0.561902s`, and `393.61%`
+median four-task process CPU. Ten thousand sleepers, standalone timers, idle
+CPU, starvation, and V6 controls also pass. The 100,000-sleeper plus
+1,000-timer workload reaches 1,989,033,984 bytes worst RSS and remains the
+sole red gate under the accepted Phase 5.4 escape hatch; its 5 ms arm span and
+3 ms p99 still pass. Raw report:
+`/private/tmp/aurora-phase57-after-pinned-worker-multicore.json`, SHA-256
+`6d47c90d3dd9eb85421245c92aa3d12b01cb58ddf9ac0819b0e210c14123531d`;
+qualified release binary SHA-256
+`9e81f90221d41899e017a3a6fbafd8dfaccdbb74a4884c4246aa448610aa0591`.
+
 One follow-up was deliberately not absorbed. Direct compilation rejected an
 `int32 != int32` comparison whose operand came from a function result while
 MIR accepted it; the fixture uses equivalent positive equality. Worker-thread
@@ -614,8 +630,8 @@ not weaken the no-periodic-tick contract.
 
 ## Follow-up
 
-Create the isolated Phase 5.7 implementation commit, run the clean-tree
-contractual benchmark, and commit its evidence; then begin Phase 5.8 typed
-select. The massive-concurrency memory claim
-remains unavailable under the recorded escape hatch. Coverage floors remain
-frozen until the one-time Batch 4 sign-off re-ratchet.
+Commit the clean-tree Phase 5.7 benchmark evidence, then begin Phase 5.8 typed
+select with its provisional ADR before implementation. The
+massive-concurrency memory claim remains unavailable under the recorded escape
+hatch. Coverage floors remain frozen until the one-time Batch 4 sign-off
+re-ratchet.

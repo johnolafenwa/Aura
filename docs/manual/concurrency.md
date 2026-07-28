@@ -537,19 +537,19 @@ particular speedup, task/output order, or broader automatic parallelism.
 Preemptive scheduling,
 `mut` task targets, typed heterogeneous selection, configurable blocking-pool
 sizing, native frame parity, and detached task syntax are unavailable. On the
-clean Mac14,9 Phase 5.6 pre-multicore measurement, 10,000 parked sleepers used
-205,389,824 bytes of worst whole-process RSS and 197,836,800 bytes above their
-same-process pre-spawn baseline: an amortized upper bound of 19,784 bytes
-(19.32 KiB) per requested sleeper, including scheduler metadata and shared
-workload growth.
+clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked sleepers used
+206,503,936 bytes of worst whole-process RSS and 197,885,952 bytes above their
+same-process pre-spawn baseline.
 
-That Phase 5.6 combined 100,000-sleeper plus 1,000-timer run passed its 3 ms
-arm-span and 3 ms p99 timer gates but reached 1,978,384,384 bytes worst
+That Phase 5.7 combined 100,000-sleeper plus 1,000-timer run passed its 5 ms
+arm-span and 3 ms p99 timer gates but reached 1,989,033,984 bytes worst
 whole-process RSS, so Aurora does not claim that population fits in 1.5 GiB.
 On this 16 KiB-page host, one resident stack page per 101,000 stackful children
 already exceeds that ceiling before task metadata. This measured escape-hatch
 result cannot be repaired by reducing only the demand-paged virtual stack
-reservation.
+reservation. The same contractual run passes the mandatory four-worker
+scaling gate at a `1.077123x` paired median wall-time ratio with `393.61%`
+median four-task process CPU.
 The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on

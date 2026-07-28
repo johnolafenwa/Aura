@@ -496,3 +496,64 @@ standalone timer p99 remains 2 ms, and idle/starvation controls remain far
 inside their limits. These measurements establish no material runtime
 regression from the Transfer boundary. They do not claim multicore execution
 or restore the massive-concurrency marketing claim.
+
+## Phase 5.7 pinned-worker multicore
+
+The accepted Phase 5.6 report above is the before-stage baseline. Phase 5.7
+replaces the single scheduler with one pinned scheduler/reactor per OS worker,
+while preserving the structural Transfer boundary, non-migrating coroutine
+stacks, event-driven idle waits, and the existing memory, timer, idle,
+starvation, and native-loop controls. The runner also adds the mandatory
+four-worker scaling workload: seven alternating one-task/four-task pairs,
+fixed checksums, minimum signal duration, process-CPU corroboration, qualified
+physical-core count, and MAD rejection.
+
+The clean-tree after-stage command was:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+python3 scripts/bench-scalable-runtime.py \
+  --label phase57-after-pinned-worker-multicore \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --multicore-repeats 7 \
+  --idle-seconds 30 \
+  --json /private/tmp/aurora-phase57-after-pinned-worker-multicore.json
+```
+
+The report records clean implementation commit
+`6fb5efbb6b5c677eb5b9f3980a73ec88980d989c`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. The
+host is the Mac14,9 Apple M2 Pro with 10 physical/logical cores and 16 GiB
+RAM, running Darwin 25.5.0. The freshly qualified locked release `aura`
+SHA-256 is
+`9e81f90221d41899e017a3a6fbafd8dfaccdbb74a4884c4246aa448610aa0591`.
+Raw report:
+`/private/tmp/aurora-phase57-after-pinned-worker-multicore.json`; SHA-256:
+`6d47c90d3dd9eb85421245c92aa3d12b01cb58ddf9ac0819b0e210c14123531d`.
+
+| Workload | Repetitions | Contractual post-multicore result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 206,503,936 bytes worst whole-process peak RSS; 197,885,952 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,989,033,984 bytes worst whole-process peak RSS; 1,981,513,728 bytes worst incremental peak RSS; 5 ms worst arm span; 3 ms worst p99 | RSS FAIL against 1.5 GiB; timer gates PASS under the recorded escape hatch |
+| 1,000 timers | 3 | 7 ms worst arm span; 3 ms worst p99 | PASS |
+| 10 idle tasks | 3 | 0.0005296816042224426% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 14 ms worst result | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | paired median ratio 1.077123x; ratio of medians 1.056700x; four-task median 0.593762 s versus one-task median 0.561902 s; 393.61% median four-task process CPU; all seven pairs pass | PASS, valid ratio at most 1.6 with at least 150% CPU |
+| V6 int32 loop | 5 plus warmup | median 33.709750 ms; MAD 0.168875 ms; p95 46.408792 ms; best 33.540875 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | median 13.073333 ms; MAD 0.166834 ms; p95 15.675208 ms; best 10.962958 ms | recorded stage evidence |
+
+The multicore sample is valid: the host reports 10 physical cores, both lanes
+use `AURORA_WORKERS=4`, one-task relative MAD is 0.009574, four-task relative
+MAD is 0.029027, and no paired sample exceeds the 1.6 ratio. Every workload
+completed naturally with its exact protocol marker, zero status, empty
+standard error, and no sampling error.
+
+The runner exits nonzero solely because the already-accepted
+massive-concurrency RSS gate remains unavailable. The mandatory multicore
+gate and every maintained control pass, so the Phase 5.4 escape hatch permits
+the stage to proceed without a massive-concurrency claim. This report is the
+current Phase 5.7 benchmark evidence; the Phase 5.6 values above remain the
+historical pre-multicore comparison.

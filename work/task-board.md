@@ -277,8 +277,8 @@ Last updated: 2026-07-28
   `209baaf5264fe469db9f88c2c7aa235fce2d2505e3d233eb0baad69fbe060bb7`.
   Phase 5.7 pinned-worker multicore is next, and no Phase 5.6 text or test
   claims parallel task execution.
-- Phase 5.7 pinned-worker multicore is implemented and is in final gate
-  closure. The runtime now creates one scheduler/reactor per OS worker,
+- Phase 5.7 pinned-worker multicore is implemented at `6fb5efb`. The runtime
+  now creates one scheduler/reactor per OS worker,
   defaults to `available_parallelism`, accepts a strict positive
   `AURORA_WORKERS` override, assigns prepared tasks round-robin, and never
   moves a coroutine after assignment. Queue and Task handles use synchronized
@@ -293,15 +293,16 @@ Last updated: 2026-07-28
   atomic output lines, cancellation, distinct simultaneous failures, result
   claim atomicity, worker affinity across yield/timer/Queue waits, and
   shutdown-spawn cleanup.
-- The mandatory multicore calibration is green on the Batch 4 host. Seven
-  alternating paired repetitions measured a four-task/one-task median ratio
-  of `1.061645x` against the `1.6x` ceiling, with `397.21%` median four-task
-  process CPU and low MAD. The first replay exposed a benchmark-only macOS
+- The mandatory multicore calibration is green on the Batch 4 host. The final
+  clean-tree contractual run's seven alternating paired repetitions measured
+  a four-task/one-task median ratio of `1.077123x` against the `1.6x` ceiling,
+  with `393.61%` median four-task process CPU and low MAD. The first
+  calibration exposed a benchmark-only macOS
   defect: `proc_pid_rusage` CPU values are mach absolute-time ticks, not
   nanoseconds. The runner now applies `mach_timebase_info` (`125/3` on this
   host), and a behavioral host-runner test pins the conversion instead of
   weakening CPU corroboration.
-- Phase 5.7 focused evidence is green so far: 1,072 compiler-library tests
+- Phase 5.7 focused evidence is green: 1,072 compiler-library tests
   under default parallelism, 118 native-runtime tests twice under default
   parallelism, 166 runtime-value tests, all four new four-worker CLI tests on
   MIR and direct, AU4006 override diagnostics on both backends, the explicit
@@ -311,16 +312,25 @@ Last updated: 2026-07-28
   101,829/107,849 regions (94.418122%), above the unchanged
   96.13/96.89/94.35 floors. The closure uses only observable fault,
   shutdown, AU4006, and direct Queue-registration tests; no synthetic test or
-  exclusion was added. Exact full CI, the implementation commit, and the
-  clean-tree contractual full benchmark remain before the stage is closed.
+  exclusion was added.
 - Exact full Phase 5.7 `npm run ci` is green: 45 benchmark-runner tests; 288
   CLI and 1,072 compiler-library tests under default-parallel Rust; the full
   forced MIR/direct fixture matrix in 559.03 seconds; 85 LSP tests; 13
   extension tests; compiler and 100% LSP coverage; reference integrity over 34
   pages, 247 fences, and 118 verified blocks; all 683 migration manifests;
   docs; audits; warning-denied Clippy; and hygiene. The allowed
-  `rustls-pemfile` unmaintained warning remains. The implementation commit and
-  clean-tree contractual benchmark are the only remaining Phase 5.7 gates.
+  `rustls-pemfile` unmaintained warning remains.
+- Phase 5.7's clean-tree contractual report is complete at `6fb5efb`, with an
+  empty dirty-file list and no competing processes. The 10,000-sleeper,
+  standalone timer, idle, starvation, V6, and mandatory multicore gates pass.
+  The multicore paired median ratio is `1.077123x`, ratio of medians is
+  `1.056700x`, and all seven pairs pass with `393.61%` median four-task CPU.
+  The 100,000-sleeper plus 1,000-timer workload is the sole red gate under the
+  accepted Phase 5.4 RSS escape hatch at 1,989,033,984 bytes worst RSS; its
+  5 ms arm span and 3 ms p99 pass. Raw report
+  `/private/tmp/aurora-phase57-after-pinned-worker-multicore.json`, SHA-256
+  `6d47c90d3dd9eb85421245c92aa3d12b01cb58ddf9ac0819b0e210c14123531d`.
+  Phase 5.7 is ready for its evidence commit; Phase 5.8 typed select follows.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

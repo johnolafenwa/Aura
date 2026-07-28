@@ -724,12 +724,12 @@ directly observed handle again is moved-value `AU3001`.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. The clean Mac14,9 Phase
-5.6 pre-multicore 10,000-sleeper measurement records 197,836,800 incremental
-bytes, an amortized upper bound of 19,784 bytes (19.32 KiB) per requested
-sleeper including scheduler metadata and shared workload growth. That Phase
-5.6 100,000-sleeper plus 1,000-timer run passed 3 ms timer gates but reached
-1,978,384,384 bytes worst RSS, so Aurora does not claim that population fits
-in 1.5 GiB.
+5.7 pinned-worker 10,000-sleeper measurement records 206,503,936 bytes worst
+whole-process RSS and 197,885,952 incremental bytes. Its 100,000-sleeper plus
+1,000-timer run passed a 5 ms timer-arm-span gate and 3 ms p99 gate but reached
+1,989,033,984 bytes worst RSS, so Aurora does not claim that population fits
+in 1.5 GiB. The mandatory four-worker workload passed at a `1.077123x` paired
+median wall-time ratio with `393.61%` median four-task process CPU.
 
 The protocol service is lazily initialized and remains alive until process
 exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
