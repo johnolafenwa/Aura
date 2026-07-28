@@ -66,7 +66,7 @@ spawn-time worker. Lightweight tasks use a guarded 512 KiB default stack.
 `TaskGroup.start_with_stack` and `start_soon_with_stack` can select a guarded
 stack from 256 KiB through 64 MiB for an individual child.
 
-Bounded process-lifetime services keep blocking and stack-heavy host work off
+Dedicated process-lifetime services keep blocking and stack-heavy host work off
 the coroutine stacks: the blocking-I/O pool owns ordinary blocking calls, the
 protocol service owns TLS/HTTP/WebSocket steps, and the JSON codec service owns
 the recursive parser frames for dynamic `json.parse`. The legacy
@@ -281,23 +281,40 @@ Those types wrap host resources and expose Aurora-level methods such as:
 - `respond_text`
 - `send_bytes`
 
-### Blocking-service saturation limit
+### Configurable blocking-I/O service
 
-Host operations that can block are submitted to one process-wide worker pool.
-Its worker count is derived from host parallelism and clamped to 2 through 8;
-the count and queue are not configurable in Aurora 0.1.
+Host operations that can block are submitted to one process-wide, lazily
+initialized blocking-I/O pool. `AURORA_BLOCKING_WORKERS=<positive integer>`
+selects its exact worker count without clamping. When absent, available host
+parallelism is used, with fallback `4`, and that derived default is clamped to
+`2..=8`. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted
+jobs waiting in the FIFO queue; it counts pending jobs only, not running jobs
+or callers still waiting for admission. Omitting it preserves the compatible
+unbounded queue.
 
-Timing out or cancelling an Aurora wait does not interrupt a host job that is
-already running. The Aurora task resumes promptly and any eventual result is
-discarded safely, but the job continues to occupy its worker until the host
-operation returns. Enough slow or stuck resolver and filesystem calls can
-therefore occupy every worker, leaving later blocking operations queued behind
-them. The current queue has no admission bound or backpressure policy, and
-resolver-outage throughput under pool saturation is not yet characterized.
+A full bounded queue uses FIFO, scheduler-aware admission. A lightweight task
+parks without blocking its pinned worker; a non-task host caller may block its
+calling thread. Before insertion into the pending queue, cancellation or
+deadline expiry removes the admission waiter and prevents the host operation
+from running. Insertion is the acceptance boundary: an accepted pending or
+running operation executes exactly once even if the Aurora wait later ends,
+and its late result is discarded.
 
-Phase 5 scheduler work must treat this as an explicit runtime ticket: make pool
-capacity and queue policy configurable, define the overload behavior, and add
-stress coverage for abandoned DNS jobs and subsequent unrelated blocking work.
+Both settings are validated before user code under MIR, direct execution, and
+standalone native launch. The first runtime preflight reads them once, and the
+resulting configuration is immutable for the process lifetime. Empty, zero,
+signed, whitespace-padded, non-decimal, or overflowing values fail with
+`AU4006`. Valid preflight creates no blocking-pool worker threads. First
+submission creates the complete worker set, which is reused until process exit;
+production has no Aurora shutdown or join surface for this pool. A
+worker-creation failure is also `AU4006` and never degrades silently to a
+smaller or synchronous pool.
+
+Bounding accepted pending work prevents an unlimited accepted queue backlog;
+admission waiters remain outside that capacity. The bound cannot interrupt
+accepted host calls or guarantee unrelated blocking-I/O work will start while
+every worker remains stuck. FIFO specifies pending dequeue and admission order,
+not completion order.
 
 ## A tiny interpreter in Rust
 

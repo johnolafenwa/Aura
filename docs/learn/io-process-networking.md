@@ -161,7 +161,21 @@ with listener = try net.listen("127.0.0.1:0"):
         try stream.shutdown_write()
 ```
 
-Hostname lookup and blocking connect syscalls are sent to the bounded blocking service, so they do not freeze sibling Aurora tasks. The `1s` timeout above is a single budget for DNS and all candidate addresses rather than a fresh second for every address. Task-group cancellation stops waiting promptly even when the host resolver itself cannot be interrupted.
+Hostname lookup and blocking connect syscalls are sent to the generic
+blocking-I/O pool, so they do not freeze sibling Aurora tasks. The `1s`
+timeout above is a single budget for queue admission, DNS, and all candidate
+addresses rather than a fresh second for every address. Task-group
+cancellation stops waiting promptly. Before pool acceptance it prevents
+submission; after acceptance, the host resolver cannot generally be
+interrupted and its eventual result is discarded.
+
+Operators may set `AURORA_BLOCKING_WORKERS` to an exact positive worker count
+and `AURORA_BLOCKING_QUEUE_CAPACITY` to a positive bound on accepted pending
+jobs. The absent worker setting derives `2..=8` workers from host parallelism,
+with fallback `4`; the absent queue setting is unbounded. Full-queue admission
+is FIFO and scheduler-aware. A queue bound limits accepted pending backlog, not
+admission waiters, and cannot guarantee unrelated blocking-I/O progress while
+every worker remains stuck.
 
 A live listener or stream is not `Transfer`, so it cannot be captured by a
 new task. The task that creates a listener keeps it and its accepted streams;

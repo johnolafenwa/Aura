@@ -1328,6 +1328,22 @@ fn explicit_four_worker_queue_stress_preserves_integrity_and_per_producer_fifo()
 }
 
 #[test]
+fn single_worker_queue_stress_preserves_integrity_without_promising_consumer_fairness() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
+
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-single-worker-queue-stress",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        1,
+    );
+}
+
+#[test]
 fn explicit_four_worker_cancellation_and_task_failures_remain_isolated() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.au"
@@ -1495,6 +1511,1104 @@ def main():
         assert!(direct_stderr.contains("error[AU4006]"), "{direct_stderr}");
         assert!(direct_stderr.contains(&expected), "{direct_stderr}");
     }
+}
+
+#[test]
+fn invalid_blocking_pool_configuration_is_au4006_before_user_code_on_every_runtime_path() {
+    use std::ffi::OsString;
+
+    let source = r#"import fs
+import io
+
+def write_marker() -> Result[None, io.Error]:
+    with marker = try fs.create("USER_CODE_RAN"):
+        return Result.Ok(None)
+
+def main():
+    print("USER_CODE_RAN")
+    write_marker()
+"#;
+    let (temp, source_path) =
+        write_temp_source("aurora-invalid-blocking-pool-configuration", source);
+    let standalone_path = temp.path().join("standalone");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&standalone_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build standalone blocking-pool configuration fixture");
+    assert!(
+        build.status.success(),
+        "standalone fixture should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let overflow = (usize::MAX as u128 + 1).to_string();
+    let mut invalid_values = vec![
+        OsString::from(""),
+        OsString::from("0"),
+        OsString::from("+1"),
+        OsString::from("-1"),
+        OsString::from(" 1"),
+        OsString::from("1 "),
+        OsString::from("1.0"),
+        OsString::from("١"),
+        OsString::from(overflow),
+    ];
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        invalid_values.push(OsString::from_vec(b"invalid-\xff".to_vec()));
+    }
+
+    for setting in ["AURORA_BLOCKING_WORKERS", "AURORA_BLOCKING_QUEUE_CAPACITY"] {
+        for invalid in &invalid_values {
+            let rendered = invalid.to_string_lossy();
+            let expected =
+                format!("invalid {setting} value `{rendered}`: expected a positive integer");
+
+            let mut mir = Command::new(aura_bin());
+            mir.env_remove("AURORA_BLOCKING_WORKERS")
+                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+                .env(setting, invalid)
+                .current_dir(temp.path())
+                .args(["run", "--backend", "mir"])
+                .arg(&source_path);
+
+            let mut direct = Command::new(aura_bin());
+            direct
+                .env_remove("AURORA_BLOCKING_WORKERS")
+                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+                .env(setting, invalid)
+                .current_dir(temp.path())
+                .args(["run", "--backend", "direct"])
+                .arg(&source_path);
+
+            let mut standalone = generated_binary(&standalone_path);
+            standalone
+                .env_remove("AURORA_BLOCKING_WORKERS")
+                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+                .env(setting, invalid)
+                .current_dir(temp.path());
+
+            for (path, output) in [
+                (
+                    "forced MIR",
+                    mir.output()
+                        .expect("failed to run invalid config through forced MIR"),
+                ),
+                (
+                    "forced direct",
+                    direct
+                        .output()
+                        .expect("failed to run invalid config through forced direct"),
+                ),
+                (
+                    "standalone",
+                    standalone
+                        .output()
+                        .expect("failed to run invalid config through standalone binary"),
+                ),
+            ] {
+                assert!(
+                    !output.status.success(),
+                    "{path} unexpectedly accepted {setting}={rendered}"
+                );
+                assert!(
+                    output.stdout.is_empty(),
+                    "{path} ran user code for {setting}={rendered}; stdout was:\n{}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                assert!(
+                    !temp.path().join("USER_CODE_RAN").exists(),
+                    "{path} ran the user filesystem side effect for {setting}={rendered}"
+                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("error[AU4006]"), "{path}: {stderr}");
+                assert!(stderr.contains(&expected), "{path}: {stderr}");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime_path() {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::mpsc;
+
+    struct FifoWriterGate {
+        opened: mpsc::Receiver<Result<(), String>>,
+        release: mpsc::Sender<()>,
+        handle: std::thread::JoinHandle<Result<(), String>>,
+    }
+
+    fn spawn_fifo_writer(path: PathBuf, payload: &'static [u8]) -> FifoWriterGate {
+        let (opened_sender, opened) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let mut writer = loop {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&path)
+                {
+                    Ok(writer) => break writer,
+                    Err(error)
+                        if error.raw_os_error() == Some(libc::ENXIO)
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::park_timeout(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => {
+                        let message =
+                            format!("failed to open FIFO writer `{}`: {error}", path.display());
+                        let _ = opened_sender.send(Err(message.clone()));
+                        return Err(message);
+                    }
+                }
+            };
+            opened_sender.send(Ok(())).map_err(|error| {
+                format!("failed to report open FIFO `{}`: {error}", path.display())
+            })?;
+            release_receiver
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .map_err(|error| {
+                    format!(
+                        "FIFO writer `{}` was not released before its watchdog: {error}",
+                        path.display()
+                    )
+                })?;
+            writer.write_all(payload).map_err(|error| {
+                format!(
+                    "failed to release FIFO reader `{}`: {error}",
+                    path.display()
+                )
+            })
+        });
+        FifoWriterGate {
+            opened,
+            release,
+            handle,
+        }
+    }
+
+    fn receive_line(
+        label: &str,
+        receiver: &mpsc::Receiver<Result<String, String>>,
+        deadline: std::time::Instant,
+    ) -> String {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(remaining) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => panic!("{label} stdout reader failed: {error}"),
+            Err(error) => panic!("{label} did not emit its next handshake line: {error}"),
+        }
+    }
+
+    fn expect_line(
+        label: &str,
+        receiver: &mpsc::Receiver<Result<String, String>>,
+        deadline: std::time::Instant,
+        lines: &mut Vec<String>,
+        expected: &str,
+    ) {
+        let line = receive_line(label, receiver, deadline);
+        assert_eq!(
+            line,
+            expected,
+            "{label} emitted an unexpected handshake; output so far was:\n{}",
+            lines.concat()
+        );
+        lines.push(line);
+    }
+
+    fn wait_for_fifo_reader(label: &str, gate: &FifoWriterGate, deadline: std::time::Instant) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match gate.opened.recv_timeout(remaining) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => panic!("{label}: {error}"),
+            Err(error) => panic!("{label} did not enter its blocking FIFO read: {error}"),
+        }
+    }
+
+    fn run_case(
+        label: &str,
+        mut command: Command,
+        first_fifo: &std::path::Path,
+        second_fifo: &std::path::Path,
+        expected_stdout: &str,
+    ) -> String {
+        let first_gate = spawn_fifo_writer(first_fifo.to_path_buf(), b"gate-one");
+        let second_gate = spawn_fifo_writer(second_fifo.to_path_buf(), b"gate-two");
+
+        command
+            .env("AURORA_WORKERS", "1")
+            .env("AURORA_BLOCKING_WORKERS", "2")
+            .env("AURORA_BLOCKING_QUEUE_CAPACITY", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .unwrap_or_else(|error| panic!("{label} failed to start: {error}"));
+        let stdout = child.stdout.take().expect("captured stdout should exist");
+        let stderr = child.stderr.take().expect("captured stderr should exist");
+
+        let (line_sender, line_receiver) = mpsc::channel();
+        let stdout_reader = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut captured = String::new();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        captured.push_str(&line);
+                        if line_sender.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = line_sender.send(Err(error.to_string()));
+                        break;
+                    }
+                }
+            }
+            captured
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            let _ = BufReader::new(stderr).read_to_end(&mut captured);
+            captured
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut lines = Vec::new();
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "gate-one-entered\n",
+        );
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "gate-two-entered\n",
+        );
+        wait_for_fifo_reader(label, &first_gate, deadline);
+        wait_for_fifo_reader(label, &second_gate, deadline);
+
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "ordinary-one-entered\n",
+        );
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "ordinary-two-entered\n",
+        );
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "scheduler-live\n",
+        );
+
+        first_gate
+            .release
+            .send(())
+            .expect("first FIFO writer should still be waiting for release");
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "ordinary-one\n",
+        );
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut lines,
+            "ordinary-two\n",
+        );
+        expect_line(label, &line_receiver, deadline, &mut lines, "gate-one\n");
+
+        second_gate
+            .release
+            .send(())
+            .expect("second FIFO writer should still be waiting for release");
+        expect_line(label, &line_receiver, deadline, &mut lines, "gate-two\n");
+
+        let status = wait_with_timeout(
+            &mut child,
+            deadline.saturating_duration_since(std::time::Instant::now()),
+        );
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let stdout = stdout_reader
+            .join()
+            .expect("stdout reader should not panic");
+        let stderr = stderr_reader
+            .join()
+            .expect("stderr reader should not panic");
+        first_gate
+            .handle
+            .join()
+            .expect("first FIFO writer should not panic")
+            .expect("first FIFO writer should complete");
+        second_gate
+            .handle
+            .join()
+            .expect("second FIFO writer should not panic")
+            .expect("second FIFO writer should complete");
+
+        let Some(status) = status else {
+            panic!(
+                "{label} did not exit before its watchdog; stdout was:\n{stdout}\nstderr was:\n{}",
+                String::from_utf8_lossy(&stderr)
+            );
+        };
+        assert!(
+            status.success(),
+            "{label} failed; stdout was:\n{stdout}\nstderr was:\n{}",
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(stdout, expected_stdout, "{label} stdout changed");
+        stdout
+    }
+
+    let temp = TempDir::new("aurora-blocking-pool-product-saturation");
+    let first_fifo = temp.path().join("gate-one.fifo");
+    let second_fifo = temp.path().join("gate-two.fifo");
+    for fifo in [&first_fifo, &second_fifo] {
+        let path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes())
+            .expect("temporary FIFO path should not contain NUL");
+        let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "failed to create FIFO `{}`: {}",
+            fifo.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    let ordinary_one = temp.path().join("ordinary-one.txt");
+    let ordinary_two = temp.path().join("ordinary-two.txt");
+    fs::write(&ordinary_one, "ordinary-one").expect("first ordinary file should be writable");
+    fs::write(&ordinary_two, "ordinary-two").expect("second ordinary file should be writable");
+
+    let path_literal = |path: &PathBuf| {
+        serde_json::to_string(
+            path.to_str()
+                .expect("temporary product-regression path should be UTF-8"),
+        )
+        .expect("temporary path should encode as an Aurora string")
+    };
+    let source = format!(
+        r#"import fs
+
+def read_gate_one(path: String) -> String:
+    print("gate-one-entered")
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "gate-one-error"
+
+def read_gate_two(path: String) -> String:
+    print("gate-two-entered")
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "gate-two-error"
+
+def read_ordinary_one(path: String) -> String:
+    print("ordinary-one-entered")
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "ordinary-one-error"
+
+def read_ordinary_two(path: String) -> String:
+    print("ordinary-two-entered")
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "ordinary-two-error"
+
+def prove_scheduler_is_live() -> None:
+    sleep(1ms)
+    print("scheduler-live")
+
+def print_task(task: own Task[String]) -> None:
+    match own task.result():
+        case TaskResult.Ready(text):
+            print(text)
+        case TaskResult.Error(_):
+            print("task-error")
+        case TaskResult.TimedOut:
+            print("task-timed-out")
+        case TaskResult.Cancelled:
+            print("task-cancelled")
+
+def main() -> int32:
+    with TaskGroup() as group:
+        gate_one = group.start(read_gate_one, {first_fifo})
+        gate_two = group.start(read_gate_two, {second_fifo})
+        ordinary_one = group.start(read_ordinary_one, {ordinary_one})
+        ordinary_two = group.start(read_ordinary_two, {ordinary_two})
+        group.start_soon(prove_scheduler_is_live)
+        print_task(ordinary_one)
+        print_task(ordinary_two)
+        print_task(gate_one)
+        print_task(gate_two)
+    return 0
+"#,
+        first_fifo = path_literal(&first_fifo),
+        second_fifo = path_literal(&second_fifo),
+        ordinary_one = path_literal(&ordinary_one),
+        ordinary_two = path_literal(&ordinary_two),
+    );
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, source).expect("product-regression source should be writable");
+
+    let standalone_path = temp.path().join("standalone");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&standalone_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build standalone bounded-pool product regression");
+    assert!(
+        build.status.success(),
+        "standalone bounded-pool product regression should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let expected = concat!(
+        "gate-one-entered\n",
+        "gate-two-entered\n",
+        "ordinary-one-entered\n",
+        "ordinary-two-entered\n",
+        "scheduler-live\n",
+        "ordinary-one\n",
+        "ordinary-two\n",
+        "gate-one\n",
+        "gate-two\n",
+    );
+
+    let mut mir = Command::new(aura_bin());
+    mir.current_dir(temp.path())
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir_stdout = run_case(
+        "forced MIR bounded-pool saturation",
+        mir,
+        &first_fifo,
+        &second_fifo,
+        expected,
+    );
+
+    let mut direct = Command::new(aura_bin());
+    direct
+        .env("AURORA_CACHE_DIR", temp.path().join("direct-cache"))
+        .current_dir(temp.path())
+        .args(["run", "--backend", "direct"])
+        .arg(&source_path);
+    let direct_stdout = run_case(
+        "forced direct bounded-pool saturation",
+        direct,
+        &first_fifo,
+        &second_fifo,
+        expected,
+    );
+
+    let mut standalone = generated_binary(&standalone_path);
+    standalone.current_dir(temp.path());
+    let standalone_stdout = run_case(
+        "standalone bounded-pool saturation",
+        standalone,
+        &first_fifo,
+        &second_fifo,
+        expected,
+    );
+
+    assert_eq!(mir_stdout, direct_stdout);
+    assert_eq!(mir_stdout, standalone_stdout);
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_parity() {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+
+    struct WriterGate {
+        opened: mpsc::Receiver<Result<(), String>>,
+        release: mpsc::Sender<()>,
+        handle: std::thread::JoinHandle<Result<(), String>>,
+    }
+
+    struct ForbiddenReaderProbe {
+        observed: mpsc::Receiver<Result<(), String>>,
+        stop: Arc<AtomicBool>,
+        handle: std::thread::JoinHandle<Result<(), String>>,
+    }
+
+    fn spawn_writer_gate(path: PathBuf, payload: &'static [u8]) -> WriterGate {
+        let (opened_sender, opened) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let mut writer = loop {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&path)
+                {
+                    Ok(writer) => break writer,
+                    Err(error)
+                        if error.raw_os_error() == Some(libc::ENXIO)
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::park_timeout(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => {
+                        let message =
+                            format!("failed to open FIFO writer `{}`: {error}", path.display());
+                        let _ = opened_sender.send(Err(message.clone()));
+                        return Err(message);
+                    }
+                }
+            };
+            opened_sender.send(Ok(())).map_err(|error| {
+                format!(
+                    "failed to report FIFO acceptance `{}`: {error}",
+                    path.display()
+                )
+            })?;
+            release_receiver
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .map_err(|error| {
+                    format!(
+                        "FIFO writer `{}` was not released before its watchdog: {error}",
+                        path.display()
+                    )
+                })?;
+            writer
+                .write_all(payload)
+                .map_err(|error| format!("failed to write FIFO `{}`: {error}", path.display()))
+        });
+        WriterGate {
+            opened,
+            release,
+            handle,
+        }
+    }
+
+    fn spawn_forbidden_reader_probe(path: PathBuf) -> ForbiddenReaderProbe {
+        let (observed_sender, observed) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        let handle = std::thread::spawn(move || {
+            while !thread_stop.load(Ordering::Acquire) {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&path)
+                {
+                    Ok(mut writer) => {
+                        let result = writer.write_all(b"forbidden").map_err(|error| {
+                            format!(
+                                "failed to release forbidden FIFO reader `{}`: {error}",
+                                path.display()
+                            )
+                        });
+                        let report = result.as_ref().map(|_| ()).map_err(Clone::clone);
+                        let _ = observed_sender.send(report);
+                        return result;
+                    }
+                    Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                        std::thread::park_timeout(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => {
+                        let message =
+                            format!("failed to probe FIFO reader `{}`: {error}", path.display());
+                        let _ = observed_sender.send(Err(message.clone()));
+                        return Err(message);
+                    }
+                }
+            }
+            Ok(())
+        });
+        ForbiddenReaderProbe {
+            observed,
+            stop,
+            handle,
+        }
+    }
+
+    fn wait_opened(label: &str, gate: &WriterGate, deadline: std::time::Instant) {
+        match gate
+            .opened
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => panic!("{label}: {error}"),
+            Err(error) => panic!("{label} did not reach its accepted FIFO operation: {error}"),
+        }
+    }
+
+    fn release(label: &str, gate: &WriterGate) {
+        gate.release
+            .send(())
+            .unwrap_or_else(|error| panic!("{label} release failed: {error}"));
+    }
+
+    fn expect_line(
+        label: &str,
+        receiver: &mpsc::Receiver<Result<String, String>>,
+        deadline: std::time::Instant,
+        output: &mut String,
+        expected: &str,
+    ) {
+        let line = match receiver
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => panic!("{label} stdout reader failed: {error}"),
+            Err(error) => panic!(
+                "{label} did not emit `{expected}` before its watchdog: {error}; output was:\n{output}"
+            ),
+        };
+        assert_eq!(
+            line, expected,
+            "{label} emitted an unexpected line; output so far was:\n{output}"
+        );
+        output.push_str(&line);
+    }
+
+    fn finish_gate(label: &str, gate: WriterGate) {
+        gate.handle
+            .join()
+            .unwrap_or_else(|_| panic!("{label} writer panicked"))
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+    }
+
+    fn finish_forbidden_probe(label: &str, probe: ForbiddenReaderProbe) {
+        assert!(
+            matches!(probe.observed.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "{label} host operation executed despite timing out or being cancelled before admission"
+        );
+        probe.stop.store(true, Ordering::Release);
+        probe
+            .handle
+            .join()
+            .unwrap_or_else(|_| panic!("{label} probe panicked"))
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert!(
+            matches!(
+                probe.observed.try_recv(),
+                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected)
+            ),
+            "{label} host operation executed before the zero-execution probe stopped"
+        );
+    }
+
+    fn run_case(label: &str, mut command: Command, paths: &[PathBuf], expected: &str) -> String {
+        let pre_timeout_active = spawn_writer_gate(paths[0].clone(), b"pre-timeout-active");
+        let pre_timeout_pending = spawn_writer_gate(paths[1].clone(), b"pre-timeout-pending");
+        let pre_timeout_forbidden = spawn_forbidden_reader_probe(paths[2].clone());
+        let accepted_timeout = spawn_writer_gate(paths[3].clone(), b"late-timeout-value");
+        let pre_cancel_active = spawn_writer_gate(paths[4].clone(), b"pre-cancel-active");
+        let pre_cancel_pending = spawn_writer_gate(paths[5].clone(), b"pre-cancel-pending");
+        let pre_cancel_forbidden = spawn_forbidden_reader_probe(paths[6].clone());
+        let accepted_cancel = spawn_writer_gate(paths[7].clone(), b"late-cancel-value");
+
+        command
+            .env("AURORA_WORKERS", "1")
+            .env("AURORA_BLOCKING_WORKERS", "1")
+            .env("AURORA_BLOCKING_QUEUE_CAPACITY", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .unwrap_or_else(|error| panic!("{label} failed to start: {error}"));
+        let stdout = child.stdout.take().expect("captured stdout should exist");
+        let stderr = child.stderr.take().expect("captured stderr should exist");
+        let (line_sender, line_receiver) = mpsc::channel();
+        let stdout_reader = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut captured = String::new();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        captured.push_str(&line);
+                        if line_sender.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = line_sender.send(Err(error.to_string()));
+                        break;
+                    }
+                }
+            }
+            captured
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            let _ = BufReader::new(stderr).read_to_end(&mut captured);
+            captured
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut output = String::new();
+        for expected_line in [
+            "phase-pre-timeout\n",
+            "pre-timeout-active-entered\n",
+            "pre-timeout-pending-entered\n",
+            "pre-timeout-target-entered\n",
+        ] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+        wait_opened(label, &pre_timeout_active, deadline);
+        expect_line(label, &line_receiver, deadline, &mut output, "timed-out\n");
+        assert!(matches!(
+            pre_timeout_forbidden.observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release(label, &pre_timeout_active);
+        wait_opened(label, &pre_timeout_pending, deadline);
+        release(label, &pre_timeout_pending);
+        for expected_line in ["pre-timeout-active\n", "pre-timeout-pending\n"] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+
+        for expected_line in ["phase-accepted-timeout\n", "accepted-timeout-entered\n"] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+        wait_opened(label, &accepted_timeout, deadline);
+        expect_line(label, &line_receiver, deadline, &mut output, "timed-out\n");
+        release(label, &accepted_timeout);
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut output,
+            "timeout-sentinel\n",
+        );
+
+        for expected_line in [
+            "phase-pre-cancel\n",
+            "pre-cancel-active-entered\n",
+            "pre-cancel-pending-entered\n",
+            "pre-cancel-target-entered\n",
+            "cancelled\n",
+        ] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+        wait_opened(label, &pre_cancel_active, deadline);
+        assert!(matches!(
+            pre_cancel_forbidden.observed.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release(label, &pre_cancel_active);
+        wait_opened(label, &pre_cancel_pending, deadline);
+        release(label, &pre_cancel_pending);
+        for expected_line in ["pre-cancel-active\n", "pre-cancel-pending\n"] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+
+        for expected_line in ["phase-accepted-cancel\n", "accepted-cancel-entered\n"] {
+            expect_line(label, &line_receiver, deadline, &mut output, expected_line);
+        }
+        wait_opened(label, &accepted_cancel, deadline);
+        expect_line(label, &line_receiver, deadline, &mut output, "cancelled\n");
+        release(label, &accepted_cancel);
+        expect_line(
+            label,
+            &line_receiver,
+            deadline,
+            &mut output,
+            "cancel-sentinel\n",
+        );
+        expect_line(label, &line_receiver, deadline, &mut output, "done\n");
+
+        let status = wait_with_timeout(
+            &mut child,
+            deadline.saturating_duration_since(std::time::Instant::now()),
+        );
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let captured_stdout = stdout_reader
+            .join()
+            .expect("stdout reader should not panic");
+        let captured_stderr = stderr_reader
+            .join()
+            .expect("stderr reader should not panic");
+
+        finish_gate(label, pre_timeout_active);
+        finish_gate(label, pre_timeout_pending);
+        finish_forbidden_probe("pre-admission timeout", pre_timeout_forbidden);
+        finish_gate(label, accepted_timeout);
+        finish_gate(label, pre_cancel_active);
+        finish_gate(label, pre_cancel_pending);
+        finish_forbidden_probe("pre-admission cancellation", pre_cancel_forbidden);
+        finish_gate(label, accepted_cancel);
+
+        let Some(status) = status else {
+            panic!(
+                "{label} did not exit before its watchdog; stdout was:\n{captured_stdout}\nstderr was:\n{}",
+                String::from_utf8_lossy(&captured_stderr)
+            );
+        };
+        assert!(
+            status.success(),
+            "{label} failed; stdout was:\n{captured_stdout}\nstderr was:\n{}",
+            String::from_utf8_lossy(&captured_stderr)
+        );
+        assert_eq!(captured_stdout, output);
+        assert_eq!(captured_stdout, expected, "{label} output changed");
+        captured_stdout
+    }
+
+    let temp = TempDir::new("aurora-blocking-pool-acceptance-boundaries");
+    let fifo_names = [
+        "pre-timeout-active.fifo",
+        "pre-timeout-pending.fifo",
+        "pre-timeout-forbidden.fifo",
+        "accepted-timeout.fifo",
+        "pre-cancel-active.fifo",
+        "pre-cancel-pending.fifo",
+        "pre-cancel-forbidden.fifo",
+        "accepted-cancel.fifo",
+    ];
+    let fifo_paths = fifo_names
+        .iter()
+        .map(|name| temp.path().join(name))
+        .collect::<Vec<_>>();
+    for fifo in &fifo_paths {
+        let path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes())
+            .expect("temporary FIFO path should not contain NUL");
+        let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "failed to create FIFO `{}`: {}",
+            fifo.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    let timeout_sentinel = temp.path().join("timeout-sentinel.txt");
+    let cancel_sentinel = temp.path().join("cancel-sentinel.txt");
+    fs::write(&timeout_sentinel, "timeout-sentinel").expect("timeout sentinel should be writable");
+    fs::write(&cancel_sentinel, "cancel-sentinel").expect("cancel sentinel should be writable");
+    let path_literal = |path: &std::path::Path| {
+        serde_json::to_string(
+            path.to_str()
+                .expect("temporary product-regression path should be UTF-8"),
+        )
+        .expect("temporary path should encode as an Aurora string")
+    };
+    let source = format!(
+        r#"import fs
+import io
+import net
+
+def read_gate(path: String, entered: String) -> String:
+    print(entered)
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "gate-error"
+
+def timed_tls(path: String, entered: String) -> String:
+    print(entered)
+    match own net.tls_connect_timeout("127.0.0.1:1", "localhost", path, 100ms):
+        case Result.Ok(_):
+            return "unexpected-ok"
+        case Result.Err(io.Error.TimedOut):
+            return "timed-out"
+        case Result.Err(_):
+            return "unexpected-error"
+
+def cancellable_tls(path: String, entered: String) -> String:
+    print(entered)
+    match own net.tls_connect_timeout("127.0.0.1:1", "localhost", path, 30s):
+        case Result.Ok(_):
+            return "unexpected-ok"
+        case Result.Err(io.Error.Cancelled):
+            return "cancelled"
+        case Result.Err(_):
+            return "unexpected-error"
+
+def print_task(task: own Task[String]) -> None:
+    match own task.result():
+        case TaskResult.Ready(text):
+            print(text)
+        case TaskResult.Error(_):
+            print("task-error")
+        case TaskResult.TimedOut:
+            print("task-timed-out")
+        case TaskResult.Cancelled:
+            print("cancelled")
+
+def print_file(path: String) -> None:
+    match own fs.read_to_string(path):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(_):
+            print("sentinel-error")
+
+def main() -> int32:
+    print("phase-pre-timeout")
+    with TaskGroup() as group:
+        active = group.start(read_gate, {pre_timeout_active}, "pre-timeout-active-entered")
+        pending = group.start(read_gate, {pre_timeout_pending}, "pre-timeout-pending-entered")
+        target = group.start(timed_tls, {pre_timeout_forbidden}, "pre-timeout-target-entered")
+        print_task(target)
+        print_task(active)
+        print_task(pending)
+
+    print("phase-accepted-timeout")
+    print(timed_tls({accepted_timeout}, "accepted-timeout-entered"))
+    print_file({timeout_sentinel})
+
+    print("phase-pre-cancel")
+    with TaskGroup() as outer:
+        active = outer.start(read_gate, {pre_cancel_active}, "pre-cancel-active-entered")
+        pending = outer.start(read_gate, {pre_cancel_pending}, "pre-cancel-pending-entered")
+        with TaskGroup() as cancelled_group:
+            target = cancelled_group.start(cancellable_tls, {pre_cancel_forbidden}, "pre-cancel-target-entered")
+            yield_now()
+            cancelled_group.cancel()
+            print_task(target)
+        print_task(active)
+        print_task(pending)
+
+    print("phase-accepted-cancel")
+    with TaskGroup() as cancelled_group:
+        target = cancelled_group.start(cancellable_tls, {accepted_cancel}, "accepted-cancel-entered")
+        yield_now()
+        cancelled_group.cancel()
+        print_task(target)
+    print_file({cancel_sentinel})
+    print("done")
+    return 0
+"#,
+        pre_timeout_active = path_literal(&fifo_paths[0]),
+        pre_timeout_pending = path_literal(&fifo_paths[1]),
+        pre_timeout_forbidden = path_literal(&fifo_paths[2]),
+        accepted_timeout = path_literal(&fifo_paths[3]),
+        pre_cancel_active = path_literal(&fifo_paths[4]),
+        pre_cancel_pending = path_literal(&fifo_paths[5]),
+        pre_cancel_forbidden = path_literal(&fifo_paths[6]),
+        accepted_cancel = path_literal(&fifo_paths[7]),
+        timeout_sentinel = path_literal(&timeout_sentinel),
+        cancel_sentinel = path_literal(&cancel_sentinel),
+    );
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, source).expect("acceptance-boundary source should be writable");
+
+    let standalone_path = temp.path().join("standalone");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&standalone_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build standalone acceptance-boundary regression");
+    assert!(
+        build.status.success(),
+        "standalone acceptance-boundary regression should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let expected = concat!(
+        "phase-pre-timeout\n",
+        "pre-timeout-active-entered\n",
+        "pre-timeout-pending-entered\n",
+        "pre-timeout-target-entered\n",
+        "timed-out\n",
+        "pre-timeout-active\n",
+        "pre-timeout-pending\n",
+        "phase-accepted-timeout\n",
+        "accepted-timeout-entered\n",
+        "timed-out\n",
+        "timeout-sentinel\n",
+        "phase-pre-cancel\n",
+        "pre-cancel-active-entered\n",
+        "pre-cancel-pending-entered\n",
+        "pre-cancel-target-entered\n",
+        "cancelled\n",
+        "pre-cancel-active\n",
+        "pre-cancel-pending\n",
+        "phase-accepted-cancel\n",
+        "accepted-cancel-entered\n",
+        "cancelled\n",
+        "cancel-sentinel\n",
+        "done\n",
+    );
+
+    let mut mir = Command::new(aura_bin());
+    mir.current_dir(temp.path())
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir_stdout = run_case(
+        "forced MIR acceptance boundaries",
+        mir,
+        &fifo_paths,
+        expected,
+    );
+
+    let mut direct = Command::new(aura_bin());
+    direct
+        .env("AURORA_CACHE_DIR", temp.path().join("direct-cache"))
+        .current_dir(temp.path())
+        .args(["run", "--backend", "direct"])
+        .arg(&source_path);
+    let direct_stdout = run_case(
+        "forced direct acceptance boundaries",
+        direct,
+        &fifo_paths,
+        expected,
+    );
+
+    let mut standalone = generated_binary(&standalone_path);
+    standalone.current_dir(temp.path());
+    let standalone_stdout = run_case(
+        "standalone acceptance boundaries",
+        standalone,
+        &fifo_paths,
+        expected,
+    );
+
+    assert_eq!(mir_stdout, direct_stdout);
+    assert_eq!(mir_stdout, standalone_stdout);
 }
 
 #[test]

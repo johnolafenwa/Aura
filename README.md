@@ -284,6 +284,22 @@ Current `run` status:
   direct Queue, task-completion, and blocking-pool notifications, including
   cross-worker wakes; an idle worker blocks until local work, a notification,
   an event, or a deadline without a periodic tick
+- blocking host operations use a separate lazy process-wide pool:
+  `AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
+  without clamping, while the absent default derives `2..=8` workers from host
+  parallelism with fallback `4`;
+  `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds
+  accepted pending jobs only, with FIFO scheduler-aware admission and an
+  unbounded compatibility default
+- invalid blocking-pool settings fail with `AU4006` before user code under
+  MIR, direct, and standalone execution; the first runtime preflight records
+  one immutable process-lifetime configuration, but starts no blocking-pool
+  worker threads
+- first blocking submission creates the complete worker set, which production
+  reuses until process exit without an Aurora shutdown/join surface;
+  pre-acceptance timeout/cancellation prevents submission, and accepted host
+  work remains non-retractable, so a queue bound cannot guarantee progress
+  for unrelated blocking I/O while every worker is stuck
 - `select(source, ...)` provides typed heterogeneous Queue, Task, and
   relative-deadline waiting with cancellation-first/lowest-index arbitration,
   one winner, and loser cleanup; it is an ordinary builtin, not statement

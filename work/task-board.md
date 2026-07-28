@@ -18,7 +18,10 @@ Last updated: 2026-07-28
   implementation commit `3e15b8a`; focused review, the completion matrix,
   frozen compiler coverage, exact full CI, and clean-tree contractual
   benchmark are green under the standing massive-RSS escape hatch. Phase 5.9
-  configurable blocking-pool work is next.
+  configurable blocking-pool implementation, product-path parity, saturation
+  matrix, independent audit, frozen coverage, and exact full CI are complete;
+  its clean-tree contractual benchmark is the remaining Phase 5.9 gate. Its
+  provisional contract landed alone as ADR-0035 at `cc450c9`.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -375,6 +378,27 @@ Last updated: 2026-07-28
   2 ms p99 passing. Raw report
   `/private/tmp/aurora-phase58-after-typed-select.json`, SHA-256
   `f72889aa83b8a222517808ef39df91d62a175109bc8806c3628602884a8c9ea2`.
+- Phase 5.9's provisional ADR-0035 is committed independently at `cc450c9`.
+  It specifies a documented default worker derivation, exact positive
+  `AURORA_BLOCKING_WORKERS` overrides, optional positive pending-queue
+  capacity through `AURORA_BLOCKING_QUEUE_CAPACITY`, FIFO scheduler-aware
+  admission, a precise pre/post-acceptance timeout and cancellation boundary,
+  lazy all-or-nothing worker startup, fatal pre-user-code `AU4006`
+  configuration diagnostics across MIR/direct/standalone execution, and the
+  deterministic resolver-saturation completion matrix. The implementation
+  now provides exact configuration decoding, lazy process-lifetime
+  all-or-nothing startup, bounded FIFO scheduler-aware admission, atomic
+  acceptance handoff, late-result disposal, panic containment, and
+  resolver/TCP recovery on the shared pool. The final independent audit found
+  no product, concurrency, parity, test-matrix, documentation, or reference
+  defect. Exact full CI is green with 296 CLI tests, 1,130 compiler tests, the
+  serialized parity matrix in 837.22 seconds, 89 LSP tests, 13 extension
+  tests, reference/docs/audits/Clippy/hygiene, and both coverage gates. Frozen
+  compiler coverage is 70,514/73,341 lines (96.14540298059748%),
+  4,683/4,830 functions (96.95652173913044%), and 103,704/109,782 regions
+  (94.4635732633765%). No synthetic coverage test or exclusion was added;
+  three unreachable defensive admission branches were restructured away.
+  The clean-tree contractual benchmark remains before Phase 5.9 closes.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

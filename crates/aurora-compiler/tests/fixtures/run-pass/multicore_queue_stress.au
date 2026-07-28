@@ -83,7 +83,9 @@ def main() -> int32:
         consumed_b: int32 = completed_count(consumer_b)
         consumed_c: int32 = completed_count(consumer_c)
         consumed_d: int32 = completed_count(consumer_d)
-        if consumed_a <= 0 or consumed_b <= 0 or consumed_c <= 0 or consumed_d <= 0:
+        # Aurora does not promise that every runnable consumer receives an
+        # item. Zero is valid; only the negative timeout/error sentinels fail.
+        if consumed_a < 0 or consumed_b < 0 or consumed_c < 0 or consumed_d < 0:
             return 11
         consumed: int32 = consumed_a + consumed_b + consumed_c + consumed_d
         if consumed != total_items:

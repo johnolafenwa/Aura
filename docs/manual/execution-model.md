@@ -280,7 +280,7 @@ coroutine stack never migrates and the runtime does not steal tasks between
 workers. Operations such as queue waits, task waits, sleep, nonblocking
 sockets, and scheduler-integrated I/O yield instead of creating one OS thread
 per Aurora task. A task can also yield explicitly with `yield_now()`. The
-bounded blocking-worker pool may execute host calls concurrently, but those
+generic blocking-I/O pool may execute host calls concurrently, but those
 service workers do not run Aurora code.
 
 The compiler inserts a cooperative scheduling check on every semantic loop
@@ -371,12 +371,23 @@ for the state to return before it observes cancellation or waits for descriptor
 readiness again, so there is never an abandoned protocol state with two
 owners, and no resource mutex remains held across the worker wait. Reactor
 readiness, absolute deadlines, and cancellation remain scheduler-side
-concerns. The process-global pool is lazily initialized and shared by every
+concerns. This protocol-step pool is lazily initialized and shared by every
 lightweight scheduler. Its workers intentionally live until process exit;
-Aurora 0.1 has no runtime pool shutdown or join surface. The non-Unix
+Aurora 0.1 has no protocol-pool shutdown or join surface. The non-Unix
 WebSocket fallback retains its compatibility path. Resolver, listener-bind,
-and file reads use the generic blocking-I/O pool. TLS asset bytes are read
-there before PEM parsing and rustls construction run on protocol workers.
+and file reads use the generic blocking-I/O pool.
+`AURORA_BLOCKING_WORKERS=<positive integer>` selects its exact worker count
+without clamping; otherwise host parallelism is used with fallback `4` and a
+derived `2..=8` clamp.
+`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
+pending jobs. Capacity excludes running jobs and callers waiting for admission,
+and omission preserves an unbounded queue. TLS asset bytes are read there
+before PEM parsing and rustls construction run on protocol workers.
+The generic pool is also process-global. Its settings are read once by the
+first runtime preflight and remain immutable for the process lifetime; that
+preflight starts no worker. First blocking submission creates the complete
+configured set, which production reuses until process exit without an Aurora
+shutdown/join surface.
 
 Dynamic `json.parse` uses a third, independent process-global service with two
 2 MiB-stack workers and total in-flight capacity two. A task reserves capacity
@@ -456,7 +467,20 @@ silently becomes an unlimited wait. An API with an `io.Error` carrier reports
 traps with `AU4001`. This host-boundary classification is accepted under
 ADR-0019.
 
-Filesystem operations and some host operations run on a bounded blocking worker pool. Cancelling the Aurora task cancels its wait for the worker result; it cannot forcibly stop an operating-system call already executing on a worker. A cancelled write or other side-effecting operation may therefore complete in the host after Aurora has stopped waiting. Programs requiring transactional cancellation must write to a temporary artifact and commit it explicitly.
+Filesystem operations and some host operations run on the generic blocking-I/O
+pool under Provisional ADR-0035. When its optional pending-queue bound is full,
+Aurora tasks wait for
+admission through the scheduler in FIFO order instead of blocking a pinned
+worker. Cancellation or deadline expiry before queue insertion prevents the
+operation from being submitted. Once inserted, the operation cannot be
+retracted: cancelling the Aurora task cancels its wait, not an
+operating-system call already pending or executing. A cancelled write or other
+side-effecting operation may therefore complete in the host after Aurora has
+stopped waiting, with its late result discarded. Programs requiring
+transactional cancellation must write to a temporary artifact and commit it
+explicitly. Bounding accepted pending jobs does not bound admission waiters or
+guarantee unrelated blocking-I/O progress while every configured worker
+remains stuck.
 
 Process cancellation and close operations signal/terminate according to the process API. Group-enabled processes extend those operations to the maintained host process group behavior.
 

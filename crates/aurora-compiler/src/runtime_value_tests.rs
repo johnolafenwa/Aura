@@ -17,19 +17,20 @@ use super::{
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
     validate_requested_read_size, wait_all_cancelled, wait_all_error, wait_all_ready,
     wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue,
-    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription,
-    RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
-    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, BlockingIoPool,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
+    HttpResponseValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy,
+    ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
+use crate::runtime_config::BlockingIoPoolConfig;
 use crate::runtime_reactor::{RuntimeReactor, WaitKey};
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
@@ -8795,6 +8796,1560 @@ fn lightweight_blocking_io_observes_pre_cancelled_and_wait_cancelled_contexts() 
         result.is_ok(),
         "blocking I/O cancellation paths should complete: {result:?}"
     );
+}
+
+fn wait_for_count(counter: &AtomicUsize, expected: usize, message: &str) {
+    let deadline = Instant::now() + StdDuration::from_secs(2);
+    while counter.load(Ordering::SeqCst) < expected {
+        assert!(Instant::now() < deadline, "{message}");
+        thread::yield_now();
+    }
+}
+
+fn gated_blocking_job(
+    started: Arc<AtomicUsize>,
+    release: Arc<AtomicBool>,
+    executions: Arc<AtomicUsize>,
+) -> super::BlockingIoJob {
+    Box::new(move || {
+        started.fetch_add(1, Ordering::SeqCst);
+        while !release.load(Ordering::SeqCst) {
+            thread::yield_now();
+        }
+        executions.fetch_add(1, Ordering::SeqCst);
+    })
+}
+
+#[test]
+fn blocking_io_pool_is_lazy_and_starts_the_exact_injected_worker_count_once() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 3,
+        queue_capacity: None,
+    });
+    assert_eq!(pool.worker_start_count(), 0);
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let completed_in_job = completed.clone();
+    pool.submit(
+        Box::new(move || {
+            completed_in_job.fetch_add(1, Ordering::SeqCst);
+        }),
+        None,
+        None,
+    )
+    .expect("the first job should initialize and enter the pool");
+    wait_for_count(&completed, 1, "the first blocking job did not complete");
+    assert_eq!(pool.worker_start_count(), 3);
+
+    pool.submit(Box::new(|| {}), None, None)
+        .expect("later jobs should reuse the initialized worker set");
+    assert_eq!(pool.worker_start_count(), 3);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn impossible_blocking_io_worker_capacity_fails_before_spawning_or_executing_and_is_cached() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: usize::MAX,
+        queue_capacity: None,
+    });
+    let spawn_attempts = Arc::new(AtomicUsize::new(0));
+    let executed = Arc::new(AtomicUsize::new(0));
+    let spawner_attempts = spawn_attempts.clone();
+    let spawner = move |_: usize,
+                        _: String,
+                        _: super::BlockingIoWorkerEntry|
+          -> io::Result<thread::JoinHandle<()>> {
+        spawner_attempts.fetch_add(1, Ordering::SeqCst);
+        panic!("worker spawning must not begin after handle reservation fails")
+    };
+    let executed_in_job = executed.clone();
+    let error = pool
+        .submit_with_spawner(
+            Box::new(move || {
+                executed_in_job.fetch_add(1, Ordering::SeqCst);
+            }),
+            None,
+            None,
+            &spawner,
+        )
+        .expect_err("an impossible explicit worker count must fail before pool startup");
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(
+        error
+            .to_string()
+            .contains("AU4006: failed to reserve blocking-I/O worker handles"),
+        "the reservation failure must retain its stable runtime-configuration diagnostic: {error}"
+    );
+    assert!(
+        error.to_string().contains(&usize::MAX.to_string()),
+        "the reservation failure must identify the rejected explicit worker count: {error}"
+    );
+    assert_eq!(spawn_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(executed.load(Ordering::SeqCst), 0);
+
+    let repeated = pool
+        .submit_with_spawner(Box::new(|| {}), None, None, &spawner)
+        .expect_err("the impossible-capacity startup failure must be cached");
+    assert_eq!(repeated.to_string(), error.to_string());
+    assert_eq!(spawn_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(executed.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn blocking_io_pool_worker_creation_failure_is_all_or_nothing_and_cached() {
+    for failed_index in 0..4 {
+        let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+            worker_count: 4,
+            queue_capacity: Some(1),
+        });
+        let spawn_attempts = Arc::new(AtomicUsize::new(0));
+        let exited_workers = Arc::new(AtomicUsize::new(0));
+        let spawner_attempts = spawn_attempts.clone();
+        let spawner_exits = exited_workers.clone();
+        let spawner = move |index: usize, name: String, entry: super::BlockingIoWorkerEntry| {
+            spawner_attempts.fetch_add(1, Ordering::SeqCst);
+            if index == failed_index {
+                return Err(io::Error::other("injected worker creation failure"));
+            }
+            let exited = spawner_exits.clone();
+            thread::Builder::new().name(name).spawn(move || {
+                entry();
+                exited.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let executed = Arc::new(AtomicUsize::new(0));
+        let executed_in_job = executed.clone();
+        let error = pool
+            .submit_with_spawner(
+                Box::new(move || {
+                    executed_in_job.fetch_add(1, Ordering::SeqCst);
+                }),
+                None,
+                None,
+                &spawner,
+            )
+            .expect_err("partial worker creation must reject the first job");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains(&format!(
+            "AU4006: failed to create blocking-I/O worker {failed_index}"
+        )));
+        assert!(error
+            .to_string()
+            .contains("injected worker creation failure"));
+        wait_for_count(
+            &exited_workers,
+            failed_index,
+            "workers created before the failure did not shut down",
+        );
+        assert_eq!(executed.load(Ordering::SeqCst), 0);
+        assert_eq!(spawn_attempts.load(Ordering::SeqCst), failed_index + 1);
+
+        let second = pool
+            .submit_with_spawner(Box::new(|| {}), None, None, &spawner)
+            .expect_err("the initialization failure must be cached");
+        assert_eq!(second.to_string(), error.to_string());
+        assert_eq!(spawn_attempts.load(Ordering::SeqCst), failed_index + 1);
+    }
+}
+
+#[test]
+fn blocking_io_pool_startup_failure_crosses_runtime_boundaries_as_fatal_au4006() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: None,
+    });
+    let diagnostic = super::catch_lightweight_task_failure(|| -> Result<(), Diagnostic> {
+        let failed_submission = pool.submit_with_spawner(
+            Box::new(|| panic!("a rejected job must never execute")),
+            None,
+            None,
+            &|_, _, _| Err(io::Error::other("injected host failure")),
+        );
+        super::preserve_blocking_io_submission_error(failed_submission)
+            .map_err(|error| Diagnostic::new(error.to_string()))
+    })
+    .expect_err("pool startup failure must terminate the runtime invocation");
+    assert_eq!(diagnostic.code, "AU4006");
+    assert_eq!(
+        diagnostic.message,
+        "failed to create blocking-I/O worker 0: injected host failure"
+    );
+
+    let unrelated = std::panic::catch_unwind(|| {
+        let _ = super::catch_lightweight_task_failure(|| -> Result<(), Diagnostic> {
+            panic!("unrelated runtime panic")
+        });
+    })
+    .expect_err("unrelated panics must not be rewritten as configuration failures");
+    assert_eq!(
+        unrelated.downcast_ref::<&str>(),
+        Some(&"unrelated runtime panic")
+    );
+}
+
+#[test]
+fn non_lightweight_blocking_io_callers_use_the_shared_dedicated_pool() {
+    assert!(
+        super::current_lightweight_task_id().is_none(),
+        "this probe must begin outside an Aurora lightweight task"
+    );
+    let worker_name = run_blocking_io(
+        || Ok::<_, io::Error>(thread::current().name().unwrap_or("<unnamed>").to_string()),
+        None,
+    )
+    .expect("a host-side caller should block until its shared-pool job completes");
+    assert!(
+        worker_name.starts_with("aurora-blocking-io-"),
+        "host-side callers must not fall back to synchronous execution: {worker_name:?}"
+    );
+}
+
+#[test]
+fn bounded_blocking_io_admission_times_out_and_cancels_before_execution() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(started.clone(), release.clone(), completed.clone()),
+        None,
+        None,
+    )
+    .unwrap();
+    wait_for_count(&started, 1, "the worker saturation job did not start");
+    pool.submit(Box::new(|| {}), None, None)
+        .expect("one pending job should fill the bounded queue");
+
+    let timed_out_executions = Arc::new(AtomicUsize::new(0));
+    let timed_out_in_job = timed_out_executions.clone();
+    let error = pool
+        .submit(
+            Box::new(move || {
+                timed_out_in_job.fetch_add(1, Ordering::SeqCst);
+            }),
+            Some(Instant::now() + StdDuration::from_millis(20)),
+            None,
+        )
+        .expect_err("full-queue admission should honor its deadline");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+    let cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = cancellation_group.child_cancellation();
+    cancellation_group.cancel();
+    let cancelled_executions = Arc::new(AtomicUsize::new(0));
+    let cancelled_in_job = cancelled_executions.clone();
+    let error = pool
+        .submit(
+            Box::new(move || {
+                cancelled_in_job.fetch_add(1, Ordering::SeqCst);
+            }),
+            None,
+            Some(&cancellation),
+        )
+        .expect_err("pre-cancelled admission should not submit a job");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+
+    release.store(true, Ordering::SeqCst);
+    wait_for_count(&completed, 1, "the saturated worker did not drain");
+    pool.wait_until_idle_for_test();
+    assert_eq!(timed_out_executions.load(Ordering::SeqCst), 0);
+    assert_eq!(cancelled_executions.load(Ordering::SeqCst), 0);
+    assert_eq!(pool.admission_waiter_count(), 0);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn bounded_blocking_io_capacity_counts_pending_jobs_but_excludes_running_jobs_and_waiters() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 2,
+        queue_capacity: Some(3),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let _release_on_unwind = AtomicReleaseGuard(release.clone());
+    let started = Arc::new(AtomicUsize::new(0));
+    for _ in 0..2 {
+        pool.submit(
+            gated_blocking_job(
+                started.clone(),
+                release.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            None,
+            None,
+        )
+        .expect("both workers should accept a running saturation job");
+    }
+    wait_for_count(
+        &started,
+        2,
+        "both capacity-accounting saturation jobs should start",
+    );
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    for job_id in 0..3 {
+        let executed_in_job = executed.clone();
+        pool.submit(
+            Box::new(move || lock_mutex(&executed_in_job).push(job_id)),
+            None,
+            None,
+        )
+        .expect("each configured pending slot should accept one job");
+    }
+
+    let first_waiter_pool = pool.clone();
+    let first_waiter_executed = executed.clone();
+    let first_waiter = thread::spawn(move || {
+        first_waiter_pool.submit(
+            Box::new(move || lock_mutex(&first_waiter_executed).push(3)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(1);
+    let second_waiter_pool = pool.clone();
+    let second_waiter_executed = executed.clone();
+    let second_waiter = thread::spawn(move || {
+        second_waiter_pool.submit(
+            Box::new(move || lock_mutex(&second_waiter_executed).push(4)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(2);
+
+    assert_eq!(
+        pool.active_job_count(),
+        2,
+        "running jobs must not consume configured pending-queue capacity"
+    );
+    assert_eq!(
+        pool.pending_job_count(),
+        3,
+        "all three configured pending slots should remain occupied"
+    );
+    assert_eq!(
+        pool.admission_waiter_count(),
+        2,
+        "parked admission waiters must remain outside pending capacity"
+    );
+
+    release.store(true, Ordering::SeqCst);
+    first_waiter
+        .join()
+        .expect("the first capacity waiter should not panic")
+        .expect("the first capacity waiter should eventually be admitted");
+    second_waiter
+        .join()
+        .expect("the second capacity waiter should not panic")
+        .expect("the second capacity waiter should eventually be admitted");
+    pool.wait_until_idle_for_test();
+    let mut executed = lock_mutex(&executed).clone();
+    executed.sort_unstable();
+    assert_eq!(executed, vec![0, 1, 2, 3, 4]);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_admission_register_recheck_has_no_missed_cancel_or_slot_wake() {
+    let cancelled_pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let cancelled_release = Arc::new(AtomicBool::new(false));
+    let cancelled_started = Arc::new(AtomicUsize::new(0));
+    cancelled_pool
+        .submit(
+            gated_blocking_job(
+                cancelled_started.clone(),
+                cancelled_release.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    wait_for_count(
+        &cancelled_started,
+        1,
+        "the register-recheck cancellation gate did not start",
+    );
+    cancelled_pool
+        .submit(Box::new(|| {}), None, None)
+        .expect("the cancellation recheck should begin with a full queue");
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    super::install_after_blocking_io_admission_register_hook({
+        let group = group.clone();
+        move || group.cancel()
+    });
+    let rejected_executions = Arc::new(AtomicUsize::new(0));
+    let rejected_counter = rejected_executions.clone();
+    let error = cancelled_pool
+        .submit(
+            Box::new(move || {
+                rejected_counter.fetch_add(1, Ordering::SeqCst);
+            }),
+            None,
+            Some(&cancellation),
+        )
+        .expect_err("cancellation after registration must be observed before parking");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    cancelled_release.store(true, Ordering::SeqCst);
+    cancelled_pool.wait_until_idle_for_test();
+    assert_eq!(rejected_executions.load(Ordering::SeqCst), 0);
+    assert_eq!(cancelled_pool.admission_waiter_count(), 0);
+    cancelled_pool.shutdown_for_test();
+
+    let released_pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let released_gate = Arc::new(AtomicBool::new(false));
+    let released_started = Arc::new(AtomicUsize::new(0));
+    released_pool
+        .submit(
+            gated_blocking_job(
+                released_started.clone(),
+                released_gate.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    wait_for_count(
+        &released_started,
+        1,
+        "the register-recheck slot gate did not start",
+    );
+    released_pool
+        .submit(Box::new(|| {}), None, None)
+        .expect("the slot recheck should begin with a full queue");
+    super::install_after_blocking_io_admission_register_hook({
+        let released_gate = released_gate.clone();
+        move || released_gate.store(true, Ordering::SeqCst)
+    });
+    let admitted_executions = Arc::new(AtomicUsize::new(0));
+    let admitted_counter = admitted_executions.clone();
+    released_pool
+        .submit(
+            Box::new(move || {
+                admitted_counter.fetch_add(1, Ordering::SeqCst);
+            }),
+            Some(Instant::now() + StdDuration::from_secs(1)),
+            None,
+        )
+        .expect("a slot released after registration must wake and admit the waiter");
+    released_pool.wait_until_idle_for_test();
+    assert_eq!(admitted_executions.load(Ordering::SeqCst), 1);
+    assert_eq!(released_pool.admission_waiter_count(), 0);
+    released_pool.shutdown_for_test();
+}
+
+#[test]
+fn bounded_blocking_io_admission_is_fifo_after_a_cancelled_waiter_is_removed() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(started.clone(), release.clone(), completed),
+        None,
+        None,
+    )
+    .unwrap();
+    wait_for_count(&started, 1, "the FIFO saturation job did not start");
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let pending_order = order.clone();
+    pool.submit(
+        Box::new(move || lock_mutex(&pending_order).push(2)),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let cancelled_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancelled = cancelled_group.child_cancellation();
+    let cancelled_pool = pool.clone();
+    let cancelled_order = order.clone();
+    let cancelled_join = thread::spawn(move || {
+        cancelled_pool.submit(
+            Box::new(move || lock_mutex(&cancelled_order).push(3)),
+            None,
+            Some(&cancelled),
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(1);
+
+    let live_pool = pool.clone();
+    let live_order = order.clone();
+    let live_join = thread::spawn(move || {
+        live_pool.submit(
+            Box::new(move || lock_mutex(&live_order).push(4)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(2);
+    cancelled_group.cancel();
+    let error = cancelled_join
+        .join()
+        .expect("cancelled submitter should not panic")
+        .expect_err("the oldest admission waiter should cancel");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+
+    release.store(true, Ordering::SeqCst);
+    live_join
+        .join()
+        .expect("live submitter should not panic")
+        .expect("the remaining waiter should consume the released slot");
+    pool.wait_until_idle_for_test();
+    assert_eq!(*lock_mutex(&order), vec![2, 4]);
+    assert_eq!(pool.admission_waiter_count(), 0);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_admission_preserves_surviving_fifo_when_the_middle_deadline_expires() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let _release_on_unwind = AtomicReleaseGuard(release.clone());
+    let started = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(
+            started.clone(),
+            release.clone(),
+            Arc::new(AtomicUsize::new(0)),
+        ),
+        None,
+        None,
+    )
+    .expect("the FIFO saturation job should be accepted");
+    wait_for_count(
+        &started,
+        1,
+        "the middle-deadline FIFO saturation job did not start",
+    );
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let pending_order = order.clone();
+    pool.submit(
+        Box::new(move || lock_mutex(&pending_order).push(1)),
+        None,
+        None,
+    )
+    .expect("the FIFO control job should occupy the pending slot");
+
+    let oldest_pool = pool.clone();
+    let oldest_order = order.clone();
+    let oldest = thread::spawn(move || {
+        oldest_pool.submit(
+            Box::new(move || lock_mutex(&oldest_order).push(2)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(1);
+
+    let middle_executions = Arc::new(AtomicUsize::new(0));
+    let middle_counter = middle_executions.clone();
+    let middle_pool = pool.clone();
+    let middle = thread::spawn(move || {
+        middle_pool.submit(
+            Box::new(move || {
+                middle_counter.fetch_add(1, Ordering::SeqCst);
+            }),
+            Some(Instant::now() + StdDuration::from_millis(500)),
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(2);
+
+    let youngest_pool = pool.clone();
+    let youngest_order = order.clone();
+    let youngest = thread::spawn(move || {
+        youngest_pool.submit(
+            Box::new(move || lock_mutex(&youngest_order).push(4)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(3);
+
+    let error = middle
+        .join()
+        .expect("the middle admission waiter should not panic")
+        .expect_err("the middle admission waiter should expire before acceptance");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(middle_executions.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        pool.admission_waiter_count(),
+        2,
+        "both live waiters should survive middle removal"
+    );
+
+    let barger_pool = pool.clone();
+    let barger_order = order.clone();
+    let barger = thread::spawn(move || {
+        barger_pool.submit(
+            Box::new(move || lock_mutex(&barger_order).push(5)),
+            None,
+            None,
+        )
+    });
+    pool.wait_for_admission_waiters_for_test(3);
+    release.store(true, Ordering::SeqCst);
+
+    for (name, waiter) in [
+        ("oldest", oldest),
+        ("youngest", youngest),
+        ("barger", barger),
+    ] {
+        waiter
+            .join()
+            .unwrap_or_else(|_| panic!("{name} admission waiter should not panic"))
+            .unwrap_or_else(|error| panic!("{name} admission waiter should succeed: {error}"));
+    }
+    pool.wait_until_idle_for_test();
+    assert_eq!(
+        *lock_mutex(&order),
+        vec![1, 2, 4, 5],
+        "middle removal must preserve both surviving waiters ahead of a later barger"
+    );
+    assert_eq!(pool.admission_waiter_count(), 0);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_operation_panics_are_observable_and_do_not_reduce_pool_size() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let error = super::run_blocking_io_with_deadline_on_pool(
+        || -> io::Result<()> {
+            panic!("injected blocking operation panic");
+        },
+        None,
+        None,
+        &pool,
+    )
+    .expect_err("a blocking operation panic must become an operation error");
+    assert!(error
+        .to_string()
+        .contains("blocking I/O operation panicked: injected blocking operation panic"));
+
+    pool.submit(
+        Box::new(|| panic!("injected raw blocking job panic")),
+        None,
+        None,
+    )
+    .expect("the raw panic probe should enter the pool");
+    assert_eq!(
+        super::run_blocking_io_with_deadline_on_pool(|| Ok::<_, io::Error>(42), None, None, &pool,)
+            .expect("the same worker should survive wrapped and raw job panics"),
+        42
+    );
+    assert_eq!(pool.worker_start_count(), 1);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_pool_shutdown_drains_accepted_jobs_and_cancels_parked_admission() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(started.clone(), release.clone(), completed.clone()),
+        None,
+        None,
+    )
+    .unwrap();
+    wait_for_count(&started, 1, "the shutdown saturation job did not start");
+
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let accepted_in_job = accepted.clone();
+    pool.submit(
+        Box::new(move || {
+            accepted_in_job.fetch_add(1, Ordering::SeqCst);
+        }),
+        None,
+        None,
+    )
+    .expect("the queued job should be accepted before shutdown");
+
+    let waiting_pool = pool.clone();
+    let waiting = thread::spawn(move || waiting_pool.submit(Box::new(|| {}), None, None));
+    pool.wait_for_admission_waiters_for_test(1);
+    let shutdown_pool = pool.clone();
+    let shutdown = thread::spawn(move || shutdown_pool.shutdown_for_test());
+
+    let error = waiting
+        .join()
+        .expect("the parked submitter should not panic")
+        .expect_err("shutdown must cancel unaccepted admission");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    release.store(true, Ordering::SeqCst);
+    shutdown.join().expect("pool shutdown should finish");
+    assert_eq!(completed.load(Ordering::SeqCst), 1);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    assert_eq!(pool.admission_waiter_count(), 0);
+}
+
+#[test]
+fn blocking_io_submission_rejects_bounded_and_unbounded_pools_once_shutdown_begins() {
+    for queue_capacity in [None, Some(1)] {
+        let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+            worker_count: 1,
+            queue_capacity,
+        });
+        let completed = Arc::new(AtomicUsize::new(0));
+        let completed_in_job = completed.clone();
+        pool.submit(
+            Box::new(move || {
+                completed_in_job.fetch_add(1, Ordering::SeqCst);
+            }),
+            None,
+            None,
+        )
+        .expect("the lifecycle probe should start its worker before shutdown");
+        wait_for_count(
+            &completed,
+            1,
+            "the lifecycle probe did not complete before shutdown",
+        );
+
+        {
+            let mut state = lock_mutex(&pool.state);
+            assert!(!state.shutting_down);
+            state.shutting_down = true;
+        }
+        let rejected_executions = Arc::new(AtomicUsize::new(0));
+        let rejected_counter = rejected_executions.clone();
+        let error = pool
+            .submit(
+                Box::new(move || {
+                    rejected_counter.fetch_add(1, Ordering::SeqCst);
+                }),
+                None,
+                None,
+            )
+            .expect_err("admission must close as soon as shutdown begins");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "blocking-I/O pool is shutting down");
+        assert_eq!(rejected_executions.load(Ordering::SeqCst), 0);
+        pool.shutdown_for_test();
+    }
+
+    let never_started = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    never_started.shutdown_for_test();
+    never_started.shutdown_for_test();
+    assert_eq!(never_started.worker_start_count(), 0);
+}
+
+#[test]
+fn lightweight_blocking_io_admission_parks_without_starving_a_sibling_timer() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(started.clone(), release.clone(), completed),
+        None,
+        None,
+    )
+    .unwrap();
+    wait_for_count(&started, 1, "the scheduler saturation job did not start");
+    pool.submit(Box::new(|| {}), None, None)
+        .expect("the one-slot pending queue should fill");
+
+    let sibling_progressed = Arc::new(AtomicBool::new(false));
+    let root_pool = pool.clone();
+    let root_release = release.clone();
+    let root_sibling_progressed = sibling_progressed.clone();
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
+        let parked_pool = root_pool.clone();
+        let parked = spawn_lightweight_task(move || {
+            let result = super::run_blocking_io_with_deadline_on_pool(
+                || Ok::<_, io::Error>(42),
+                Some(Instant::now() + StdDuration::from_secs(1)),
+                None,
+                &parked_pool,
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Int(IntegerValue::from_signed(result)))
+        })?;
+        while root_pool.admission_waiter_count() == 0 {
+            super::yield_now_with_runtime_scheduler();
+        }
+
+        let sibling_progress = root_sibling_progressed.clone();
+        let sibling = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            sibling_progress.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&sibling)?;
+        assert!(
+            root_sibling_progressed.load(Ordering::SeqCst),
+            "a full blocking-I/O queue must park admission and free the pinned worker"
+        );
+        root_release.store(true, Ordering::SeqCst);
+        assert_eq!(
+            wait_task_ready(&parked)?,
+            Value::Int(IntegerValue::from_signed(42))
+        );
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "scheduler-aware blocking-I/O admission should preserve sibling progress: {result:?}"
+    );
+    pool.wait_until_idle_for_test();
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn unbounded_blocking_io_queue_accepts_without_admission_waiters() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: None,
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    pool.submit(
+        gated_blocking_job(started.clone(), release.clone(), completed.clone()),
+        None,
+        None,
+    )
+    .unwrap();
+    wait_for_count(&started, 1, "the unbounded control job did not start");
+
+    for _ in 0..32 {
+        let completed = completed.clone();
+        pool.submit(
+            Box::new(move || {
+                completed.fetch_add(1, Ordering::SeqCst);
+            }),
+            Some(Instant::now() + StdDuration::from_secs(1)),
+            None,
+        )
+        .expect("an unbounded queue should not park a live submission");
+    }
+    assert_eq!(pool.admission_waiter_count(), 0);
+    release.store(true, Ordering::SeqCst);
+    wait_for_count(&completed, 33, "the unbounded control queue did not drain");
+    pool.wait_until_idle_for_test();
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_slot_deadline_races_have_one_outcome_and_lose_no_capacity() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let saturation_starts = Arc::new(AtomicUsize::new(0));
+    for iteration in 0..24 {
+        let release = Arc::new(AtomicBool::new(false));
+        pool.submit(
+            gated_blocking_job(
+                saturation_starts.clone(),
+                release.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        wait_for_count(
+            &saturation_starts,
+            iteration + 1,
+            "the race saturation job did not start",
+        );
+        pool.submit(Box::new(|| {}), None, None)
+            .expect("the race control job should fill the queue");
+
+        let contender_executions = Arc::new(AtomicUsize::new(0));
+        let contender_counter = contender_executions.clone();
+        let contender_pool = pool.clone();
+        let deadline = Instant::now() + StdDuration::from_millis(3);
+        let contender = thread::spawn(move || {
+            contender_pool.submit(
+                Box::new(move || {
+                    contender_counter.fetch_add(1, Ordering::SeqCst);
+                }),
+                Some(deadline),
+                None,
+            )
+        });
+        let observation_deadline = Instant::now() + StdDuration::from_secs(2);
+        while pool.admission_waiter_count() == 0 && !contender.is_finished() {
+            assert!(
+                Instant::now() < observation_deadline,
+                "the deadline-race submitter neither registered nor completed"
+            );
+            thread::yield_now();
+        }
+        if pool.admission_waiter_count() != 0 {
+            match iteration % 3 {
+                0 => thread::sleep(StdDuration::from_millis(1)),
+                1 => thread::sleep(StdDuration::from_millis(3)),
+                _ => thread::sleep(StdDuration::from_millis(5)),
+            }
+        }
+        release.store(true, Ordering::SeqCst);
+        let admission = contender.join().expect("race submitter should not panic");
+        pool.wait_until_idle_for_test();
+        match admission {
+            Ok(()) => assert_eq!(
+                contender_executions.load(Ordering::SeqCst),
+                1,
+                "accepted race jobs must execute exactly once"
+            ),
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                assert_eq!(
+                    contender_executions.load(Ordering::SeqCst),
+                    0,
+                    "timed-out pre-acceptance race jobs must never execute"
+                );
+            }
+        }
+        assert_eq!(pool.admission_waiter_count(), 0);
+
+        assert_eq!(
+            super::run_blocking_io_with_deadline_on_pool(
+                move || Ok::<_, io::Error>(iteration),
+                None,
+                None,
+                &pool,
+            )
+            .expect("every race must restore capacity for unrelated work"),
+            iteration
+        );
+    }
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn blocking_io_slot_cancellation_races_have_one_outcome_and_lose_no_capacity() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let saturation_starts = Arc::new(AtomicUsize::new(0));
+    for iteration in 0..24 {
+        let release = Arc::new(AtomicBool::new(false));
+        pool.submit(
+            gated_blocking_job(
+                saturation_starts.clone(),
+                release.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        wait_for_count(
+            &saturation_starts,
+            iteration + 1,
+            "the cancellation-race saturation job did not start",
+        );
+        pool.submit(Box::new(|| {}), None, None)
+            .expect("the cancellation-race control job should fill the queue");
+
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let cancellation = group.child_cancellation();
+        let contender_executions = Arc::new(AtomicUsize::new(0));
+        let contender_counter = contender_executions.clone();
+        let contender_pool = pool.clone();
+        let contender = thread::spawn(move || {
+            contender_pool.submit(
+                Box::new(move || {
+                    contender_counter.fetch_add(1, Ordering::SeqCst);
+                }),
+                None,
+                Some(&cancellation),
+            )
+        });
+        pool.wait_for_admission_waiters_for_test(1);
+        match iteration % 3 {
+            0 => {
+                group.cancel();
+                release.store(true, Ordering::SeqCst);
+            }
+            1 => {
+                release.store(true, Ordering::SeqCst);
+                thread::sleep(StdDuration::from_millis(1));
+                group.cancel();
+            }
+            _ => {
+                release.store(true, Ordering::SeqCst);
+                group.cancel();
+            }
+        }
+        let admission = contender.join().expect("race submitter should not panic");
+        pool.wait_until_idle_for_test();
+        match admission {
+            Ok(()) => assert_eq!(
+                contender_executions.load(Ordering::SeqCst),
+                1,
+                "accepted cancellation-race jobs must execute exactly once"
+            ),
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+                assert_eq!(
+                    contender_executions.load(Ordering::SeqCst),
+                    0,
+                    "cancelled pre-acceptance race jobs must never execute"
+                );
+            }
+        }
+        assert_eq!(pool.admission_waiter_count(), 0);
+        assert_eq!(
+            super::run_blocking_io_with_deadline_on_pool(
+                move || Ok::<_, io::Error>(iteration),
+                None,
+                None,
+                &pool,
+            )
+            .expect("every cancellation race must restore unrelated capacity"),
+            iteration
+        );
+    }
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn injected_resolver_outage_saturation_recovers_without_executing_rejected_jobs() {
+    let resolved: std::net::SocketAddr = "127.0.0.1:443"
+        .parse()
+        .expect("the injected resolver address should parse");
+    for _ in 0..4 {
+        let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+            worker_count: 2,
+            queue_capacity: Some(1),
+        });
+        let release = Arc::new(AtomicBool::new(false));
+        let running_started = Arc::new(AtomicUsize::new(0));
+        let running_executions = Arc::new(AtomicUsize::new(0));
+        let mut running = Vec::new();
+        for _ in 0..2 {
+            let resolver_pool = pool.clone();
+            let resolver_release = release.clone();
+            let resolver_started = running_started.clone();
+            let resolver_executions = running_executions.clone();
+            running.push(thread::spawn(move || {
+                super::resolve_socket_addresses_before_on_pool_with(
+                    "outage.injected:443",
+                    None,
+                    None,
+                    &resolver_pool,
+                    move |address| {
+                        assert_eq!(address, "outage.injected:443");
+                        resolver_started.fetch_add(1, Ordering::SeqCst);
+                        while !resolver_release.load(Ordering::SeqCst) {
+                            thread::yield_now();
+                        }
+                        resolver_executions.fetch_add(1, Ordering::SeqCst);
+                        Ok(vec![resolved])
+                    },
+                )
+            }));
+        }
+        wait_for_count(
+            &running_started,
+            2,
+            "both injected resolver workers should become occupied",
+        );
+
+        let accepted_late_executions = Arc::new(AtomicUsize::new(0));
+        let accepted_late_counter = accepted_late_executions.clone();
+        let accepted_pool = pool.clone();
+        let accepted_late = thread::spawn(move || {
+            super::resolve_socket_addresses_before_on_pool_with(
+                "accepted-late.injected:443",
+                Some(Instant::now() + StdDuration::from_millis(15)),
+                None,
+                &accepted_pool,
+                move |_| {
+                    accepted_late_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![resolved])
+                },
+            )
+        });
+        let pending_deadline = Instant::now() + StdDuration::from_secs(2);
+        while pool.pending_job_count() != 1 {
+            assert!(
+                Instant::now() < pending_deadline,
+                "the accepted late resolver job should fill the pending queue"
+            );
+            thread::yield_now();
+        }
+        let error = accepted_late
+            .join()
+            .expect("the accepted resolver caller should not panic")
+            .expect_err("the accepted pending resolver wait should time out");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(accepted_late_executions.load(Ordering::SeqCst), 0);
+
+        let rejected_timeout_executions = Arc::new(AtomicUsize::new(0));
+        let rejected_timeout_counter = rejected_timeout_executions.clone();
+        let error = super::resolve_socket_addresses_before_on_pool_with(
+            "rejected-timeout.injected:443",
+            Some(Instant::now() + StdDuration::from_millis(10)),
+            None,
+            &pool,
+            move |_| {
+                rejected_timeout_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![resolved])
+            },
+        )
+        .expect_err("a resolver request outside the full queue should time out before acceptance");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(rejected_timeout_executions.load(Ordering::SeqCst), 0);
+
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let cancellation = group.child_cancellation();
+        let rejected_cancel_executions = Arc::new(AtomicUsize::new(0));
+        let rejected_cancel_counter = rejected_cancel_executions.clone();
+        let cancelled_pool = pool.clone();
+        let cancelled = thread::spawn(move || {
+            super::resolve_socket_addresses_before_on_pool_with(
+                "rejected-cancel.injected:443",
+                None,
+                Some(&cancellation),
+                &cancelled_pool,
+                move |_| {
+                    rejected_cancel_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![resolved])
+                },
+            )
+        });
+        pool.wait_for_admission_waiters_for_test(1);
+        group.cancel();
+        let error = cancelled
+            .join()
+            .expect("the cancelled resolver caller should not panic")
+            .expect_err("full-queue resolver admission should observe cancellation");
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(rejected_cancel_executions.load(Ordering::SeqCst), 0);
+
+        let unrelated_pool = pool.clone();
+        let unrelated = thread::spawn(move || {
+            super::run_blocking_io_with_deadline_on_pool(
+                || {
+                    std::fs::metadata(".")?;
+                    Ok::<_, io::Error>(())
+                },
+                Some(Instant::now() + StdDuration::from_secs(1)),
+                None,
+                &unrelated_pool,
+            )
+        });
+        pool.wait_for_admission_waiters_for_test(1);
+        release.store(true, Ordering::SeqCst);
+        for resolver in running {
+            assert_eq!(
+                resolver
+                    .join()
+                    .expect("running resolver should not panic")
+                    .expect("running resolver should drain"),
+                vec![resolved]
+            );
+        }
+        unrelated
+            .join()
+            .expect("unrelated filesystem caller should not panic")
+            .expect("unrelated filesystem work should complete after resolver release");
+        pool.wait_until_idle_for_test();
+
+        assert_eq!(running_executions.load(Ordering::SeqCst), 2);
+        assert_eq!(accepted_late_executions.load(Ordering::SeqCst), 1);
+        assert_eq!(rejected_timeout_executions.load(Ordering::SeqCst), 0);
+        assert_eq!(rejected_cancel_executions.load(Ordering::SeqCst), 0);
+        assert_eq!(pool.admission_waiter_count(), 0);
+        pool.shutdown_for_test();
+    }
+}
+
+#[test]
+fn tcp_combined_resolve_connect_adapter_recovers_queued_work_after_resolver_saturation() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("the TCP saturation probe should bind a loopback listener");
+    let candidate = listener
+        .local_addr()
+        .expect("the TCP saturation listener should expose its address");
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 2,
+        queue_capacity: Some(1),
+    });
+    let outage_gates = [
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    ];
+    let _release_on_unwind = outage_gates
+        .iter()
+        .cloned()
+        .map(AtomicReleaseGuard)
+        .collect::<Vec<_>>();
+    let outage_started = Arc::new(AtomicUsize::new(0));
+    let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
+    let mut callers = Vec::new();
+
+    for (caller_id, gate) in outage_gates.iter().cloned().enumerate() {
+        let caller_pool = pool.clone();
+        let caller_started = outage_started.clone();
+        let caller_outcome = outcome_tx.clone();
+        callers.push(thread::spawn(move || {
+            let result = TcpStreamValue::connect_with_operations_on_pool(
+                "resolver-outage.injected:443",
+                None,
+                None,
+                &caller_pool,
+                move |address| {
+                    assert_eq!(address, "resolver-outage.injected:443");
+                    caller_started.fetch_add(1, Ordering::SeqCst);
+                    while !gate.load(Ordering::SeqCst) {
+                        thread::yield_now();
+                    }
+                    Ok(vec![candidate])
+                },
+                |candidate, timeout| match timeout {
+                    Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                    None => std::net::TcpStream::connect(candidate),
+                },
+            );
+            caller_outcome
+                .send((caller_id, result))
+                .expect("the TCP saturation outcome receiver should remain live");
+        }));
+    }
+    wait_for_count(
+        &outage_started,
+        2,
+        "both blocking workers should be occupied by injected TCP resolution",
+    );
+
+    let queued_resolver_executions = Arc::new(AtomicUsize::new(0));
+    let queued_counter = queued_resolver_executions.clone();
+    let queued_pool = pool.clone();
+    let queued_outcome = outcome_tx.clone();
+    callers.push(thread::spawn(move || {
+        let result = TcpStreamValue::connect_with_operations_on_pool(
+            "queued-combined.injected:443",
+            None,
+            None,
+            &queued_pool,
+            move |address| {
+                assert_eq!(address, "queued-combined.injected:443");
+                queued_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![candidate])
+            },
+            |candidate, timeout| match timeout {
+                Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                None => std::net::TcpStream::connect(candidate),
+            },
+        );
+        queued_outcome
+            .send((2, result))
+            .expect("the queued TCP outcome receiver should remain live");
+    }));
+    let pending_deadline = Instant::now() + StdDuration::from_secs(2);
+    while pool.pending_job_count() != 1 {
+        assert!(
+            Instant::now() < pending_deadline,
+            "the third combined TCP adapter should occupy the pending slot"
+        );
+        thread::yield_now();
+    }
+
+    let unrelated_resolver_executions = Arc::new(AtomicUsize::new(0));
+    let unrelated_counter = unrelated_resolver_executions.clone();
+    let unrelated_pool = pool.clone();
+    let unrelated_outcome = outcome_tx.clone();
+    callers.push(thread::spawn(move || {
+        let result = TcpStreamValue::connect_with_operations_on_pool(
+            "unrelated-combined.injected:443",
+            None,
+            None,
+            &unrelated_pool,
+            move |address| {
+                assert_eq!(address, "unrelated-combined.injected:443");
+                unrelated_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![candidate])
+            },
+            |candidate, timeout| match timeout {
+                Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                None => std::net::TcpStream::connect(candidate),
+            },
+        );
+        unrelated_outcome
+            .send((3, result))
+            .expect("the unrelated TCP outcome receiver should remain live");
+    }));
+    pool.wait_for_admission_waiters_for_test(1);
+    assert_eq!(pool.active_job_count(), 2);
+    assert_eq!(pool.pending_job_count(), 1);
+
+    outage_gates[0].store(true, Ordering::SeqCst);
+    let mut recovered_callers = Vec::new();
+    for _ in 0..3 {
+        let (caller_id, result) = outcome_rx
+            .recv_timeout(StdDuration::from_secs(2))
+            .expect("one released worker should drain queued and unrelated TCP adapters");
+        let stream = result.expect("every recovered loopback TCP adapter should connect");
+        stream.close();
+        recovered_callers.push(caller_id);
+    }
+    recovered_callers.sort_unstable();
+    assert_eq!(
+        recovered_callers,
+        vec![0, 2, 3],
+        "queued and unrelated combined adapters must recover while one resolver remains stuck"
+    );
+    assert_eq!(queued_resolver_executions.load(Ordering::SeqCst), 1);
+    assert_eq!(unrelated_resolver_executions.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            outcome_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "the unreleased resolver must still occupy its worker"
+    );
+
+    outage_gates[1].store(true, Ordering::SeqCst);
+    let (caller_id, result) = outcome_rx
+        .recv_timeout(StdDuration::from_secs(2))
+        .expect("the final TCP resolver should complete after release");
+    assert_eq!(caller_id, 1);
+    result
+        .expect("the final loopback TCP adapter should connect")
+        .close();
+    for caller in callers {
+        caller
+            .join()
+            .expect("a combined TCP saturation caller should not panic");
+    }
+    pool.wait_until_idle_for_test();
+    assert_eq!(pool.admission_waiter_count(), 0);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn accepted_blocking_io_timeout_discards_the_late_result_and_pool_recovers() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let executions = Arc::new(AtomicUsize::new(0));
+    let run_release = release.clone();
+    let run_started = started.clone();
+    let run_executions = executions.clone();
+    let error = super::run_blocking_io_with_deadline_on_pool(
+        move || {
+            run_started.fetch_add(1, Ordering::SeqCst);
+            while !run_release.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+            run_executions.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, io::Error>(41)
+        },
+        Some(Instant::now() + StdDuration::from_millis(20)),
+        None,
+        &pool,
+    )
+    .expect_err("an accepted operation may outlive its caller deadline");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    wait_for_count(&started, 1, "the accepted operation never started");
+    release.store(true, Ordering::SeqCst);
+    wait_for_count(
+        &executions,
+        1,
+        "the abandoned operation did not execute exactly once",
+    );
+
+    let recovered =
+        super::run_blocking_io_with_deadline_on_pool(|| Ok::<_, io::Error>(42), None, None, &pool)
+            .expect("unrelated work should complete after the accepted outage job drains");
+    assert_eq!(recovered, 42);
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn accepted_blocking_io_cancellation_discards_the_late_result_and_pool_recovers() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let release = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicUsize::new(0));
+    let executions = Arc::new(AtomicUsize::new(0));
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let caller_pool = pool.clone();
+    let caller_release = release.clone();
+    let caller_started = started.clone();
+    let caller_executions = executions.clone();
+    let caller = thread::spawn(move || {
+        super::run_blocking_io_with_deadline_on_pool(
+            move || {
+                caller_started.fetch_add(1, Ordering::SeqCst);
+                while !caller_release.load(Ordering::SeqCst) {
+                    thread::yield_now();
+                }
+                caller_executions.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, io::Error>(41)
+            },
+            None,
+            Some(&cancellation),
+            &caller_pool,
+        )
+    });
+    wait_for_count(&started, 1, "the cancellation operation never started");
+    group.cancel();
+    let error = caller
+        .join()
+        .expect("the cancelled caller should not panic")
+        .expect_err("an accepted operation may outlive caller cancellation");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    release.store(true, Ordering::SeqCst);
+    wait_for_count(
+        &executions,
+        1,
+        "the cancelled accepted operation did not execute exactly once",
+    );
+
+    assert_eq!(
+        super::run_blocking_io_with_deadline_on_pool(|| Ok::<_, io::Error>(42), None, None, &pool,)
+            .expect("unrelated work should complete after cancelled accepted work drains"),
+        42
+    );
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    pool.shutdown_for_test();
+}
+
+#[test]
+fn abandoned_blocking_io_discards_late_host_errors_and_panics_then_recovers() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+
+    let error_release = Arc::new(AtomicBool::new(false));
+    let error_started = Arc::new(AtomicUsize::new(0));
+    let error_finished = Arc::new(AtomicUsize::new(0));
+    let operation_release = error_release.clone();
+    let operation_started = error_started.clone();
+    let operation_finished = error_finished.clone();
+    let error = super::run_blocking_io_with_deadline_on_pool(
+        move || {
+            operation_started.fetch_add(1, Ordering::SeqCst);
+            while !operation_release.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+            operation_finished.fetch_add(1, Ordering::SeqCst);
+            Err::<(), _>(io::Error::other("late injected host error"))
+        },
+        Some(Instant::now() + StdDuration::from_millis(15)),
+        None,
+        &pool,
+    )
+    .expect_err("the caller should observe its deadline, not a later host error");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    wait_for_count(&error_started, 1, "the late-error operation never started");
+    error_release.store(true, Ordering::SeqCst);
+    wait_for_count(
+        &error_finished,
+        1,
+        "the abandoned late-error operation did not finish",
+    );
+    assert_eq!(
+        super::run_blocking_io_with_deadline_on_pool(
+            || Ok::<_, io::Error>("after-error"),
+            None,
+            None,
+            &pool,
+        )
+        .expect("late host errors must not poison the pool"),
+        "after-error"
+    );
+
+    let panic_release = Arc::new(AtomicBool::new(false));
+    let panic_started = Arc::new(AtomicUsize::new(0));
+    let panic_finished = Arc::new(AtomicUsize::new(0));
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let caller_pool = pool.clone();
+    let operation_release = panic_release.clone();
+    let operation_started = panic_started.clone();
+    let operation_finished = panic_finished.clone();
+    let caller = thread::spawn(move || {
+        super::run_blocking_io_with_deadline_on_pool(
+            move || -> io::Result<()> {
+                operation_started.fetch_add(1, Ordering::SeqCst);
+                while !operation_release.load(Ordering::SeqCst) {
+                    thread::yield_now();
+                }
+                operation_finished.fetch_add(1, Ordering::SeqCst);
+                panic!("late injected host panic");
+            },
+            None,
+            Some(&cancellation),
+            &caller_pool,
+        )
+    });
+    wait_for_count(&panic_started, 1, "the late-panic operation never started");
+    group.cancel();
+    let error = caller
+        .join()
+        .expect("the cancelled late-panic caller should not panic")
+        .expect_err("the caller should observe cancellation, not a later panic");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    panic_release.store(true, Ordering::SeqCst);
+    wait_for_count(
+        &panic_finished,
+        1,
+        "the abandoned late-panic operation did not finish",
+    );
+    assert_eq!(
+        super::run_blocking_io_with_deadline_on_pool(
+            || Ok::<_, io::Error>("after-panic"),
+            None,
+            None,
+            &pool,
+        )
+        .expect("late host panics must not poison the pool"),
+        "after-panic"
+    );
+    pool.shutdown_for_test();
 }
 
 #[test]

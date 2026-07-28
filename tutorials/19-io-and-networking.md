@@ -16,7 +16,12 @@ import net
 import process
 ```
 
-The current runtime model uses scheduler-backed lightweight tasks. Queue waits, timer waits, and the maintained socket/HTTP surface share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps. Hostname resolution and blocking connect syscalls run on the bounded blocking service, so a slow DNS resolver or connect attempt does not pin the lightweight-task scheduler.
+The current runtime model uses scheduler-backed lightweight tasks. Queue waits,
+timer waits, and the maintained socket/HTTP surface share the same evented
+runtime scheduler underneath instead of spinning or blocking on per-operation
+sleeps. Hostname resolution and blocking connect syscalls run on the generic
+blocking-I/O pool, so a slow DNS resolver or connect attempt does not pin the
+lightweight-task scheduler.
 
 ## Standard Input And Output
 
@@ -467,7 +472,22 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as `attempt * 1ms`. Explicit values must be non-negative and fit the host deadline; invalid values return `io.Error.InvalidInput` rather than being treated as unlimited.
 
-For connect operations, one timeout budget covers hostname resolution, every resolved-address attempt, and the remaining protocol handshake. Aurora does not restart the full timeout for each address returned by DNS. Cancellation stops the Aurora task's wait immediately; an already-running host resolver or connect syscall may finish later on the bounded blocking service, and its result is discarded safely.
+For connect operations, one timeout budget covers blocking-pool admission,
+hostname resolution, every resolved-address attempt, and the remaining
+protocol handshake. Aurora does not restart the full timeout for each address
+returned by DNS. Cancellation or expiry before pool acceptance prevents
+submission. After acceptance it stops the Aurora task's wait, but the host
+resolver or connect syscall may finish later and its result is discarded
+safely.
+
+`AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
+without clamping; the absent default uses host parallelism with fallback `4`
+and a derived `2..=8` clamp.
+`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
+pending jobs only, and omission preserves an unbounded queue. Full-queue
+admission is FIFO and scheduler-aware. The queue bound limits accepted pending
+backlog, not admission waiters, and cannot interrupt accepted work or guarantee
+unrelated blocking-I/O progress while every worker remains stuck.
 
 `process.run(...)` follows the same rule through
 `process.Error.Io(io.Error.InvalidInput)`. Omitting its timeout uses an
@@ -483,7 +503,7 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
   run through the pinned-worker runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
-- hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the bounded blocking service
+- hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the configurable generic blocking-I/O pool
 - process waits and captured child stdio pipes use the same scheduler-backed wait path
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations offload through the pinned-worker scheduler-backed

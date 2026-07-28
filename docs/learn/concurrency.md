@@ -354,6 +354,20 @@ binding continue through the generic blocking-I/O pool. For TLS assets, that
 generic pool reads the bytes and the protocol workers perform PEM parsing and
 rustls construction.
 
+The generic pool is a separate operational control.
+`AURORA_BLOCKING_WORKERS=<positive integer>` requests an exact worker count;
+without it Aurora derives a `2..=8` default from host parallelism with fallback
+`4`. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally limits
+accepted jobs still waiting in the FIFO queue. It does not count running jobs
+or callers waiting for admission, and omitting it preserves an unbounded
+queue. A full bounded queue parks the Aurora task without blocking its pinned
+worker. Cancellation or timeout before queue insertion prevents the host job
+from running. After insertion, Aurora can stop waiting but cannot retract the
+host operation; its late result is discarded. The bound controls accepted
+pending backlog, not admission waiters or a stuck OS call, so unrelated
+blocking-I/O host work still cannot run until some worker returns when every
+worker is occupied.
+
 On the clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked
 sleepers used 206,503,936 bytes worst whole-process RSS and 197,885,952
 incremental bytes above their same-process baseline. The combined

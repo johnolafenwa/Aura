@@ -408,6 +408,16 @@ does not expose a shutdown or join operation for it. File reads, resolver work,
 and listener binding use the generic blocking-I/O pool. TLS asset bytes are
 read there before PEM parsing and rustls construction run on protocol workers.
 
+The generic blocking-I/O pool is configured separately. An exact positive
+`AURORA_BLOCKING_WORKERS` value is not clamped; without it, host parallelism
+is used with fallback `4` and a derived `2..=8` clamp. A positive
+`AURORA_BLOCKING_QUEUE_CAPACITY` bounds accepted pending jobs only, while
+omission preserves an unbounded queue. Full-queue admission is FIFO and parks
+the Aurora task through the scheduler. Cancellation or timeout before queue
+insertion prevents submission; accepted work cannot be retracted and its late
+result is discarded. Bounding the queue does not guarantee unrelated progress
+while every blocking worker remains stuck.
+
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 
 See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).

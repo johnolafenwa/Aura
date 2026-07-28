@@ -69,6 +69,32 @@ override. Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing
 values stop execution with `AU4006` and identify the raw invalid value.
 Checking, analysis, completion, and formatting do not start the task runtime.
 
+Blocking host operations use a separate process-wide pool. Its operational
+settings are:
+
+- `AURORA_BLOCKING_WORKERS=<positive integer>` requests that exact blocking
+  worker count without clamping. When absent, the runtime uses available host
+  parallelism, falls back to `4`, and clamps that derived default to `2..=8`.
+- `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted jobs
+  waiting in the pool's FIFO queue. Running jobs and callers waiting for
+  admission do not consume this capacity. When absent, the pending queue is
+  unbounded.
+
+MIR execution, direct execution, and launched standalone native binaries
+validate both settings before any user code runs. Empty, zero, signed,
+whitespace-padded, non-decimal, and overflowing values stop execution with
+`AU4006`, naming the setting and rendering the supplied value; a non-Unicode
+value is displayed lossily. The first runtime preflight reads both settings
+once, and the resulting configuration is immutable for the process lifetime.
+Valid preflight creates no blocking worker threads. First submission creates
+the complete configured set, which production reuses until process exit
+without an Aurora shutdown/join surface. A full bounded queue parks a
+lightweight task through the scheduler; timeout or cancellation before queue
+insertion prevents submission. Once inserted, host work cannot be retracted
+and any late result is discarded. A bound limits accepted pending backlog, not
+running work or admission waiters, so it cannot guarantee progress for
+unrelated blocking I/O while all workers are stuck.
+
 ## Building
 
 ```bash

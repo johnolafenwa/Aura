@@ -47,8 +47,9 @@ invalid setting is a fatal `AU4006` runtime-configuration diagnostic that
 names the setting, renders its value, and says that a positive integer is
 required.
 
-Configuration is read and validated once during runtime preflight, before any
-Aurora user code executes. The same preflight is mandatory for
+Configuration is read and validated once per process during the first runtime
+preflight and remains immutable for that process lifetime. Validation happens
+before any Aurora user code executes. The same preflight is mandatory for
 `aura run --backend mir`, `aura run --backend direct`, and a launched
 standalone native binary. Invalid configuration therefore fails before
 `main`, module initialization, a top-level test body, or another user-visible
@@ -69,7 +70,7 @@ shuts down the workers already created for that attempt, accepts no job, and
 returns `AU4006`. The diagnostic identifies blocking-I/O worker creation as
 the failed runtime configuration and preserves the host error as detail.
 
-Initialization failure is cached for that runtime invocation. Later calls do
+Initialization failure is cached for the process lifetime. Later calls do
 not repeatedly create partial worker sets or silently run with fewer workers.
 Panics inside an individual job remain contained as operation failures and do
 not silently reduce the configured pool size.
@@ -203,7 +204,7 @@ which are outside this decision.
 | Worker configuration | Absent setting covers host parallelism, fallback `4`, and derived `2..=8` clamp; explicit positive values below, within, and above that range are used exactly without a clamp. |
 | Queue configuration | Absent capacity is unbounded; explicit positive capacities, including `1`, bound pending jobs only while running jobs and admission waiters are accounted separately. |
 | Fatal validation | Empty, zero, signed, non-decimal, non-Unicode, and overflowing values for each setting produce stable `AU4006` diagnostics before any user side effect under forced MIR, forced direct, and standalone launch. |
-| Lazy lifecycle | Valid preflight starts no thread; first submission creates exactly the configured set once; later submissions reuse it; orderly runtime shutdown does not abandon an accepted job or retain a parked admission waiter. |
+| Lazy lifecycle | Valid preflight starts no thread; first submission creates exactly the configured set once; later submissions reuse it for the process lifetime. Injected test pools prove that test-only shutdown rejects parked admissions, drains accepted work, and joins the worker set; production workers otherwise live until process exit. |
 | Creation failure | Deterministic failure at every worker index proves all-or-nothing startup, cleanup of earlier workers, no accepted job, cached failure, and `AU4006` with host detail. |
 | Capacity accounting | Controlled running, pending, and waiting jobs prove that only pending jobs consume capacity and every dequeue/failed admission restores exactly one slot. |
 | FIFO behavior | Pending execution order and waiter admission order are pinned; cancellation/deadline removal preserves the order of all remaining live waiters. |

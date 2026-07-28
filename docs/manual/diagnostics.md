@@ -17,7 +17,7 @@ the phase that owns the failure:
 | `AU11xx` | parsing | `AU1101` invalid syntax |
 | `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, borrows, and transfer | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication |
-| `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
+| `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure; `AU4006` invalid runtime configuration |
 
 `AU1001` also owns source-delimiter pairing. An unexpected closer is primary at
 that closer. A mismatched closer names the expected kind and labels its opener
@@ -336,6 +336,15 @@ An explicit task-stack request has exact type `int64` and an inclusive
 checking. A dynamic value outside that range and a stack-allocation or
 platform-size failure trap with `AU4005`; Aurora never clamps the request or
 silently substitutes the default.
+
+`AU4006` reports invalid process runtime configuration.
+`AURORA_WORKERS`, `AURORA_BLOCKING_WORKERS`, and
+`AURORA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer.
+Empty, zero, signed, whitespace-padded, non-decimal, non-Unicode, and
+overflowing values are rejected before user code; the diagnostic names the
+setting and renders the supplied value, using a lossy display for a non-Unicode
+value. Failure to create the configured blocking-I/O worker set also uses
+`AU4006` and does not silently use fewer workers or synchronous execution.
 
 JSON input-data failures are typed `json.Error` values rather than diagnostics.
 Parse allocation failure or exceeding the shared 262,144-value

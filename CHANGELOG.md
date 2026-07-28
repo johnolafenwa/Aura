@@ -21,6 +21,13 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
   declarations with either name must be renamed. The new variadic
   `select(source, ...)` waits over Queue, Task, and relative-Duration sources
   and returns a typed `SelectOutcome[Q, T]`.
+- Added `AURORA_BLOCKING_WORKERS` for an exact positive blocking-I/O worker
+  count and `AURORA_BLOCKING_QUEUE_CAPACITY` for an optional positive bound on
+  accepted pending jobs. Full queues now use FIFO scheduler-aware admission;
+  timeout or cancellation before acceptance prevents submission, while
+  accepted host work remains non-retractable and discards abandoned results.
+  Invalid values fail with `AU4006` before user code under MIR, direct, and
+  standalone execution.
 
 - Built a typed bootstrap compiler, MIR runtime, direct native backend, package/workspace support, structured concurrency, file/network/process APIs, LSP, VS Code extension, and maintained book.
 - Froze syntax expansion while the 0.1 distribution, safety validation, editor responsiveness, and control-plane standard library are hardened.

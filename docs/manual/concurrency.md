@@ -324,7 +324,14 @@ while not cancelled():
     do_step()
 ```
 
-Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
+Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed
+operations. For the generic blocking-I/O pool, insertion into the pending job
+queue is the acceptance boundary. Cancellation or deadline expiry while a
+caller is still waiting for admission prevents submission. After acceptance,
+Aurora cannot forcibly stop the pending or running host operation; it executes
+once, may still perform its side effect, and has any late result discarded.
+A configured queue bound limits accepted pending work, but cannot guarantee
+unrelated blocking-I/O progress while all blocking workers remain stuck.
 
 Aurora 0.1 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
@@ -505,8 +512,11 @@ reports a general runtime trap, including zero or negative Queue capacity.
 deadline because these APIs have no typed InvalidInput carrier. `AU4002`
 reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
 violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
-`AU4006` reports an invalid pinned-worker runtime configuration, with
-``invalid AURORA_WORKERS value `<raw>`: expected a positive integer``.
+`AU4006` reports invalid pinned-worker or blocking-I/O runtime configuration.
+`AURORA_WORKERS`, `AURORA_BLOCKING_WORKERS`, and
+`AURORA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer; the
+diagnostic names the setting, renders the supplied invalid value, and is issued
+before user code. A non-Unicode value is displayed lossily.
 `AU2002` rejects an out-of-range literal stack request during checking.
 `AU4005` reports the exact same range violation for a dynamic request and
 reports task-stack allocation or platform-size failure; neither path clamps or
@@ -573,13 +583,18 @@ The MIR/direct entry thread reserves
 64 MiB. The scheduler
 keeps descriptor registrations persistent and blocks until an event or
 deadline when idle; it does not use a periodic readiness scan. Nested Aurora
-calls stop at 256 frames. The process-wide blocking pool uses 2
-through 8 host threads selected from host parallelism; it has no 0.1
-configuration or queue backpressure, so slow or stuck jobs can delay unrelated
-work behind them. Non-repeatable transferable task results have one statically
-enforced observation right.
-Cancelling a blocking-worker wait cannot retract an OS side effect already in
-progress. If the scheduler itself stops with tasks still suspended, it disarms
+calls stop at 256 frames. The process-wide blocking-I/O pool derives a default
+of 2 through 8 host threads from host parallelism (fallback 4), or uses an
+exact positive `AURORA_BLOCKING_WORKERS` value without clamping.
+`AURORA_BLOCKING_QUEUE_CAPACITY` optionally bounds pending accepted jobs;
+omitting it leaves the queue unbounded. The first runtime preflight reads this
+configuration once without starting the pool, and the configuration remains
+immutable for the process lifetime. First submission creates the complete
+worker set; production reuses it until process exit and has no Aurora
+shutdown/join surface. Non-repeatable transferable task results have one
+statically enforced observation right. Cancelling after a blocking job is
+accepted cannot retract an OS side effect. If the scheduler itself stops with
+tasks still suspended, it disarms
 their waits, publishes cancellation to their handles and observers, and
 reclaims scheduler-owned and direct-runtime host state. That abandonment path
 does not run arbitrary Aurora cleanup thunks; direct generated stacks may be
@@ -623,9 +638,8 @@ Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
 `select(source, ...)` builtin on both backends, using the shared persistent
 wait machinery for atomic registration, deterministic one-winner arbitration,
 cross-worker wakeups, and loser cleanup. It adds no statement syntax.
-Preemptive scheduling,
-`mut` task targets, configurable blocking-pool sizing, native frame parity,
-and detached task syntax are unavailable. On the
+Preemptive scheduling, `mut` task targets, native frame parity, and detached
+task syntax are unavailable. On the
 clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked sleepers used
 206,503,936 bytes of worst whole-process RSS and 197,885,952 bytes above their
 same-process pre-spawn baseline.

@@ -100,6 +100,23 @@ use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle worker blocks
 until work, an event, or a deadline without a periodic tick.
 
+Under Provisional ADR-0035, the separate process-wide blocking-I/O pool is
+lazily initialized. The first runtime preflight reads its settings once and
+keeps that configuration immutable for the process lifetime without starting
+worker threads. First blocking submission creates the complete worker set;
+production reuses it until process exit and exposes no Aurora shutdown/join
+surface.
+`AURORA_BLOCKING_WORKERS` selects an exact positive worker count; without it,
+the runtime derives and clamps a `2..=8` default from host parallelism with
+fallback `4`. `AURORA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted
+pending jobs only, while omission preserves the unbounded compatibility mode.
+Full-queue admission is FIFO and scheduler-aware. MIR, direct, and standalone
+execution reject invalid values with `AU4006` before user code. Cancellation
+or timeout before queue insertion prevents submission; accepted work runs once
+and has any abandoned result discarded. The bound cannot interrupt host calls
+or guarantee unrelated blocking-I/O progress while all workers remain
+occupied.
+
 Provisional ADR-0033 implements compiler-derived structural Transfer checks for
 task captures, task results, and Queue payloads, plus conditional task-handle
 Copy and statically single-consumer non-repeatable results. Queue and Task

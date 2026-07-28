@@ -177,8 +177,24 @@ This page documents known current limits of the Aurora compiler and runtime.
   consume it on every outcome, and multi-task waits consume the complete task
   vector. A second runtime claim that reaches the atomic containment check
   traps with `AU4001` rather than returning or cloning the stored value.
-- Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait, not an operating-system call already in progress. External side effects may still complete.
-- The process-wide blocking pool uses 2 through 8 host threads, selected from host parallelism, with no 0.1 configuration or queue backpressure. A timed-out or cancelled host job keeps its worker until the underlying call returns; enough slow or stuck DNS/filesystem jobs can occupy the whole pool and delay unrelated blocking operations queued behind them.
+- Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait,
+  not an accepted operating-system call. Before insertion into the pending
+  queue, timeout or cancellation prevents submission; after insertion, the
+  host operation runs exactly once and external side effects may still
+  complete while its late result is discarded.
+- The process-wide blocking-I/O pool defaults from host parallelism with
+  fallback `4` and a derived `2..=8` clamp.
+  `AURORA_BLOCKING_WORKERS=<positive integer>` instead requests that exact
+  count without clamping. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>`
+  bounds pending accepted jobs only; running jobs and admission waiters do not
+  consume it, and omission preserves an unbounded queue. Full-queue admission
+  is FIFO and scheduler-aware. The first runtime preflight reads the settings
+  once and keeps them immutable for the process lifetime without starting
+  workers. First submission creates the complete worker set; production reuses
+  it until process exit and has no Aurora shutdown/join surface. This bounds
+  accepted pending backlog, but not admission waiters, and cannot interrupt a
+  stuck accepted call or guarantee unrelated blocking-I/O progress while every
+  worker remains occupied.
 - `WebSocketListener` has no explicit `close()` method, and WebSocket cancellation/error propagation is not yet fully aligned with TCP and UDP.
 
 ## Tooling

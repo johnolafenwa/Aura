@@ -745,6 +745,17 @@ exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
 listener binding use the generic blocking-I/O pool. Only subsequent PEM
 parsing and rustls construction use protocol workers for TLS assets.
 
+The generic pool accepts two process settings:
+`AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact, unclamped worker
+count, while the absent default derives `2..=8` workers from host parallelism
+with fallback `4`; `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds
+accepted pending jobs only, while omission preserves the unbounded queue.
+Full-queue admission is FIFO and scheduler-aware. Expiry or cancellation before
+queue insertion prevents submission. Accepted work still runs once and has
+any abandoned result discarded. A bound limits accepted pending backlog, not
+admission waiters, and cannot guarantee unrelated blocking-I/O work while every
+worker remains stuck.
+
 Current collection notes:
 
 - `String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and

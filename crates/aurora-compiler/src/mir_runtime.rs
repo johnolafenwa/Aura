@@ -22,16 +22,17 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cast_numeric_value, claim_task_result_observations, clone_json_codec_source,
-    decode_process_restart_policy, decode_process_stdio, duration_to_host_timer,
-    duration_to_milliseconds, duration_to_seconds, evaluate_bytes_host_builtin_ref,
-    evaluate_host_builtin_with_program_args, evaluate_string_to_bytes_host_ref, float_floor_divmod,
-    host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
-    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
-    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    cast_numeric_value, catch_lightweight_task_failure, claim_task_result_observations,
+    clone_json_codec_source, decode_process_restart_policy, decode_process_stdio,
+    duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
+    evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
+    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
+    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -103,6 +104,7 @@ pub fn run_entry_with_stdout_sink_and_program_args(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
+    crate::runtime_config::validate_runtime_configuration()?;
     let entry = entry.map(|name| name.to_string());
     let module = module.clone();
     let program_args = Arc::new(program_args);
@@ -133,7 +135,7 @@ pub fn run_entry_with_stdout_sink_and_program_args(
                         CancellationContext::default(),
                         program_args,
                     );
-                    runtime.run_entry(entry.as_deref())
+                    catch_lightweight_task_failure(|| runtime.run_entry(entry.as_deref()))
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
                 match value_result {

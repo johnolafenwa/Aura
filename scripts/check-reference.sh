@@ -460,8 +460,8 @@ grep -Fq '| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: in
 grep -Fq 'Values outside that range are rejected,' docs/manual/concurrency.md
 grep -Fq 'rounded upward to the host page size and guard-protected' docs/manual/execution-model.md
 grep -Fq 'distinct bounded protocol-step service' docs/manual/execution-model.md
-grep -Fq 'process-global pool is lazily initialized and shared by every' docs/manual/execution-model.md
-grep -Fq 'file reads use the generic blocking-I/O pool' docs/manual/execution-model.md
+grep -Fq 'This protocol-step pool is lazily initialized and shared by every' docs/manual/execution-model.md
+grep -Fq 'and file reads use the generic blocking-I/O pool.' docs/manual/execution-model.md
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
 grep -Fq 'Phase 5.7 pinned-worker measurement' docs/manual/current-limits.md
 grep -Fq '206,503,936 bytes of worst whole-process RSS and 197,885,952' docs/manual/current-limits.md
@@ -732,6 +732,45 @@ if rg -n 'language-level `select`|instead of the removed `select` statement|type
   tutorials \
   examples/README.md; then
   echo "maintained reference still describes typed select as unavailable" >&2
+  exit 1
+fi
+
+# Phase 5.9: Provisional ADR-0035 configures the generic blocking-I/O pool
+# without changing the independent protocol-step or JSON services. Pin the
+# operational controls, pending-only capacity accounting, admission boundary,
+# backend preflight, and the retained stuck-worker limitation.
+test -s architecture_docs/decisions/0035-configurable-blocking-io-pool.md
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0035-configurable-blocking-io-pool.md
+grep -Fq '0035-configurable-blocking-io-pool.md) — implemented provisionally in Phase 5.9, pending checkpoint ratification' architecture_docs/decisions/README.md
+grep -Fq '`AURORA_BLOCKING_WORKERS=<positive integer>`' architecture_docs/07-mir-runtime.md
+grep -Fq 'selects its exact worker count without clamping.' architecture_docs/07-mir-runtime.md
+grep -Fq 'resulting configuration is immutable for the process lifetime.' architecture_docs/07-mir-runtime.md
+grep -Fq 'Valid preflight creates no blocking-pool worker threads.' architecture_docs/07-mir-runtime.md
+grep -Fq 'submission creates the complete worker set, which is reused until process exit;' architecture_docs/07-mir-runtime.md
+grep -Fq 'production has no Aurora shutdown or join surface for this pool.' architecture_docs/07-mir-runtime.md
+grep -Fq '`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted' docs/manual/execution-model.md
+grep -Fq 'The generic pool is also process-global.' docs/manual/execution-model.md
+grep -Fq 'MIR execution, direct execution, and launched standalone native binaries' docs/manual/cli-and-tooling.md
+grep -Fq 'a non-Unicode' docs/manual/cli-and-tooling.md
+grep -Fq 'value is displayed lossily.' docs/manual/cli-and-tooling.md
+grep -Fq 'timeout or cancellation prevents submission; after insertion' docs/manual/current-limits.md
+grep -Fq 'Full-queue admission is FIFO and scheduler-aware' docs/manual/status-and-compatibility.md
+grep -Fq 'Provisional ADR-0035 blocking-I/O worker configuration' docs/manual/conformance.md
+grep -Fq '`AU4006` reports invalid process runtime configuration' docs/manual/diagnostics.md
+grep -Fq 'limits accepted pending backlog, not' docs/learn/io-process-networking.md
+grep -Fq 'cannot guarantee unrelated blocking-I/O progress while' docs/learn/io-process-networking.md
+grep -Fq 'cannot interrupt accepted work or guarantee' tutorials/19-io-and-networking.md
+grep -Fq 'unrelated blocking-I/O progress while every worker remains stuck' tutorials/19-io-and-networking.md
+grep -Fq 'AURORA_BLOCKING_WORKERS' README.md
+grep -Fq 'AURORA_BLOCKING_QUEUE_CAPACITY' CHANGELOG.md
+
+if rg -n 'blocking pool uses 2 through 8 host threads|no 0\.1 configuration or queue backpressure|count and queue are not configurable|current queue has no admission bound|configurable blocking-pool sizing[^.\n]*unavailable|bounded blocking service' \
+  README.md \
+  architecture_docs/07-mir-runtime.md \
+  docs/manual \
+  docs/learn \
+  tutorials; then
+  echo "maintained reference still describes the pre-Phase-5.9 blocking-I/O pool contract" >&2
   exit 1
 fi
 

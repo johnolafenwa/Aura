@@ -50,6 +50,7 @@ use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
+use crate::runtime_config::{blocking_io_pool_config, BlockingIoPoolConfig};
 use crate::runtime_reactor::{
     IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
 };
@@ -947,6 +948,8 @@ struct RuntimeScheduler {
 static RUNTIME_SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
 
 type BlockingIoJob = Box<dyn FnOnce() + Send + 'static>;
+#[cfg(test)]
+type BlockingIoWorkerEntry = Box<dyn FnOnce() + Send + 'static>;
 type ProtocolStepJob = Box<dyn FnOnce() + Send + 'static>;
 
 struct JsonCodecJob {
@@ -955,9 +958,71 @@ struct JsonCodecJob {
     completion: ChannelValue,
 }
 
-struct BlockingIoPool {
-    queue: Mutex<VecDeque<BlockingIoJob>>,
+struct BlockingIoAdmissionWaiter {
+    id: u64,
+    job: Option<BlockingIoJob>,
+    deadline: Option<Instant>,
+    cancellation: Option<CancellationContext>,
+    outcome: Arc<Mutex<Option<BlockingIoAdmissionOutcome>>>,
+    completion: ChannelValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BlockingIoAdmissionOutcome {
+    Accepted,
+    TimedOut,
+    Cancelled,
+}
+
+struct BlockingIoPoolState {
+    queue: VecDeque<BlockingIoJob>,
+    admission_waiters: VecDeque<BlockingIoAdmissionWaiter>,
+    next_waiter_id: u64,
+    active_jobs: usize,
+    shutting_down: bool,
+}
+
+enum BlockingIoPoolInitialization {
+    NotStarted,
+    #[allow(dead_code)] // Production workers are process-lifetime; tests join these handles.
+    Started(Vec<thread::JoinHandle<()>>),
+    Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BlockingIoWorkerStartupState {
+    Pending,
+    Run,
+    Stop,
+}
+
+struct BlockingIoWorkerStartupGate {
+    state: Mutex<BlockingIoWorkerStartupState>,
     ready: Condvar,
+}
+
+struct BlockingIoPool {
+    config: BlockingIoPoolConfig,
+    state: Mutex<BlockingIoPoolState>,
+    ready: Condvar,
+    idle: Condvar,
+    initialization: Mutex<BlockingIoPoolInitialization>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_BLOCKING_IO_ADMISSION_REGISTER_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn install_after_blocking_io_admission_register_hook(hook: impl FnOnce() + 'static) {
+    AFTER_BLOCKING_IO_ADMISSION_REGISTER_HOOK.with(|slot| {
+        assert!(
+            slot.borrow_mut().replace(Box::new(hook)).is_none(),
+            "blocking-I/O admission hook already installed"
+        );
+    });
 }
 
 struct ProtocolStepPool {
@@ -1616,49 +1681,420 @@ fn notify_runtime_scheduler_if_started() {
     }
 }
 
-impl BlockingIoPool {
-    fn start() -> Arc<Self> {
-        let pool = Arc::new(Self {
-            queue: Mutex::new(VecDeque::new()),
+#[derive(Debug)]
+struct BlockingIoPoolStartupError {
+    message: String,
+}
+
+impl fmt::Display for BlockingIoPoolStartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "AU4006: {}", self.message)
+    }
+}
+
+impl std::error::Error for BlockingIoPoolStartupError {}
+
+impl BlockingIoWorkerStartupGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(BlockingIoWorkerStartupState::Pending),
             ready: Condvar::new(),
-        });
-        let worker_count = thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(4)
-            .clamp(2, 8);
-        for _ in 0..worker_count {
-            let worker = pool.clone();
-            thread::spawn(move || worker.run());
+        })
+    }
+
+    fn wait(&self) -> bool {
+        let mut state = lock_mutex(&self.state);
+        while *state == BlockingIoWorkerStartupState::Pending {
+            state = wait_condvar(&self.ready, state);
         }
-        pool
+        *state == BlockingIoWorkerStartupState::Run
+    }
+
+    fn finish(&self, state: BlockingIoWorkerStartupState) {
+        *lock_mutex(&self.state) = state;
+        self.ready.notify_all();
+    }
+}
+
+impl BlockingIoPool {
+    fn new(config: BlockingIoPoolConfig) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            state: Mutex::new(BlockingIoPoolState {
+                queue: VecDeque::new(),
+                admission_waiters: VecDeque::new(),
+                next_waiter_id: 0,
+                active_jobs: 0,
+                shutting_down: false,
+            }),
+            ready: Condvar::new(),
+            idle: Condvar::new(),
+            initialization: Mutex::new(BlockingIoPoolInitialization::NotStarted),
+        })
+    }
+
+    fn startup_error(message: String) -> io::Error {
+        io::Error::other(BlockingIoPoolStartupError { message })
+    }
+
+    fn ensure_started_with<F>(self: &Arc<Self>, spawner: &F) -> io::Result<()>
+    where
+        F: Fn(
+            usize,
+            String,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<thread::JoinHandle<()>>,
+    {
+        let mut initialization = lock_mutex(&self.initialization);
+        match &*initialization {
+            BlockingIoPoolInitialization::Started(_) => return Ok(()),
+            BlockingIoPoolInitialization::Failed(message) => {
+                return Err(Self::startup_error(message.clone()));
+            }
+            BlockingIoPoolInitialization::NotStarted => {}
+        }
+
+        let startup_gate = BlockingIoWorkerStartupGate::new();
+        let mut workers = Vec::new();
+        if let Err(error) = workers.try_reserve_exact(self.config.worker_count) {
+            let message = format!(
+                "failed to reserve blocking-I/O worker handles for {} workers: {error}",
+                self.config.worker_count
+            );
+            *initialization = BlockingIoPoolInitialization::Failed(message.clone());
+            return Err(Self::startup_error(message));
+        }
+        for worker_index in 0..self.config.worker_count {
+            let worker = self.clone();
+            let worker_gate = startup_gate.clone();
+            let entry: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
+                if worker_gate.wait() {
+                    worker.run();
+                }
+            });
+            let name = format!("aurora-blocking-io-{worker_index}");
+            match spawner(worker_index, name, entry) {
+                Ok(handle) => workers.push(handle),
+                Err(error) => {
+                    let message =
+                        format!("failed to create blocking-I/O worker {worker_index}: {error}");
+                    startup_gate.finish(BlockingIoWorkerStartupState::Stop);
+                    for worker in workers {
+                        let _ = worker.join();
+                    }
+                    *initialization = BlockingIoPoolInitialization::Failed(message.clone());
+                    return Err(Self::startup_error(message));
+                }
+            }
+        }
+        *initialization = BlockingIoPoolInitialization::Started(workers);
+        startup_gate.finish(BlockingIoWorkerStartupState::Run);
+        Ok(())
+    }
+
+    fn finish_admission_waiter(
+        waiter: &BlockingIoAdmissionWaiter,
+        outcome: BlockingIoAdmissionOutcome,
+    ) {
+        *lock_mutex(&waiter.outcome) = Some(outcome);
+    }
+
+    fn signal_admission_waiter(waiter: BlockingIoAdmissionWaiter) {
+        let _ = waiter.completion.send(Value::Unit);
+        waiter.completion.close();
+    }
+
+    fn fill_available_admission_slots_locked(
+        &self,
+        state: &mut BlockingIoPoolState,
+    ) -> Vec<BlockingIoAdmissionWaiter> {
+        let Some(capacity) = self.config.queue_capacity else {
+            debug_assert!(state.admission_waiters.is_empty());
+            return Vec::new();
+        };
+        let mut finished = Vec::new();
+        while state.queue.len() < capacity {
+            let Some(mut waiter) = state.admission_waiters.pop_front() else {
+                break;
+            };
+            let outcome = if waiter
+                .cancellation
+                .as_ref()
+                .is_some_and(CancellationContext::is_cancelled)
+            {
+                BlockingIoAdmissionOutcome::Cancelled
+            } else if waiter
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                BlockingIoAdmissionOutcome::TimedOut
+            } else {
+                state.queue.push_back(
+                    waiter
+                        .job
+                        .take()
+                        .expect("a live blocking-I/O admission waiter owns one job"),
+                );
+                BlockingIoAdmissionOutcome::Accepted
+            };
+            Self::finish_admission_waiter(&waiter, outcome);
+            finished.push(waiter);
+        }
+        finished
     }
 
     fn run(self: Arc<Self>) {
         loop {
-            let job = {
-                let mut queue = lock_mutex(&self.queue);
+            let (job, finished_waiters) = {
+                let mut state = lock_mutex(&self.state);
                 loop {
-                    if let Some(job) = queue.pop_front() {
-                        break job;
+                    if let Some(job) = state.queue.pop_front() {
+                        state.active_jobs += 1;
+                        let finished = self.fill_available_admission_slots_locked(&mut state);
+                        break (job, finished);
                     }
-                    queue = wait_condvar(&self.ready, queue);
+                    if state.shutting_down {
+                        return;
+                    }
+                    state = wait_condvar(&self.ready, state);
                 }
             };
-            job();
+            for waiter in finished_waiters {
+                Self::signal_admission_waiter(waiter);
+            }
+            self.ready.notify_all();
+            let _ = panic::catch_unwind(AssertUnwindSafe(job));
+            let mut state = lock_mutex(&self.state);
+            state.active_jobs = state
+                .active_jobs
+                .checked_sub(1)
+                .expect("each running blocking-I/O job owns one active slot");
+            if state.active_jobs == 0
+                && state.queue.is_empty()
+                && state.admission_waiters.is_empty()
+            {
+                self.idle.notify_all();
+            }
         }
     }
 
-    fn submit(&self, job: BlockingIoJob) {
-        let mut queue = lock_mutex(&self.queue);
-        queue.push_back(job);
-        drop(queue);
-        self.ready.notify_one();
+    fn submit(
+        self: &Arc<Self>,
+        job: BlockingIoJob,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<()> {
+        self.submit_with_spawner(job, deadline, cancellation, &|worker_index, name, entry| {
+            thread::Builder::new()
+                .name(name)
+                .spawn(entry)
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!("worker {worker_index} could not start: {error}"),
+                    )
+                })
+        })
+    }
+
+    fn submit_with_spawner<F>(
+        self: &Arc<Self>,
+        job: BlockingIoJob,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+        spawner: &F,
+    ) -> io::Result<()>
+    where
+        F: Fn(
+            usize,
+            String,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<thread::JoinHandle<()>>,
+    {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        self.ensure_started_with(spawner)?;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+
+        let Some(capacity) = self.config.queue_capacity else {
+            let mut state = lock_mutex(&self.state);
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if state.shutting_down {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "blocking-I/O pool is shutting down",
+                ));
+            }
+            state.queue.push_back(job);
+            drop(state);
+            self.ready.notify_one();
+            return Ok(());
+        };
+
+        let completion = ChannelValue::new();
+        let outcome = Arc::new(Mutex::new(None));
+        let waiter_id;
+        {
+            let mut state = lock_mutex(&self.state);
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if state.shutting_down {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "blocking-I/O pool is shutting down",
+                ));
+            }
+            if state.admission_waiters.is_empty() && state.queue.len() < capacity {
+                state.queue.push_back(job);
+                drop(state);
+                self.ready.notify_one();
+                return Ok(());
+            }
+            waiter_id = state.next_waiter_id;
+            state.next_waiter_id = state.next_waiter_id.wrapping_add(1);
+            state
+                .admission_waiters
+                .push_back(BlockingIoAdmissionWaiter {
+                    id: waiter_id,
+                    job: Some(job),
+                    deadline,
+                    cancellation: cancellation.cloned(),
+                    outcome: outcome.clone(),
+                    completion: completion.clone(),
+                });
+            #[cfg(test)]
+            AFTER_BLOCKING_IO_ADMISSION_REGISTER_HOOK.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().take() {
+                    hook();
+                }
+            });
+        }
+        self.ready.notify_all();
+
+        let wake = completion.recv_result_with_deadline(deadline, cancellation);
+        let removal_outcome = match wake {
+            RecvValueResult::TimedOut => Some(BlockingIoAdmissionOutcome::TimedOut),
+            RecvValueResult::Cancelled => Some(BlockingIoAdmissionOutcome::Cancelled),
+            RecvValueResult::Value(_) | RecvValueResult::Closed => None,
+        };
+        if let Some(removal_outcome) = removal_outcome {
+            let mut removed = None;
+            let mut state = lock_mutex(&self.state);
+            if let Some(position) = state
+                .admission_waiters
+                .iter()
+                .position(|waiter| waiter.id == waiter_id)
+            {
+                let waiter = state
+                    .admission_waiters
+                    .remove(position)
+                    .expect("the located blocking-I/O waiter should remain present");
+                Self::finish_admission_waiter(&waiter, removal_outcome);
+                removed = Some(waiter);
+            }
+            drop(state);
+            if let Some(waiter) = removed {
+                Self::signal_admission_waiter(waiter);
+            }
+            self.ready.notify_all();
+        }
+
+        let result = match lock_mutex(&outcome)
+            .expect("every completed blocking-I/O admission has one outcome")
+        {
+            BlockingIoAdmissionOutcome::Accepted => Ok(()),
+            BlockingIoAdmissionOutcome::TimedOut => Err(timeout_resource_error()),
+            BlockingIoAdmissionOutcome::Cancelled => Err(cancelled_resource_error()),
+        };
+        result
+    }
+
+    #[cfg(test)]
+    fn worker_start_count(&self) -> usize {
+        match &*lock_mutex(&self.initialization) {
+            BlockingIoPoolInitialization::Started(workers) => workers.len(),
+            BlockingIoPoolInitialization::NotStarted | BlockingIoPoolInitialization::Failed(_) => 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn admission_waiter_count(&self) -> usize {
+        lock_mutex(&self.state).admission_waiters.len()
+    }
+
+    #[cfg(test)]
+    fn pending_job_count(&self) -> usize {
+        lock_mutex(&self.state).queue.len()
+    }
+
+    #[cfg(test)]
+    fn active_job_count(&self) -> usize {
+        lock_mutex(&self.state).active_jobs
+    }
+
+    #[cfg(test)]
+    fn wait_for_admission_waiters_for_test(&self, expected: usize) {
+        let deadline = Instant::now() + StdDuration::from_secs(2);
+        while self.admission_waiter_count() < expected {
+            assert!(
+                Instant::now() < deadline,
+                "blocking-I/O admission waiter did not register"
+            );
+            thread::yield_now();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_until_idle_for_test(&self) {
+        let mut state = lock_mutex(&self.state);
+        while state.active_jobs != 0
+            || !state.queue.is_empty()
+            || !state.admission_waiters.is_empty()
+        {
+            state = wait_condvar(&self.idle, state);
+        }
+    }
+
+    #[cfg(test)]
+    fn shutdown_for_test(&self) {
+        let waiters = {
+            let mut state = lock_mutex(&self.state);
+            state.shutting_down = true;
+            let waiters: Vec<_> = state.admission_waiters.drain(..).collect();
+            for waiter in &waiters {
+                Self::finish_admission_waiter(waiter, BlockingIoAdmissionOutcome::Cancelled);
+            }
+            waiters
+        };
+        for waiter in waiters {
+            Self::signal_admission_waiter(waiter);
+        }
+        self.ready.notify_all();
+        let workers = {
+            let mut initialization = lock_mutex(&self.initialization);
+            match std::mem::replace(
+                &mut *initialization,
+                BlockingIoPoolInitialization::Failed("pool was shut down".to_string()),
+            ) {
+                BlockingIoPoolInitialization::Started(workers) => workers,
+                BlockingIoPoolInitialization::NotStarted
+                | BlockingIoPoolInitialization::Failed(_) => Vec::new(),
+            }
+        };
+        for worker in workers {
+            worker.join().expect("blocking-I/O test worker should stop");
+        }
     }
 }
 
-fn blocking_io_pool() -> &'static Arc<BlockingIoPool> {
-    static POOL: OnceLock<Arc<BlockingIoPool>> = OnceLock::new();
-    POOL.get_or_init(BlockingIoPool::start)
+fn blocking_io_pool() -> io::Result<&'static Arc<BlockingIoPool>> {
+    static POOL: OnceLock<std::result::Result<Arc<BlockingIoPool>, String>> = OnceLock::new();
+    match POOL.get_or_init(|| {
+        blocking_io_pool_config()
+            .map(BlockingIoPool::new)
+            .map_err(|diagnostic| diagnostic.message)
+    }) {
+        Ok(pool) => Ok(pool),
+        Err(message) => Err(BlockingIoPool::startup_error(message.clone())),
+    }
 }
 
 const PROTOCOL_STEP_QUEUE_CAPACITY: usize = 64;
@@ -2278,9 +2714,6 @@ where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
-    if with_current_lightweight_task_context(|_| ()).is_none() {
-        return operation();
-    }
     run_blocking_io_with_deadline(operation, None, cancellation)
 }
 
@@ -2439,18 +2872,83 @@ where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
+    let pool = match blocking_io_pool() {
+        Ok(pool) => pool,
+        Err(error) => raise_blocking_io_pool_startup_failure(error),
+    };
+    run_blocking_io_with_deadline_on_pool(operation, deadline, cancellation, pool)
+}
+
+fn raise_blocking_io_pool_startup_failure(error: io::Error) -> ! {
+    let message = error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<BlockingIoPoolStartupError>())
+        .map(|source| source.message.clone())
+        .unwrap_or_else(|| format!("failed to initialize the blocking-I/O pool: {error}"));
+    panic::panic_any(LightweightTaskFailureSignal(Diagnostic::coded(
+        "AU4006", message,
+    )));
+}
+
+fn preserve_blocking_io_submission_error(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error
+                .get_ref()
+                .is_some_and(|source| source.is::<BlockingIoPoolStartupError>()) =>
+        {
+            raise_blocking_io_pool_startup_failure(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn catch_lightweight_task_failure<T>(
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match panic::catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result,
+        Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+            Ok(signal) => Err(signal.0),
+            Err(payload) => panic::resume_unwind(payload),
+        },
+    }
+}
+
+fn run_blocking_io_with_deadline_on_pool<T, F>(
+    operation: F,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+    pool: &Arc<BlockingIoPool>,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
     check_deadline_and_cancellation(deadline, cancellation)?;
 
     let completion = ChannelValue::new();
     let result = Arc::new(Mutex::new(None::<io::Result<T>>));
     let result_slot = result.clone();
     let completion_signal = completion.clone();
-    blocking_io_pool().submit(Box::new(move || {
-        let outcome = operation();
-        *lock_mutex(&result_slot) = Some(outcome);
-        let _ = completion_signal.send(Value::Unit);
-        completion_signal.close();
-    }));
+    preserve_blocking_io_submission_error(pool.submit(
+        Box::new(move || {
+            let outcome = panic::catch_unwind(AssertUnwindSafe(operation))
+                .map_err(|payload| {
+                    io::Error::other(format!(
+                        "blocking I/O operation panicked: {}",
+                        task_panic_message(&*payload)
+                    ))
+                })
+                .and_then(|outcome| outcome);
+            *lock_mutex(&result_slot) = Some(outcome);
+            let _ = completion_signal.send(Value::Unit);
+            completion_signal.close();
+        }),
+        deadline,
+        cancellation,
+    ))?;
 
     match completion.recv_result_with_deadline(deadline, cancellation) {
         RecvValueResult::Value(_) => lock_mutex(&result).take().unwrap_or_else(|| {
@@ -3824,6 +4322,7 @@ pub(crate) fn run_lightweight_root_task<F>(entry: F) -> std::result::Result<Valu
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
+    crate::runtime_config::validate_runtime_configuration()?;
     install_lightweight_task_panic_hook();
     run_lightweight_root_task_on_workers(lightweight_worker_count()?, Box::new(entry), None)
 }
@@ -3847,6 +4346,7 @@ where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
     C: FnOnce() + Send + 'static,
 {
+    crate::runtime_config::validate_runtime_configuration()?;
     install_lightweight_task_panic_hook();
     run_lightweight_root_task_on_workers(
         lightweight_worker_count()?,
@@ -7716,16 +8216,29 @@ fn resolve_socket_addresses_before(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Vec<SocketAddr>> {
+    let pool = match blocking_io_pool() {
+        Ok(pool) => pool,
+        Err(error) => raise_blocking_io_pool_startup_failure(error),
+    };
+    resolve_socket_addresses_before_on_pool_with(address, deadline, cancellation, pool, |address| {
+        address
+            .to_socket_addrs()
+            .map(|addresses| addresses.collect())
+    })
+}
+
+fn resolve_socket_addresses_before_on_pool_with<F>(
+    address: &str,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+    pool: &Arc<BlockingIoPool>,
+    resolver: F,
+) -> io::Result<Vec<SocketAddr>>
+where
+    F: FnOnce(String) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+{
     let address = address.to_string();
-    run_blocking_io_with_deadline(
-        move || {
-            address
-                .to_socket_addrs()
-                .map(|addresses| addresses.collect())
-        },
-        deadline,
-        cancellation,
-    )
+    run_blocking_io_with_deadline_on_pool(move || resolver(address), deadline, cancellation, pool)
 }
 
 fn connect_resolved_tcp_candidates_with_clock<T, N, C>(
@@ -7831,6 +8344,29 @@ impl TcpStreamValue {
         )
     }
 
+    #[cfg(test)]
+    fn connect_with_operations_on_pool<R, C>(
+        address: &str,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+        pool: &Arc<BlockingIoPool>,
+        resolve: R,
+        connect: C,
+    ) -> io::Result<Self>
+    where
+        R: FnOnce(String) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+        C: FnMut(SocketAddr, Option<StdDuration>) -> io::Result<StdTcpStream> + Send + 'static,
+    {
+        Self::connect_with_deadline_and_operations_on_pool(
+            address,
+            deadline_from_timeout(timeout)?,
+            cancellation,
+            pool,
+            resolve,
+            connect,
+        )
+    }
+
     fn connect_with_deadline_and_operations<R, C>(
         address: &str,
         deadline: Option<Instant>,
@@ -7842,8 +8378,34 @@ impl TcpStreamValue {
         R: FnOnce(String) -> io::Result<Vec<SocketAddr>> + Send + 'static,
         C: FnMut(SocketAddr, Option<StdDuration>) -> io::Result<StdTcpStream> + Send + 'static,
     {
+        let pool = match blocking_io_pool() {
+            Ok(pool) => pool,
+            Err(error) => raise_blocking_io_pool_startup_failure(error),
+        };
+        Self::connect_with_deadline_and_operations_on_pool(
+            address,
+            deadline,
+            cancellation,
+            pool,
+            resolve,
+            connect,
+        )
+    }
+
+    fn connect_with_deadline_and_operations_on_pool<R, C>(
+        address: &str,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+        pool: &Arc<BlockingIoPool>,
+        resolve: R,
+        connect: C,
+    ) -> io::Result<Self>
+    where
+        R: FnOnce(String) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+        C: FnMut(SocketAddr, Option<StdDuration>) -> io::Result<StdTcpStream> + Send + 'static,
+    {
         let address = address.to_string();
-        let stream = run_blocking_io_with_deadline(
+        let stream = run_blocking_io_with_deadline_on_pool(
             move || {
                 let addresses = resolve(address.clone())?;
                 connect_resolved_tcp_candidates_with_clock(
@@ -7856,6 +8418,7 @@ impl TcpStreamValue {
             },
             deadline,
             cancellation,
+            pool,
         )?;
         Self::from_std(stream)
     }

@@ -16,7 +16,16 @@ import io
 
 Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior. An explicit timeout must be non-negative, fit the host timer range, and produce a representable deadline; otherwise the operation returns `io.Error.InvalidInput`. Deadline overflow never means no deadline. This input policy is accepted under ADR-0019.
 
-Hostname resolution, socket binding, UDP destination resolution, and blocking TCP or Unix connect syscalls run on Aurora's bounded blocking service rather than on the lightweight-task scheduler. A connect timeout is one end-to-end budget: it includes DNS resolution and is shared by every resolved-address attempt, then by any remaining TLS, HTTP, or WebSocket handshake work. Cancellation ends the Aurora wait promptly; host work that cannot be interrupted may finish later and is discarded safely.
+Hostname resolution, socket binding, UDP destination resolution, and blocking
+TCP or Unix connect syscalls run on Aurora's generic blocking-I/O pool rather
+than on the lightweight-task scheduler. The pool has a configurable worker
+count and optional pending-queue bound; a full bounded queue parks Aurora
+callers through FIFO scheduler-aware admission. A connect timeout is one
+end-to-end budget: it includes admission and DNS resolution, is shared by every
+resolved-address attempt, and then covers any remaining TLS, HTTP, or
+WebSocket handshake work. Cancellation or expiry before acceptance prevents
+submission. Accepted host work cannot be interrupted, may finish later, and
+has its result discarded safely.
 
 Text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid bytes. TCP, Unix, and TLS deadlines return `io.Error.TimedOut`; a UDP receive deadline returns `Ok(None)`. Cancellation is reported as `io.Error.Cancelled` where the operation participates in scheduler cancellation.
 
@@ -252,7 +261,17 @@ Text members accept or return `String` and enforce UTF-8. Byte members accept or
 
 ## Runtime Semantics
 
-Resolution, binding, and connect work use the bounded blocking service. One explicit connect timeout is an end-to-end budget shared across name resolution, resolved-address attempts, and remaining protocol handshake work. Before host work begins, the runtime rejects a negative, host-unrepresentable, or deadline-overflowing timeout as `io.Error.InvalidInput`; it never treats such a value as omission. TCP, Unix, TLS, HTTP, and WebSocket waiting failures return typed errors as specified; UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and returns `io.Error.Cancelled` on cancellation-aware operations, while already-started host work may complete later and is discarded.
+Resolution, binding, and connect work use the generic blocking-I/O pool. One
+explicit connect timeout is an end-to-end budget shared across queue admission,
+name resolution, resolved-address attempts, and remaining protocol handshake
+work. Before host work begins, the runtime rejects a negative,
+host-unrepresentable, or deadline-overflowing timeout as
+`io.Error.InvalidInput`; it never treats such a value as omission. TCP, Unix,
+TLS, HTTP, and WebSocket waiting failures return typed errors as specified;
+UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and
+returns `io.Error.Cancelled` on cancellation-aware operations. Before pool
+acceptance it prevents submission; after acceptance, host work may complete
+later and its result is discarded.
 
 TCP is a byte stream; UDP preserves datagrams. Text reads decode strictly and remove only their documented line ending. HTTP supports content-length, chunked, and connection-close framing under the stated parser caps. WebSocket receives complete text or binary messages, with text mode enforcing UTF-8. TLS verifies the named peer using the configured CA file or, for the high-level HTTPS client, the maintained Web PKI root set.
 

@@ -41,4 +41,4 @@ test locations that must prove completion.
 32. [ADR-0032: Guarded lightweight-task stacks](0032-guarded-lightweight-task-stacks.md)
 33. [ADR-0033: Structural Transfer and task-result consumption](0033-structural-transfer-and-task-results.md) — implemented provisionally in Phase 5.6, pending checkpoint ratification
 34. [ADR-0034: Typed heterogeneous `select`](0034-typed-heterogeneous-select.md) — implemented provisionally in Phase 5.8, pending checkpoint ratification
-35. [ADR-0035: Configurable blocking-I/O pool](0035-configurable-blocking-io-pool.md) — provisional Phase 5.9 design, implementation pending
+35. [ADR-0035: Configurable blocking-I/O pool](0035-configurable-blocking-io-pool.md) — implemented provisionally in Phase 5.9, pending checkpoint ratification
