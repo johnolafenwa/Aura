@@ -357,9 +357,9 @@ before-reactor baseline is recorded in
   frozen coverage result, contractual after-stage benchmark, scope-qualified
   512 KiB default, and massive-concurrency escape-hatch evidence are all
   recorded above. Coverage floors remain frozen at 96.13/96.89/94.35.
-- Phase 5.5 scheduler-soundness implementation is in progress. The previous
-  nested-spawn path reconstructed a second live mutable scheduler reference
-  from a raw `*mut LightweightTaskScheduler`; that aliased
+- Phase 5.5 scheduler soundness is implemented and verified in `ea92897`.
+  The previous nested-spawn path reconstructed a second live mutable scheduler
+  reference from a raw `*mut LightweightTaskScheduler`; that aliased
   `&mut *scheduler` pattern is replaced by an owned FIFO request broker
   whose only mutable scheduler consumer is the scheduler driver. FIFO is an
   internal admission invariant, not a language scheduling-order guarantee.
@@ -411,16 +411,21 @@ before-reactor baseline is recorded in
   functions (96.910357%), and 99,304/105,216 regions (94.381083%), above the
   frozen 96.13/96.89/94.35 floors. LSP coverage remains 100%: 895/895
   statements and lines, 246/246 branches, and 49/49 functions.
-- Phase 5.5 is not yet complete. The clean contractual after-stage benchmark,
-  benchmark-note update, and isolated stage commit family remain pending. No
-  performance claim is recorded until that benchmark runs on the clean commit.
+- The clean contractual after-stage benchmark was captured from `ea92897` on
+  the Mac14,9 baseline. All gates pass except the already-recorded
+  massive-concurrency RSS escape hatch: 10,000 sleepers peak at 206,815,232
+  bytes, standalone timer p99 is 2 ms, worst timer arm span is 5 ms, idle CPU
+  is 0.000018876%, and starvation latency is 13 ms. The 100,000-sleeper plus
+  1,000-timer workload peaks at 1,962,000,384 bytes with 4 ms arm span and
+  4 ms p99. The contractual report, full before/after table, provenance, and
+  SHA-256 are recorded in `work/2026-07-27-phase5-runtime-benchmarks.md`.
+- Phase 5.5 is complete. Its measured outcome supports a soundness change
+  without material performance regression; it does not add a performance or
+  massive-concurrency marketing claim.
 
 ## Follow-up
 
-Commit the verified Phase 5.5 implementation, capture and record its clean
-contractual after-stage benchmark, and close the scheduler-soundness stage.
-Advance next to structural
-Transfer and static single-consumer task-result enforcement only after that
-commit is green. The massive-concurrency memory claim remains unavailable
-under the recorded escape hatch. Coverage floors remain frozen until the
-one-time Batch 4 sign-off re-ratchet.
+Advance to structural Transfer and static single-consumer task-result
+enforcement. The massive-concurrency memory claim remains unavailable under
+the recorded escape hatch. Coverage floors remain frozen until the one-time
+Batch 4 sign-off re-ratchet.

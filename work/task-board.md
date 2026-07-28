@@ -180,7 +180,8 @@ Last updated: 2026-07-28
   Rust runtime HTTP round trip now succeeds when only its protocol-calling
   children are forced to 256 KiB; that proves deep host frames are offloaded
   to protocol workers, not that 256 KiB is a safe whole-program default.
-- Phase 5.5 scheduler soundness is active. The raw
+- Phase 5.5 scheduler soundness is complete in implementation commit
+  `ea92897`. The raw
   `*mut LightweightTaskScheduler` and reconstructed `&mut *scheduler`
   nested-spawn path has been replaced by an owned FIFO request broker, leaving
   the scheduler driver as the only mutable scheduler owner. FIFO describes
@@ -216,12 +217,15 @@ Last updated: 2026-07-28
   4,454/4,596 functions (96.910357%), and 99,304/105,216 regions
   (94.381083%); LSP coverage remains 100%. No synthetic coverage test or
   justified exclusion was added.
-- Remaining Phase 5.5 gates: create the verified implementation commit,
-  capture and validate the clean contractual after-stage benchmark, update the
-  benchmark evidence and final stage status, and close the isolated commit
-  family. No performance claim has been made. Phase 5.6 structural Transfer and static
-  single-consumer task-result enforcement begins only after Phase 5.5 is green
-  and committed.
+- The clean contractual Phase 5.5 benchmark from `ea92897` passes the 10,000
+  sleeper, timer, idle, and starvation gates. The 100,000-sleeper RSS gate
+  remains the sole failure under the accepted Phase 5.4 escape hatch, while
+  its timer arm-span and p99 controls pass. Full provenance, raw-report hash,
+  and before/after measurements are recorded in
+  `work/2026-07-27-phase5-runtime-benchmarks.md`. The soundness refactor shows
+  no material performance regression and makes no new performance claim.
+- Phase 5.6 structural Transfer and static single-consumer task-result
+  enforcement is next. It has not started.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

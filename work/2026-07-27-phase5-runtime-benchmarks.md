@@ -385,3 +385,61 @@ reservation but cannot remove that physical-page floor; the occasional lower
 RSS run reflects macOS reclaim/compression variability and is not a stable
 contract. Beating the ceiling requires a later stackless or safely
 copy-and-decommit architecture, not a smaller Phase 5.4 reservation.
+
+## Phase 5.5 scheduler soundness
+
+The accepted Phase 5.4 post-stack-diet report is the before-stage baseline.
+It records clean commit `0dddb43ff83d96d9b1f847e62afb9aa0edf5fb92`;
+the later `f72fd2f` commit changes documentation only. Phase 5.5 is a
+soundness refactor rather than a performance feature: it replaces aliased
+scheduler mutation with owned prepared-task admission, makes teardown terminal
+for every exposed task handle, and contains generated direct-task state without
+Rust-unwinding through Cranelift frames. The complete workload suite was still
+repeated so a performance regression could not hide behind that intent.
+
+The clean-tree after-stage command was:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+/Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
+  scripts/bench-scalable-runtime.py \
+  --label phase55-after-scheduler-soundness \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --idle-seconds 30 \
+  --json /tmp/aurora-phase55-after-scheduler-soundness.json
+```
+
+The report records clean implementation commit
+`ea928975d867a51771553602aa1eba51cd0ebd37`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. The
+host remains the Mac14,9 Apple M2 Pro with 10 physical/logical cores and 16 GiB
+RAM. All workload source hashes and runner parameters match the Phase 5.4
+baseline. The freshly qualified locked release `aura` SHA-256 is
+`1bf073ab90b26dadbf3c0bfeb18bce086b30728655c9e7c19965214d932c8def`.
+Raw report: `/private/tmp/aurora-phase55-after-scheduler-soundness.json`;
+SHA-256:
+`d0f3f96a02a2280cac728b6da80f9a2e35c6f893ab22b591c4f73fe627749f89`.
+
+| Workload | Repetitions | Contractual post-soundness result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 206,815,232 bytes worst whole-process peak RSS; 199,458,816 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,465,106,432 bytes best and 1,962,000,384 bytes worst whole-process peak RSS; 1,954,578,432 bytes worst incremental peak RSS; 4 ms worst arm span; 4 ms worst p99 | RSS FAIL against 1.5 GiB; timer gates PASS under the recorded escape hatch |
+| 1,000 timers | 3 | arm spans 5, 3, 3 ms; p99 2 ms in every run | PASS |
+| 10 idle tasks | 3 | 0.00001887614530740043% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 13 ms worst result | PASS, at most 50 ms |
+| V6 int32 loop | 5 plus warmup | median 32.511584 ms; MAD 0.089501 ms; p95 46.254458 ms; best 32.422083 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | median 9.970917 ms; MAD 0.045501 ms; p95 11.638750 ms; best 9.925416 ms | recorded stage evidence |
+
+Every process completed naturally with its exact protocol marker, zero status,
+empty standard error, and no sampling error. The contractual runner exits
+nonzero solely because the already-accepted massive-concurrency RSS gate
+remains unavailable; every other gate passes. Relative to the Phase 5.4
+baseline, the 10,000-sleeper worst peak changes by less than 0.7%, the
+massive-workload worst peak improves by about 0.8%, standalone timer p99
+improves from 3 ms to 2 ms, and the other controls remain comfortably inside
+their limits. These are evidence of no material regression, not new
+performance claims. The one-resident-page stackful-coroutine floor and the
+resulting restriction on massive-concurrency marketing are unchanged.
