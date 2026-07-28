@@ -75,6 +75,10 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
 fn uncoded_constructors_assign_stable_phase_banded_codes() {
     assert_eq!(Diagnostic::new("unexpected character `@`").code, "AU1001");
     assert_eq!(
+        Diagnostic::new("invalid escape sequence `\\q`").code,
+        "AU1001"
+    );
+    assert_eq!(
         Diagnostic::new("expected expression, found end of file").code,
         "AU1101"
     );

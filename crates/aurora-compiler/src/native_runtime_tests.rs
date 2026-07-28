@@ -22,6 +22,8 @@ use crate::runtime_value::{
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
+#[cfg(unix)]
+use corosensei::stack::Stack;
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -644,8 +646,12 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
 fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_still_consume() {
     use crate::json_codec::JsonValue;
 
-    for name in ["json::as_bool", "json::as_float"] {
-        let source = direct_json_value(JsonValue::Int(7));
+    for (name, input) in [
+        ("json::as_bool", JsonValue::Int(7)),
+        ("json::as_int", JsonValue::Bool(true)),
+        ("json::as_float", JsonValue::Int(7)),
+    ] {
+        let source = direct_json_value(input);
         let result = direct_json_host_builtin_call(name, &[source]);
         expect_option_none(result);
         unsafe {
@@ -934,6 +940,84 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
         super::with_value(source, |value| match value {
             Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
             other => panic!("expected String, found {other:?}"),
+        });
+        release_value(source);
+    }
+}
+
+#[test]
+fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source() {
+    let source = boxed_value(Value::String("null".to_string()));
+    let source_address = source as usize;
+    let clone_count = super::direct_value_clone_count();
+
+    let result = run_lightweight_root_task(move || {
+        let (_, first_reservation) =
+            crate::runtime_value::prepare_json_codec_source(|| Ok("held-one".to_string()))?;
+        let (_, second_reservation) =
+            crate::runtime_value::prepare_json_codec_source(|| Ok("held-two".to_string()))?;
+
+        let parse = spawn_lightweight_task(move || {
+            unsafe {
+                super::retain_untracked_value(source_address as *mut OpaqueValue);
+            }
+            let args = super::DirectHostArgBuffer {
+                handles: vec![source_address as i64],
+            };
+            super::evaluate_direct_json_host_builtin("json::parse", &args)
+        })?;
+        crate::runtime_value::yield_now_with_runtime_scheduler();
+
+        let source = unsafe { &*(source_address as *mut OpaqueValue) };
+        let mut source_guard = source
+            .value
+            .try_write()
+            .expect("codec saturation must park before the direct adapter borrows its source");
+        match &mut *source_guard {
+            Value::String(source) => *source = "true".to_string(),
+            other => panic!("expected direct JSON source String, found {other:?}"),
+        }
+        drop(source_guard);
+
+        drop(first_reservation);
+        drop(second_reservation);
+
+        match parse
+            .wait_result_with_cancellation_observed(
+                Some(StdDuration::from_secs(2)),
+                None,
+            )
+            .expect("the bounded parse wait should be representable")
+        {
+            TaskWaitStatus::Ready(Ok(Value::EnumVariant(variant)))
+                if variant.enum_name == "Result"
+                    && variant.variant_name == "Ok"
+                    && matches!(
+                        variant.payloads.as_slice(),
+                        [Value::EnumVariant(parsed)]
+                            if parsed.enum_name == "json.Value"
+                                && parsed.variant_name == "Bool"
+                                && parsed.payloads == vec![Value::Bool(true)]
+                    ) => {}
+            other => panic!(
+                "the admitted parse must copy the source after capacity becomes available, found {other:?}"
+            ),
+        }
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("the direct JSON admission probe should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "the direct JSON adapter must borrow rather than clone the opaque source value"
+    );
+    unsafe {
+        super::with_value(source, |value| {
+            assert_eq!(value, &Value::String("true".to_string()))
         });
         release_value(source);
     }
@@ -2435,7 +2519,15 @@ fn direct_print_helpers_are_callable() {
     super::aurora_direct_print_f64(7.0);
     super::aurora_direct_print_bool(0);
     super::aurora_direct_print_bool(1);
-    super::aurora_direct_print_value(string_value(""));
+    let value = string_value("");
+    let clone_count = super::direct_value_clone_count();
+    super::aurora_direct_print_value(value);
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "printing a direct runtime value must render the shared value without cloning it"
+    );
+    unsafe { release_value(value) };
     expect_result_ok_unit(super::aurora_direct_io_write(string_value("")));
     expect_result_ok_unit(super::aurora_direct_io_flush());
 }
@@ -5387,6 +5479,8 @@ fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
                 1,
                 group,
                 1,
+                1,
+                crate::call::MIN_TASK_STACK_BYTES,
             )
         };
         let joined = super::aurora_direct_task_join(task);
@@ -5421,6 +5515,230 @@ fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
 }
 
 #[test]
+fn native_runtime_invalid_task_stack_releases_transferred_arguments() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("invalid-stack retained argument");
+    let argument_address = argument as usize;
+    let group = super::aurora_direct_task_group_new();
+    let group_address = group as usize;
+    let result = run_lightweight_root_task(move || {
+        let argument = argument_address as *mut OpaqueValue;
+        let group = group_address as *mut OpaqueValue;
+        let args = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(args, 0, argument as i64);
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_fresh_duration as *const () as usize as i64,
+                    args,
+                    1,
+                    1,
+                    group,
+                    1,
+                    1,
+                    crate::call::MIN_TASK_STACK_BYTES - 1,
+                )
+            })
+        });
+        Ok(Value::Unit)
+    });
+    let error = result.expect_err("an invalid explicit stack must trap");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "task stack size must be between 262144 and 67108864 bytes, found 262143"
+    );
+    assert_eq!(
+        unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+        1,
+        "rejecting the stack size must release the argument-buffer retain"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "rejecting the stack size must release its external-state claim flag"
+    );
+    unsafe {
+        release_value(argument);
+        release_value(group);
+    }
+}
+
+fn rejected_direct_task_start(
+    argument: *mut OpaqueValue,
+    group: *mut OpaqueValue,
+    stack_size_present: i64,
+    stack_size: i64,
+) -> Diagnostic {
+    let argument_address = argument as usize;
+    let group_address = group as usize;
+    run_lightweight_root_task(move || {
+        let args = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(args, 0, argument_address as *mut OpaqueValue as i64);
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_fresh_duration as *const () as usize as i64,
+                    args,
+                    1,
+                    1,
+                    group_address as *mut OpaqueValue,
+                    1,
+                    stack_size_present,
+                    stack_size,
+                )
+            })
+        });
+        Ok(Value::Unit)
+    })
+    .expect_err("the invalid direct task start should trap")
+}
+
+#[test]
+fn native_runtime_task_start_validation_releases_owned_abi_state() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let cases = [
+        (
+            std::ptr::null_mut(),
+            1,
+            crate::call::MIN_TASK_STACK_BYTES,
+            "task starting requires a `TaskGroup`".to_string(),
+            None,
+        ),
+        (
+            bool_value(true),
+            1,
+            crate::call::MIN_TASK_STACK_BYTES,
+            "expected `TaskGroup`, found `bool`".to_string(),
+            None,
+        ),
+        (
+            super::aurora_direct_task_group_new(),
+            1,
+            crate::call::MAX_TASK_STACK_BYTES + 1,
+            format!(
+                "task stack size must be between {} and {} bytes, found {}",
+                crate::call::MIN_TASK_STACK_BYTES,
+                crate::call::MAX_TASK_STACK_BYTES,
+                crate::call::MAX_TASK_STACK_BYTES + 1
+            ),
+            Some("AU4005"),
+        ),
+        (
+            super::aurora_direct_task_group_new(),
+            2,
+            crate::call::MIN_TASK_STACK_BYTES,
+            "invalid task-start stack-presence flag".to_string(),
+            None,
+        ),
+    ];
+
+    for (group, presence, size, expected_message, expected_code) in cases {
+        let argument = string_value("rejected task-start argument");
+        let error = rejected_direct_task_start(argument, group, presence, size);
+        assert_eq!(error.message, expected_message);
+        if let Some(expected_code) = expected_code {
+            assert_eq!(error.code, expected_code);
+        }
+        assert_eq!(
+            unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+            1,
+            "every rejected ABI path must release the argument-buffer retain"
+        );
+        assert_eq!(
+            super::direct_task_claim_flag_live_count(),
+            baseline,
+            "every rejected ABI path must release its external-state claim flag"
+        );
+        unsafe {
+            release_value(argument);
+            if !group.is_null() {
+                release_value(group);
+            }
+        }
+    }
+}
+
+#[test]
+fn native_runtime_task_stack_allocation_failure_releases_transferred_arguments() {
+    let baseline = super::direct_task_claim_flag_live_count();
+    let argument = string_value("allocation-failure retained argument");
+    let argument_address = argument as usize;
+    let group = super::aurora_direct_task_group_new();
+    let group_address = group as usize;
+    let result = run_lightweight_root_task(move || {
+        let argument = argument_address as *mut OpaqueValue;
+        let group = group_address as *mut OpaqueValue;
+        let args = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(args, 0, argument as i64);
+        crate::runtime_value::fail_next_lightweight_task_stack_allocation();
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_fresh_duration as *const () as usize as i64,
+                    args,
+                    1,
+                    1,
+                    group,
+                    1,
+                    1,
+                    crate::call::MIN_TASK_STACK_BYTES,
+                )
+            })
+        });
+        Ok(Value::Unit)
+    });
+    let error = result.expect_err("injected stack allocation failure must trap");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "injected Aurora task stack allocation failure"
+    );
+    assert_eq!(
+        unsafe { &*argument }.ref_count.load(Ordering::Acquire),
+        1,
+        "allocation failure must release the argument-buffer retain"
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "allocation failure must release its external-state claim flag"
+    );
+    unsafe {
+        release_value(argument);
+        release_value(group);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lightweight_task_stack_allocation_rounds_up_and_includes_a_guard_page() {
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    assert!(page_size.is_power_of_two());
+    let requested = usize::try_from(crate::call::MIN_TASK_STACK_BYTES)
+        .expect("minimum task stack size fits usize")
+        + 1;
+    let stack = crate::runtime_value::allocate_lightweight_task_stack(requested)
+        .expect("minimum non-page-aligned task stack should allocate");
+    let reservation = stack.base().get() - stack.limit().get();
+    let expected_reservation = requested
+        .checked_add(page_size + page_size - 1)
+        .expect("test stack reservation should not overflow")
+        & !(page_size - 1);
+    assert_eq!(
+        reservation, expected_reservation,
+        "the reservation must page-round the requested usable bytes plus one guard page"
+    );
+    assert!(reservation >= requested + page_size);
+
+    let maximum = usize::try_from(crate::call::MAX_TASK_STACK_BYTES)
+        .expect("maximum task stack size fits usize");
+    let maximum_stack = crate::runtime_value::allocate_lightweight_task_stack(maximum)
+        .expect("maximum accepted task stack should allocate");
+    assert!(maximum_stack.base().get() - maximum_stack.limit().get() >= maximum + page_size);
+}
+
+#[test]
 fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
     let baseline = super::direct_task_claim_flag_live_count();
     let external = string_value("spawn failure argument");
@@ -5437,6 +5755,7 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
             args_address,
             claim_flag_address,
             true,
+            None,
         )
     }
     .expect_err("starting outside a scheduler should fail");
@@ -5470,6 +5789,8 @@ fn native_runtime_direct_task_claim_flag_survives_late_scope_unwind() {
                 1,
                 group,
                 1,
+                0,
+                0,
             )
         };
         let joined = super::aurora_direct_task_join(task);
@@ -5513,6 +5834,8 @@ fn native_runtime_direct_task_external_state_survives_panic_before_result_handof
                 1,
                 group,
                 1,
+                0,
+                0,
             )
         };
         let joined = super::aurora_direct_task_join(task);
@@ -5885,6 +6208,8 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
                 1,
                 group,
                 1,
+                0,
+                0,
             ))
         };
         let Value::Task(task) = task else {
@@ -7928,6 +8253,18 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 let buffer = super::aurora_direct_arg_buffer_new(1);
                 super::aurora_direct_arg_buffer_store(buffer, -1, int_value(1) as i64);
             }
+            "task-start-negative-arg-count" => unsafe {
+                super::aurora_direct_start_task_call(
+                    direct_task_fresh_duration as *const () as usize as i64,
+                    std::ptr::null(),
+                    -1,
+                    1,
+                    std::ptr::null_mut(),
+                    1,
+                    0,
+                    0,
+                );
+            },
             "cleanup-negative-arg-count" => {
                 super::aurora_direct_register_cleanup(1, std::ptr::null_mut(), -1);
             }
@@ -9179,6 +9516,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         ("arg-buffer-negative-size", "invalid arg buffer size"),
         ("arg-buffer-negative-index", "invalid arg index"),
+        (
+            "task-start-negative-arg-count",
+            "invalid task-start arg count",
+        ),
         ("cleanup-negative-arg-count", "invalid cleanup arg count"),
         ("cleanup-null-thunk", "invalid cleanup thunk pointer"),
         (
@@ -11599,6 +11940,8 @@ fn native_runtime_direct_forced_exit_releases_frame_owned_argument_references() 
                     1,
                     group,
                     1,
+                    0,
+                    0,
                 )
             };
             let joined = super::aurora_direct_task_join(task);
@@ -11648,6 +11991,8 @@ fn native_runtime_direct_cancellation_releases_frame_owned_argument_references()
                     1,
                     group,
                     1,
+                    0,
+                    0,
                 )
             };
             let cancelled = super::aurora_direct_task_group_cancel(group);
@@ -12486,6 +12831,15 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
         ),
         1,
         "an untagged tuple should infer its structural element types"
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            left,
+            b"(?Number, ?Text)".as_ptr(),
+            "(?Number, ?Text)".len(),
+        ),
+        1,
+        "an untagged tuple must match wildcard patterns from its structural element metadata"
     );
     let equality = super::aurora_direct_binary_value(5, left, right);
     assert!(expect_bool_boxed(equality));

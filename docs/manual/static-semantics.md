@@ -301,10 +301,12 @@ The managed binding cannot be moved out in a way that would prevent required cle
 
 ## Tasks And Static Safety
 
-`TaskGroup.start` and `start_soon` accept named functions and associated methods
-without `self`. Target arguments are copied or moved into task-owned capture
-storage independently of the target ABI. Bare shared target parameters borrow
-that storage for the child call; `own` parameters
+`TaskGroup.start`, `start_soon`, `start_with_stack`, and
+`start_soon_with_stack` accept named functions and associated methods without
+`self`. The explicit-stack methods first require an exact `int64` capacity.
+Target arguments are copied or moved into task-owned capture storage
+independently of the target ABI. Bare shared target parameters borrow that
+storage for the child call; `own` parameters
 consume it. Generic targets also enforce their inferred clone-safety
 obligations after specialization. `mut` target parameters are rejected.
 

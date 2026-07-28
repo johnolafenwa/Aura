@@ -306,8 +306,10 @@ with `AU3007`.
 
 ## Tasks And Borrowing
 
-`TaskGroup.start` and `start_soon` accept named functions or associated methods
-with bare shared or `own` parameters. `mut` targets are rejected.
+The four `TaskGroup` start methods accept named functions or associated
+methods with bare shared or `own` parameters. `mut` targets are rejected. The
+two `_with_stack` forms add an `int64` capacity argument before the callable;
+they do not change capture ownership.
 
 ```python
 def worker(label: String):

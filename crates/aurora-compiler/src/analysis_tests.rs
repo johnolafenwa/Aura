@@ -1150,6 +1150,25 @@ fn analysis_recovery_helpers_cover_member_error_paths() {
         recover_checked_program_after_member_errors(&source, &mut check_program);
     assert!(recovered_after_members.is_some());
 
+    let mid_line_incomplete_member = [
+        "class Counter:",
+        "    value: int32",
+        "",
+        "def main() -> int32:",
+        "    counter = Counter(value=1)",
+        "    counter. + 1",
+        "    return 0",
+    ]
+    .join("\n");
+    assert!(
+        recover_checked_program_after_member_errors(
+            &mid_line_incomplete_member,
+            &mut check_program
+        )
+        .is_some(),
+        "editor recovery should replace an incomplete member statement even when the dot is not at end of line"
+    );
+
     let too_many_dangling_members = [
         "def main() -> int32:",
         "    counter.",
@@ -1215,6 +1234,11 @@ fn analysis_recovery_only_classifies_code_dots_as_dangling_members() {
     assert_eq!(
         first_dangling_member_line("def main():\n    text = 'value.' # comment."),
         None
+    );
+    assert_eq!(
+        first_dangling_member_line("def main():\n    text = \"escaped quote: \\\"."),
+        None,
+        "a trailing dot inside an escaped-quote string is not a member access"
     );
 }
 
@@ -1879,6 +1903,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .collect::<Vec<_>>();
     assert!(task_group_member_names.contains(&"start".to_string()));
     assert!(task_group_member_names.contains(&"start_soon".to_string()));
+    assert!(task_group_member_names.contains(&"start_with_stack".to_string()));
+    assert!(task_group_member_names.contains(&"start_soon_with_stack".to_string()));
 
     let assert_resolved_member =
         |receiver: Type, field: &str, hover_fragment: &str, expected_ty: Type| {
@@ -1903,6 +1929,18 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         Type::named("TaskGroup"),
         "start_soon",
         "start_soon",
+        Type::Unit,
+    );
+    assert_resolved_member(
+        Type::named("TaskGroup"),
+        "start_with_stack",
+        "bytes: int64",
+        Type::Named("Task".to_string(), vec![Type::Unit]),
+    );
+    assert_resolved_member(
+        Type::named("TaskGroup"),
+        "start_soon_with_stack",
+        "bytes: int64",
         Type::Unit,
     );
     assert_resolved_member(Type::named("Option"), "Some", "Some", Type::named("Option"));

@@ -594,6 +594,8 @@ Current builtin member methods include:
 - `Task.result_or(timeout=...)`
 - `TaskGroup.start(...)`
 - `TaskGroup.start_soon(...)`
+- `TaskGroup.start_with_stack(...)`
+- `TaskGroup.start_soon_with_stack(...)`
 - `TaskGroup.cancel()`
 - `random.Rng.next_int(...)`
 - `random.Rng.next_float()`
@@ -652,6 +654,8 @@ The current bootstrap concurrency surface includes:
 - task groups
 - `TaskGroup.start(...)`
 - `TaskGroup.start_soon(...)`
+- `TaskGroup.start_with_stack(bytes, ...)`
+- `TaskGroup.start_soon_with_stack(bytes, ...)`
 - `Task.result(timeout=...)`
 - `wait_any(...)`
 - `wait_all(...)`
@@ -664,12 +668,30 @@ bodies are not parallel. Every loop backedge has a compiler-inserted scheduling
 check, including the ordinary body tail and `continue`; `break` and `return`
 bypass it. Tight loops therefore no longer starve ready timers, queues, or
 sockets indefinitely, although a single long loop body can still delay
-siblings. The check does not inspect cancellation. Each task reserves a fixed
-1 MiB coroutine stack. Scheduler waits use persistent descriptor
+siblings. The check does not inspect cancellation. Ordinary tasks request a
+guarded 512 KiB coroutine stack. The two explicit stack-start methods accept
+an exact `int64` byte request from 256 KiB through 64 MiB inclusive, reject
+out-of-range values without clamping, and page-round accepted requests. The
+256 KiB lower bound is for measured shallow tasks, not the generally safe
+default. The complete compiled Aurora HTTP example requires the 512 KiB
+default; an isolated runtime round trip can use 256 KiB protocol callers
+because it excludes the compiled program's language-execution frames and
+keeps deep host protocol frames on service workers.
+Scheduler waits use persistent descriptor
 registrations, a timer heap, and direct Queue, task-completion, and
 blocking-pool notifications; an idle scheduler blocks until an event or
 deadline without a periodic tick. Resource-bearing task results are
 single-observer-only; the checker does not yet enforce that restriction.
+
+Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
+protocol-step service with deep native worker stacks. The clean incremental
+RSS per parked task and the combined 100,000-sleeper timer/RSS result are
+pending the contractual Mac14,9 measurement.
+
+The protocol service is lazily initialized and remains alive until process
+exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
+listener binding use the generic blocking-I/O pool. Only subsequent PEM
+parsing and rustls construction use protocol workers for TLS assets.
 
 Current collection notes:
 
@@ -762,11 +784,14 @@ Current expression/ergonomics limitations:
 - empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
-- `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` support named functions
-  plus associated methods without `self`, using task-owned captures
+- `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, and their explicit-stack
+  variants support named functions plus associated methods without `self`,
+  using task-owned captures
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
-- concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `yield_now()`, `wait_any(...)`, and `wait_all(...)` surface
+- concurrency uses only the maintained `Queue[T]()`, `Task.result()`,
+  `TaskGroup()`, its four start methods, `yield_now()`, `wait_any(...)`, and
+  `wait_all(...)` surface
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime

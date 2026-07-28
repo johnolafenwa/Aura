@@ -58,7 +58,16 @@ Aurora's MIR runtime centers around:
 
 That is why `run` wraps execution in a thread builder instead of just calling a function directly.
 
-This dedicated thread is the one thread that executes Aurora task bodies. It reserves a 64 MiB host stack. Lightweight child tasks are stackful coroutines scheduled on that same thread, with a fixed 1 MiB stack reserved per task. The bounded blocking-I/O pool runs host calls only; it does not make Aurora task code parallel.
+This dedicated thread is the one thread that executes Aurora task bodies. It reserves a 64 MiB host stack. Lightweight child tasks are stackful coroutines scheduled on that same thread, with a guarded 512 KiB default stack. `TaskGroup.start_with_stack` and `start_soon_with_stack` can select a guarded stack from 256 KiB through 64 MiB for an individual child.
+
+Bounded process-lifetime services keep blocking and stack-heavy host work off
+the coroutine stacks: the blocking-I/O pool owns ordinary blocking calls, the
+protocol service owns TLS/HTTP/WebSocket steps, and the JSON codec service owns
+the recursive parser frames for dynamic `json.parse`. The legacy
+`json.is_valid` and `json.parse_string_map` compatibility helpers remain
+bounded caller-side operations and do not enter that service. These services
+resume the pinned coroutine after completion; they do not execute Aurora task
+bodies or make the language runtime parallel.
 
 ## The core execution loop
 

@@ -58,6 +58,11 @@ fn integer_floor_division_and_modulo_follow_the_divisor_sign() {
 
     let zero = IntegerValue::zero();
     let seven = IntegerValue::from_signed(7);
+    assert_eq!(
+        IntegerValue::from_signed(1).checked_div(IntegerValue::from_signed(2)),
+        Some(zero),
+        "truncating division must canonicalize a zero quotient without a sign"
+    );
     assert_eq!(seven.checked_floor_div(zero), None);
     assert_eq!(seven.checked_floor_rem(zero), None);
 

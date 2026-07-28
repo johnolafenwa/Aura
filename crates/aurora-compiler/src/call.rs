@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use crate::ast::{Argument, Param, ReceiverKind};
 use crate::diag::{Diagnostic, Result, Span};
 
+pub(crate) const MIN_TASK_STACK_BYTES: i64 = 256 * 1024;
+pub(crate) const MAX_TASK_STACK_BYTES: i64 = 64 * 1024 * 1024;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CallConvention {
     PositionalOnly,
@@ -359,6 +362,10 @@ const STATUS_BYTES_HEADERS_PARAMS: [BuiltinParam; 3] = [
 ];
 const TASK_GROUP_START_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "function", ReceiverKind::Borrow)];
+const TASK_GROUP_START_WITH_STACK_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "bytes", ReceiverKind::Borrow),
+    builtin_param!(required, "function", ReceiverKind::Borrow),
+];
 const RNG_NEXT_INT_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "lo", ReceiverKind::Borrow),
     builtin_param!(required, "hi", ReceiverKind::Borrow),
@@ -823,6 +830,8 @@ pub enum BuiltinMember {
     TaskResultOr,
     TaskGroupStart,
     TaskGroupStartSoon,
+    TaskGroupStartWithStack,
+    TaskGroupStartSoonWithStack,
     TaskGroupCancel,
     FileReadAll,
     FileReadBytes,
@@ -1017,6 +1026,8 @@ impl BuiltinMember {
             ("Task", "result_or") => Some(Self::TaskResultOr),
             ("TaskGroup", "start") => Some(Self::TaskGroupStart),
             ("TaskGroup", "start_soon") => Some(Self::TaskGroupStartSoon),
+            ("TaskGroup", "start_with_stack") => Some(Self::TaskGroupStartWithStack),
+            ("TaskGroup", "start_soon_with_stack") => Some(Self::TaskGroupStartSoonWithStack),
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
             ("fs.File", "read_all") => Some(Self::FileReadAll),
             ("fs.File", "read_bytes") => Some(Self::FileReadBytes),
@@ -1185,6 +1196,8 @@ impl BuiltinMember {
             Self::TaskResultOr => "result_or",
             Self::TaskGroupStart => "start",
             Self::TaskGroupStartSoon => "start_soon",
+            Self::TaskGroupStartWithStack => "start_with_stack",
+            Self::TaskGroupStartSoonWithStack => "start_soon_with_stack",
             Self::TaskGroupCancel => "cancel",
             Self::FileReadAll => "read_all",
             Self::FileReadBytes => "read_bytes",
@@ -1354,6 +1367,12 @@ impl BuiltinMember {
             Self::TaskResultOr => "result_or(default: own T, timeout: Duration = ...) -> T",
             Self::TaskGroupStart => "start(function, own ...) -> Task[T]",
             Self::TaskGroupStartSoon => "start_soon(function, own ...) -> None",
+            Self::TaskGroupStartWithStack => {
+                "start_with_stack(bytes: int64, function, own ...) -> Task[T]"
+            }
+            Self::TaskGroupStartSoonWithStack => {
+                "start_soon_with_stack(bytes: int64, function, own ...) -> None"
+            }
             Self::TaskGroupCancel => "cancel() -> None",
             Self::FileReadAll => "read_all() -> Result[String, io.Error]",
             Self::FileReadBytes => "read_bytes() -> Result[Vec[uint8], io.Error]",
@@ -1597,9 +1616,17 @@ impl BuiltinMember {
             Self::TaskResultOr => {
                 "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait."
             }
-            Self::TaskGroupStart => "Starts a child task in the current task group.",
+            Self::TaskGroupStart => {
+                "Starts a child task on the guarded 512 KiB default stack and returns its handle."
+            }
             Self::TaskGroupStartSoon => {
-                "Starts a child task in the current task group without returning a task handle."
+                "Starts a child task on the guarded 512 KiB default stack without returning a task handle."
+            }
+            Self::TaskGroupStartWithStack => {
+                "Starts a child task with a guarded 256 KiB..64 MiB stack request and returns its handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+            }
+            Self::TaskGroupStartSoonWithStack => {
+                "Starts a child task with a guarded 256 KiB..64 MiB stack request without returning a task handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
             }
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."
@@ -1948,6 +1975,9 @@ impl BuiltinMember {
             ),
             Self::TaskGroupStart | Self::TaskGroupStartSoon => {
                 BuiltinCallShape::variadic(&TASK_GROUP_START_PARAMS, ReceiverKind::Value)
+            }
+            Self::TaskGroupStartWithStack | Self::TaskGroupStartSoonWithStack => {
+                BuiltinCallShape::variadic(&TASK_GROUP_START_WITH_STACK_PARAMS, ReceiverKind::Value)
             }
         }
     }

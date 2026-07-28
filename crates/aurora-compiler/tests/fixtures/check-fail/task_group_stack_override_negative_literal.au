@@ -1,0 +1,7 @@
+def worker() -> int32:
+    return 1
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_with_stack(-1, worker)
+    return 0

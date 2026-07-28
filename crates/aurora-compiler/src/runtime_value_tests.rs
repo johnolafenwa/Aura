@@ -9,22 +9,23 @@ use super::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
     remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    run_lightweight_root_task, run_protocol_step, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
-    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, validate_read_line_capacity, validate_requested_read_size,
-    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
-    wait_any_error, wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
-    wait_timeout_condvar, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
-    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
-    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
+    task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
+    validate_requested_read_size, wait_all_cancelled, wait_all_error, wait_all_ready,
+    wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue,
+    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription,
+    RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -53,6 +54,14 @@ struct TempDir {
     path: PathBuf,
 }
 
+struct AtomicReleaseGuard(Arc<AtomicBool>);
+
+impl Drop for AtomicReleaseGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 fn wait_task_ready(task: &TaskValue) -> Result<Value, Diagnostic> {
     match task
         .wait_result_with_cancellation_observed(None, None)
@@ -62,6 +71,22 @@ fn wait_task_ready(task: &TaskValue) -> Result<Value, Diagnostic> {
         TaskWaitStatus::Cancelled => Err(Diagnostic::new("task was cancelled")),
         TaskWaitStatus::TimedOut => Err(Diagnostic::new("task wait timed out")),
     }
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn lightweight_stack_allocator_reports_real_address_space_exhaustion() {
+    let error = match super::allocate_lightweight_task_stack(usize::MAX / 2) {
+        Ok(_) => panic!("an address-space-sized guarded stack reservation must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error
+            .message
+            .starts_with("failed to allocate Aurora task stack:"),
+        "the allocator failure must retain its resource context: {error}"
+    );
 }
 
 fn assert_cast_source_type(value: Value, expected_source: &str) {
@@ -3272,6 +3297,28 @@ fn dynamic_json_dump_node_budget_precedes_container_and_key_allocations() {
 }
 
 #[test]
+fn dynamic_json_runtime_reserve_failures_are_coded_resource_diagnostics() {
+    let parse_error = super::json_parse_try_reserve(&mut Vec::<Value>::new(), usize::MAX)
+        .expect_err("an impossible materialization reserve must be recoverable");
+    assert_eq!(parse_error.code, "AU4005");
+    assert_eq!(
+        parse_error.message,
+        "memory allocation failed while materializing parsed JSON"
+    );
+
+    let dump_error =
+        super::json_runtime_conversion_try_reserve(&mut Vec::<Value>::new(), usize::MAX)
+            .expect_err("an impossible dump-conversion reserve must be recoverable");
+    assert_eq!(dump_error.code, "AU4005");
+    assert!(
+        dump_error
+            .message
+            .starts_with("memory allocation failed while preparing JSON output:"),
+        "the allocator detail must remain attached to the dump diagnostic: {dump_error}"
+    );
+}
+
+#[test]
 fn dynamic_json_metadata_validation_is_structural_and_allocation_free() {
     use crate::json_codec::JsonValue;
 
@@ -3559,6 +3606,59 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
     assert_eq!(diagnostic.code, "AU4001");
     assert!(diagnostic.message.contains("Object key must be `String`"));
 
+    for (label, value, expected) in [
+        (
+            "non-enum JSON root",
+            Value::Bool(false),
+            "expected `json.Value`, found `false`",
+        ),
+        (
+            "wrong JSON enum root",
+            variant("other.Value", "Null", Vec::new()),
+            "expected enum `json.Value`, found `other.Value`",
+        ),
+    ] {
+        let diagnostic = match super::runtime_value_to_json(&value) {
+            Ok(converted) => {
+                panic!("{label} unexpectedly converted to {converted:?}; expected {expected}")
+            }
+            Err(diagnostic) => diagnostic,
+        };
+        assert_eq!(diagnostic.code, "AU4001");
+        assert!(
+            diagnostic.message.contains(expected),
+            "{label}: expected `{expected}`, found `{diagnostic}`"
+        );
+    }
+
+    let wrong_later_key = variant(
+        "json.Value",
+        "Object",
+        vec![Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("json.Value"),
+            entries: vec![
+                (
+                    Value::String("valid".into()),
+                    runtime_json(crate::json_codec::JsonValue::Null),
+                ),
+                (
+                    Value::Int(IntegerValue::from_i64(2)),
+                    runtime_json(crate::json_codec::JsonValue::Bool(true)),
+                ),
+            ],
+        })],
+    );
+    let diagnostic = super::runtime_value_to_json(&wrong_later_key)
+        .expect_err("every runtime object key must be validated, not only the first");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert!(
+        diagnostic
+            .message
+            .contains("Object key must be `String`, found `2`"),
+        "unexpected later-key diagnostic: {diagnostic}"
+    );
+
     for indent in [
         Value::Int(IntegerValue::from_i64(2)),
         variant("Option", "None", vec![Value::Unit]),
@@ -3655,6 +3755,327 @@ fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_cl
         .expect_err("runtime-to-codec conversion must enforce the dump depth limit");
     assert_eq!(error.code, "AU4003");
     assert_eq!(error.message, "JSON value exceeds the maximum depth of 128");
+}
+
+#[test]
+fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth_limit() {
+    fn nested_runtime_array(depth: usize) -> Value {
+        let mut value = runtime_json(crate::json_codec::JsonValue::Null);
+        for _ in 0..depth {
+            value = Value::EnumVariant(EnumVariantValue {
+                enum_name: "json.Value".to_string(),
+                variant_name: "Array".to_string(),
+                payloads: vec![Value::Vec(VecValue {
+                    element_type: Type::named("json.Value"),
+                    elements: vec![value],
+                })],
+            });
+        }
+        value
+    }
+
+    let maximum = nested_runtime_array(crate::json_codec::MAX_JSON_DEPTH);
+    let too_deep = nested_runtime_array(crate::json_codec::MAX_JSON_DEPTH + 1);
+    let result = run_lightweight_root_task(move || {
+        let task = spawn_lightweight_task_with_stack(512 * 1024, move || {
+            let cloned = maximum.clone();
+            assert_eq!(cloned.render(), maximum.render());
+            drop(cloned);
+            let rendered = maximum.render();
+            assert!(rendered.starts_with("json.Value.Array([json.Value.Array(["));
+            assert!(rendered.contains("json.Value.Null"));
+            assert!(rendered.ends_with("])"));
+            let dumped = super::evaluate_host_builtin("json::dumps", vec![maximum, option_none()])
+                .expect("the exact JSON depth limit should fit a 512 KiB task stack");
+            assert_eq!(
+                dumped,
+                Value::String(format!(
+                    "{}null{}",
+                    "[".repeat(crate::json_codec::MAX_JSON_DEPTH),
+                    "]".repeat(crate::json_codec::MAX_JSON_DEPTH)
+                ))
+            );
+            let error = super::evaluate_host_builtin("json::dumps", vec![too_deep, option_none()])
+                .expect_err("depth 129 must retain the public nesting diagnostic");
+            assert_eq!(error.code, "AU4003");
+            assert_eq!(error.message, "JSON value exceeds the maximum depth of 128");
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&task)?;
+        Ok(Value::Unit)
+    });
+
+    assert!(
+        result.is_ok(),
+        "dynamic JSON conversion must fit a forced 512 KiB task stack: {result:?}"
+    );
+}
+
+#[test]
+fn json_codec_service_bounds_admission_and_recovers_permits_after_failures() {
+    let recovery_pool = super::JsonCodecPool::start_with_limits(1, 1);
+    let panic_pool = recovery_pool.clone();
+    let (panic_result, panic_receiver) = std::sync::mpsc::channel();
+    let panic_probe = thread::spawn(move || {
+        let outcome = super::run_json_codec_operation_on_pool_with(
+            super::reserve_json_codec_slot(&panic_pool),
+            || -> std::result::Result<
+                crate::json_codec::JsonValue,
+                crate::json_codec::JsonCodecError,
+            > { panic!("injected JSON codec panic") },
+        );
+        let _ = panic_result.send(outcome);
+    });
+    let panic = panic_receiver
+        .recv_timeout(StdDuration::from_secs(1))
+        .expect("panic containment must complete within one second")
+        .expect_err("a codec panic must be contained");
+    panic_probe
+        .join()
+        .expect("the bounded panic probe should join");
+    assert!(matches!(
+        panic,
+        super::JsonCodecServiceError::Panicked(message)
+            if message == "injected JSON codec panic"
+    ));
+
+    let clone_pool = recovery_pool.clone();
+    let (clone_result, clone_receiver) = std::sync::mpsc::channel();
+    let clone_probe = thread::spawn(move || {
+        super::fail_next_json_codec_source_clone();
+        let outcome = super::prepare_json_codec_source_with_pool(&clone_pool, || {
+            super::clone_json_codec_source("null")
+        })
+        .err();
+        let _ = clone_result.send(outcome);
+    });
+    let error = clone_receiver
+        .recv_timeout(StdDuration::from_secs(1))
+        .expect("post-panic reservation and clone failure must finish within one second")
+        .expect("the injected source-clone failure must be reported");
+    clone_probe
+        .join()
+        .expect("the bounded clone-failure probe should join");
+    assert_eq!(error.code, "AU4005");
+
+    let success_pool = recovery_pool.clone();
+    let (success_result, success_receiver) = std::sync::mpsc::channel();
+    let success_probe = thread::spawn(move || {
+        let outcome = super::run_json_codec_operation_on_pool_with(
+            super::reserve_json_codec_slot(&success_pool),
+            || Ok(crate::json_codec::JsonValue::Null),
+        );
+        let _ = success_result.send(outcome);
+    });
+    assert_eq!(
+        success_receiver
+            .recv_timeout(StdDuration::from_secs(1))
+            .expect("post-clone-failure reservation must finish within one second")
+            .expect("panic and clone failure must each restore the sole permit"),
+        crate::json_codec::JsonValue::Null
+    );
+    success_probe
+        .join()
+        .expect("the bounded recovery probe should join");
+
+    fn submit_blocker(pool: &Arc<super::JsonCodecPool>, release: Arc<AtomicBool>) {
+        let reservation = super::reserve_json_codec_slot(pool);
+        let result = Arc::new(Mutex::new(None));
+        let completion = ChannelValue::new();
+        reservation.submit(super::JsonCodecJob {
+            operation: Box::new(move || {
+                while !release.load(Ordering::SeqCst) {
+                    thread::yield_now();
+                }
+                Ok(crate::json_codec::JsonValue::Null)
+            }),
+            result,
+            completion,
+        });
+    }
+
+    let saturated_pool = super::JsonCodecPool::start_with_limits(1, 2);
+    let release = Arc::new(AtomicBool::new(false));
+    let _release_guard = AtomicReleaseGuard(release.clone());
+    submit_blocker(&saturated_pool, release.clone());
+    submit_blocker(&saturated_pool, release.clone());
+    let watchdog_fired = Arc::new(AtomicBool::new(false));
+    let watchdog_release = release.clone();
+    let watchdog_flag = watchdog_fired.clone();
+    let (watchdog_done, watchdog_cancel) = std::sync::mpsc::channel();
+    let watchdog = thread::spawn(move || {
+        if watchdog_cancel
+            .recv_timeout(StdDuration::from_secs(1))
+            .is_err()
+        {
+            watchdog_flag.store(true, Ordering::SeqCst);
+            watchdog_release.store(true, Ordering::SeqCst);
+        }
+    });
+
+    super::reset_json_codec_source_clone_count();
+    let result = run_lightweight_root_task(move || {
+        let parse_pool = saturated_pool.clone();
+        let parse = spawn_lightweight_task(move || {
+            let (source, reservation) =
+                super::prepare_json_codec_source_with_pool(&parse_pool, || {
+                    super::clone_json_codec_source("null")
+                })?;
+            let parsed = super::run_json_codec_operation_on_pool_with(reservation, move || {
+                crate::json_codec::parse(&source)
+            })
+            .map_err(|error| Diagnostic::new(format!("{error:?}")))?;
+            assert_eq!(parsed, crate::json_codec::JsonValue::Null);
+            Ok(Value::Unit)
+        })?;
+        let release_in_timer = release.clone();
+        let timer = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            assert_eq!(
+                super::json_codec_source_clone_count(),
+                0,
+                "saturated admission must precede the fallible source clone"
+            );
+            release_in_timer.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&timer)?;
+        wait_task_ready(&parse)?;
+        Ok(Value::Unit)
+    });
+    let _ = watchdog_done.send(());
+    watchdog
+        .join()
+        .expect("codec admission watchdog should join");
+    assert!(
+        result.is_ok(),
+        "saturated codec admission must park while sibling timers progress: {result:?}"
+    );
+    assert!(
+        !watchdog_fired.load(Ordering::SeqCst),
+        "saturated codec admission exceeded the bounded one-second watchdog"
+    );
+
+    let cancellation_pool = super::JsonCodecPool::start_with_limits(1, 1);
+    let result = run_lightweight_root_task(move || {
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let cancellation = group.child_cancellation();
+        let parse = spawn_lightweight_task_with_cancellation(cancellation, move || {
+            let parsed = super::run_json_codec_operation_on_pool_with(
+                super::reserve_json_codec_slot(&cancellation_pool),
+                || {
+                    thread::sleep(StdDuration::from_millis(30));
+                    Ok(crate::json_codec::JsonValue::Null)
+                },
+            )
+            .map_err(|error| Diagnostic::new(format!("{error:?}")))?;
+            assert_eq!(parsed, crate::json_codec::JsonValue::Null);
+            let cancellation = super::current_lightweight_task_cancellation()
+                .expect("the cancellable parse task has a current cancellation context");
+            assert!(
+                super::poll_cancellation(&cancellation),
+                "the next ordinary cancellation boundary must observe deferred cancellation"
+            );
+            Ok(Value::Unit)
+        })?;
+        let cancel_group = group.clone();
+        let canceller = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            cancel_group.cancel();
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&canceller)?;
+        wait_task_ready(&parse)?;
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "cancellation must remain deferred until synchronous JSON parse completes: {result:?}"
+    );
+}
+
+#[test]
+fn json_codec_non_task_admission_waits_for_capacity_before_cloning() {
+    let pool = super::JsonCodecPool::start_with_limits(1, 1);
+    let release = Arc::new(AtomicBool::new(false));
+    let worker_started = Arc::new(AtomicBool::new(false));
+    let blocker_result = Arc::new(Mutex::new(None));
+    let blocker_completion = ChannelValue::new();
+    let release_in_worker = release.clone();
+    let started_in_worker = worker_started.clone();
+    super::reserve_json_codec_slot(&pool).submit(super::JsonCodecJob {
+        operation: Box::new(move || {
+            started_in_worker.store(true, Ordering::SeqCst);
+            while !release_in_worker.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+            Ok(crate::json_codec::JsonValue::Null)
+        }),
+        result: blocker_result,
+        completion: blocker_completion,
+    });
+
+    let start_wait = Instant::now();
+    while !worker_started.load(Ordering::SeqCst) {
+        assert!(
+            start_wait.elapsed() < StdDuration::from_secs(1),
+            "the sole codec worker must start the capacity-blocking job"
+        );
+        thread::yield_now();
+    }
+
+    let clone_called = Arc::new(AtomicBool::new(false));
+    let clone_called_in_waiter = clone_called.clone();
+    let pool_in_waiter = pool.clone();
+    let (waiter_started_tx, waiter_started_rx) = std::sync::mpsc::channel();
+    let (prepared_tx, prepared_rx) = std::sync::mpsc::channel();
+    let waiter = thread::spawn(move || {
+        waiter_started_tx
+            .send(())
+            .expect("admission waiter should announce its start");
+        let prepared = super::prepare_json_codec_source_with_pool(&pool_in_waiter, || {
+            clone_called_in_waiter.store(true, Ordering::SeqCst);
+            Ok("null".to_string())
+        });
+        prepared_tx
+            .send(prepared)
+            .expect("admission waiter should publish its outcome");
+    });
+    waiter_started_rx
+        .recv_timeout(StdDuration::from_secs(1))
+        .expect("non-task admission waiter should start");
+    thread::sleep(StdDuration::from_millis(20));
+    assert!(
+        !clone_called.load(Ordering::SeqCst),
+        "bounded admission must happen before cloning the JSON source"
+    );
+
+    release.store(true, Ordering::SeqCst);
+    let (source, reservation) = prepared_rx
+        .recv_timeout(StdDuration::from_secs(1))
+        .expect("capacity release should wake the non-task admission waiter")
+        .expect("post-admission source preparation should succeed");
+    assert_eq!(source, "null");
+    assert!(
+        clone_called.load(Ordering::SeqCst),
+        "the source clone should run after capacity becomes available"
+    );
+    drop(reservation);
+    waiter.join().expect("admission waiter should join");
+
+    let clone_count_before = super::json_codec_source_clone_count();
+    let (empty, recovered) =
+        super::prepare_json_codec_source_with_pool(&pool, || super::clone_json_codec_source(""))
+            .expect("an empty source must clone without allocating after capacity recovers");
+    assert!(empty.is_empty());
+    assert_eq!(
+        super::json_codec_source_clone_count(),
+        clone_count_before + 1,
+        "the empty source must still cross the post-admission clone boundary"
+    );
+    drop(recovered);
 }
 
 #[test]
@@ -3914,6 +4335,9 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
         JsonCodecError::OutputTooLarge {
             limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
         },
+        JsonCodecError::MaterializationTooLarge {
+            limit: crate::json_codec::MAX_JSON_VALUE_NODES,
+        },
         JsonCodecError::AllocationFailed,
     ] {
         let diagnostic = super::json_dump_error_to_diagnostic(codec_error);
@@ -3927,6 +4351,30 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
     let diagnostic = super::json_runtime_allocation_error(allocation);
     assert_eq!(diagnostic.code, "AU4005");
     assert!(diagnostic.message.contains("preparing JSON output"));
+}
+
+#[test]
+fn legacy_json_validity_walks_nested_arrays_and_objects() {
+    for source in [
+        r#"{"outer":{"items":[null,true,1.5,"text"]}}"#,
+        r#"[{"left":1},{"right":[2,3]}]"#,
+    ] {
+        assert_eq!(
+            super::evaluate_host_builtin("json::is_valid", vec![Value::String(source.to_string())])
+                .expect("json.is_valid should accept a String"),
+            Value::Bool(true),
+            "valid nested JSON should remain valid: {source}"
+        );
+    }
+
+    assert_eq!(
+        super::evaluate_host_builtin(
+            "json::is_valid",
+            vec![Value::String(r#"{"outer":{"number":1e400}}"#.to_string())],
+        )
+        .expect("json.is_valid should report invalid data as false"),
+        Value::Bool(false)
+    );
 }
 
 #[test]
@@ -5753,6 +6201,267 @@ fn lightweight_scheduler_handles_large_http_binary_round_trip() {
 }
 
 #[test]
+fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
+    // This is intentionally a runtime-boundary regression, not a compiled
+    // Aurora workload. The Rust closures call the HTTP runtime directly, so
+    // success proves the protocol service keeps deep host-library frames off
+    // these 256 KiB children. It does not include MIR/direct language-
+    // execution frames and therefore does not justify a 256 KiB default.
+    const SMALL_STACK: usize = 256 * 1024;
+    let timeout = StdDuration::from_secs(5);
+    let body = vec![0x6du8; 4 * 1024 * 1024];
+    let result = run_lightweight_root_task(move || {
+        let listener = HttpListenerValue::bind("127.0.0.1:0")
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let server_body = body.clone();
+        let server = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
+            let exchange = listener
+                .accept(Some(timeout), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            exchange
+                .respond_bytes(200, &server_body, Vec::new())
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Unit)
+        })?;
+
+        let timer_progressed = Arc::new(AtomicBool::new(false));
+        let timer_progressed_in_task = timer_progressed.clone();
+        let timer = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            timer_progressed_in_task.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+
+        let timer_progressed_in_client = timer_progressed.clone();
+        let client = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
+            let response = HttpResponseValue::request_bytes(
+                "GET",
+                &format!("http://{address}/small-stack"),
+                &[],
+                Vec::new(),
+                Some(timeout),
+                None,
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            assert_eq!(response.bytes().len(), 4 * 1024 * 1024);
+            assert!(
+                timer_progressed_in_client.load(Ordering::SeqCst),
+                "deep HTTP build and parse steps must not prevent sibling timer progress"
+            );
+            Ok(Value::Unit)
+        })?;
+
+        wait_task_ready(&client)?;
+        wait_task_ready(&server)?;
+        wait_task_ready(&timer)?;
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "the isolated HTTP runtime path must fit forced 256 KiB callers: {result:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_256_kib_websocket_data_serializes_clones_without_blocking_siblings() {
+    const SMALL_STACK: usize = 256 * 1024;
+    let timeout = StdDuration::from_secs(2);
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("websocket listener should expose its address");
+    let server = thread::spawn(move || {
+        let socket = listener
+            .accept(Some(timeout))
+            .expect("websocket server should accept");
+        thread::sleep(StdDuration::from_millis(100));
+        socket
+            .send_text("ready", Some(timeout))
+            .expect("websocket server should send");
+    });
+    let socket =
+        super::WebSocketValue::connect(&format!("ws://{address}/small-stack"), Some(timeout))
+            .expect("websocket client should connect");
+    let first_socket = socket.clone();
+    let second_socket = socket.clone();
+    let result = run_lightweight_root_task(move || {
+        let first = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
+            assert_eq!(
+                first_socket
+                    .recv_text(Some(timeout))
+                    .map_err(|error| Diagnostic::new(error.to_string()))?,
+                Some("ready".to_string())
+            );
+            Ok(Value::Unit)
+        })?;
+        let second = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
+            let error = second_socket
+                .recv_text(Some(StdDuration::from_millis(20)))
+                .expect_err("a cloned receive must time out while the first owns the socket");
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            Ok(Value::Unit)
+        })?;
+        let timer = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&second)?;
+        wait_task_ready(&timer)?;
+        wait_task_ready(&first)?;
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "cloned websocket contention must preserve scheduler progress: {result:?}"
+    );
+    socket.close().expect("websocket client should close");
+    server.join().expect("websocket server should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_256_kib_tls_handshake_and_data_preserve_sibling_timer_progress() {
+    const SMALL_STACK: usize = 256 * 1024;
+    let timeout = StdDuration::from_secs(2);
+    let temp = TempDir::new("aurora-small-stack-tls");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes()).expect("write key pem");
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path
+            .to_str()
+            .expect("certificate path should be UTF-8"),
+        key_path.to_str().expect("key path should be UTF-8"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let server = thread::spawn(move || {
+        let stream = listener
+            .accept(Some(timeout), None)
+            .expect("TLS server should accept");
+        thread::sleep(StdDuration::from_millis(50));
+        stream
+            .write_all("ok", Some(timeout), None)
+            .expect("TLS server should write");
+        stream.close();
+    });
+    let ca_path = cert_path
+        .to_str()
+        .expect("certificate path should be UTF-8")
+        .to_string();
+    let timer_progressed = Arc::new(AtomicBool::new(false));
+    let timer_progressed_in_task = timer_progressed.clone();
+    let timer_progressed_in_client = timer_progressed.clone();
+    let result = run_lightweight_root_task(move || {
+        let timer = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            timer_progressed_in_task.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+        let client = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
+            let stream =
+                TlsStreamValue::connect(&address, "localhost", Some(&ca_path), Some(timeout), None)
+                    .map_err(|error| Diagnostic::new(error.to_string()))?;
+            assert_eq!(
+                stream
+                    .read_exact(2, Some(timeout), None)
+                    .map_err(|error| Diagnostic::new(error.to_string()))?,
+                b"ok"
+            );
+            assert!(
+                timer_progressed_in_client.load(Ordering::SeqCst),
+                "TLS steps must not prevent sibling timer progress"
+            );
+            stream.close();
+            Ok(Value::Unit)
+        })?;
+        wait_task_ready(&client)?;
+        wait_task_ready(&timer)?;
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "TLS handshake/data must fit a forced 256 KiB task stack: {result:?}"
+    );
+    server.join().expect("TLS server should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn tls_state_is_reusable_after_cancellation_at_a_protocol_step_boundary() {
+    let timeout = StdDuration::from_secs(2);
+    let temp = TempDir::new("aurora-tls-cancel-reuse");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes()).expect("write key pem");
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path
+            .to_str()
+            .expect("certificate path should be UTF-8"),
+        key_path.to_str().expect("key path should be UTF-8"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let server = thread::spawn(move || {
+        let stream = listener
+            .accept(Some(timeout), None)
+            .expect("TLS server should accept");
+        thread::sleep(StdDuration::from_millis(100));
+        stream
+            .write_all("ok", Some(timeout), None)
+            .expect("TLS server should write after client cancellation");
+        stream.close();
+    });
+    let stream = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(
+            cert_path
+                .to_str()
+                .expect("certificate path should be UTF-8"),
+        ),
+        Some(timeout),
+        None,
+    )
+    .expect("TLS client should connect");
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    let canceller = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(10));
+        group.cancel();
+    });
+    let error = stream
+        .read_exact(2, Some(timeout), Some(&cancellation))
+        .expect_err("TLS read should observe cancellation");
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(
+        stream
+            .read_exact(2, Some(timeout), None)
+            .expect("TLS state should be restored and reusable after cancellation"),
+        b"ok"
+    );
+    stream.close();
+    canceller.join().expect("canceller should join");
+    server.join().expect("TLS server should join");
+}
+
+#[test]
 fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
     let timeout = StdDuration::from_secs(2);
     let result = run_lightweight_root_task(move || {
@@ -5848,6 +6557,214 @@ fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
         start.elapsed() < StdDuration::from_millis(150),
         "blocking-I/O wake should be prompt; elapsed {:?}",
         start.elapsed()
+    );
+}
+
+#[test]
+fn protocol_steps_run_on_the_dedicated_service_and_resume_siblings() {
+    let sibling_progressed = Arc::new(AtomicBool::new(false));
+    let sibling_progressed_in_task = sibling_progressed.clone();
+    let result = run_lightweight_root_task(move || {
+        let sibling = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            sibling_progressed_in_task.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+        let worker_name = run_protocol_step(|| {
+            thread::sleep(StdDuration::from_millis(30));
+            Ok::<_, io::Error>(thread::current().name().unwrap_or("<unnamed>").to_string())
+        })
+        .map_err(|error| Diagnostic::new(error.to_string()))?;
+        assert!(
+            worker_name.starts_with("aurora-protocol-step-"),
+            "deep protocol work must run on the dedicated service, got {worker_name:?}"
+        );
+        assert!(
+            sibling_progressed.load(Ordering::SeqCst),
+            "waiting for a protocol step must yield the lightweight scheduler"
+        );
+        wait_task_ready(&sibling)?;
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "dedicated protocol service should preserve scheduler progress: {result:?}"
+    );
+}
+
+#[test]
+fn protocol_steps_do_not_consume_a_forced_256_kib_caller_stack() {
+    let join = thread::Builder::new()
+        .name("aurora-protocol-small-stack-test".to_string())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            run_protocol_step(|| {
+                // This lower-level isolation probe deliberately excludes
+                // compiled Aurora language-execution frames. Keep a frame
+                // larger than the caller stack live while exercising
+                // representative URL parsing, HTTP building, and chunk
+                // decoding on the service worker.
+                let scratch = [0x5au8; 384 * 1024];
+                let parsed =
+                    url::Url::parse("https://example.test/deep?q=1").map_err(io::Error::other)?;
+                let request =
+                    super::build_http_request_bytes("POST", &parsed, &scratch[..32], Vec::new())?;
+                let chunked = b"6\r\naurora\r\n0\r\n\r\n";
+                let decoded = super::try_decode_chunked_http_body(chunked, 0)?
+                    .ok_or_else(|| io::Error::other("chunked body remained incomplete"))?;
+                Ok::<_, io::Error>((scratch[0], request.len(), decoded))
+            })
+        })
+        .expect("256 KiB protocol caller should spawn");
+    let (marker, request_len, decoded) = join
+        .join()
+        .expect("deep protocol frame must stay off the 256 KiB caller stack")
+        .expect("representative protocol work should succeed");
+    assert_eq!(marker, 0x5a);
+    assert!(request_len > 32);
+    assert_eq!(decoded, b"aurora");
+}
+
+#[test]
+fn protocol_step_panics_signal_the_waiter_and_preserve_the_service() {
+    let error = run_protocol_step(|| -> io::Result<()> {
+        panic!("intentional protocol-step panic");
+    })
+    .expect_err("protocol-step panics must become observable errors");
+    assert!(error
+        .to_string()
+        .contains("protocol step panicked: intentional protocol-step panic"));
+    assert_eq!(
+        run_protocol_step(|| Ok::<_, io::Error>(42))
+            .expect("a worker panic must not poison the protocol service"),
+        42
+    );
+}
+
+#[test]
+fn protocol_state_step_panics_return_owned_state_and_preserve_the_service() {
+    let pool = super::ProtocolStepPool::start();
+    let (state, outcome) = super::run_protocol_state_step_on_pool(
+        vec![1],
+        |state| -> usize {
+            state.push(2);
+            panic!("intentional stateful protocol-step panic");
+        },
+        &pool,
+        None,
+        None,
+    )
+    .expect("a stateful protocol panic must still return ownership to the caller");
+    assert_eq!(
+        state,
+        vec![1, 2],
+        "mutations completed before the panic must remain in the returned state"
+    );
+    let error = outcome.expect_err("the contained stateful panic must remain observable");
+    assert!(
+        error
+            .to_string()
+            .contains("protocol state step panicked: intentional stateful protocol-step panic"),
+        "unexpected stateful panic diagnostic: {error}"
+    );
+
+    let (state, outcome) = super::run_protocol_state_step_on_pool(
+        vec![3],
+        |state| {
+            state.push(4);
+            state.len()
+        },
+        &pool,
+        None,
+        None,
+    )
+    .expect("the protocol service must remain available after a stateful panic");
+    assert_eq!(state, vec![3, 4]);
+    assert_eq!(
+        outcome.expect("the post-panic stateful operation should succeed"),
+        2
+    );
+}
+
+#[test]
+fn protocol_step_deadlines_cover_queue_saturation_and_late_completion() {
+    let pool = super::ProtocolStepPool::start();
+    let release = Arc::new(AtomicBool::new(false));
+    let release_guard = AtomicReleaseGuard(release.clone());
+    let started = Arc::new(AtomicUsize::new(0));
+    for _ in 0..super::PROTOCOL_STEP_WORKER_COUNT {
+        let release = release.clone();
+        let started = started.clone();
+        let admitted = pool.try_submit(Box::new(move || {
+            started.fetch_add(1, Ordering::SeqCst);
+            while !release.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+        }));
+        assert!(
+            admitted.is_ok(),
+            "worker-blocking protocol job should be admitted"
+        );
+    }
+    let start_wait = Instant::now();
+    while started.load(Ordering::SeqCst) < super::PROTOCOL_STEP_WORKER_COUNT {
+        if start_wait.elapsed() >= StdDuration::from_secs(1) {
+            release.store(true, Ordering::SeqCst);
+            panic!("protocol workers should start saturation jobs promptly");
+        }
+        thread::yield_now();
+    }
+    let mut saturated = false;
+    for _ in 0..=super::PROTOCOL_STEP_QUEUE_CAPACITY {
+        let admitted = pool.try_submit(Box::new(|| {}));
+        if admitted.is_err() {
+            saturated = true;
+            break;
+        }
+    }
+
+    let deadline = Instant::now() + StdDuration::from_millis(10);
+    let (state, saturated_result) = super::run_protocol_state_step_on_pool(
+        vec![41],
+        |state| state.push(42),
+        &pool,
+        Some(deadline),
+        None,
+    )
+    .expect("stateful admission should always return owned state");
+    release.store(true, Ordering::SeqCst);
+    drop(release_guard);
+    assert!(
+        saturated,
+        "protocol queue should enforce its declared bound"
+    );
+    let error =
+        saturated_result.expect_err("a saturated stateful queue must honor admission deadlines");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(
+        state,
+        vec![41],
+        "timed-out admission must return unmodified owned protocol state"
+    );
+
+    let completed = Arc::new(AtomicBool::new(false));
+    let completed_in_step = completed.clone();
+    let deadline = Instant::now() + StdDuration::from_millis(5);
+    let error = super::run_protocol_step_before(
+        move || {
+            thread::sleep(StdDuration::from_millis(20));
+            completed_in_step.store(true, Ordering::SeqCst);
+            Ok::<_, io::Error>(())
+        },
+        Some(deadline),
+        None,
+    )
+    .expect_err("late protocol success must become a timeout");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        completed.load(Ordering::SeqCst),
+        "late steps must still complete before timeout is reported"
     );
 }
 

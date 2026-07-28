@@ -5849,6 +5849,7 @@ def main() -> int32:
                 value: Rvalue::StartTask {
                     returns_handle: true,
                     result_is_copy: true,
+                    stack_size: None,
                     task_group: Operand::Place("%group".to_string()),
                     function: "worker".to_string(),
                     args: vec![MirArg {
@@ -5911,6 +5912,7 @@ def main() -> int32:
         value: Rvalue::StartTask {
             returns_handle: true,
             result_is_copy: true,
+            stack_size: None,
             task_group: Operand::Place("%group".to_string()),
             function: "worker".to_string(),
             args: vec![MirArg {
@@ -8476,6 +8478,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &Rvalue::StartTask {
                 returns_handle: true,
                 result_is_copy: true,
+                stack_size: None,
                 task_group: Operand::Unit,
                 function: "helper".to_string(),
                 args: Vec::new(),
@@ -8495,6 +8498,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &Rvalue::StartTask {
                 returns_handle: false,
                 result_is_copy: true,
+                stack_size: None,
                 task_group: Operand::Unit,
                 function: "helper".to_string(),
                 args: Vec::new(),
@@ -8511,6 +8515,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &Rvalue::StartTask {
                 returns_handle: true,
                 result_is_copy: true,
+                stack_size: None,
                 task_group: Operand::Unit,
                 function: "missing".to_string(),
                 args: Vec::new(),
@@ -8569,6 +8574,50 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     };
     validate_function(&consuming, &HashMap::new())
         .expect("MovePlace should remain valid for a consuming assignment");
+
+    let task_start = Rvalue::StartTask {
+        returns_handle: true,
+        result_is_copy: true,
+        stack_size: Some(Operand::MovePlace("stack_bytes".to_string())),
+        task_group: Operand::Place("group".to_string()),
+        function: "worker".to_string(),
+        args: Vec::new(),
+        span: Span::new(1, 1),
+    };
+    let error = validate_rvalue(&task_start, &HashMap::new())
+        .expect_err("a task stack override is a non-consuming scalar read");
+    assert_eq!(
+        error,
+        "direct backend only permits `MovePlace` in consuming contexts, not in a task stack size"
+    );
+
+    let task_start = Rvalue::StartTask {
+        returns_handle: true,
+        result_is_copy: true,
+        stack_size: Some(Operand::Place("stack_bytes".to_string())),
+        task_group: Operand::MovePlace("group".to_string()),
+        function: "worker".to_string(),
+        args: Vec::new(),
+        span: Span::new(1, 1),
+    };
+    let error = validate_rvalue(&task_start, &HashMap::new())
+        .expect_err("a task-group receiver must stay live until task registration completes");
+    assert_eq!(
+        error,
+        "direct backend only permits `MovePlace` in consuming contexts, not in a task-group receiver"
+    );
+
+    let task_start = Rvalue::StartTask {
+        returns_handle: true,
+        result_is_copy: true,
+        stack_size: Some(Operand::Place("stack_bytes".to_string())),
+        task_group: Operand::Place("group".to_string()),
+        function: "worker".to_string(),
+        args: Vec::new(),
+        span: Span::new(1, 1),
+    };
+    validate_rvalue(&task_start, &HashMap::new())
+        .expect("shared reads of a stack override and task-group receiver must validate");
 }
 
 #[test]

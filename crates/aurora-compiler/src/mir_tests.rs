@@ -1811,6 +1811,67 @@ def main():
 }
 
 #[test]
+fn task_group_stack_override_lowers_stack_operand_and_named_target_arguments() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def choose_stack() -> int64:
+    return 262144
+
+def worker(left: int32, right: int32) -> int32:
+    return left + right
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start_with_stack(
+            choose_stack(),
+            worker,
+            right=2,
+            left=1
+        )
+        return task.result_or(-1)
+"#,
+    )
+    .expect("task stack override should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let start = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::StartTask {
+                        stack_size, args, ..
+                    },
+                ..
+            } => Some((stack_size, args)),
+            _ => None,
+        })
+        .expect("task start should be explicit MIR");
+    assert!(
+        matches!(start.0, Some(Operand::Place(place)) if place.starts_with('%')),
+        "dynamic stack size should be evaluated once into a sequence-point temporary: {:?}",
+        start.0
+    );
+    assert_eq!(
+        start
+            .1
+            .iter()
+            .map(|argument| &argument.value)
+            .collect::<Vec<_>>(),
+        vec![
+            &Operand::Place("%t4".to_string()),
+            &Operand::Place("%t3".to_string()),
+        ],
+        "source-order temporaries should be reordered only when binding target parameters"
+    );
+}
+
+#[test]
 fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
     let module = crate::lower_source_to_mir(
         r#"

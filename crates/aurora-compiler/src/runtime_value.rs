@@ -199,7 +199,7 @@ enum HttpBodyFraming {
     UntilClose,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Value {
     Int(IntegerValue),
     Float(f64),
@@ -538,6 +538,8 @@ enum WebSocketStateKind {
 
 struct WebSocketState {
     socket: Mutex<Option<WebSocketStateKind>>,
+    busy: AtomicBool,
+    closed: AtomicBool,
 }
 
 struct ProcessChildState {
@@ -664,8 +666,22 @@ enum TlsStreamKind {
     Server(rustls::StreamOwned<ServerConnection, StdTcpStream>),
 }
 
+type TlsClientStream = rustls::StreamOwned<ClientConnection, StdTcpStream>;
+
 struct TlsStreamState {
     stream: Mutex<Option<TlsStreamKind>>,
+    busy: AtomicBool,
+    closed: AtomicBool,
+}
+
+struct ProtocolOperationGuard<'a> {
+    busy: &'a AtomicBool,
+}
+
+impl Drop for ProtocolOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.busy.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -807,10 +823,37 @@ struct LightweightTaskScheduler {
     ready_turns_since_io_reactor_poll: u32,
 }
 
-// Network-heavy lightweight tasks can traverse substantial library stacks
-// (URL parsing, rustls handshakes, websocket framing). 256 KiB is too small
-// and was causing reproducible EXC_BAD_ACCESS faults on maintained examples.
-const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 1024 * 1024;
+// Deep HTTP, TLS, and WebSocket library frames run on the bounded protocol
+// service, keeping ordinary guarded lightweight-task stacks compact.
+const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 512 * 1024;
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_lightweight_task_stack_allocation() {
+    FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION.with(|fail| fail.set(true));
+}
+
+pub(crate) fn allocate_lightweight_task_stack(
+    stack_size: usize,
+) -> std::result::Result<DefaultStack, Diagnostic> {
+    #[cfg(test)]
+    if FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION.with(|fail| fail.replace(false)) {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            "injected Aurora task stack allocation failure",
+        ));
+    }
+    DefaultStack::new(stack_size).map_err(|error| {
+        Diagnostic::coded(
+            "AU4005",
+            format!("failed to allocate Aurora task stack: {error}"),
+        )
+    })
+}
+
 pub(crate) const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TLS_CONFIG_BYTES: usize = MAX_STREAM_READ_BYTES;
@@ -861,10 +904,35 @@ struct RuntimeScheduler {
 static RUNTIME_SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
 
 type BlockingIoJob = Box<dyn FnOnce() + Send + 'static>;
+type ProtocolStepJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct JsonCodecJob {
+    operation: Box<dyn FnOnce() -> std::result::Result<JsonValue, JsonCodecError> + Send + 'static>,
+    result: Arc<Mutex<Option<std::result::Result<JsonValue, JsonCodecServiceError>>>>,
+    completion: ChannelValue,
+}
 
 struct BlockingIoPool {
     queue: Mutex<VecDeque<BlockingIoJob>>,
     ready: Condvar,
+}
+
+struct ProtocolStepPool {
+    queue: Mutex<VecDeque<ProtocolStepJob>>,
+    ready: Condvar,
+}
+
+struct JsonCodecPoolState {
+    queue: VecDeque<JsonCodecJob>,
+    in_flight: usize,
+}
+
+struct JsonCodecPool {
+    state: Mutex<JsonCodecPoolState>,
+    ready: Condvar,
+    available: Condvar,
+    availability_signal: ChannelValue,
+    capacity: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1550,6 +1618,164 @@ fn blocking_io_pool() -> &'static Arc<BlockingIoPool> {
     POOL.get_or_init(BlockingIoPool::start)
 }
 
+const PROTOCOL_STEP_QUEUE_CAPACITY: usize = 64;
+const PROTOCOL_STEP_WORKER_COUNT: usize = 2;
+const PROTOCOL_STEP_WORKER_STACK_SIZE: usize = 2 * 1024 * 1024;
+
+impl ProtocolStepPool {
+    fn start() -> Arc<Self> {
+        let pool = Arc::new(Self {
+            queue: Mutex::new(VecDeque::with_capacity(PROTOCOL_STEP_QUEUE_CAPACITY)),
+            ready: Condvar::new(),
+        });
+        for worker_index in 0..PROTOCOL_STEP_WORKER_COUNT {
+            let worker = pool.clone();
+            thread::Builder::new()
+                .name(format!("aurora-protocol-step-{worker_index}"))
+                .stack_size(PROTOCOL_STEP_WORKER_STACK_SIZE)
+                .spawn(move || worker.run())
+                .expect("Aurora protocol-step worker should start");
+        }
+        pool
+    }
+
+    fn run(self: Arc<Self>) {
+        loop {
+            let job = {
+                let mut queue = lock_mutex(&self.queue);
+                loop {
+                    if let Some(job) = queue.pop_front() {
+                        break job;
+                    }
+                    queue = wait_condvar(&self.ready, queue);
+                }
+            };
+            job();
+        }
+    }
+
+    fn try_submit(&self, job: ProtocolStepJob) -> std::result::Result<(), ProtocolStepJob> {
+        let mut queue = lock_mutex(&self.queue);
+        if queue.len() >= PROTOCOL_STEP_QUEUE_CAPACITY {
+            return Err(job);
+        }
+        queue.push_back(job);
+        drop(queue);
+        self.ready.notify_one();
+        Ok(())
+    }
+}
+
+fn protocol_step_pool() -> &'static Arc<ProtocolStepPool> {
+    // Runtime-global by design: the bounded service is shared by every
+    // lightweight scheduler and its workers live until process exit.
+    static POOL: OnceLock<Arc<ProtocolStepPool>> = OnceLock::new();
+    POOL.get_or_init(ProtocolStepPool::start)
+}
+
+const JSON_CODEC_WORKER_COUNT: usize = 2;
+const JSON_CODEC_IN_FLIGHT_CAPACITY: usize = JSON_CODEC_WORKER_COUNT;
+const JSON_CODEC_WORKER_STACK_SIZE: usize = 2 * 1024 * 1024;
+
+impl JsonCodecPool {
+    fn start() -> Arc<Self> {
+        Self::start_with_limits(JSON_CODEC_WORKER_COUNT, JSON_CODEC_IN_FLIGHT_CAPACITY)
+    }
+
+    fn start_with_limits(worker_count: usize, capacity: usize) -> Arc<Self> {
+        let pool = Arc::new(Self {
+            state: Mutex::new(JsonCodecPoolState {
+                queue: VecDeque::with_capacity(capacity),
+                in_flight: 0,
+            }),
+            ready: Condvar::new(),
+            available: Condvar::new(),
+            availability_signal: ChannelValue::with_capacity(capacity),
+            capacity,
+        });
+        for worker_index in 0..worker_count {
+            let worker = pool.clone();
+            thread::Builder::new()
+                .name(format!("aurora-json-codec-{worker_index}"))
+                .stack_size(JSON_CODEC_WORKER_STACK_SIZE)
+                .spawn(move || worker.run())
+                .expect("Aurora JSON codec worker should start");
+        }
+        pool
+    }
+
+    fn run(self: Arc<Self>) {
+        loop {
+            let job = {
+                let mut state = lock_mutex(&self.state);
+                loop {
+                    if let Some(job) = state.queue.pop_front() {
+                        break job;
+                    }
+                    state = wait_condvar(&self.ready, state);
+                }
+            };
+            let outcome = panic::catch_unwind(AssertUnwindSafe(job.operation))
+                .map_err(|payload| JsonCodecServiceError::Panicked(task_panic_message(&*payload)))
+                .and_then(|outcome| outcome.map_err(JsonCodecServiceError::Codec));
+            *lock_mutex(&job.result) = Some(outcome);
+            let _ = job.completion.send(Value::Unit);
+            job.completion.close();
+            let mut state = lock_mutex(&self.state);
+            state.in_flight = state
+                .in_flight
+                .checked_sub(1)
+                .expect("every JSON codec job owns one in-flight slot");
+            drop(state);
+            self.available.notify_one();
+            let _ = self.availability_signal.try_send(Value::Unit);
+        }
+    }
+
+    fn try_reserve(&self) -> bool {
+        let mut state = lock_mutex(&self.state);
+        if state.in_flight >= self.capacity {
+            return false;
+        }
+        state.in_flight += 1;
+        true
+    }
+
+    fn release_reservation(&self) {
+        let mut state = lock_mutex(&self.state);
+        state.in_flight = state
+            .in_flight
+            .checked_sub(1)
+            .expect("released JSON codec reservations are in flight");
+        drop(state);
+        self.available.notify_one();
+        let _ = self.availability_signal.try_send(Value::Unit);
+    }
+
+    fn submit_reserved(&self, job: JsonCodecJob) {
+        let mut state = lock_mutex(&self.state);
+        debug_assert!(state.queue.len() < self.capacity);
+        state.queue.push_back(job);
+        drop(state);
+        self.ready.notify_one();
+    }
+
+    fn reserve_blocking(&self) {
+        let mut state = lock_mutex(&self.state);
+        while state.in_flight >= self.capacity {
+            state = wait_condvar(&self.available, state);
+        }
+        state.in_flight += 1;
+    }
+}
+
+fn json_codec_pool() -> &'static Arc<JsonCodecPool> {
+    // Runtime-global by design: bounded codec workers are isolated from the
+    // protocol and blocking-I/O services and live until process exit.
+    static POOL: OnceLock<Arc<JsonCodecPool>> = OnceLock::new();
+    POOL.get_or_init(JsonCodecPool::start)
+}
+
 pub(crate) fn wait_for_runtime_scheduler(
     recv_channels: Vec<ChannelValue>,
     ignore_closed_recv_channels: bool,
@@ -1737,6 +1963,152 @@ where
     run_blocking_io_with_deadline(operation, None, cancellation)
 }
 
+pub(crate) fn run_protocol_step<T, F>(operation: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    run_protocol_step_with_admission(operation, protocol_step_pool(), None, None)
+}
+
+fn run_protocol_step_with_admission<T, F>(
+    operation: F,
+    pool: &Arc<ProtocolStepPool>,
+    admission_deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    check_deadline_and_cancellation(admission_deadline, cancellation)?;
+    let completion = ChannelValue::new();
+    let result = Arc::new(Mutex::new(None::<io::Result<T>>));
+    let result_slot = result.clone();
+    let completion_signal = completion.clone();
+    let mut job: ProtocolStepJob = Box::new(move || {
+        let outcome = panic::catch_unwind(AssertUnwindSafe(operation)).unwrap_or_else(|payload| {
+            Err(io::Error::other(format!(
+                "protocol step panicked: {}",
+                task_panic_message(&*payload)
+            )))
+        });
+        *lock_mutex(&result_slot) = Some(outcome);
+        let _ = completion_signal.send(Value::Unit);
+        completion_signal.close();
+    });
+
+    loop {
+        match pool.try_submit(job) {
+            Ok(()) => break,
+            Err(returned) => {
+                job = returned;
+                check_deadline_and_cancellation(admission_deadline, cancellation)?;
+                if yield_now_current_lightweight_task().is_none() {
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+
+    // Protocol state is moved into each bounded step. Always await that step,
+    // even after cancellation or timeout, so callers can restore owned state
+    // before consulting the reactor for the next readiness wait.
+    match completion.recv_result_with_deadline(None, None) {
+        RecvValueResult::Value(_) | RecvValueResult::Closed => {
+            lock_mutex(&result).take().unwrap_or_else(|| {
+                Err(io::Error::other(
+                    "protocol step completed without returning a result",
+                ))
+            })
+        }
+        RecvValueResult::TimedOut | RecvValueResult::Cancelled => {
+            unreachable!("protocol-step completion waits have no deadline or cancellation")
+        }
+    }
+}
+
+fn run_protocol_step_before<T, F>(
+    operation: F,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    check_deadline_and_cancellation(deadline, cancellation)?;
+    let result =
+        run_protocol_step_with_admission(operation, protocol_step_pool(), deadline, cancellation)?;
+    check_deadline_and_cancellation(deadline, cancellation)?;
+    Ok(result)
+}
+
+fn run_protocol_state_step<S, T, F>(
+    state: S,
+    operation: F,
+    admission_deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(S, io::Result<T>)>
+where
+    S: Send + 'static,
+    T: Send + 'static,
+    F: FnOnce(&mut S) -> T + Send + 'static,
+{
+    run_protocol_state_step_on_pool(
+        state,
+        operation,
+        protocol_step_pool(),
+        admission_deadline,
+        cancellation,
+    )
+}
+
+fn run_protocol_state_step_on_pool<S, T, F>(
+    state: S,
+    operation: F,
+    pool: &Arc<ProtocolStepPool>,
+    admission_deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(S, io::Result<T>)>
+where
+    S: Send + 'static,
+    T: Send + 'static,
+    F: FnOnce(&mut S) -> T + Send + 'static,
+{
+    let state = Arc::new(Mutex::new(Some(state)));
+    let worker_state = state.clone();
+    let result = run_protocol_step_with_admission(
+        move || {
+            let mut owned_state = lock_mutex(&worker_state)
+                .take()
+                .expect("protocol state should be present before its worker step");
+            let outcome = panic::catch_unwind(AssertUnwindSafe(|| operation(&mut owned_state)))
+                .map_err(|payload| {
+                    io::Error::other(format!(
+                        "protocol state step panicked: {}",
+                        task_panic_message(&*payload)
+                    ))
+                });
+            *lock_mutex(&worker_state) = Some(owned_state);
+            Ok(outcome)
+        },
+        pool,
+        admission_deadline,
+        cancellation,
+    );
+    let state = lock_mutex(&state)
+        .take()
+        .expect("protocol state should be restored after every worker outcome");
+    Ok((
+        state,
+        match result {
+            Ok(outcome) => outcome,
+            Err(error) => Err(error),
+        },
+    ))
+}
+
 fn run_blocking_io_with_deadline<T, F>(
     operation: F,
     deadline: Option<Instant>,
@@ -1907,12 +2279,25 @@ impl LightweightTaskScheduler {
     where
         F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
     {
-        self.spawn_task_with_forced_exit_cleanup(cancellation, entry, None)
+        self.spawn_task_with_stack(cancellation, None, entry)
+    }
+
+    fn spawn_task_with_stack<F>(
+        &mut self,
+        cancellation: Option<CancellationContext>,
+        stack_size: Option<usize>,
+        entry: F,
+    ) -> std::result::Result<TaskValue, Diagnostic>
+    where
+        F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    {
+        self.spawn_task_with_forced_exit_cleanup(cancellation, stack_size, entry, None)
     }
 
     fn spawn_task_with_forced_exit_cleanup<F>(
         &mut self,
         cancellation: Option<CancellationContext>,
+        stack_size: Option<usize>,
         entry: F,
         forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
     ) -> std::result::Result<TaskValue, Diagnostic>
@@ -1939,9 +2324,8 @@ impl LightweightTaskScheduler {
             cancellation,
         });
         let context_ptr = &*context as *const LightweightTaskContext;
-        let stack = DefaultStack::new(LIGHTWEIGHT_TASK_STACK_SIZE).map_err(|error| {
-            Diagnostic::new(format!("failed to allocate Aurora task stack: {error}"))
-        })?;
+        let stack =
+            allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
         let coroutine = Coroutine::with_stack(stack, move |yielder, _| {
             let context = unsafe { &*context_ptr };
             context.yielder.set(yielder as *const _);
@@ -2257,6 +2641,22 @@ where
     scheduler.spawn_task(None, entry)
 }
 
+pub(crate) fn spawn_lightweight_task_with_stack<F>(
+    stack_size: usize,
+    entry: F,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+{
+    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
+        return Err(Diagnostic::new(
+            "lightweight Aurora task start requires an active task scheduler",
+        ));
+    };
+    let scheduler = unsafe { &mut *scheduler };
+    scheduler.spawn_task_with_stack(None, Some(stack_size), entry)
+}
+
 fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutionResult) {
     if !matches!(result, TaskExecutionResult::Ready(Err(_))) {
         return;
@@ -2313,6 +2713,35 @@ where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
     C: FnOnce() + 'static,
 {
+    unsafe {
+        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack(
+            cancellation,
+            None,
+            entry,
+            forced_exit_cleanup,
+        )
+    }
+}
+
+/// Starts a generated task with an optional explicit stack size.
+///
+/// # Safety
+///
+/// This has the same forced-exit ownership requirements as
+/// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
+pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack<
+    F,
+    C,
+>(
+    cancellation: CancellationContext,
+    stack_size: Option<usize>,
+    entry: F,
+    forced_exit_cleanup: C,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    C: FnOnce() + 'static,
+{
     let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
         return Err(Diagnostic::new(
             "lightweight Aurora task start requires an active task scheduler",
@@ -2321,6 +2750,7 @@ where
     let scheduler = unsafe { &mut *scheduler };
     scheduler.spawn_task_with_forced_exit_cleanup(
         Some(cancellation),
+        stack_size,
         entry,
         Some(Box::new(forced_exit_cleanup)),
     )
@@ -2384,6 +2814,226 @@ impl PartialEq for MapValue {
     }
 }
 
+fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
+    enum CloneFrame<'a> {
+        Array {
+            variant: &'a EnumVariantValue,
+            vector: &'a VecValue,
+            next_index: usize,
+            elements: Vec<Value>,
+        },
+        Object {
+            variant: &'a EnumVariantValue,
+            map: &'a MapValue,
+            next_index: usize,
+            entries: Vec<(Value, Value)>,
+            pending_key: Value,
+        },
+    }
+
+    fn enum_value(variant: &EnumVariantValue, payloads: Vec<Value>) -> Value {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: variant.enum_name.clone(),
+            variant_name: variant.variant_name.clone(),
+            payloads,
+        })
+    }
+
+    let mut frames = Vec::new();
+    let mut next = Some(root);
+    let mut completed = None;
+    loop {
+        if let Some(value) = next.take() {
+            let Value::EnumVariant(variant) = value else {
+                return None;
+            };
+            if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+                return None;
+            }
+            completed = match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+                ("Null", []) => Some(enum_value(variant, Vec::new())),
+                ("Bool", [Value::Bool(value)]) => {
+                    Some(enum_value(variant, vec![Value::Bool(*value)]))
+                }
+                ("Int", [Value::Int(value)]) => Some(enum_value(variant, vec![Value::Int(*value)])),
+                ("Float", [Value::Float(value)]) => {
+                    Some(enum_value(variant, vec![Value::Float(*value)]))
+                }
+                ("String", [Value::String(value)]) => {
+                    Some(enum_value(variant, vec![Value::String(value.clone())]))
+                }
+                ("Array", [Value::Vec(vector)]) => {
+                    let elements = Vec::with_capacity(vector.elements.len());
+                    if vector.elements.is_empty() {
+                        Some(enum_value(
+                            variant,
+                            vec![Value::Vec(VecValue {
+                                element_type: vector.element_type.clone(),
+                                elements,
+                            })],
+                        ))
+                    } else {
+                        frames.push(CloneFrame::Array {
+                            variant,
+                            vector,
+                            next_index: 1,
+                            elements,
+                        });
+                        next = Some(&vector.elements[0]);
+                        None
+                    }
+                }
+                ("Object", [Value::Map(map)]) => {
+                    let entries = Vec::with_capacity(map.entries.len());
+                    if map.entries.is_empty() {
+                        Some(enum_value(
+                            variant,
+                            vec![Value::Map(MapValue {
+                                key_type: map.key_type.clone(),
+                                value_type: map.value_type.clone(),
+                                entries,
+                            })],
+                        ))
+                    } else {
+                        let (Value::String(key), value) = &map.entries[0] else {
+                            return None;
+                        };
+                        frames.push(CloneFrame::Object {
+                            variant,
+                            map,
+                            next_index: 1,
+                            entries,
+                            pending_key: Value::String(key.clone()),
+                        });
+                        next = Some(value);
+                        None
+                    }
+                }
+                _ => return None,
+            };
+        } else {
+            let frame = frames.pop()?;
+            match frame {
+                CloneFrame::Array {
+                    variant,
+                    vector,
+                    mut next_index,
+                    mut elements,
+                } => {
+                    elements.push(completed.take()?);
+                    if let Some(value) = vector.elements.get(next_index) {
+                        next_index += 1;
+                        frames.push(CloneFrame::Array {
+                            variant,
+                            vector,
+                            next_index,
+                            elements,
+                        });
+                        next = Some(value);
+                    } else {
+                        completed = Some(enum_value(
+                            variant,
+                            vec![Value::Vec(VecValue {
+                                element_type: vector.element_type.clone(),
+                                elements,
+                            })],
+                        ));
+                    }
+                }
+                CloneFrame::Object {
+                    variant,
+                    map,
+                    mut next_index,
+                    mut entries,
+                    pending_key,
+                } => {
+                    entries.push((pending_key, completed.take()?));
+                    if let Some((key, value)) = map.entries.get(next_index) {
+                        let Value::String(key) = key else {
+                            return None;
+                        };
+                        next_index += 1;
+                        frames.push(CloneFrame::Object {
+                            variant,
+                            map,
+                            next_index,
+                            entries,
+                            pending_key: Value::String(key.clone()),
+                        });
+                        next = Some(value);
+                    } else {
+                        completed = Some(enum_value(
+                            variant,
+                            vec![Value::Map(MapValue {
+                                key_type: map.key_type.clone(),
+                                value_type: map.value_type.clone(),
+                                entries,
+                            })],
+                        ));
+                    }
+                }
+            }
+        }
+
+        if next.is_none() && frames.is_empty() {
+            return completed;
+        }
+    }
+}
+
+impl Clone for Value {
+    fn clone(&self) -> Self {
+        if matches!(
+            self,
+            Value::EnumVariant(variant)
+                if nominal_runtime_base_name(&variant.enum_name) == "json.Value"
+        ) {
+            if let Some(cloned) = clone_json_runtime_tree(self) {
+                return cloned;
+            }
+        }
+
+        match self {
+            Self::Int(value) => Self::Int(*value),
+            Self::Float(value) => Self::Float(*value),
+            Self::Bool(value) => Self::Bool(*value),
+            Self::String(value) => Self::String(value.clone()),
+            Self::Tuple(value) => Self::Tuple(value.clone()),
+            Self::Vec(value) => Self::Vec(value.clone()),
+            Self::Set(value) => Self::Set(value.clone()),
+            Self::Map(value) => Self::Map(value.clone()),
+            Self::Duration(value) => Self::Duration(*value),
+            Self::Rng(value) => Self::Rng(value.clone()),
+            Self::Range(value) => Self::Range(value.clone()),
+            Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
+            Self::Unit => Self::Unit,
+            Self::Instance(value) => Self::Instance(value.clone()),
+            Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
+            Self::Channel(value) => Self::Channel(value.clone()),
+            Self::Task(value) => Self::Task(value.clone()),
+            Self::TaskGroup(value) => Self::TaskGroup(value.clone()),
+            Self::File(value) => Self::File(value.clone()),
+            Self::TcpListener(value) => Self::TcpListener(value.clone()),
+            Self::TcpStream(value) => Self::TcpStream(value.clone()),
+            Self::UdpSocket(value) => Self::UdpSocket(value.clone()),
+            Self::UdpDatagram(value) => Self::UdpDatagram(value.clone()),
+            Self::HttpListener(value) => Self::HttpListener(value.clone()),
+            Self::HttpExchange(value) => Self::HttpExchange(value.clone()),
+            Self::HttpResponse(value) => Self::HttpResponse(value.clone()),
+            Self::WebSocketListener(value) => Self::WebSocketListener(value.clone()),
+            Self::WebSocket(value) => Self::WebSocket(value.clone()),
+            Self::ProcessChild(value) => Self::ProcessChild(value.clone()),
+            Self::ProcessPipe(value) => Self::ProcessPipe(value.clone()),
+            Self::ProcessCompleted(value) => Self::ProcessCompleted(value.clone()),
+            Self::ProcessSupervisor(value) => Self::ProcessSupervisor(value.clone()),
+            Self::UnixListener(value) => Self::UnixListener(value.clone()),
+            Self::UnixStream(value) => Self::UnixStream(value.clone()),
+            Self::TlsListener(value) => Self::TlsListener(value.clone()),
+            Self::TlsStream(value) => Self::TlsStream(value.clone()),
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -2430,134 +3080,147 @@ impl PartialEq for Value {
 
 impl Value {
     pub fn render(&self) -> String {
-        match self {
-            Value::Int(value) => value.to_string(),
-            Value::Float(value) => render_float(*value),
-            Value::Bool(value) => value.to_string(),
-            Value::String(value) => value.clone(),
-            Value::Tuple(tuple) => {
-                let mut rendered = String::from("(");
-                for (index, value) in tuple.elements.iter().enumerate() {
-                    if index > 0 {
-                        rendered.push_str(", ");
-                    }
-                    rendered.push_str(&value.render());
+        enum RenderAction<'a> {
+            Value(&'a Value),
+            Text(&'a str),
+            Static(&'static str),
+        }
+
+        let mut rendered = String::new();
+        let mut actions = vec![RenderAction::Value(self)];
+        while let Some(action) = actions.pop() {
+            match action {
+                RenderAction::Text(text) | RenderAction::Static(text) => {
+                    rendered.push_str(text);
                 }
-                if tuple.elements.len() == 1 {
-                    rendered.push(',');
-                }
-                rendered.push(')');
-                rendered
-            }
-            Value::Vec(values) => {
-                let mut rendered = String::from("[");
-                for (index, value) in values.elements.iter().enumerate() {
-                    if index > 0 {
-                        rendered.push_str(", ");
-                    }
-                    rendered.push_str(&value.render());
-                }
-                rendered.push(']');
-                rendered
-            }
-            Value::Set(values) => {
-                let mut rendered = String::from("Set{");
-                for (index, value) in values.elements.iter().enumerate() {
-                    if index > 0 {
-                        rendered.push_str(", ");
-                    }
-                    rendered.push_str(&value.render());
-                }
-                rendered.push('}');
-                rendered
-            }
-            Value::Map(map) => {
-                let mut rendered = String::from("{");
-                for (index, (key, value)) in map.entries.iter().enumerate() {
-                    if index > 0 {
-                        rendered.push_str(", ");
-                    }
-                    rendered.push_str(&key.render());
-                    rendered.push_str(": ");
-                    rendered.push_str(&value.render());
-                }
-                rendered.push('}');
-                rendered
-            }
-            Value::Duration(value) => render_duration(*value),
-            Value::Rng(_) => "<rng>".to_string(),
-            Value::Range(range) => format!("range({}, {})", range.start, range.end),
-            Value::ModuleNamespace(namespace) => format!("<module {}>", namespace.path),
-            Value::Unit => String::new(),
-            Value::Channel(_) => "<queue>".to_string(),
-            Value::Task(_) => "<task>".to_string(),
-            Value::TaskGroup(_) => "<tasks>".to_string(),
-            Value::File(_) => "<file>".to_string(),
-            Value::TcpListener(_) => "<tcp-listener>".to_string(),
-            Value::TcpStream(_) => "<tcp-stream>".to_string(),
-            Value::UdpSocket(_) => "<udp-socket>".to_string(),
-            Value::UdpDatagram(datagram) => format!(
-                "<udp-datagram {} {} bytes>",
-                datagram.address,
-                datagram.data.len()
-            ),
-            Value::HttpListener(_) => "<http-listener>".to_string(),
-            Value::HttpExchange(_) => "<http-exchange>".to_string(),
-            Value::HttpResponse(response) => format!(
-                "<http-response {} {} bytes>",
-                response.status,
-                response.body.len()
-            ),
-            Value::WebSocketListener(_) => "<websocket-listener>".to_string(),
-            Value::WebSocket(_) => "<websocket>".to_string(),
-            Value::ProcessChild(_) => "<process-child>".to_string(),
-            Value::ProcessPipe(_) => "<process-pipe>".to_string(),
-            Value::ProcessCompleted(completed) => {
-                format!("<process-completed {}>", completed.status().render())
-            }
-            Value::ProcessSupervisor(_) => "<process-supervisor>".to_string(),
-            Value::UnixListener(_) => "<unix-listener>".to_string(),
-            Value::UnixStream(_) => "<unix-stream>".to_string(),
-            Value::TlsListener(_) => "<tls-listener>".to_string(),
-            Value::TlsStream(_) => "<tls-stream>".to_string(),
-            Value::Instance(instance) => {
-                let mut rendered = format!("{}(", nominal_runtime_base_name(&instance.class_name));
-                let mut first = true;
-                for (name, value) in instance
-                    .fields
-                    .iter()
-                    .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
-                {
-                    if !first {
-                        rendered.push_str(", ");
-                    }
-                    first = false;
-                    rendered.push_str(name);
-                    rendered.push('=');
-                    rendered.push_str(&value.render());
-                }
-                rendered.push(')');
-                rendered
-            }
-            Value::EnumVariant(variant) => {
-                let mut rendered = format!(
-                    "{}.{}",
-                    nominal_runtime_base_name(&variant.enum_name),
-                    variant.variant_name
-                );
-                if !variant.payloads.is_empty() {
-                    rendered.push('(');
-                    for (index, payload) in variant.payloads.iter().enumerate() {
-                        if index > 0 {
-                            rendered.push_str(", ");
+                RenderAction::Value(value) => match value {
+                    Value::Int(value) => rendered.push_str(&value.to_string()),
+                    Value::Float(value) => rendered.push_str(&render_float(*value)),
+                    Value::Bool(value) => rendered.push_str(if *value { "true" } else { "false" }),
+                    Value::String(value) => rendered.push_str(value),
+                    Value::Tuple(tuple) => {
+                        rendered.push('(');
+                        actions.push(RenderAction::Static(")"));
+                        if tuple.elements.len() == 1 {
+                            actions.push(RenderAction::Static(","));
                         }
-                        rendered.push_str(&payload.render());
+                        for (index, value) in tuple.elements.iter().enumerate().rev() {
+                            actions.push(RenderAction::Value(value));
+                            if index > 0 {
+                                actions.push(RenderAction::Static(", "));
+                            }
+                        }
                     }
-                    rendered.push(')');
-                }
-                rendered
+                    Value::Vec(values) => {
+                        rendered.push('[');
+                        actions.push(RenderAction::Static("]"));
+                        for (index, value) in values.elements.iter().enumerate().rev() {
+                            actions.push(RenderAction::Value(value));
+                            if index > 0 {
+                                actions.push(RenderAction::Static(", "));
+                            }
+                        }
+                    }
+                    Value::Set(values) => {
+                        rendered.push_str("Set{");
+                        actions.push(RenderAction::Static("}"));
+                        for (index, value) in values.elements.iter().enumerate().rev() {
+                            actions.push(RenderAction::Value(value));
+                            if index > 0 {
+                                actions.push(RenderAction::Static(", "));
+                            }
+                        }
+                    }
+                    Value::Map(map) => {
+                        rendered.push('{');
+                        actions.push(RenderAction::Static("}"));
+                        for (index, (key, value)) in map.entries.iter().enumerate().rev() {
+                            actions.push(RenderAction::Value(value));
+                            actions.push(RenderAction::Static(": "));
+                            actions.push(RenderAction::Value(key));
+                            if index > 0 {
+                                actions.push(RenderAction::Static(", "));
+                            }
+                        }
+                    }
+                    Value::Duration(value) => rendered.push_str(&render_duration(*value)),
+                    Value::Rng(_) => rendered.push_str("<rng>"),
+                    Value::Range(range) => {
+                        rendered.push_str(&format!("range({}, {})", range.start, range.end));
+                    }
+                    Value::ModuleNamespace(namespace) => {
+                        rendered.push_str(&format!("<module {}>", namespace.path));
+                    }
+                    Value::Unit => {}
+                    Value::Channel(_) => rendered.push_str("<queue>"),
+                    Value::Task(_) => rendered.push_str("<task>"),
+                    Value::TaskGroup(_) => rendered.push_str("<tasks>"),
+                    Value::File(_) => rendered.push_str("<file>"),
+                    Value::TcpListener(_) => rendered.push_str("<tcp-listener>"),
+                    Value::TcpStream(_) => rendered.push_str("<tcp-stream>"),
+                    Value::UdpSocket(_) => rendered.push_str("<udp-socket>"),
+                    Value::UdpDatagram(datagram) => rendered.push_str(&format!(
+                        "<udp-datagram {} {} bytes>",
+                        datagram.address,
+                        datagram.data.len()
+                    )),
+                    Value::HttpListener(_) => rendered.push_str("<http-listener>"),
+                    Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
+                    Value::HttpResponse(response) => rendered.push_str(&format!(
+                        "<http-response {} {} bytes>",
+                        response.status,
+                        response.body.len()
+                    )),
+                    Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
+                    Value::WebSocket(_) => rendered.push_str("<websocket>"),
+                    Value::ProcessChild(_) => rendered.push_str("<process-child>"),
+                    Value::ProcessPipe(_) => rendered.push_str("<process-pipe>"),
+                    Value::ProcessCompleted(completed) => rendered.push_str(&format!(
+                        "<process-completed {}>",
+                        completed.status().render()
+                    )),
+                    Value::ProcessSupervisor(_) => rendered.push_str("<process-supervisor>"),
+                    Value::UnixListener(_) => rendered.push_str("<unix-listener>"),
+                    Value::UnixStream(_) => rendered.push_str("<unix-stream>"),
+                    Value::TlsListener(_) => rendered.push_str("<tls-listener>"),
+                    Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
+                    Value::Instance(instance) => {
+                        rendered.push_str(nominal_runtime_base_name(&instance.class_name));
+                        rendered.push('(');
+                        actions.push(RenderAction::Static(")"));
+                        let fields = instance
+                            .fields
+                            .iter()
+                            .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+                            .collect::<Vec<_>>();
+                        for (index, (name, value)) in fields.into_iter().enumerate().rev() {
+                            actions.push(RenderAction::Value(value));
+                            actions.push(RenderAction::Static("="));
+                            actions.push(RenderAction::Text(name));
+                            if index > 0 {
+                                actions.push(RenderAction::Static(", "));
+                            }
+                        }
+                    }
+                    Value::EnumVariant(variant) => {
+                        rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
+                        rendered.push('.');
+                        rendered.push_str(&variant.variant_name);
+                        if !variant.payloads.is_empty() {
+                            rendered.push('(');
+                            actions.push(RenderAction::Static(")"));
+                            for (index, payload) in variant.payloads.iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(payload));
+                                if index > 0 {
+                                    actions.push(RenderAction::Static(", "));
+                                }
+                            }
+                        }
+                    }
+                },
             }
         }
+        rendered
     }
 }
 
@@ -3104,6 +3767,25 @@ fn check_deadline_and_cancellation(
         return Err(timeout_resource_error());
     }
     Ok(())
+}
+
+fn acquire_protocol_operation<'a>(
+    busy: &'a AtomicBool,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<ProtocolOperationGuard<'a>> {
+    loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        if busy
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(ProtocolOperationGuard { busy });
+        }
+        if yield_now_current_lightweight_task().is_none() {
+            thread::yield_now();
+        }
+    }
 }
 
 fn tls_handshake_deadline_with<F>(
@@ -3885,16 +4567,21 @@ where
     )
 }
 
+#[cfg(test)]
 fn load_tls_server_config(
     cert_pem_path: &str,
     key_pem_path: &str,
 ) -> io::Result<Arc<ServerConfig>> {
-    ensure_rustls_crypto_provider();
     let cert_pem = read_tls_config_file(cert_pem_path, "TLS certificate PEM")?;
+    let key_pem = read_tls_config_file(key_pem_path, "TLS private key PEM")?;
+    build_tls_server_config(cert_pem, key_pem)
+}
+
+fn build_tls_server_config(cert_pem: Vec<u8>, key_pem: Vec<u8>) -> io::Result<Arc<ServerConfig>> {
+    ensure_rustls_crypto_provider();
     let cert_chain = CertificateDer::pem_slice_iter(&cert_pem)
         .collect::<std::result::Result<Vec<CertificateDer<'static>>, _>>()
         .map_err(io::Error::other)?;
-    let key_pem = read_tls_config_file(key_pem_path, "TLS private key PEM")?;
     let Some(private_key) = PrivateKeyDer::pem_slice_iter(&key_pem).next() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -3909,12 +4596,20 @@ fn load_tls_server_config(
     Ok(Arc::new(config))
 }
 
+#[cfg(test)]
 fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
+    let pem = ca_pem_path
+        .filter(|path| !path.is_empty())
+        .map(|path| read_tls_config_file(path, "TLS CA PEM"))
+        .transpose()?;
+    build_tls_root_store(pem)
+}
+
+fn build_tls_root_store(ca_pem: Option<Vec<u8>>) -> io::Result<RootCertStore> {
     ensure_rustls_crypto_provider();
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    if let Some(ca_pem_path) = ca_pem_path.filter(|path| !path.is_empty()) {
-        let pem = read_tls_config_file(ca_pem_path, "TLS CA PEM")?;
+    if let Some(pem) = ca_pem {
         for certificate in CertificateDer::pem_slice_iter(&pem) {
             let certificate = certificate.map_err(io::Error::other)?;
             roots.add(certificate).map_err(io::Error::other)?;
@@ -4260,6 +4955,47 @@ fn parse_http_response_head(buffer: &[u8]) -> io::Result<Option<HttpResponseHead
     }
 }
 
+fn parse_http_request_head_step(
+    buffer: &[u8],
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<HttpRequestHead>> {
+    let owned = buffer.to_vec();
+    run_protocol_step_before(
+        move || parse_http_request_head(&owned),
+        deadline,
+        cancellation,
+    )
+}
+
+fn parse_http_response_head_step(
+    buffer: &[u8],
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<HttpResponseHead>> {
+    let owned = buffer.to_vec();
+    run_protocol_step_before(
+        move || parse_http_response_head(&owned),
+        deadline,
+        cancellation,
+    )
+}
+
+fn decode_chunked_http_body_step(
+    buffer: &[u8],
+    start: usize,
+    limit: usize,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<Vec<u8>>> {
+    let owned = buffer.to_vec();
+    run_protocol_step_before(
+        move || try_decode_chunked_http_body_with_limit(&owned, start, limit),
+        deadline,
+        cancellation,
+    )
+}
+
 fn read_http_request_from_stream_with_limit(
     stream: &mut StdTcpStream,
     deadline: Option<Instant>,
@@ -4268,7 +5004,9 @@ fn read_http_request_from_stream_with_limit(
 ) -> io::Result<HttpRequestParts> {
     let mut buffer = Vec::new();
     let (header_len, method, path, headers, framing) = loop {
-        if let Some(parsed) = parse_http_request_head(&buffer)? {
+        let parsed = parse_http_request_head_step(&buffer, deadline, cancellation)?;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        if let Some(parsed) = parsed {
             break parsed;
         }
         let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
@@ -4298,9 +5036,15 @@ fn read_http_request_from_stream_with_limit(
             buffer[header_len..header_len.saturating_add(content_length)].to_vec()
         }
         HttpBodyFraming::Chunked => loop {
-            if let Some(body) =
-                try_decode_chunked_http_body_with_limit(&buffer, header_len, message_limit)?
-            {
+            let decoded = decode_chunked_http_body_step(
+                &buffer,
+                header_len,
+                message_limit,
+                deadline,
+                cancellation,
+            )?;
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if let Some(body) = decoded {
                 break body;
             }
             let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
@@ -4371,7 +5115,9 @@ fn read_http_response_from_stream_with_limit<R: HttpDeadlineReader>(
 ) -> io::Result<HttpResponseValue> {
     let mut buffer = Vec::new();
     let (header_len, status, reason, headers, framing) = loop {
-        if let Some(parsed) = parse_http_response_head(&buffer)? {
+        let parsed = parse_http_response_head_step(&buffer, deadline, cancellation)?;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        if let Some(parsed) = parsed {
             break parsed;
         }
         let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
@@ -4400,9 +5146,15 @@ fn read_http_response_from_stream_with_limit<R: HttpDeadlineReader>(
             buffer[header_len..header_len.saturating_add(content_length)].to_vec()
         }
         HttpBodyFraming::Chunked => loop {
-            if let Some(body) =
-                try_decode_chunked_http_body_with_limit(&buffer, header_len, message_limit)?
-            {
+            let decoded = decode_chunked_http_body_step(
+                &buffer,
+                header_len,
+                message_limit,
+                deadline,
+                cancellation,
+            )?;
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if let Some(body) = decoded {
                 break body;
             }
             let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
@@ -4518,6 +5270,20 @@ fn write_http_response_to_stream(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
+    let body = body.to_vec();
+    let rendered = run_protocol_step_before(
+        move || build_http_response_bytes(status, headers, &body),
+        deadline,
+        cancellation,
+    )?;
+    write_all_with_deadline(stream, &rendered, deadline, cancellation)
+}
+
+fn build_http_response_bytes(
+    status: i32,
+    headers: Vec<(String, String)>,
+    body: &[u8],
+) -> io::Result<Vec<u8>> {
     validate_http_headers(&headers)?;
     let mut rendered =
         format!("HTTP/1.1 {} {}\r\n", status, http_reason_phrase(status)).into_bytes();
@@ -4544,7 +5310,7 @@ fn write_http_response_to_stream(
     }
     rendered.extend_from_slice(b"\r\n");
     rendered.extend_from_slice(body);
-    write_all_with_deadline(stream, &rendered, deadline, cancellation)
+    Ok(rendered)
 }
 
 #[cfg(unix)]
@@ -4602,20 +5368,23 @@ impl WebSocketHandshakeStream for MaybeTlsStream<StdTcpStream> {
 fn finish_websocket_handshake<Role>(
     mut mid: tungstenite::handshake::MidHandshake<Role>,
     deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
 ) -> io::Result<Role::FinalResult>
 where
-    Role: tungstenite::handshake::HandshakeRole,
-    Role::InternalStream: Read + Write + WebSocketHandshakeStream,
+    Role: tungstenite::handshake::HandshakeRole + Send + 'static,
+    Role::InternalStream: Read + Write + WebSocketHandshakeStream + Send + 'static,
+    Role::FinalResult: Send + 'static,
 {
     loop {
-        match mid.handshake() {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match run_protocol_step_before(move || Ok(mid.handshake()), deadline, cancellation)? {
             Ok(result) => return Ok(result),
             Err(tungstenite::handshake::HandshakeError::Interrupted(next_mid)) => {
                 wait_for_fd_event(
                     next_mid.get_ref().get_ref().raw_fd()?,
                     libc::POLLIN | libc::POLLOUT,
                     deadline,
-                    None,
+                    cancellation,
                 )?;
                 mid = next_mid;
             }
@@ -4630,12 +5399,23 @@ where
 fn accept_websocket_stream(
     stream: StdTcpStream,
     deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
 ) -> io::Result<WebSocketStateKind> {
+    check_deadline_and_cancellation(deadline, cancellation)?;
     stream.set_nonblocking(true)?;
-    let socket = match websocket_accept_with_config(stream, Some(websocket_config())) {
+    let socket = match run_protocol_step_before(
+        move || {
+            Ok(websocket_accept_with_config(
+                stream,
+                Some(websocket_config()),
+            ))
+        },
+        deadline,
+        cancellation,
+    )? {
         Ok(socket) => socket,
         Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
-            finish_websocket_handshake(mid, deadline)?
+            finish_websocket_handshake(mid, deadline, cancellation)?
         }
         Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
             return Err(websocket_error_to_io(error));
@@ -4649,14 +5429,26 @@ fn connect_websocket_stream(
     stream: StdTcpStream,
     request: tungstenite::http::Request<()>,
     deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
 ) -> io::Result<WebSocketStateKind> {
+    check_deadline_and_cancellation(deadline, cancellation)?;
     stream.set_nonblocking(true)?;
     stream.set_nodelay(true)?;
-    let (socket, _) = match client_tls_with_config(request, stream, Some(websocket_config()), None)
-    {
+    let (socket, _) = match run_protocol_step_before(
+        move || {
+            Ok(client_tls_with_config(
+                request,
+                stream,
+                Some(websocket_config()),
+                None,
+            ))
+        },
+        deadline,
+        cancellation,
+    )? {
         Ok(result) => result,
         Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
-            finish_websocket_handshake(mid, deadline)?
+            finish_websocket_handshake(mid, deadline, cancellation)?
         }
         Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
             return Err(websocket_error_to_io(error));
@@ -4727,44 +5519,6 @@ fn websocket_client_request(parsed: &Url) -> io::Result<tungstenite::http::Reque
         .header("Sec-WebSocket-Key", websocket_client_key()?)
         .body(())
         .map_err(io::Error::other)
-}
-
-fn websocket_read_message(
-    socket: &mut WebSocketStateKind,
-    timeout: Option<StdDuration>,
-) -> io::Result<Option<Message>> {
-    let deadline = deadline_from_timeout(timeout)?;
-    loop {
-        let result = match socket {
-            WebSocketStateKind::Plain(socket) => socket.read(),
-            WebSocketStateKind::MaybeTls(socket) => socket.read(),
-        };
-
-        match result {
-            Ok(Message::Close(_)) => return Ok(None),
-            Ok(message) => return Ok(Some(message)),
-            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                return Ok(None)
-            }
-            Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
-                #[cfg(unix)]
-                {
-                    wait_for_fd_event(
-                        websocket_raw_fd(socket)?,
-                        libc::POLLIN | libc::POLLOUT,
-                        deadline,
-                        None,
-                    )?;
-                    continue;
-                }
-                #[cfg(not(unix))]
-                {
-                    continue;
-                }
-            }
-            Err(error) => return Err(websocket_error_to_io(error)),
-        }
-    }
 }
 
 impl FileValue {
@@ -6648,15 +7402,22 @@ impl TlsListenerValue {
         let address = address.to_string();
         let cert_pem_path = cert_pem_path.to_string();
         let key_pem_path = key_pem_path.to_string();
-        let (listener, config) = run_blocking_io_with_deadline(
+        let cancellation = current_lightweight_task_cancellation();
+        let (listener, cert_pem, key_pem) = run_blocking_io_with_deadline(
             move || {
                 Ok((
                     StdTcpListener::bind(address)?,
-                    load_tls_server_config(&cert_pem_path, &key_pem_path)?,
+                    read_tls_config_file(&cert_pem_path, "TLS certificate PEM")?,
+                    read_tls_config_file(&key_pem_path, "TLS private key PEM")?,
                 ))
             },
             None,
-            current_lightweight_task_cancellation().as_ref(),
+            cancellation.as_ref(),
+        )?;
+        let config = run_protocol_step_before(
+            move || build_tls_server_config(cert_pem, key_pem),
+            None,
+            cancellation.as_ref(),
         )?;
         listener.set_nonblocking(true)?;
         Ok(Self {
@@ -6676,23 +7437,16 @@ impl TlsListenerValue {
         let mut pending = VecDeque::new();
         loop {
             #[cfg(unix)]
-            let listener_fd = {
+            let (listener_fd, accepted) = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
                     return Err(closed_resource_error());
                 };
                 let listener_fd = listener.as_raw_fd();
+                let mut accepted = Vec::new();
                 loop {
                     match listener.accept() {
-                        Ok((stream, _)) => {
-                            stream.set_nonblocking(true)?;
-                            let connection = ServerConnection::new(self.inner.config.clone())
-                                .map_err(io::Error::other)?;
-                            pending.push_back(PendingTlsServerHandshake {
-                                stream: rustls::StreamOwned::new(connection, stream),
-                                deadline: tls_handshake_deadline(deadline)?,
-                            });
-                        }
+                        Ok((stream, _)) => accepted.push(stream),
                         Err(error)
                             if matches!(
                                 error.kind(),
@@ -6704,26 +7458,36 @@ impl TlsListenerValue {
                         Err(error) => return Err(error),
                     }
                 }
-                listener_fd
+                (listener_fd, accepted)
             };
+            #[cfg(unix)]
+            for stream in accepted {
+                let config = self.inner.config.clone();
+                let handshake_deadline = tls_handshake_deadline(deadline)?;
+                pending.push_back(run_protocol_step_before(
+                    move || {
+                        stream.set_nonblocking(true)?;
+                        let connection = ServerConnection::new(config).map_err(io::Error::other)?;
+                        Ok(PendingTlsServerHandshake {
+                            stream: rustls::StreamOwned::new(connection, stream),
+                            deadline: handshake_deadline,
+                        })
+                    },
+                    deadline,
+                    cancellation,
+                )?);
+            }
             #[cfg(not(unix))]
-            let wait_listener = {
+            let (wait_listener, accepted) = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
                     return Err(closed_resource_error());
                 };
                 let wait_listener = listener.try_clone()?;
+                let mut accepted = Vec::new();
                 loop {
                     match listener.accept() {
-                        Ok((stream, _)) => {
-                            stream.set_nonblocking(true)?;
-                            let connection = ServerConnection::new(self.inner.config.clone())
-                                .map_err(io::Error::other)?;
-                            pending.push_back(PendingTlsServerHandshake {
-                                stream: rustls::StreamOwned::new(connection, stream),
-                                deadline: tls_handshake_deadline(deadline)?,
-                            });
-                        }
+                        Ok((stream, _)) => accepted.push(stream),
                         Err(error)
                             if matches!(
                                 error.kind(),
@@ -6735,8 +7499,25 @@ impl TlsListenerValue {
                         Err(error) => return Err(error),
                     }
                 }
-                wait_listener
+                (wait_listener, accepted)
             };
+            #[cfg(not(unix))]
+            for stream in accepted {
+                let config = self.inner.config.clone();
+                let handshake_deadline = tls_handshake_deadline(deadline)?;
+                pending.push_back(run_protocol_step_before(
+                    move || {
+                        stream.set_nonblocking(true)?;
+                        let connection = ServerConnection::new(config).map_err(io::Error::other)?;
+                        Ok(PendingTlsServerHandshake {
+                            stream: rustls::StreamOwned::new(connection, stream),
+                            deadline: handshake_deadline,
+                        })
+                    },
+                    deadline,
+                    cancellation,
+                )?);
+            }
 
             let pending_count = pending.len();
             for _ in 0..pending_count {
@@ -6744,19 +7525,24 @@ impl TlsListenerValue {
                     break;
                 };
                 match advance_tls_server_handshake(
-                    &mut handshake.stream,
+                    handshake.stream,
                     handshake.deadline,
                     cancellation,
                 ) {
-                    Ok(true) => {
-                        finalize_tls_server_stream_for_runtime(&mut handshake.stream)?;
+                    Ok((mut stream, true)) => {
+                        finalize_tls_server_stream_for_runtime(&mut stream)?;
                         return Ok(TlsStreamValue {
                             inner: Arc::new(TlsStreamState {
-                                stream: Mutex::new(Some(TlsStreamKind::Server(handshake.stream))),
+                                stream: Mutex::new(Some(TlsStreamKind::Server(stream))),
+                                busy: AtomicBool::new(false),
+                                closed: AtomicBool::new(false),
                             }),
                         });
                     }
-                    Ok(false) => pending.push_back(handshake),
+                    Ok((stream, false)) => {
+                        handshake.stream = stream;
+                        pending.push_back(handshake);
+                    }
                     Err(error) => {
                         if cancellation.is_some_and(CancellationContext::is_cancelled) {
                             return Err(error);
@@ -6797,13 +7583,25 @@ impl TlsListenerValue {
 }
 
 fn complete_tls_client_handshake(
-    stream: &mut rustls::StreamOwned<ClientConnection, StdTcpStream>,
+    mut stream: rustls::StreamOwned<ClientConnection, StdTcpStream>,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<()> {
+) -> io::Result<rustls::StreamOwned<ClientConnection, StdTcpStream>> {
     while stream.conn.is_handshaking() {
         check_deadline_and_cancellation(deadline, cancellation)?;
-        match stream.conn.complete_io(&mut stream.sock) {
+        let (returned, result) = run_protocol_state_step(
+            stream,
+            |stream| stream.conn.complete_io(&mut stream.sock),
+            deadline,
+            cancellation,
+        )?;
+        stream = returned;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => Err(error),
+        };
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match result {
             Ok(_) => {}
             Err(error) if is_retryable_network_error(&error) => {
                 #[cfg(unix)]
@@ -6819,23 +7617,35 @@ fn complete_tls_client_handshake(
             Err(error) => return Err(error),
         }
     }
-    Ok(())
+    Ok(stream)
 }
 
 fn advance_tls_server_handshake(
-    stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
+    mut stream: rustls::StreamOwned<ServerConnection, StdTcpStream>,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<bool> {
+) -> io::Result<(rustls::StreamOwned<ServerConnection, StdTcpStream>, bool)> {
     while stream.conn.is_handshaking() {
         check_deadline_and_cancellation(deadline, cancellation)?;
-        match stream.conn.complete_io(&mut stream.sock) {
+        let (returned, result) = run_protocol_state_step(
+            stream,
+            |stream| stream.conn.complete_io(&mut stream.sock),
+            deadline,
+            cancellation,
+        )?;
+        stream = returned;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => Err(error),
+        };
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match result {
             Ok(_) => {}
-            Err(error) if is_retryable_network_error(&error) => return Ok(false),
+            Err(error) if is_retryable_network_error(&error) => return Ok((stream, false)),
             Err(error) => return Err(error),
         }
     }
-    Ok(true)
+    Ok((stream, true))
 }
 
 fn finalize_tls_server_stream_for_runtime(
@@ -6846,7 +7656,238 @@ fn finalize_tls_server_stream_for_runtime(
     Ok(())
 }
 
+fn tls_stream_raw_fd(stream: &TlsStreamKind) -> i32 {
+    match stream {
+        TlsStreamKind::Client(stream) => stream.sock.as_raw_fd(),
+        TlsStreamKind::Server(stream) => stream.sock.as_raw_fd(),
+    }
+}
+
+fn tls_read_step(
+    stream: TlsStreamKind,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(TlsStreamKind, io::Result<Vec<u8>>)> {
+    let (stream, result) = run_protocol_state_step(
+        stream,
+        move |stream| {
+            let mut bytes = vec![0u8; max_bytes];
+            let count = match stream {
+                TlsStreamKind::Client(stream) => stream.read(&mut bytes),
+                TlsStreamKind::Server(stream) => stream.read(&mut bytes),
+            }?;
+            bytes.truncate(count);
+            Ok(bytes)
+        },
+        deadline,
+        cancellation,
+    )?;
+    Ok((
+        stream,
+        match result {
+            Ok(result) => result,
+            Err(error) => Err(error),
+        },
+    ))
+}
+
+fn tls_write_step(
+    stream: TlsStreamKind,
+    bytes: Vec<u8>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(TlsStreamKind, io::Result<usize>)> {
+    let (stream, result) = run_protocol_state_step(
+        stream,
+        move |stream| match stream {
+            TlsStreamKind::Client(stream) => stream.write(&bytes),
+            TlsStreamKind::Server(stream) => stream.write(&bytes),
+        },
+        deadline,
+        cancellation,
+    )?;
+    Ok((
+        stream,
+        match result {
+            Ok(result) => result,
+            Err(error) => Err(error),
+        },
+    ))
+}
+
+fn tls_client_read_some_owned(
+    mut stream: TlsClientStream,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(TlsClientStream, Option<Vec<u8>>)> {
+    loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        let (returned, result) = tls_read_step(
+            TlsStreamKind::Client(stream),
+            max_bytes,
+            deadline,
+            cancellation,
+        )?;
+        let TlsStreamKind::Client(returned) = returned else {
+            unreachable!("TLS client read step returned a server stream")
+        };
+        stream = returned;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match result {
+            Ok(bytes) if bytes.is_empty() => return Ok((stream, None)),
+            Ok(bytes) => return Ok((stream, Some(bytes))),
+            Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
+                stream.sock.as_raw_fd(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline,
+                cancellation,
+            )?,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn write_all_tls_client_owned(
+    mut stream: rustls::StreamOwned<ClientConnection, StdTcpStream>,
+    bytes: &[u8],
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<rustls::StreamOwned<ClientConnection, StdTcpStream>> {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        let pending = bytes[written..].to_vec();
+        let (returned, result) = tls_write_step(
+            TlsStreamKind::Client(stream),
+            pending,
+            deadline,
+            cancellation,
+        )?;
+        let TlsStreamKind::Client(returned) = returned else {
+            unreachable!("TLS client write step returned a server stream")
+        };
+        stream = returned;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match result {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "stream ended before enough bytes were written",
+                ));
+            }
+            Ok(count) => written += count,
+            Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
+                stream.sock.as_raw_fd(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline,
+                cancellation,
+            )?,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(stream)
+}
+
+fn read_http_response_tls_client_owned(
+    mut stream: rustls::StreamOwned<ClientConnection, StdTcpStream>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(
+    rustls::StreamOwned<ClientConnection, StdTcpStream>,
+    HttpResponseValue,
+)> {
+    let mut buffer = Vec::new();
+    let (header_len, status, reason, headers, framing) = loop {
+        let parsed = parse_http_response_head_step(&buffer, deadline, cancellation)?;
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        if let Some(parsed) = parsed {
+            break parsed;
+        }
+        let (returned, chunk) = tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
+        stream = returned;
+        let Some(chunk) = chunk else {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "stream closed before a complete HTTP response was received",
+            ));
+        };
+        push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
+    };
+
+    let body = match framing {
+        HttpBodyFraming::ContentLength(content_length) => {
+            if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
+                return Err(http_message_too_large_error_with_limit(
+                    MAX_HTTP_MESSAGE_BYTES,
+                ));
+            }
+            while buffer.len() < header_len.saturating_add(content_length) {
+                let (returned, chunk) =
+                    tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
+                stream = returned;
+                let Some(chunk) = chunk else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "stream closed before the HTTP response body was fully received",
+                    ));
+                };
+                push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
+            }
+            buffer[header_len..header_len.saturating_add(content_length)].to_vec()
+        }
+        HttpBodyFraming::Chunked => loop {
+            let decoded = decode_chunked_http_body_step(
+                &buffer,
+                header_len,
+                MAX_HTTP_MESSAGE_BYTES,
+                deadline,
+                cancellation,
+            )?;
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if let Some(body) = decoded {
+                break body;
+            }
+            let (returned, chunk) =
+                tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
+            stream = returned;
+            let Some(chunk) = chunk else {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed before the chunked HTTP response body was fully received",
+                ));
+            };
+            push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
+        },
+        HttpBodyFraming::UntilClose => loop {
+            let (returned, chunk) =
+                tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
+            stream = returned;
+            let Some(chunk) = chunk else {
+                break buffer[header_len..].to_vec();
+            };
+            push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
+        },
+    };
+
+    Ok((stream, parse_http_response(status, reason, headers, body)))
+}
+
 impl TlsStreamValue {
+    fn take_stream_for_step(&self) -> io::Result<TlsStreamKind> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(closed_resource_error());
+        }
+        lock_mutex(&self.inner.stream)
+            .take()
+            .ok_or_else(|| io::Error::other("TLS stream state is temporarily unavailable"))
+    }
+
+    fn restore_stream_after_step(&self, stream: TlsStreamKind) {
+        *lock_mutex(&self.inner.stream) = Some(stream);
+    }
+
     pub(crate) fn connect(
         address: &str,
         server_name: &str,
@@ -6870,28 +7911,47 @@ impl TlsStreamValue {
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        ensure_rustls_crypto_provider();
+        let ca_pem = ca_pem_path
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                let path = path.to_string();
+                run_blocking_io_with_deadline(
+                    move || read_tls_config_file(&path, "TLS CA PEM"),
+                    deadline,
+                    cancellation,
+                )
+            })
+            .transpose()?;
         let tcp = TcpStreamValue::connect_before(address, deadline, cancellation)?;
         let mut guard = lock_mutex(&tcp.inner.stream);
         let Some(stream) = guard.take() else {
             return Err(closed_resource_error());
         };
-        let config = ClientConfig::builder()
-            .with_root_certificates(load_tls_root_store(ca_pem_path)?)
-            .with_no_client_auth();
-        let server_name = ServerName::try_from(server_name.to_string())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid TLS server name"))?;
-        let connection =
-            ClientConnection::new(Arc::new(config), server_name).map_err(io::Error::other)?;
-        let mut stream = rustls::StreamOwned::new(connection, stream);
-        complete_tls_client_handshake(
-            &mut stream,
-            tls_handshake_deadline(deadline)?,
+        drop(guard);
+        let server_name = server_name.to_string();
+        let stream = run_protocol_step_before(
+            move || {
+                ensure_rustls_crypto_provider();
+                let config = ClientConfig::builder()
+                    .with_root_certificates(build_tls_root_store(ca_pem)?)
+                    .with_no_client_auth();
+                let server_name = ServerName::try_from(server_name).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid TLS server name")
+                })?;
+                let connection = ClientConnection::new(Arc::new(config), server_name)
+                    .map_err(io::Error::other)?;
+                Ok(rustls::StreamOwned::new(connection, stream))
+            },
+            deadline,
             cancellation,
         )?;
+        let stream =
+            complete_tls_client_handshake(stream, tls_handshake_deadline(deadline)?, cancellation)?;
         Ok(Self {
             inner: Arc::new(TlsStreamState {
                 stream: Mutex::new(Some(TlsStreamKind::Client(stream))),
+                busy: AtomicBool::new(false),
+                closed: AtomicBool::new(false),
             }),
         })
     }
@@ -6901,25 +7961,38 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<String>> {
-        let mut stream = lock_mutex(&self.inner.stream);
-        let Some(stream) = stream.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        match stream {
-            TlsStreamKind::Client(stream) => read_line_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
-            TlsStreamKind::Server(stream) => read_line_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
+        let deadline = deadline_from_timeout(timeout)?;
+        let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
+        let mut buffer = Vec::new();
+        loop {
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            let stream = self.take_stream_for_step()?;
+            let (stream, result) = tls_read_step(stream, 1, deadline, cancellation)?;
+            let fd = tls_stream_raw_fd(&stream);
+            self.restore_stream_after_step(stream);
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            match result {
+                Ok(bytes) if bytes.is_empty() && buffer.is_empty() => return Ok(None),
+                Ok(bytes) if bytes.is_empty() => {
+                    return String::from_utf8(buffer)
+                        .map(trim_line_endings)
+                        .map(Some)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+                }
+                Ok(bytes) => {
+                    buffer.extend_from_slice(&bytes);
+                    if buffer.last() == Some(&b'\n') {
+                        return String::from_utf8(buffer)
+                            .map(trim_line_endings)
+                            .map(Some)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+                    }
+                }
+                Err(error) if is_retryable_network_error(&error) => {
+                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -6929,28 +8002,32 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Vec<u8>> {
-        let mut stream = lock_mutex(&self.inner.stream);
-        let Some(stream) = stream.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        match stream {
-            TlsStreamKind::Client(stream) => read_exact_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                count,
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
-            TlsStreamKind::Server(stream) => read_exact_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                count,
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
+        let deadline = deadline_from_timeout(timeout)?;
+        let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
+        let mut output = Vec::with_capacity(count);
+        while output.len() < count {
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            let stream = self.take_stream_for_step()?;
+            let (stream, result) =
+                tls_read_step(stream, count - output.len(), deadline, cancellation)?;
+            let fd = tls_stream_raw_fd(&stream);
+            self.restore_stream_after_step(stream);
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            match result {
+                Ok(bytes) if bytes.is_empty() => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "stream ended before enough bytes were read",
+                    ));
+                }
+                Ok(bytes) => output.extend_from_slice(&bytes),
+                Err(error) if is_retryable_network_error(&error) => {
+                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(output)
     }
 
     pub(crate) fn write_all(
@@ -6959,33 +8036,44 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<()> {
-        let mut stream = lock_mutex(&self.inner.stream);
-        let Some(stream) = stream.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        match stream {
-            TlsStreamKind::Client(stream) => write_all_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                text.as_bytes(),
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
-            TlsStreamKind::Server(stream) => write_all_with_fd_deadline(
-                stream,
-                stream.sock.as_raw_fd(),
-                text.as_bytes(),
-                libc::POLLIN | libc::POLLOUT,
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            ),
+        let deadline = deadline_from_timeout(timeout)?;
+        let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
+        let bytes = text.as_bytes();
+        let mut written = 0usize;
+        while written < bytes.len() {
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            let stream = self.take_stream_for_step()?;
+            let pending = bytes[written..].to_vec();
+            let (stream, result) = tls_write_step(stream, pending, deadline, cancellation)?;
+            let fd = tls_stream_raw_fd(&stream);
+            self.restore_stream_after_step(stream);
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            match result {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "stream ended before enough bytes were written",
+                    ));
+                }
+                Ok(count) => written += count,
+                Err(error) if is_retryable_network_error(&error) => {
+                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(())
     }
 
     pub(crate) fn close(&self) {
-        let mut stream = lock_mutex(&self.inner.stream);
-        if let Some(stream) = stream.take() {
+        let Ok(_operation) = acquire_protocol_operation(&self.inner.busy, None, None) else {
+            return;
+        };
+        let Ok(stream) = self.take_stream_for_step() else {
+            return;
+        };
+        self.inner.closed.store(true, Ordering::Release);
+        let _ = run_protocol_step(move || {
             match stream {
                 TlsStreamKind::Client(mut stream) => {
                     stream.conn.send_close_notify();
@@ -6998,7 +8086,8 @@ impl TlsStreamValue {
                     let _ = stream.sock.shutdown(Shutdown::Both);
                 }
             }
-        }
+            Ok(())
+        });
     }
 }
 
@@ -7060,13 +8149,13 @@ impl HttpListenerValue {
                 };
                 TcpStreamValue::from_std(listener.accept()?.0)?
             };
-            let request = {
-                let mut raw_stream = lock_mutex(&stream.inner.stream);
-                let Some(raw_stream) = raw_stream.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                read_http_request_from_stream(raw_stream, deadline, cancellation)
+            let mut raw_stream_guard = lock_mutex(&stream.inner.stream);
+            let Some(mut raw_stream) = raw_stream_guard.take() else {
+                return Err(closed_resource_error());
             };
+            drop(raw_stream_guard);
+            let request = read_http_request_from_stream(&mut raw_stream, deadline, cancellation);
+            *lock_mutex(&stream.inner.stream) = Some(raw_stream);
             let (method, path, headers, body) = match request {
                 Ok(request) => request,
                 Err(error)
@@ -7078,10 +8167,10 @@ impl HttpListenerValue {
                     } else {
                         431
                     };
-                    let mut raw_stream = lock_mutex(&stream.inner.stream);
-                    if let Some(raw_stream) = raw_stream.as_mut() {
+                    let raw_stream = lock_mutex(&stream.inner.stream).take();
+                    if let Some(mut raw_stream) = raw_stream {
                         let _ = write_http_response_to_stream(
-                            raw_stream,
+                            &mut raw_stream,
                             status,
                             Vec::new(),
                             b"",
@@ -7089,15 +8178,14 @@ impl HttpListenerValue {
                             cancellation,
                         );
                     }
-                    drop(raw_stream);
                     stream.close();
                     continue;
                 }
                 Err(error) if is_http_bad_request_error(&error) => {
-                    let mut raw_stream = lock_mutex(&stream.inner.stream);
-                    if let Some(raw_stream) = raw_stream.as_mut() {
+                    let raw_stream = lock_mutex(&stream.inner.stream).take();
+                    if let Some(mut raw_stream) = raw_stream {
                         let _ = write_http_response_to_stream(
-                            raw_stream,
+                            &mut raw_stream,
                             400,
                             Vec::new(),
                             b"",
@@ -7105,7 +8193,6 @@ impl HttpListenerValue {
                             cancellation,
                         );
                     }
-                    drop(raw_stream);
                     stream.close();
                     continue;
                 }
@@ -7173,17 +8260,18 @@ impl HttpExchangeValue {
         body: &[u8],
         headers: Vec<(String, String)>,
     ) -> io::Result<()> {
-        let mut stream = lock_mutex(&self.inner.stream);
-        let Some(stream) = stream.take() else {
+        let mut exchange_stream = lock_mutex(&self.inner.stream);
+        let Some(stream) = exchange_stream.take() else {
             return Err(closed_resource_error());
         };
-        let result = {
-            let mut raw_stream = lock_mutex(&stream.inner.stream);
-            let Some(raw_stream) = raw_stream.as_mut() else {
-                return Err(closed_resource_error());
-            };
-            write_http_response_to_stream(raw_stream, status, headers, body, None, None)
+        drop(exchange_stream);
+        let mut raw_stream_guard = lock_mutex(&stream.inner.stream);
+        let Some(mut raw_stream) = raw_stream_guard.take() else {
+            return Err(closed_resource_error());
         };
+        drop(raw_stream_guard);
+        let result =
+            write_http_response_to_stream(&mut raw_stream, status, headers, body, None, None);
         stream.close();
         result
     }
@@ -7242,52 +8330,63 @@ impl HttpResponseValue {
         cancellation: Option<&CancellationContext>,
         ca_pem_path: Option<&str>,
     ) -> io::Result<Self> {
-        let url = Url::parse(url).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid URL `{}`: {}", url, error),
-            )
-        })?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "Aurora HTTP requests require `http://` or `https://` URLs, found `{}`",
-                    url
-                ),
-            ));
-        }
-        let host = match url.host() {
-            Some(url::Host::Ipv6(host)) => {
-                format!("[{}]:{}", host, url.port_or_known_default().unwrap_or(80))
-            }
-            Some(url::Host::Ipv4(host)) => {
-                format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
-            }
-            Some(url::Host::Domain(host)) => {
-                format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
-            }
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid URL `{}`: missing host", url),
-                ))
-            }
-        };
-        let request = build_http_request_bytes(method, &url, body, headers)?;
         let deadline = deadline_from_timeout(timeout)?;
+        let method = method.to_string();
+        let url_text = url.to_string();
+        let body = body.to_vec();
+        let (url, host, request) = run_protocol_step_before(
+            move || {
+                let url = Url::parse(&url_text).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid URL `{url_text}`: {error}"),
+                    )
+                })?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                        "Aurora HTTP requests require `http://` or `https://` URLs, found `{url}`"
+                    ),
+                    ));
+                }
+                let host = match url.host() {
+                    Some(url::Host::Ipv6(host)) => {
+                        format!("[{}]:{}", host, url.port_or_known_default().unwrap_or(80))
+                    }
+                    Some(url::Host::Ipv4(host)) => {
+                        format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
+                    }
+                    Some(url::Host::Domain(host)) => {
+                        format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
+                    }
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid URL `{url}`: missing host"),
+                        ))
+                    }
+                };
+                let request = build_http_request_bytes(&method, &url, &body, headers)?;
+                Ok((url, host, request))
+            },
+            deadline,
+            cancellation,
+        )?;
         if url.scheme() == "http" {
             let stream = TcpStreamValue::connect_before(&host, deadline, cancellation)?;
-            let response = {
-                let mut raw_stream = lock_mutex(&stream.inner.stream);
-                let Some(raw_stream) = raw_stream.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                write_all_with_deadline(raw_stream, &request, deadline, cancellation)?;
-                read_http_response_from_stream(raw_stream, deadline, cancellation)?
+            let mut guard = lock_mutex(&stream.inner.stream);
+            let Some(mut raw_stream) = guard.take() else {
+                return Err(closed_resource_error());
             };
+            drop(guard);
+            let response = (|| {
+                write_all_with_deadline(&mut raw_stream, &request, deadline, cancellation)?;
+                read_http_response_from_stream(&mut raw_stream, deadline, cancellation)
+            })();
+            *lock_mutex(&stream.inner.stream) = Some(raw_stream);
             stream.close();
-            return Ok(response);
+            return response;
         }
 
         #[cfg(unix)]
@@ -7302,21 +8401,16 @@ impl HttpResponseValue {
                 deadline,
                 cancellation,
             )?;
-            let response = {
-                let mut stream = lock_mutex(&stream.inner.stream);
-                let Some(TlsStreamKind::Client(stream)) = stream.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                write_all_with_fd_deadline(
-                    stream,
-                    stream.sock.as_raw_fd(),
-                    &request,
-                    libc::POLLIN | libc::POLLOUT,
-                    deadline,
-                    cancellation,
-                )?;
-                read_http_response_from_stream(stream, deadline, cancellation)?
+            let mut guard = lock_mutex(&stream.inner.stream);
+            let Some(TlsStreamKind::Client(raw_stream)) = guard.take() else {
+                return Err(closed_resource_error());
             };
+            drop(guard);
+            let raw_stream =
+                write_all_tls_client_owned(raw_stream, &request, deadline, cancellation)?;
+            let (raw_stream, response) =
+                read_http_response_tls_client_owned(raw_stream, deadline, cancellation)?;
+            stream.restore_stream_after_step(TlsStreamKind::Client(raw_stream));
             stream.close();
             Ok(response)
         }
@@ -7369,9 +8463,12 @@ impl WebSocketListenerValue {
     }
 
     pub(crate) fn accept(&self, timeout: Option<StdDuration>) -> io::Result<WebSocketValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
+        let listener = {
+            let listener = lock_mutex(&self.inner.listener);
+            let Some(listener) = listener.as_ref() else {
+                return Err(closed_resource_error());
+            };
+            listener.try_clone()?
         };
         let deadline = deadline_from_timeout(timeout)?;
         let cancellation = current_lightweight_task_cancellation();
@@ -7379,10 +8476,8 @@ impl WebSocketListenerValue {
             match listener.accept() {
                 Ok((stream, _)) => {
                     #[cfg(unix)]
-                    let mut state = run_blocking_io(
-                        move || accept_websocket_stream(stream, deadline),
-                        cancellation.as_ref(),
-                    )?;
+                    let mut state =
+                        accept_websocket_stream(stream, deadline, cancellation.as_ref())?;
                     #[cfg(not(unix))]
                     let mut state = {
                         let socket =
@@ -7405,6 +8500,8 @@ impl WebSocketListenerValue {
                     return Ok(WebSocketValue {
                         inner: Arc::new(WebSocketState {
                             socket: Mutex::new(Some(state)),
+                            busy: AtomicBool::new(false),
+                            closed: AtomicBool::new(false),
                         }),
                     });
                 }
@@ -7414,7 +8511,12 @@ impl WebSocketListenerValue {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, None)?;
+                    wait_for_fd_event(
+                        listener.as_raw_fd(),
+                        libc::POLLIN,
+                        deadline,
+                        cancellation.as_ref(),
+                    )?;
                 }
                 Err(error) => return Err(error),
             }
@@ -7431,44 +8533,65 @@ impl WebSocketListenerValue {
 }
 
 impl WebSocketValue {
+    fn take_socket_for_step(&self) -> io::Result<WebSocketStateKind> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(closed_resource_error());
+        }
+        lock_mutex(&self.inner.socket)
+            .take()
+            .ok_or_else(|| io::Error::other("websocket state is temporarily unavailable"))
+    }
+
+    fn restore_socket_after_step(&self, socket: WebSocketStateKind) {
+        *lock_mutex(&self.inner.socket) = Some(socket);
+    }
+
     pub(crate) fn connect(url: &str, timeout: Option<StdDuration>) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            let parsed = url::Url::parse(url).map_err(io::Error::other)?;
-            let request = websocket_client_request(&parsed)?;
-            let host = parsed.host_str().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "websocket URL is missing a host",
-                )
-            })?;
-            let port = parsed.port_or_known_default().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "websocket URL is missing a known port",
-                )
-            })?;
-            let address = if host.contains(':') && !host.starts_with('[') {
-                format!("[{host}]:{port}")
-            } else {
-                format!("{host}:{port}")
-            };
             let deadline = deadline_from_timeout(timeout)?;
             let cancellation = current_lightweight_task_cancellation();
+            let url = url.to_string();
+            let (request, address) = run_protocol_step_before(
+                move || {
+                    let parsed = url::Url::parse(&url).map_err(io::Error::other)?;
+                    let request = websocket_client_request(&parsed)?;
+                    let host = parsed.host_str().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "websocket URL is missing a host",
+                        )
+                    })?;
+                    let port = parsed.port_or_known_default().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "websocket URL is missing a known port",
+                        )
+                    })?;
+                    let address = if host.contains(':') && !host.starts_with('[') {
+                        format!("[{host}]:{port}")
+                    } else {
+                        format!("{host}:{port}")
+                    };
+                    Ok((request, address))
+                },
+                deadline,
+                cancellation.as_ref(),
+            )?;
             let tcp = TcpStreamValue::connect_before(&address, deadline, cancellation.as_ref())?;
             let mut guard = lock_mutex(&tcp.inner.stream);
             let Some(stream) = guard.take() else {
                 return Err(closed_resource_error());
             };
-            let mut state = run_blocking_io_with_deadline(
-                move || connect_websocket_stream(stream, request, deadline),
-                deadline,
-                cancellation.as_ref(),
-            )?;
+            drop(guard);
+            let mut state =
+                connect_websocket_stream(stream, request, deadline, cancellation.as_ref())?;
             websocket_set_nonblocking(&mut state, true)?;
             Ok(Self {
                 inner: Arc::new(WebSocketState {
                     socket: Mutex::new(Some(state)),
+                    busy: AtomicBool::new(false),
+                    closed: AtomicBool::new(false),
                 }),
             })
         }
@@ -7487,109 +8610,74 @@ impl WebSocketValue {
             Ok(Self {
                 inner: Arc::new(WebSocketState {
                     socket: Mutex::new(Some(state)),
+                    busy: AtomicBool::new(false),
+                    closed: AtomicBool::new(false),
                 }),
             })
         }
     }
 
     pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let deadline = deadline_from_timeout(timeout)?;
-        let mut message = Message::Text(text.to_string());
-        match socket.as_mut() {
-            Some(socket) => loop {
-                let result = match socket {
-                    WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
-                    WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
-                };
-                match result {
-                    Ok(()) => return Ok(()),
-                    Err(tungstenite::Error::WriteBufferFull(returned)) => {
-                        message = returned;
-                        #[cfg(unix)]
-                        wait_for_fd_event(
-                            websocket_raw_fd(socket)?,
-                            libc::POLLOUT,
-                            deadline,
-                            None,
-                        )?;
-                        #[cfg(not(unix))]
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "websocket write buffer is full",
-                        ));
-                    }
-                    Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
-                        #[cfg(unix)]
-                        wait_for_fd_event(
-                            websocket_raw_fd(socket)?,
-                            libc::POLLOUT,
-                            deadline,
-                            None,
-                        )?;
-                        #[cfg(not(unix))]
-                        return Err(error);
-                    }
-                    Err(error) => return Err(websocket_error_to_io(error)),
-                }
-            },
-            None => Err(closed_resource_error()),
-        }
+        self.send_message(Message::Text(text.to_string()), timeout)
     }
 
     pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
-        let mut socket = lock_mutex(&self.inner.socket);
+        self.send_message(Message::Binary(bytes.to_vec()), timeout)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn send_message(&self, mut message: Message, timeout: Option<StdDuration>) -> io::Result<()> {
         let deadline = deadline_from_timeout(timeout)?;
-        let mut message = Message::Binary(bytes.to_vec());
-        match socket.as_mut() {
-            Some(socket) => loop {
-                let result = match socket {
+        let cancellation = current_lightweight_task_cancellation();
+        let _operation =
+            acquire_protocol_operation(&self.inner.busy, deadline, cancellation.as_ref())?;
+        loop {
+            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+            let socket = self.take_socket_for_step()?;
+            let ((returned_socket, returned_message), result) = run_protocol_state_step(
+                (socket, message),
+                |(socket, message)| match socket {
                     WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
                     WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
-                };
-                match result {
-                    Ok(()) => return Ok(()),
-                    Err(tungstenite::Error::WriteBufferFull(returned)) => {
-                        message = returned;
-                        #[cfg(unix)]
-                        wait_for_fd_event(
-                            websocket_raw_fd(socket)?,
-                            libc::POLLOUT,
-                            deadline,
-                            None,
-                        )?;
-                        #[cfg(not(unix))]
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "websocket write buffer is full",
-                        ));
-                    }
-                    Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
-                        #[cfg(unix)]
-                        wait_for_fd_event(
-                            websocket_raw_fd(socket)?,
-                            libc::POLLOUT,
-                            deadline,
-                            None,
-                        )?;
-                        #[cfg(not(unix))]
-                        return Err(error);
-                    }
-                    Err(error) => return Err(websocket_error_to_io(error)),
+                },
+                deadline,
+                cancellation.as_ref(),
+            )?;
+            message = returned_message;
+            #[cfg(unix)]
+            let fd = websocket_raw_fd(&returned_socket);
+            self.restore_socket_after_step(returned_socket);
+            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+            #[cfg(unix)]
+            let fd = fd?;
+            let result = result?;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(tungstenite::Error::WriteBufferFull(returned)) => {
+                    message = returned;
+                    #[cfg(unix)]
+                    wait_for_fd_event(fd, libc::POLLOUT, deadline, cancellation.as_ref())?;
+                    #[cfg(not(unix))]
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "websocket write buffer is full",
+                    ));
                 }
-            },
-            None => Err(closed_resource_error()),
+                Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
+                    #[cfg(unix)]
+                    wait_for_fd_event(fd, libc::POLLOUT, deadline, cancellation.as_ref())?;
+                    #[cfg(not(unix))]
+                    return Err(error);
+                }
+                Err(error) => return Err(websocket_error_to_io(error)),
+            }
         }
     }
 
     pub(crate) fn recv_text(&self, timeout: Option<StdDuration>) -> io::Result<Option<String>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let message = match socket.as_mut() {
-            Some(socket) => match websocket_read_message(socket, timeout)? {
-                Some(message) => message,
-                None => return Ok(None),
-            },
-            None => return Err(closed_resource_error()),
+        let message = match self.recv_message(timeout)? {
+            Some(message) => message,
+            None => return Ok(None),
         };
         match message {
             Message::Text(text) => Ok(Some(text.to_string())),
@@ -7600,13 +8688,9 @@ impl WebSocketValue {
     }
 
     pub(crate) fn recv_bytes(&self, timeout: Option<StdDuration>) -> io::Result<Option<Vec<u8>>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let message = match socket.as_mut() {
-            Some(socket) => match websocket_read_message(socket, timeout)? {
-                Some(message) => message,
-                None => return Ok(None),
-            },
-            None => return Err(closed_resource_error()),
+        let message = match self.recv_message(timeout)? {
+            Some(message) => message,
+            None => return Ok(None),
         };
         match message {
             Message::Text(text) => Ok(Some(text.as_bytes().to_vec())),
@@ -7616,16 +8700,73 @@ impl WebSocketValue {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    fn recv_message(&self, timeout: Option<StdDuration>) -> io::Result<Option<Message>> {
+        let deadline = deadline_from_timeout(timeout)?;
+        let cancellation = current_lightweight_task_cancellation();
+        let _operation =
+            acquire_protocol_operation(&self.inner.busy, deadline, cancellation.as_ref())?;
+        loop {
+            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+            let socket = self.take_socket_for_step()?;
+            let (socket, result) = run_protocol_state_step(
+                socket,
+                |socket| match socket {
+                    WebSocketStateKind::Plain(socket) => socket.read(),
+                    WebSocketStateKind::MaybeTls(socket) => socket.read(),
+                },
+                deadline,
+                cancellation.as_ref(),
+            )?;
+            #[cfg(unix)]
+            let fd = websocket_raw_fd(&socket);
+            self.restore_socket_after_step(socket);
+            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+            #[cfg(unix)]
+            let fd = fd?;
+            let result = result?;
+            match result {
+                Ok(Message::Close(_)) => return Ok(None),
+                Ok(message) => return Ok(Some(message)),
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return Ok(None);
+                }
+                Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
+                    #[cfg(unix)]
+                    wait_for_fd_event(
+                        fd,
+                        libc::POLLIN | libc::POLLOUT,
+                        deadline,
+                        cancellation.as_ref(),
+                    )?;
+                    #[cfg(not(unix))]
+                    continue;
+                }
+                Err(error) => return Err(websocket_error_to_io(error)),
+            }
+        }
+    }
+
     pub(crate) fn close(&self) -> io::Result<()> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        match socket.as_mut() {
-            Some(WebSocketStateKind::Plain(socket)) => {
-                socket.close(None).map_err(websocket_error_to_io)
-            }
-            Some(WebSocketStateKind::MaybeTls(socket)) => {
-                socket.close(None).map_err(websocket_error_to_io)
-            }
-            None => Err(closed_resource_error()),
+        let _operation = acquire_protocol_operation(&self.inner.busy, None, None)?;
+        let socket = self.take_socket_for_step()?;
+        self.inner.closed.store(true, Ordering::Release);
+        let (_socket, result) = run_protocol_state_step(
+            socket,
+            |socket| match socket {
+                WebSocketStateKind::Plain(socket) => {
+                    socket.close(None).map_err(websocket_error_to_io)
+                }
+                WebSocketStateKind::MaybeTls(socket) => {
+                    socket.close(None).map_err(websocket_error_to_io)
+                }
+            },
+            None,
+            None,
+        )?;
+        match result {
+            Ok(result) => result,
+            Err(error) => Err(error),
         }
     }
 }
@@ -8572,6 +9713,8 @@ std::thread_local! {
     static JSON_RUNTIME_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
     static JSON_RUNTIME_NODE_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
     static JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+    static JSON_CODEC_SOURCE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static FAIL_NEXT_JSON_CODEC_SOURCE_CLONE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -8639,6 +9782,158 @@ fn json_runtime_node_limit() -> usize {
         return limit;
     }
     json_codec::MAX_JSON_VALUE_NODES
+}
+
+#[cfg(test)]
+fn reset_json_codec_source_clone_count() {
+    JSON_CODEC_SOURCE_CLONE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn json_codec_source_clone_count() -> usize {
+    JSON_CODEC_SOURCE_CLONE_COUNT.with(Cell::get)
+}
+
+#[cfg(test)]
+fn fail_next_json_codec_source_clone() {
+    FAIL_NEXT_JSON_CODEC_SOURCE_CLONE.with(|fail| fail.set(true));
+}
+
+#[derive(Debug)]
+enum JsonCodecServiceError {
+    Codec(JsonCodecError),
+    Panicked(String),
+}
+
+pub(crate) struct JsonCodecReservation {
+    pool: Arc<JsonCodecPool>,
+    submitted: bool,
+}
+
+impl JsonCodecReservation {
+    fn submit(mut self, job: JsonCodecJob) {
+        self.submitted = true;
+        self.pool.submit_reserved(job);
+    }
+}
+
+impl Drop for JsonCodecReservation {
+    fn drop(&mut self) {
+        if !self.submitted {
+            self.pool.release_reservation();
+        }
+    }
+}
+
+fn reserve_json_codec_slot(pool: &Arc<JsonCodecPool>) -> JsonCodecReservation {
+    if with_current_lightweight_task_context(|_| ()).is_some() {
+        while !pool.try_reserve() {
+            match pool
+                .availability_signal
+                .recv_result_with_deadline(None, None)
+            {
+                RecvValueResult::Value(_) => {}
+                RecvValueResult::Closed => {
+                    unreachable!("the process-lifetime JSON codec service remains open")
+                }
+                RecvValueResult::Cancelled | RecvValueResult::TimedOut => {
+                    unreachable!("JSON codec admission has no cancellation or deadline")
+                }
+            }
+        }
+    } else {
+        pool.reserve_blocking();
+    }
+    JsonCodecReservation {
+        pool: pool.clone(),
+        submitted: false,
+    }
+}
+
+fn prepare_json_codec_source_with_pool<F>(
+    pool: &Arc<JsonCodecPool>,
+    clone_source: F,
+) -> Result<(String, JsonCodecReservation)>
+where
+    F: FnOnce() -> Result<String>,
+{
+    let reservation = reserve_json_codec_slot(pool);
+    let source = clone_source()?;
+    Ok((source, reservation))
+}
+
+pub(crate) fn prepare_json_codec_source<F>(
+    clone_source: F,
+) -> Result<(String, JsonCodecReservation)>
+where
+    F: FnOnce() -> Result<String>,
+{
+    prepare_json_codec_source_with_pool(json_codec_pool(), clone_source)
+}
+
+pub(crate) fn clone_json_codec_source(source: &str) -> Result<String> {
+    #[cfg(test)]
+    JSON_CODEC_SOURCE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
+    #[cfg(test)]
+    if FAIL_NEXT_JSON_CODEC_SOURCE_CLONE.with(|fail| fail.replace(false)) {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            JsonCodecError::AllocationFailed.to_string(),
+        ));
+    }
+
+    let mut owned = String::new();
+    if !source.is_empty() {
+        owned.try_reserve(source.len()).map_err(|_| {
+            Diagnostic::coded("AU4005", JsonCodecError::AllocationFailed.to_string())
+        })?;
+        owned.push_str(source);
+    }
+    Ok(owned)
+}
+
+fn run_json_codec_operation_on_pool_with<F>(
+    reservation: JsonCodecReservation,
+    operation: F,
+) -> std::result::Result<JsonValue, JsonCodecServiceError>
+where
+    F: FnOnce() -> std::result::Result<JsonValue, JsonCodecError> + Send + 'static,
+{
+    let completion = ChannelValue::new();
+    let result = Arc::new(Mutex::new(None));
+    reservation.submit(JsonCodecJob {
+        operation: Box::new(operation),
+        result: result.clone(),
+        completion: completion.clone(),
+    });
+
+    loop {
+        match completion.recv_result_with_deadline(None, None) {
+            RecvValueResult::Value(_) | RecvValueResult::Closed => {
+                if let Some(outcome) = lock_mutex(&result).take() {
+                    return outcome;
+                }
+            }
+            RecvValueResult::Cancelled | RecvValueResult::TimedOut => {
+                // JSON parse was synchronous before codec isolation. Defer task
+                // cancellation until the admitted parse has completed, then let
+                // the caller encounter cancellation at its next normal boundary.
+                if let Some(outcome) = lock_mutex(&result).take() {
+                    return outcome;
+                }
+                if yield_now_current_lightweight_task().is_none() {
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+}
+
+fn run_json_codec_parse_on_pool(
+    source: String,
+    reservation: JsonCodecReservation,
+) -> std::result::Result<JsonValue, JsonCodecServiceError> {
+    run_json_codec_operation_on_pool_with(reservation, move || json_codec::parse(&source))
 }
 
 fn json_runtime_node_limit_error(limit: usize) -> Diagnostic {
@@ -8778,10 +10073,15 @@ pub(crate) fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
     let mut frames = Vec::new();
     let mut next = Some(value);
     let mut completed = None;
+    let mut materialized_nodes = 0usize;
 
     loop {
         if let Some(value) = next.take() {
             consume_json_runtime_node(&mut remaining, limit)?;
+            materialized_nodes += 1;
+            if materialized_nodes.is_multiple_of(1024) {
+                let _ = yield_now_current_lightweight_task();
+            }
             completed = match value {
                 JsonValue::Null => Some(json_runtime_enum_value("json.Value", "Null", Vec::new())?),
                 JsonValue::Bool(value) => Some(json_runtime_enum_value(
@@ -8912,21 +10212,249 @@ fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
 }
 
-pub(crate) fn json_parse_to_runtime(source: &str) -> Result<Value> {
-    match json_codec::parse(source) {
+pub(crate) fn json_parse_owned_to_runtime(
+    source: String,
+    reservation: JsonCodecReservation,
+) -> Result<Value> {
+    match run_json_codec_parse_on_pool(source, reservation) {
         Ok(value) => json_parse_success_value(value),
-        Err(error @ JsonCodecError::MaterializationTooLarge { .. })
-        | Err(error @ JsonCodecError::AllocationFailed) => {
+        Err(JsonCodecServiceError::Codec(
+            error @ JsonCodecError::MaterializationTooLarge { .. },
+        ))
+        | Err(JsonCodecServiceError::Codec(error @ JsonCodecError::AllocationFailed)) => {
             Err(Diagnostic::coded("AU4005", error.to_string()))
         }
-        Err(error) => json_parse_failure_value(error),
+        Err(JsonCodecServiceError::Codec(error)) => json_parse_failure_value(error),
+        Err(JsonCodecServiceError::Panicked(message)) => Err(Diagnostic::coded(
+            "AU4005",
+            format!("JSON codec worker panicked: {message}"),
+        )),
     }
 }
 
+#[cfg(test)]
+pub(crate) fn json_parse_to_runtime(source: &str) -> Result<Value> {
+    let (source, reservation) = prepare_json_codec_source(|| clone_json_codec_source(source))?;
+    json_parse_owned_to_runtime(source, reservation)
+}
+
 pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
+    enum ConversionFrame<'a> {
+        Array {
+            values: &'a [Value],
+            next_index: usize,
+            converted: Vec<JsonValue>,
+            child_depth: usize,
+        },
+        Object {
+            entries: &'a [(Value, Value)],
+            next_index: usize,
+            converted: Vec<(String, JsonValue)>,
+            pending_key: &'a str,
+            child_depth: usize,
+        },
+    }
+
+    fn malformed(message: impl Into<String>) -> Diagnostic {
+        Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value`: {}", message.into()),
+        )
+    }
+
+    fn clone_string(value: &str) -> Result<String> {
+        let mut cloned = String::new();
+        if !value.is_empty() {
+            json_runtime_conversion_allocation_checkpoint()?;
+            cloned
+                .try_reserve(value.len())
+                .map_err(json_runtime_allocation_error)?;
+        }
+        cloned.push_str(value);
+        Ok(cloned)
+    }
+
     let limit = json_runtime_node_limit();
     let mut remaining = limit;
-    runtime_value_to_json_at_depth(value, 0, &mut remaining, limit)
+    let mut frames = Vec::new();
+    let mut next = Some((value, 0usize));
+    let mut completed = None;
+
+    loop {
+        if let Some((value, depth)) = next.take() {
+            consume_json_runtime_node(&mut remaining, limit)?;
+
+            let Value::EnumVariant(variant) = value else {
+                return Err(malformed(format!(
+                    "expected `json.Value`, found `{}`",
+                    value.render()
+                )));
+            };
+            if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
+                return Err(malformed(format!(
+                    "expected enum `json.Value`, found `{}`",
+                    nominal_runtime_base_name(&variant.enum_name)
+                )));
+            }
+
+            completed = match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+                ("Null", []) => Some(JsonValue::Null),
+                ("Bool", [Value::Bool(value)]) => Some(JsonValue::Bool(*value)),
+                ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
+                    let value = value
+                        .as_i128()
+                        .and_then(|value| i64::try_from(value).ok())
+                        .ok_or_else(|| malformed("Value.Int payload is outside `int64`"))?;
+                    Some(JsonValue::Int(value))
+                }
+                ("Int", [Value::Int(_)]) => {
+                    return Err(malformed(
+                        "Value.Int payload must be exactly `int64` at runtime",
+                    ))
+                }
+                ("Float", [Value::Float(value)]) => Some(JsonValue::Float(*value)),
+                ("String", [Value::String(value)]) => Some(JsonValue::String(clone_string(value)?)),
+                ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
+                    let child_depth = json_runtime_child_depth(depth)?;
+                    let capacity =
+                        json_runtime_container_capacity(values.elements.len(), remaining, limit)?;
+                    let mut converted = Vec::new();
+                    json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+                    if values.elements.is_empty() {
+                        Some(JsonValue::Array(converted))
+                    } else {
+                        frames
+                            .try_reserve(1)
+                            .map_err(json_runtime_allocation_error)?;
+                        frames.push(ConversionFrame::Array {
+                            values: &values.elements,
+                            next_index: 1,
+                            converted,
+                            child_depth,
+                        });
+                        next = Some((&values.elements[0], child_depth));
+                        None
+                    }
+                }
+                ("Array", [Value::Vec(_)]) => {
+                    return Err(malformed(
+                        "Value.Array payload must be exactly `Vec[json.Value]` at runtime",
+                    ))
+                }
+                ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
+                    let child_depth = json_runtime_child_depth(depth)?;
+                    let capacity =
+                        json_runtime_container_capacity(entries.entries.len(), remaining, limit)?;
+                    let mut converted = Vec::new();
+                    json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+                    if entries.entries.is_empty() {
+                        Some(JsonValue::Object(converted))
+                    } else {
+                        let (key, value) = &entries.entries[0];
+                        let Value::String(key) = key else {
+                            return Err(malformed(format!(
+                                "Value.Object key must be `String`, found `{}`",
+                                key.render()
+                            )));
+                        };
+                        frames
+                            .try_reserve(1)
+                            .map_err(json_runtime_allocation_error)?;
+                        frames.push(ConversionFrame::Object {
+                            entries: &entries.entries,
+                            next_index: 1,
+                            converted,
+                            pending_key: key,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                        None
+                    }
+                }
+                ("Object", [Value::Map(_)]) => {
+                    return Err(malformed(
+                        "Value.Object payload must be exactly `Map[String, json.Value]` at runtime",
+                    ))
+                }
+                (variant_name, _) => {
+                    return Err(malformed(format!(
+                        "variant `{variant_name}` has an invalid payload shape"
+                    )))
+                }
+            };
+        } else {
+            let frame = frames
+                .pop()
+                .expect("runtime JSON conversion always has a pending frame");
+            match frame {
+                ConversionFrame::Array {
+                    values,
+                    mut next_index,
+                    mut converted,
+                    child_depth,
+                } => {
+                    converted.push(
+                        completed
+                            .take()
+                            .expect("a completed JSON array child has a value"),
+                    );
+                    if let Some(value) = values.get(next_index) {
+                        next_index += 1;
+                        frames
+                            .try_reserve(1)
+                            .map_err(json_runtime_allocation_error)?;
+                        frames.push(ConversionFrame::Array {
+                            values,
+                            next_index,
+                            converted,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    } else {
+                        completed = Some(JsonValue::Array(converted));
+                    }
+                }
+                ConversionFrame::Object {
+                    entries,
+                    mut next_index,
+                    mut converted,
+                    pending_key,
+                    child_depth,
+                } => {
+                    let value = completed
+                        .take()
+                        .expect("a completed JSON object child has a value");
+                    converted.push((clone_string(pending_key)?, value));
+                    if let Some((key, value)) = entries.get(next_index) {
+                        let Value::String(key) = key else {
+                            return Err(malformed(format!(
+                                "Value.Object key must be `String`, found `{}`",
+                                key.render()
+                            )));
+                        };
+                        next_index += 1;
+                        frames
+                            .try_reserve(1)
+                            .map_err(json_runtime_allocation_error)?;
+                        frames.push(ConversionFrame::Object {
+                            entries,
+                            next_index,
+                            converted,
+                            pending_key: key,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    } else {
+                        completed = Some(JsonValue::Object(converted));
+                    }
+                }
+            }
+        }
+
+        if next.is_none() && frames.is_empty() {
+            return Ok(completed.expect("completed runtime JSON conversion has a value"));
+        }
+    }
 }
 
 pub(crate) fn json_int_metadata_is_exact(value: &IntegerValue) -> bool {
@@ -8947,108 +10475,6 @@ pub(crate) fn json_array_metadata_is_exact(value: &VecValue) -> bool {
 pub(crate) fn json_object_metadata_is_exact(value: &MapValue) -> bool {
     json_exact_nominal_type(&value.key_type, "String")
         && json_exact_nominal_type(&value.value_type, "json.Value")
-}
-
-fn runtime_value_to_json_at_depth(
-    value: &Value,
-    depth: usize,
-    remaining: &mut usize,
-    node_limit: usize,
-) -> Result<JsonValue> {
-    fn malformed(message: impl Into<String>) -> Diagnostic {
-        Diagnostic::coded(
-            "AU4001",
-            format!("malformed runtime `json.Value`: {}", message.into()),
-        )
-    }
-
-    fn clone_string(value: &str) -> Result<String> {
-        let mut cloned = String::new();
-        if !value.is_empty() {
-            json_runtime_conversion_allocation_checkpoint()?;
-            cloned
-                .try_reserve(value.len())
-                .map_err(json_runtime_allocation_error)?;
-        }
-        cloned.push_str(value);
-        Ok(cloned)
-    }
-
-    consume_json_runtime_node(remaining, node_limit)?;
-
-    let Value::EnumVariant(variant) = value else {
-        return Err(malformed(format!(
-            "expected `json.Value`, found `{}`",
-            value.render()
-        )));
-    };
-    if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
-        return Err(malformed(format!(
-            "expected enum `json.Value`, found `{}`",
-            nominal_runtime_base_name(&variant.enum_name)
-        )));
-    }
-
-    match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
-        ("Null", []) => Ok(JsonValue::Null),
-        ("Bool", [Value::Bool(value)]) => Ok(JsonValue::Bool(*value)),
-        ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
-            let value = value
-                .as_i128()
-                .and_then(|value| i64::try_from(value).ok())
-                .ok_or_else(|| malformed("Value.Int payload is outside `int64`"))?;
-            Ok(JsonValue::Int(value))
-        }
-        ("Int", [Value::Int(_)]) => Err(malformed(
-            "Value.Int payload must be exactly `int64` at runtime",
-        )),
-        ("Float", [Value::Float(value)]) => Ok(JsonValue::Float(*value)),
-        ("String", [Value::String(value)]) => Ok(JsonValue::String(clone_string(value)?)),
-        ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
-            let child_depth = json_runtime_child_depth(depth)?;
-            let capacity =
-                json_runtime_container_capacity(values.elements.len(), *remaining, node_limit)?;
-            let mut converted = Vec::new();
-            json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-            for value in &values.elements {
-                converted.push(runtime_value_to_json_at_depth(
-                    value,
-                    child_depth,
-                    remaining,
-                    node_limit,
-                )?);
-            }
-            Ok(JsonValue::Array(converted))
-        }
-        ("Array", [Value::Vec(_)]) => Err(malformed(
-            "Value.Array payload must be exactly `Vec[json.Value]` at runtime",
-        )),
-        ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
-            let child_depth = json_runtime_child_depth(depth)?;
-            let capacity =
-                json_runtime_container_capacity(entries.entries.len(), *remaining, node_limit)?;
-            let mut converted = Vec::new();
-            json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-            for (key, value) in &entries.entries {
-                let Value::String(key) = key else {
-                    return Err(malformed(format!(
-                        "Value.Object key must be `String`, found `{}`",
-                        key.render()
-                    )));
-                };
-                let value =
-                    runtime_value_to_json_at_depth(value, child_depth, remaining, node_limit)?;
-                converted.push((clone_string(key)?, value));
-            }
-            Ok(JsonValue::Object(converted))
-        }
-        ("Object", [Value::Map(_)]) => Err(malformed(
-            "Value.Object payload must be exactly `Map[String, json.Value]` at runtime",
-        )),
-        (variant_name, _) => Err(malformed(format!(
-            "variant `{variant_name}` has an invalid payload shape"
-        ))),
-    }
 }
 
 fn json_runtime_child_depth(depth: usize) -> Result<usize> {
@@ -9388,7 +10814,10 @@ fn evaluate_host_builtin_with_args(
         }
         "json::parse" => {
             host_expect_arity(name, &args, 1)?;
-            json_parse_to_runtime(host_string_ref_arg(&args, 0, name)?)
+            let (source, reservation) = prepare_json_codec_source(|| {
+                clone_json_codec_source(host_string_ref_arg(&args, 0, name)?)
+            })?;
+            json_parse_owned_to_runtime(source, reservation)
         }
         "json::dumps" => {
             host_expect_arity(name, &args, 2)?;

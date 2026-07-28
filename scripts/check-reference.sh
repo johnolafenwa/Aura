@@ -453,6 +453,23 @@ grep -Fq 'compiler-inserted scheduling checks on every ordinary and `continue` l
 grep -Fq 'fn loop_backedge_safepoints_prevent_timer_and_queue_starvation()' crates/aura/tests/cli.rs
 grep -Fq 'fn loop_backedge_safepoints_prevent_socket_readiness_starvation()' crates/aura/tests/cli.rs
 test -s benchmarks/scalable_runtime/sleeper_vs_hot_loop.au
+grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md
+grep -Fq '0032-guarded-lightweight-task-stacks.md' architecture_docs/decisions/README.md
+grep -Fq '| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` |' docs/manual/concurrency.md
+grep -Fq '| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` |' docs/manual/api-index.md
+grep -Fq 'Values outside that range are rejected,' docs/manual/concurrency.md
+grep -Fq 'rounded upward to the host page size and guard-protected' docs/manual/execution-model.md
+grep -Fq 'distinct bounded protocol-step service' docs/manual/execution-model.md
+grep -Fq 'process-global pool is lazily initialized and shared by every' docs/manual/execution-model.md
+grep -Fq 'file reads use the generic blocking-I/O pool' docs/manual/execution-model.md
+grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
+grep -Fq 'pending measurement' docs/manual/current-limits.md
+grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
+grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
+grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md
+grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aurora-compiler/src/call.rs
+grep -Fq 'Provisional ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md

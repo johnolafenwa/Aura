@@ -4172,7 +4172,10 @@ impl<'a> FunctionChecker<'a> {
         // rather than a mutable value place.
         if matches!(
             member,
-            BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartSoon
+            BuiltinMember::TaskGroupStart
+                | BuiltinMember::TaskGroupStartSoon
+                | BuiltinMember::TaskGroupStartWithStack
+                | BuiltinMember::TaskGroupStartSoonWithStack
         ) {
             return Ok(());
         }
@@ -11419,30 +11422,102 @@ impl<'a> FunctionChecker<'a> {
 
                     if receiver_name == "TaskGroup" && receiver_args.is_empty() {
                         match field.as_str() {
-                            "start" | "start_soon" => {
-                                if args.is_empty() {
+                            "start"
+                            | "start_soon"
+                            | "start_with_stack"
+                            | "start_soon_with_stack" => {
+                                let has_stack_override = matches!(
+                                    field.as_str(),
+                                    "start_with_stack" | "start_soon_with_stack"
+                                );
+                                let target_index = usize::from(has_stack_override);
+                                let required_count = target_index + 1;
+                                if args.len() < required_count {
                                     return Err(Diagnostic::at(
                                         span,
                                         format!(
-                                            "`{}` expects a target function followed by its arguments",
-                                            field
+                                            "`{}` expects {}a target function followed by its arguments",
+                                            field,
+                                            if has_stack_override {
+                                                "a stack size in bytes and "
+                                            } else {
+                                                ""
+                                            },
                                         ),
                                     ));
                                 }
-                                if args[0].name.is_some() {
+                                if let Some(argument) = args[..required_count]
+                                    .iter()
+                                    .find(|argument| argument.name.is_some())
+                                {
                                     return Err(Diagnostic::at(
-                                        args[0].span,
+                                        argument.span,
                                         format!("`{}` does not take keyword arguments", field),
                                     ));
                                 }
-                                let callable = self.resolve_spawn_callable(&args[0].value)?;
+                                if has_stack_override {
+                                    let actual = self.type_of_expr_hint(
+                                        &args[0].value,
+                                        locals,
+                                        Some(&Type::named("int64")),
+                                    )?;
+                                    if actual != Type::named("int64") {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            args[0].span,
+                                            format!(
+                                                "`{}` stack size expects `int64`, found `{}`",
+                                                field, actual
+                                            ),
+                                        ));
+                                    }
+                                    let literal_bytes = match &args[0].value.kind {
+                                        ExprKind::Int(bytes) => Some((*bytes, false)),
+                                        ExprKind::Unary {
+                                            op: UnaryOp::Neg,
+                                            expr,
+                                        } => match &expr.kind {
+                                            ExprKind::Int(bytes) => Some((*bytes, true)),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    };
+                                    if let Some((magnitude, negative)) = literal_bytes {
+                                        let outside_bounds = negative
+                                            || magnitude
+                                                < u128::try_from(crate::call::MIN_TASK_STACK_BYTES)
+                                                    .expect("minimum stack size is positive")
+                                            || magnitude
+                                                > u128::try_from(crate::call::MAX_TASK_STACK_BYTES)
+                                                    .expect("maximum stack size is positive");
+                                        if outside_bounds {
+                                            let found = if negative {
+                                                format!("-{magnitude}")
+                                            } else {
+                                                magnitude.to_string()
+                                            };
+                                            return Err(Diagnostic::coded_at(
+                                                "AU2002",
+                                                args[0].span,
+                                                format!(
+                                                    "task stack size must be between {} and {} bytes, found {}",
+                                                    crate::call::MIN_TASK_STACK_BYTES,
+                                                    crate::call::MAX_TASK_STACK_BYTES,
+                                                    found
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                }
+                                let callable =
+                                    self.resolve_spawn_callable(&args[target_index].value)?;
                                 self.require_task_startable_function(
                                     &callable.display_name,
                                     &callable.decl.params,
                                     &callable.signature.param_passings,
-                                    args[0].span,
+                                    args[target_index].span,
                                 )?;
-                                let spawn_args = &args[1..];
+                                let spawn_args = &args[required_count..];
                                 let capture_passings = vec![
                                     ReceiverKind::Value;
                                     callable.signature.param_passings.len()
@@ -11462,14 +11537,16 @@ impl<'a> FunctionChecker<'a> {
                                     None,
                                     callable.seed_substitutions,
                                 )?;
-                                return Ok(if field == "start" {
-                                    Type::Named(
-                                        "Task".to_string(),
-                                        vec![callable.signature.return_type.clone()],
-                                    )
-                                } else {
-                                    Type::Unit
-                                });
+                                return Ok(
+                                    if matches!(field.as_str(), "start" | "start_with_stack") {
+                                        Type::Named(
+                                            "Task".to_string(),
+                                            vec![callable.signature.return_type.clone()],
+                                        )
+                                    } else {
+                                        Type::Unit
+                                    },
+                                );
                             }
                             "cancel" => {
                                 BuiltinMember::TaskGroupCancel.bind_args(args, span)?;

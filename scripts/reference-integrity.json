@@ -369,17 +369,22 @@
       "reason": "TaskGroup usage fragment: work is the application function supplied by the surrounding example."
     },
     "docs/manual/concurrency.md#aurora-3": {
+      "sha256": "08158c358b6630a5c6a3883f6b526ad22c1e7ce43a176f6a4497afef45459300",
+      "mode": "illustrative",
+      "reason": "Explicit-stack task-start fragment: parse_document, deep_worker, source, and jobs are application declarations supplied by the surrounding program."
+    },
+    "docs/manual/concurrency.md#aurora-4": {
       "sha256": "edf125ae0bbd0b2d73db0dcfca4cc4413be4dda2b9768aea59fb21b45dcdcfcd",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/concurrency.md#aurora-4": {
+    "docs/manual/concurrency.md#aurora-5": {
       "sha256": "91c9d96d4eeb8e42e1b3d6eed7382c8f184000b15cb628cb003bbd8d6c5bc5fc",
       "mode": "illustrative",
       "reason": "Queue-iteration fragment: jobs is the queue established by the surrounding example."
     },
-    "docs/manual/concurrency.md#aurora-5": {
+    "docs/manual/concurrency.md#aurora-6": {
       "sha256": "93adedeb13f11b84a412b9a1ead15a875d0269dd91a253556d4078b2789dd979",
       "mode": "illustrative",
       "reason": "Cancellation-loop fragment: do_step is an application hook intentionally left to the embedding program."

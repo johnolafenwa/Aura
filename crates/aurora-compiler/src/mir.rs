@@ -366,6 +366,7 @@ pub enum Rvalue {
     StartTask {
         returns_handle: bool,
         result_is_copy: bool,
+        stack_size: Option<Operand>,
         task_group: Operand,
         function: String,
         args: Vec<MirArg>,
@@ -4870,17 +4871,28 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if matches!(field.as_str(), "start" | "start_soon")
-                    && matches!(
-                        self.infer_expr_type(object),
-                        Some(Type::Named(ref name, ref args))
-                            if name == "TaskGroup" && args.is_empty()
-                    )
-                {
+                if matches!(
+                    field.as_str(),
+                    "start" | "start_soon" | "start_with_stack" | "start_soon_with_stack"
+                ) && matches!(
+                    self.infer_expr_type(object),
+                    Some(Type::Named(ref name, ref args))
+                        if name == "TaskGroup" && args.is_empty()
+                ) {
+                    let has_stack_override =
+                        matches!(field.as_str(), "start_with_stack" | "start_soon_with_stack");
+                    let target_index = usize::from(has_stack_override);
+                    let first_target_arg = target_index + 1;
                     let target = self
-                        .resolve_task_start_target(&args[0].value)
+                        .resolve_task_start_target(&args[target_index].value)
                         .expect("task-group start should lower from a supported callable target");
                     let group = self.lower_expr_at_sequence_point(object, None);
+                    let stack_size = has_stack_override.then(|| {
+                        self.lower_expr_at_sequence_point(
+                            &args[0].value,
+                            Some(&Type::named("int64")),
+                        )
+                    });
                     // A task capture outlives this call expression. Copy values are
                     // snapshotted and non-copy values are transferred into the task,
                     // regardless of whether the eventual target parameter is a shared
@@ -4889,18 +4901,19 @@ impl<'a> Lowerer<'a> {
                     let lowered_args = self.lower_user_args(
                         &target.display_name,
                         &target.params,
-                        &args[1..],
+                        &args[first_target_arg..],
                         callee.span,
                         Some(&capture_passings),
                     );
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::StartTask {
-                            returns_handle: field == "start",
+                            returns_handle: matches!(field.as_str(), "start" | "start_with_stack"),
                             result_is_copy: type_is_copy_in_program(
                                 &target.return_type,
                                 self.program,
                             ),
+                            stack_size,
                             task_group: group,
                             function: target.function,
                             args: lowered_args,
@@ -5934,12 +5947,26 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                         if matches!(&receiver_type, Type::Named(name, _) if name == "TaskGroup")
-                            && matches!(field.as_str(), "start" | "start_soon")
+                            && matches!(
+                                field.as_str(),
+                                "start"
+                                    | "start_soon"
+                                    | "start_with_stack"
+                                    | "start_soon_with_stack"
+                            )
                         {
-                            return if field == "start_soon" {
+                            let has_stack_override = matches!(
+                                field.as_str(),
+                                "start_with_stack" | "start_soon_with_stack"
+                            );
+                            let target_index = usize::from(has_stack_override);
+                            return if matches!(
+                                field.as_str(),
+                                "start_soon" | "start_soon_with_stack"
+                            ) {
                                 Some(Type::Unit)
                             } else {
-                                args.first().and_then(|argument| {
+                                args.get(target_index).and_then(|argument| {
                                     self.resolve_task_start_target(&argument.value)
                                         .map(|target| {
                                             Type::Named(
@@ -6726,11 +6753,13 @@ impl<'a> Lowerer<'a> {
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
             )),
-            ("TaskGroup", "start") => Some(Type::Named(
+            ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],
             )),
-            ("TaskGroup", "start_soon") => Some(Type::Unit),
+            ("TaskGroup", "start_soon") | ("TaskGroup", "start_soon_with_stack") => {
+                Some(Type::Unit)
+            }
             ("fs.File", "read_all") => Some(Type::Named(
                 "Result".to_string(),
                 vec![Type::named("String"), io_error_ty.clone()],

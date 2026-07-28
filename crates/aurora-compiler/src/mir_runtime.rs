@@ -22,36 +22,37 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
-    duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
+    cast_numeric_value, clone_json_codec_source, decode_process_restart_policy,
+    decode_process_stdio, duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
     evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
     io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_to_runtime,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
     nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
-    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
-    NANOS_PER_SECOND,
+    spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
+    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    yield_now_with_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue,
+    FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -481,6 +482,15 @@ struct EvaluatedMirArg {
     value: Value,
     ty: Option<Type>,
     writeback_place: Option<String>,
+}
+
+struct StartTaskRequest<'a> {
+    returns_handle: bool,
+    stack_size: Option<usize>,
+    task_group: &'a Operand,
+    function: &'a str,
+    args: &'a [MirArg],
+    spawn_span: Span,
 }
 
 enum RvalueOutcome {
@@ -1064,11 +1074,14 @@ fn evaluate_json_mir_host_call(
                 Ok(bound) => bound,
                 Err(error) => return Some(Err(error)),
             };
-            let text = match borrow_mir_string(&bound[0].value, env, name) {
+            let prepared = prepare_json_codec_source(|| {
+                borrow_mir_string(&bound[0].value, env, name).and_then(clone_json_codec_source)
+            });
+            let (text, reservation) = match prepared {
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            json_parse_to_runtime(text)
+            json_parse_owned_to_runtime(text, reservation)
         }
         "json::dumps" => {
             let bound = match bind_mir_arg_refs(&["value", "indent"], args) {
@@ -2485,18 +2498,28 @@ impl MirRuntime {
             Rvalue::StartTask {
                 returns_handle,
                 result_is_copy: _,
+                stack_size,
                 task_group,
                 function,
                 args,
                 span,
-            } => Ok(RvalueOutcome::Value(self.start_task(
-                *returns_handle,
-                task_group,
-                function,
-                args,
-                *span,
-                env,
-            )?)),
+            } => {
+                let stack_size = stack_size
+                    .as_ref()
+                    .map(|operand| self.evaluate_task_stack_size(operand, env))
+                    .transpose()?;
+                Ok(RvalueOutcome::Value(self.start_task(
+                    StartTaskRequest {
+                        returns_handle: *returns_handle,
+                        stack_size,
+                        task_group,
+                        function,
+                        args,
+                        spawn_span: *span,
+                    },
+                    env,
+                )?))
+            }
             Rvalue::Binary {
                 op,
                 left,
@@ -3546,15 +3569,15 @@ impl MirRuntime {
         }
     }
 
-    fn start_task(
-        &mut self,
-        returns_handle: bool,
-        task_group: &Operand,
-        function: &str,
-        args: &[MirArg],
-        spawn_span: Span,
-        env: &mut Env,
-    ) -> Result<Value> {
+    fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
+        let StartTaskRequest {
+            returns_handle,
+            stack_size,
+            task_group,
+            function,
+            args,
+            spawn_span,
+        } = request;
         let function = self
             .functions
             .get(function)
@@ -3594,7 +3617,7 @@ impl MirRuntime {
             parent_function,
             spawn_span,
         });
-        let task = spawn_lightweight_task(move || {
+        let entry = move || {
             let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                 module,
                 stdout,
@@ -3606,7 +3629,11 @@ impl MirRuntime {
             runtime
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
-        })?;
+        };
+        let task = match stack_size {
+            Some(stack_size) => spawn_lightweight_task_with_stack(stack_size, entry),
+            None => spawn_lightweight_task(entry),
+        }?;
         group_value.register_task(task.clone());
         for queue in producer_queues {
             queue.register_producer_task(&task);
@@ -3617,6 +3644,34 @@ impl MirRuntime {
         } else {
             Ok(Value::Unit)
         }
+    }
+
+    fn evaluate_task_stack_size(&self, operand: &Operand, env: &Env) -> Result<usize> {
+        let value = self.evaluate_operand(operand, env)?;
+        let Value::Int(bytes) = value else {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                "task stack size must evaluate to an int64 value",
+            ));
+        };
+        let bytes = bytes.as_i128().ok_or_else(|| {
+            Diagnostic::coded("AU4005", "task stack size must evaluate to an int64 value")
+        })?;
+        if bytes < i128::from(crate::call::MIN_TASK_STACK_BYTES)
+            || bytes > i128::from(crate::call::MAX_TASK_STACK_BYTES)
+        {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "task stack size must be between {} and {} bytes, found {}",
+                    crate::call::MIN_TASK_STACK_BYTES,
+                    crate::call::MAX_TASK_STACK_BYTES,
+                    bytes
+                ),
+            ));
+        }
+        usize::try_from(bytes)
+            .map_err(|_| Diagnostic::coded("AU4005", "task stack size does not fit this platform"))
     }
 
     fn apply_borrowed_param_writebacks(

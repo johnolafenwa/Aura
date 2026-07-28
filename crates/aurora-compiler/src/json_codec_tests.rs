@@ -108,6 +108,25 @@ fn exact_number_lexemes_select_int_or_float_without_losing_i64_boundaries() {
 }
 
 #[test]
+fn parse_materializes_every_json_value_kind_and_preserves_object_order() {
+    assert_eq!(
+        parse_ok(r#"{"second":[null,true,false,"text"],"first":0}"#),
+        JsonValue::Object(vec![
+            (
+                "second".to_string(),
+                JsonValue::Array(vec![
+                    JsonValue::Null,
+                    JsonValue::Bool(true),
+                    JsonValue::Bool(false),
+                    JsonValue::String("text".to_string()),
+                ]),
+            ),
+            ("first".to_string(), JsonValue::Int(0)),
+        ])
+    );
+}
+
+#[test]
 fn exponent_lexemes_beyond_i128_preserve_overflow_and_underflow_semantics() {
     let exponent = "9".repeat(80);
 
@@ -343,15 +362,30 @@ fn full_parse_and_dumps_entry_points_enforce_exact_byte_cap_boundaries() {
     assert_eq!(output.as_bytes().last(), Some(&b'"'));
     drop(output);
 
-    let JsonValue::String(payload) = &mut value else {
-        unreachable!("the test constructs a JSON string")
-    };
-    payload.push('x');
+    if let JsonValue::String(payload) = &mut value {
+        payload.push('x');
+    } else {
+        unreachable!("the test constructs a JSON string");
+    }
     assert_eq!(
         dumps(&value, None).unwrap_err(),
         JsonCodecError::OutputTooLarge {
             limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
         }
+    );
+
+    if let JsonValue::String(payload) = &mut value {
+        payload.truncate(MAX_JSON_OUTPUT_BYTES - 4);
+    } else {
+        unreachable!("the test constructs a JSON string");
+    }
+    let numeric_overflow = JsonValue::Array(vec![value, JsonValue::Int(0)]);
+    assert_eq!(
+        dumps(&numeric_overflow, None).unwrap_err(),
+        JsonCodecError::OutputTooLarge {
+            limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
+        },
+        "the output limit must also be enforced while formatting a number"
     );
 }
 
@@ -445,6 +479,74 @@ fn tree_construction_allocation_failures_keep_the_allocation_error_category() {
 }
 
 #[test]
+fn decoder_adapter_diagnostics_remain_specific_and_source_anchored() {
+    struct JsonValueExpectation;
+
+    impl std::fmt::Display for JsonValueExpectation {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut budget = JsonMaterializationBudget::new();
+            <JsonValueVisitor<'_> as serde::de::Visitor<'_>>::expecting(
+                &JsonValueVisitor {
+                    budget: &mut budget,
+                },
+                formatter,
+            )
+        }
+    }
+
+    struct FallibleStringExpectation;
+
+    impl std::fmt::Display for FallibleStringExpectation {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            <FallibleStringVisitor as serde::de::Visitor<'_>>::expecting(
+                &FallibleStringVisitor,
+                formatter,
+            )
+        }
+    }
+
+    struct JsonMapKeyExpectation;
+
+    impl std::fmt::Display for JsonMapKeyExpectation {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            <JsonMapKeyVisitor as serde::de::Visitor<'_>>::expecting(&JsonMapKeyVisitor, formatter)
+        }
+    }
+
+    assert_eq!(JsonValueExpectation.to_string(), "a JSON value");
+    assert_eq!(FallibleStringExpectation.to_string(), "a JSON string");
+    assert_eq!(
+        JsonMapKeyExpectation.to_string(),
+        "a JSON object key or arbitrary-precision number marker"
+    );
+
+    let invalid_marker = <JsonMapKeyVisitor as serde::de::Visitor<'_>>::visit_str::<
+        serde::de::value::Error,
+    >(JsonMapKeyVisitor, "not-the-private-number-marker");
+    let invalid_marker = match invalid_marker {
+        Ok(_) => panic!("only serde_json's private number marker is valid in this adapter"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        invalid_marker.to_string(),
+        "invalid serde_json arbitrary-precision number marker"
+    );
+
+    let upstream =
+        <serde_json::Error as serde::de::Error>::custom("unexpected decoder adapter failure");
+    assert_eq!(
+        deserialize_error("null", upstream),
+        JsonCodecError::Syntax {
+            message: "unexpected decoder adapter failure".to_string(),
+            line: 1,
+            column: 5,
+            offset: 4,
+        },
+        "a decoder-stage error without a serde location must anchor after the source"
+    );
+}
+
+#[test]
 fn serde_arbitrary_precision_marker_is_preserved_as_a_real_object_key() {
     const MARKER: &str = "$serde_json::private::Number";
     let source = r#"{"$serde_json::private::Number":"123","other":4}"#;
@@ -499,15 +601,38 @@ fn dumps_is_sorted_compact_or_exactly_indented_and_preserves_integer_spelling() 
     assert_eq!(
         dumps(
             &JsonValue::Object(vec![
-                ("b".to_string(), JsonValue::Int(1)),
-                ("a".to_string(), JsonValue::Int(2)),
+                ("a".to_string(), JsonValue::Int(1)),
+                ("b".to_string(), JsonValue::Int(2)),
+                ("a".to_string(), JsonValue::Int(3)),
                 ("b".to_string(), JsonValue::Int(3)),
             ]),
             None,
         )
         .unwrap(),
-        r#"{"a":2,"b":3}"#,
-        "sorting must retain the final value for duplicate raw object entries"
+        r#"{"a":3,"b":3}"#,
+        "sorting must retain the final value for duplicate first and later key groups"
+    );
+}
+
+#[test]
+fn iterative_dumps_handles_empty_and_nonempty_containers_in_both_layouts() {
+    let value = JsonValue::Array(vec![
+        JsonValue::Array(Vec::new()),
+        JsonValue::Object(Vec::new()),
+        JsonValue::Array(vec![JsonValue::Null, JsonValue::Bool(false)]),
+        JsonValue::Object(vec![(
+            "key".to_string(),
+            JsonValue::String("value".to_string()),
+        )]),
+    ]);
+
+    assert_eq!(
+        dumps(&value, None).unwrap(),
+        r#"[[],{},[null,false],{"key":"value"}]"#
+    );
+    assert_eq!(
+        dumps(&value, Some(2)).unwrap(),
+        "[\n  [],\n  {},\n  [\n    null,\n    false\n  ],\n  {\n    \"key\": \"value\"\n  }\n]"
     );
 }
 
@@ -545,6 +670,12 @@ fn dumps_rejects_invalid_indent_nonfinite_values_depth_and_output_overflow() {
         dumps(&JsonValue::Float(f64::NAN), None).unwrap_err(),
         JsonCodecError::NonFiniteNumber
     );
+    for value in [f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            dumps(&JsonValue::Float(value), Some(2)).unwrap_err(),
+            JsonCodecError::NonFiniteNumber
+        );
+    }
 
     let mut too_deep = JsonValue::Null;
     for _ in 0..=MAX_JSON_DEPTH {
@@ -582,4 +713,20 @@ fn dump_object_sort_scratch_allocation_failure_is_reported() {
         sorted_object_entries_with_capacity(&[], usize::MAX).unwrap_err(),
         JsonCodecError::AllocationFailed
     );
+}
+
+#[test]
+fn bounded_numeric_writer_flush_is_transparent_and_preserves_followup_writes() {
+    let mut output = BoundedOutput::default();
+    let mut writer = BoundedIoWriter {
+        output: &mut output,
+        failure: None,
+    };
+
+    std::io::Write::write_all(&mut writer, b"12").unwrap();
+    std::io::Write::flush(&mut writer).unwrap();
+    std::io::Write::write_all(&mut writer, b"3").unwrap();
+    drop(writer);
+
+    assert_eq!(output.text, "123");
 }

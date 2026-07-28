@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 ## Batch 4 of 6 (active)
 
@@ -132,17 +132,45 @@ Last updated: 2026-07-27
   tests, 13 extension tests, both coverage gates, reference/docs, audits,
   warning-denied Clippy, and hygiene. Phase 5.3 is complete; Phase 5.4 stack
   diet is next.
-- Phase 5.4 stack diet is active. Read-only architecture, protocol, and
-  benchmark audits are complete. Parallel test-first lanes are implementing:
-  a dedicated bounded protocol-step service for deep HTTP/rustls/WebSocket
-  frames; guarded 256 KiB default stacks with collision-free
-  `start_with_stack`/`start_soon_with_stack` overrides from 256 KiB to 64 MiB;
-  and truthful incremental-RSS plus 100,000-sleeper/timer benchmark protocols.
-  Reactor readiness/deadlines/cancellation remain on coroutine stacks, and the
-  existing generic blocking pool is not used for whole protocol operations.
-  The contractual Mac14,9 host has 16 KiB pages; `DefaultStack` already leaves
-  one guard page inaccessible. Implementation, focused gates, before/after
-  measurements, coverage, full CI, and published per-task cost remain.
+- Phase 5.4 stack diet is active. The contractual pre-change report was
+  captured from clean baseline commit `5af134a` at
+  `/tmp/aurora-phase54-before.json` (SHA-256
+  `405f3acb61126aed87ee6bebdb0d2abb3e98feef9f3992f6f0d42e32bffdfb2f`).
+  The 10,000-sleeper control passes at 204,193,792 bytes worst whole-process
+  peak RSS and 196,935,680 bytes worst incremental peak RSS. The new
+  100,000-sleeper plus 1,000-timer gate is intentionally red before the diet:
+  1,980,628,992 bytes worst whole-process peak RSS and 1,972,830,208 bytes
+  incremental, above the 1.5 GiB limit, while its 4 ms arm span and 5 ms p99
+  still pass. Existing controls also pass at a 5 ms timer arm span, 3 ms timer
+  p99, 0.000019655072722165167% worst idle CPU, 12 ms worst starvation
+  latency, and a 14.373750 ms native int64 median.
+- The implementation now uses guarded 512 KiB default coroutine stacks.
+  `TaskGroup.start_with_stack` and `start_soon_with_stack` provide explicit
+  guarded requests from 256 KiB through 64 MiB; the 256 KiB floor is an opt-in
+  for measured shallow work, not the default. Deep HTTP, rustls, and WebSocket
+  host-library steps run through a dedicated bounded two-worker protocol
+  service with 2 MiB worker stacks, while reactor readiness, deadlines,
+  cancellation, and protocol-state ownership remain explicit. Dynamic
+  `json.parse` runs through a separate two-worker, two-in-flight service with
+  2 MiB stacks and admission before source cloning; iterative JSON conversion,
+  writing, rendering, and canonical-value cloning avoid moving depth-bounded
+  language work back onto the coroutine stack. The legacy `json.is_valid` and
+  `json.parse_string_map` helpers remain bounded caller-side compatibility
+  operations. Exact full `npm run ci` is green: 280 CLI tests, 1,007 compiler
+  tests, the complete forced MIR/direct parity matrix in 543.05 seconds, 81
+  LSP tests at 100% coverage, 13 extension tests, compiler coverage,
+  reference/migration/docs, audits, warning-denied Clippy, and hygiene.
+  Frozen compiler coverage passes at 67,159/69,851 lines (96.146082%),
+  4,446/4,587 functions (96.926095%), and 99,186/105,100 regions
+  (94.372978%), with no synthetic coverage test or exclusion. The clean
+  contractual post-change benchmark and its evidence commit remain pending;
+  Phase 5.4 must not be marked complete until both are recorded.
+- Stack evidence is scope-qualified: the complete compiled Aurora HTTP
+  example, including MIR/direct language-execution frames, `SIGBUS`ed with an
+  experimental 256 KiB global default and completed at 512 KiB. The isolated
+  Rust runtime HTTP round trip now succeeds when only its protocol-calling
+  children are forced to 256 KiB; that proves deep host frames are offloaded
+  to protocol workers, not that 256 KiB is a safe whole-program default.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

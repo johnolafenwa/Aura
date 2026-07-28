@@ -7087,6 +7087,127 @@ def main() -> int32:
 }
 
 #[test]
+fn task_group_stack_overrides_preserve_bounds_argument_order_and_backend_parity() {
+    let source = r#"
+def stack_bytes() -> int64:
+    print("stack")
+    return 262144
+
+def argument(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def publish_sum(values: Queue[int32], left: int32, right: int32) -> None:
+    values.put(left + right)
+
+def publish(values: Queue[int32], value: int32) -> None:
+    values.put(value)
+
+def main() -> int32:
+    values = Queue[int32]()
+    with TaskGroup() as group:
+        group.start_with_stack(
+            stack_bytes(),
+            publish_sum,
+            values,
+            right=argument("right", 2),
+            left=argument("left", 1)
+        )
+        group.start_soon_with_stack(67108864, publish, values, 9)
+    print(values.get_or(-1))
+    print(values.get_or(-1))
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-task-group-stack-override",
+        source,
+        "stack\nright\nleft\n3\n9\n",
+    );
+}
+
+#[test]
+fn task_group_stack_overrides_reject_dynamic_out_of_range_values_on_both_backends() {
+    let source = r#"
+def stack_bytes() -> int64:
+    return 0
+
+def work() -> int32:
+    return 1
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_with_stack(stack_bytes(), work)
+    return 0
+"#;
+
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-task-group-stack-override-bounds",
+        source,
+        std::time::Duration::from_secs(20),
+        "",
+        "task stack size must be between 262144 and 67108864 bytes, found 0",
+    );
+}
+
+#[test]
+fn dynamic_json_dumps_depth_limit_fits_forced_512_kib_tasks_on_both_backends() {
+    let source = r#"
+import json
+
+def dump_at_depth_limit() -> None:
+    mut array_source = "null"
+    mut object_source = "null"
+    mut depth: int32 = 0
+    while depth < 128:
+        array_source = "[" + array_source + "]"
+        object_source = "{\"x\":" + object_source + "}"
+        depth += 1
+    match json.parse(array_source):
+        case Result.Ok(value):
+            print(value)
+            print(json.dumps(value).len())
+            print(f"{value}".len())
+        case Result.Err(error):
+            print(error)
+    match json.parse(object_source):
+        case Result.Ok(value):
+            print(value)
+            print(json.dumps(value).len())
+            print(f"{value}".len())
+        case Result.Err(error):
+            print(error)
+    match json.parse("[" + array_source + "]"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(json.Error.NestingTooDeep(limit, line, column)):
+            print(limit)
+            print(line)
+            print(column)
+        case Result.Err(error):
+            print(error)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_soon_with_stack(524288, dump_at_depth_limit)
+    return 0
+"#;
+
+    let mut array_render = "json.Value.Null".to_string();
+    let mut object_render = "json.Value.Null".to_string();
+    for _ in 0..128 {
+        array_render = format!("json.Value.Array([{array_render}])");
+        object_render = format!("json.Value.Object({{x: {object_render}}})");
+    }
+    let expected = format!(
+        "{array_render}\n260\n{}\n{object_render}\n772\n{}\n128\n1\n129\n",
+        array_render.len(),
+        object_render.len()
+    );
+    assert_run_and_direct_source_stdout("aurora-json-dumps-small-stack", source, &expected);
+}
+
+#[test]
 fn task_results_surface_errors_without_aborting_the_program() {
     let source = r#"
 def bad() -> int32:

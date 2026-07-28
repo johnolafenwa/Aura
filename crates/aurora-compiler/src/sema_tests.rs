@@ -18591,3 +18591,56 @@ def update(values: mut Vec[int32], index: mut int32):
     )
     .expect("a mutation completed before the later shared argument does not overlap it");
 }
+#[test]
+fn task_group_stack_override_checks_type_literal_bounds_and_target_arguments() {
+    let valid = crate::check_source(
+        r#"
+def worker(left: int32, right: int32) -> int32:
+    return left + right
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start_with_stack(262144, worker, right=2, left=1)
+        group.start_soon_with_stack(67108864, worker, left=1, right=2)
+        return task.result_or(-1)
+"#,
+    );
+    valid.expect("inclusive stack bounds and forwarded named target arguments should type-check");
+
+    for (literal, expected) in [
+        (
+            "262143",
+            "task stack size must be between 262144 and 67108864 bytes, found 262143",
+        ),
+        (
+            "67108865",
+            "task stack size must be between 262144 and 67108864 bytes, found 67108865",
+        ),
+        (
+            "-1",
+            "task stack size must be between 262144 and 67108864 bytes, found -1",
+        ),
+    ] {
+        let source = format!(
+            "def worker() -> int32:\n    return 1\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        group.start_with_stack({literal}, worker)\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("literal stack sizes outside the supported range must be rejected");
+        assert_eq!(error.code, "AU2002");
+        assert_eq!(error.message, expected);
+    }
+
+    for method in ["start_with_stack", "start_soon_with_stack"] {
+        let source = format!(
+            "def worker() -> int32:\n    return 1\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        group.{method}(\"large\", worker)\n    return 0\n"
+        );
+        let wrong_type = crate::check_source(&source).expect_err("stack size must be int64");
+        assert_eq!(wrong_type.code, "AU2002", "{method}");
+        assert!(
+            wrong_type
+                .message
+                .contains("expects `int64`, found `String`"),
+            "unexpected diagnostic for {method}: {wrong_type:?}"
+        );
+    }
+}

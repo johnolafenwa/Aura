@@ -1931,10 +1931,12 @@ impl<'a> AnalysisBuilder<'a> {
                         .unwrap_or(Type::Unit)],
                 )),
                 BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
-                BuiltinMember::TaskGroupStart => {
+                BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartWithStack => {
                     Some(Type::Named("Task".to_string(), vec![Type::Unit]))
                 }
-                BuiltinMember::TaskGroupStartSoon => Some(Type::Unit),
+                BuiltinMember::TaskGroupStartSoon | BuiltinMember::TaskGroupStartSoonWithStack => {
+                    Some(Type::Unit)
+                }
                 BuiltinMember::ProcessChildStdin
                 | BuiltinMember::ProcessChildStdout
                 | BuiltinMember::ProcessChildStderr => Some(Type::Named(
@@ -4044,6 +4046,8 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::TaskResultOr,
         BuiltinMember::TaskGroupStart,
         BuiltinMember::TaskGroupStartSoon,
+        BuiltinMember::TaskGroupStartWithStack,
+        BuiltinMember::TaskGroupStartSoonWithStack,
         BuiltinMember::TaskGroupCancel,
         BuiltinMember::RngNextInt,
         BuiltinMember::RngNextFloat,

@@ -283,3 +283,81 @@ subsequent exact full `npm run ci` gate is green: 277 CLI tests, 979 compiler
 library tests, the full forced-backend parity matrix, 80 LSP tests, 13
 extension tests, compiler and LSP coverage, reference integrity, docs, audits,
 warning-denied Clippy, and hygiene.
+
+## Phase 5.4 coroutine stack diet
+
+The stack-diet runner extends the accepted harness without weakening the
+10,000-sleeper control. It records both whole-process peak RSS and the
+increment above a pre-start baseline, and adds a 100,000-sleeper workload with
+1,000 concurrently armed 10 ms timers. That massive-concurrency gate requires
+no more than 1.5 GiB whole-process peak RSS, no more than a 10 ms timer arm
+span, and no more than 5 ms p99 timer overshoot. A failing pre-change memory
+gate is expected evidence for this stage; the benchmark escape hatch is not
+being used to claim acceptance.
+
+The contractual pre-change report was captured from a clean detached worktree
+at commit `5af134a2b1be9b54771e43f36ac355c68882c002`. The runner qualified a
+fresh locked release build whose `aura` SHA-256 is
+`9385fdbe3d05d493f3f7acc7c76c6c545e50aa2abce3da9a8cec473351fc5484`.
+The report records no dirty files, no competing processes, and
+`contractual: true`.
+
+```bash
+/Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
+  scripts/bench-scalable-runtime.py \
+  --label phase54-before-stack-diet \
+  --aura target/release/aura \
+  --json /tmp/aurora-phase54-before.json
+```
+
+Raw report: `/tmp/aurora-phase54-before.json`. SHA-256:
+`405f3acb61126aed87ee6bebdb0d2abb3e98feef9f3992f6f0d42e32bffdfb2f`.
+
+| Workload | Repetitions | Contractual pre-change result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 204,193,792 bytes worst whole-process peak RSS; 196,935,680 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,980,628,992 bytes worst whole-process peak RSS; 1,972,830,208 bytes worst incremental peak RSS; 4 ms worst arm span; 5 ms worst p99 | FAIL on the 1.5 GiB whole-process RSS gate; timer gates pass |
+| 1,000 timers | 3 | 5 ms worst arm span; 3 ms worst p99 | PASS |
+| 10 idle tasks | 3 | 0.000019655072722165167% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 12 ms in every run | PASS, at most 50 ms |
+| V6 int64 loop | 5 plus warmup | median 14.373750 ms; MAD 0.260250 ms; p95 15.700000 ms; best 13.963209 ms | recorded stage evidence |
+
+Every workload process completed naturally with its expected marker, zero
+status, empty standard error, and no sampling error. `all_gates_passed` is
+false solely because the pre-change massive-concurrency memory result exceeds
+the new limit.
+
+The implementation now under verification uses guarded 512 KiB default
+coroutine stacks. Explicit
+`TaskGroup.start_with_stack`/`start_soon_with_stack` requests accept guarded
+capacities from 256 KiB through 64 MiB; 256 KiB is an opt-in floor for measured
+shallow tasks, not the default. Deep HTTP/rustls/WebSocket steps use a
+dedicated bounded two-worker service with 2 MiB worker stacks. Dynamic
+`json.parse` uses a separate two-worker, two-in-flight service with 2 MiB
+stacks, bounded admission before source copying, and iterative
+conversion/write/render/clone paths for supported-depth values. The legacy
+`json.is_valid` and `json.parse_string_map` helpers remain bounded caller-side
+compatibility operations rather than codec-service jobs. Focused 512 KiB
+protocol, both-backend override, and supported-depth dynamic JSON checks have
+been reported green.
+
+The stack-selection evidence has two different scopes. The complete compiled
+Aurora HTTP example terminated with `SIGBUS` when the experimental global
+default was 256 KiB and completed at 512 KiB; that full workload includes the
+MIR/direct language-execution frames. An isolated Rust runtime round trip now
+completes with its direct protocol-calling children forced to 256 KiB. The
+isolated result proves deep host protocol frames stay on 2 MiB service-worker
+stacks, but it does not establish 256 KiB as safe for a complete compiled
+Aurora task.
+
+The implementation has passed exact full `npm run ci`: 280 CLI tests, 1,007
+compiler library tests, the complete forced MIR/direct parity matrix in
+543.05 seconds, 81 LSP tests, 13 extension tests, both coverage gates,
+reference/migration/docs, audits, warning-denied Clippy, and hygiene. Frozen
+compiler coverage is 67,159/69,851 lines (96.146082%), 4,446/4,587 functions
+(96.926095%), and 99,186/105,100 regions (94.372978%); LSP coverage remains
+100%. No synthetic coverage test or exclusion was added.
+
+No post-change measurement is recorded yet. A clean contractual post-change
+report and its evidence commit remain required before this stage can be
+accepted.

@@ -1,0 +1,5 @@
+error[AU2002]: task stack size must be between 262144 and 67108864 bytes, found 262143
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_group_stack_override_literal_bounds.au:6:32
+  |
+6 |         group.start_with_stack(262143, worker)
+  |                                ^

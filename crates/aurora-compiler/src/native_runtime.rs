@@ -21,24 +21,26 @@ use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, collect_queue_values,
-    current_lightweight_task_cancellation, current_lightweight_task_id,
+    cancel_current_lightweight_task_boundary, cast_numeric_value, clone_json_codec_source,
+    collect_queue_values, current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin, fail_current_lightweight_task,
     float_floor_divmod, io_error, io_read_line, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_to_runtime, nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
+    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
+    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -1256,15 +1258,20 @@ fn evaluate_direct_json_host_builtin(
 ) -> std::result::Result<Value, Diagnostic> {
     args.validate(name)?;
     match name {
-        "json::parse" => args.with_borrow(name, 0, |value| {
-            let Value::String(text) = value else {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    format!("`{name}` expects argument 1 to be `String`"),
-                ));
-            };
-            json_parse_to_runtime(text)
-        }),
+        "json::parse" => {
+            let (source, reservation) = prepare_json_codec_source(|| {
+                args.with_borrow(name, 0, |value| {
+                    let Value::String(text) = value else {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            format!("`{name}` expects argument 1 to be `String`"),
+                        ));
+                    };
+                    clone_json_codec_source(text)
+                })
+            })?;
+            json_parse_owned_to_runtime(source, reservation)
+        }
         "json::dumps" => {
             let indent = args.with_copy(name, 1, direct_json_indent)?;
             args.with_borrow(name, 0, |value| {
@@ -3930,7 +3937,8 @@ pub extern "C-unwind" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i6
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        write_stdout(unsafe { value_ref(value) }.render().as_str());
+        let rendered = unsafe { with_value(value, Value::render) };
+        write_stdout(&rendered);
         write_stdout("\n");
     })
 }
@@ -8583,6 +8591,7 @@ unsafe fn spawn_direct_task_with_external_state(
     args_address: usize,
     claim_flag_address: usize,
     result_is_copy: bool,
+    stack_size: Option<usize>,
 ) -> std::result::Result<TaskValue, Diagnostic> {
     let entry = move || {
         // This guard is created on the coroutine stack rather than captured by
@@ -8613,11 +8622,21 @@ unsafe fn spawn_direct_task_with_external_state(
         }
     };
     let task = unsafe {
-        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
-            cancellation,
-            entry,
-            forced_exit_cleanup,
-        )
+        match stack_size {
+            Some(stack_size) => {
+                spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack(
+                    cancellation,
+                    Some(stack_size),
+                    entry,
+                    forced_exit_cleanup,
+                )
+            }
+            None => spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                cancellation,
+                entry,
+                forced_exit_cleanup,
+            ),
+        }
     };
     match task {
         Ok(task) => Ok(task),
@@ -8638,6 +8657,8 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     returns_handle: i64,
     task_group: *mut OpaqueValue,
     result_is_copy: i64,
+    stack_size_present: i64,
+    stack_size: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
@@ -8652,6 +8673,16 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             ));
             boxed.into_vec()
         };
+        // Establish ownership immediately after reconstructing the raw
+        // argument buffer. Every later diagnostic exit must release both the
+        // retained opaque arguments and this claim flag.
+        let args_address = Box::into_raw(Box::new(args)) as usize;
+        let claim_flag_address = allocate_direct_task_claim_flag();
+        let external_state_guard = DirectTaskExternalStateGuard {
+            args_address,
+            claim_flag_address,
+        };
+        let args = unsafe { &*(args_address as *const Vec<i64>) };
         let mut queue_producers = Vec::new();
         for arg in args.iter().copied().filter(|arg| *arg != 0) {
             unsafe {
@@ -8672,12 +8703,36 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             }
         };
         let cancellation = group.child_cancellation();
+        let stack_size = match stack_size_present {
+            0 => None,
+            1 if !(crate::call::MIN_TASK_STACK_BYTES..=crate::call::MAX_TASK_STACK_BYTES)
+                .contains(&stack_size) =>
+            {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "task stack size must be between {} and {} bytes, found {}",
+                        crate::call::MIN_TASK_STACK_BYTES,
+                        crate::call::MAX_TASK_STACK_BYTES,
+                        stack_size
+                    ),
+                ))
+            }
+            1 => Some(usize::try_from(stack_size).unwrap_or_else(|_| {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4005",
+                    "task stack size does not fit this platform",
+                ))
+            })),
+            _ => runtime_error("invalid task-start stack-presence flag"),
+        };
         // A direct task can be abandoned while suspended inside generated
         // Cranelift frames. Keep its raw argument allocation outside the
         // coroutine stack so the scheduler can reclaim it without unwinding
         // through those frames.
-        let args_address = Box::into_raw(Box::new(args)) as usize;
-        let claim_flag_address = allocate_direct_task_claim_flag();
+        // The spawned task and its forced-exit cleanup now own the external
+        // state. The spawn helper releases it itself when scheduling fails.
+        std::mem::forget(external_state_guard);
         let task = unsafe {
             spawn_direct_task_with_external_state(
                 cancellation,
@@ -8685,6 +8740,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
                 args_address,
                 claim_flag_address,
                 result_is_copy != 0,
+                stack_size,
             )
         };
         let task = match task {

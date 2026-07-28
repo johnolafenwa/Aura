@@ -38,3 +38,4 @@ test locations that must prove completion.
 29. [ADR-0029: `enumerate` and `zip` loop forms](0029-enumerate-and-zip-loop-forms.md)
 30. [ADR-0030: `len` and `str` builtins](0030-len-and-str-builtins.md)
 31. [ADR-0031: CLI backend defaults](0031-cli-backend-defaults.md)
+32. [ADR-0032: Guarded lightweight-task stacks](0032-guarded-lightweight-task-stacks.md)

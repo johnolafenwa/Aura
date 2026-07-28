@@ -202,7 +202,10 @@ to Int, or a scalar to text.
 
 The legacy string-map helpers keep their existing types. They are not aliases
 for `parse` and `dumps`, and the dynamic API does not broaden
-`parse_string_map` to accept nested or non-string values.
+`parse_string_map` to accept nested or non-string values. The legacy
+`json.is_valid` and `json.parse_string_map` parsers remain bounded caller-side
+compatibility operations; neither is submitted to the dynamic-parse codec
+service. `json.stringify_map` likewise remains caller-side.
 
 ## Runtime Semantics
 
@@ -213,13 +216,30 @@ variant for data failure. A codec or runtime-tree allocation failure, or
 exhaustion of the 262,144-node materialization budget, traps with `AU4005`; it
 is not malformed-input data and does not become a `json.Error` variant.
 
+The dependency-owned recursive parse used by dynamic `json.parse` runs on
+Aurora's dedicated JSON codec service rather than on a lightweight task's
+coroutine stack. The service is process-global and independent of the protocol
+and generic blocking-I/O pools. It has two workers with 2 MiB native stacks
+and a total in-flight capacity of two operations, including work that has
+reserved capacity but has not yet entered a worker. Capacity is reserved
+before the fallible owned copy of the source is made, so saturation cannot
+accumulate unbounded waiting source copies. A lightweight task waiting to
+enter the service parks on a scheduler notification rather than spinning.
+
+After parsing, codec-to-runtime materialization uses an iterative traversal.
+JSON-aware runtime cloning and rendering are iterative as well. These
+traversals preserve the exact tree, ownership, diagnostic, and resource rules
+in this chapter without making host call depth proportional to JSON nesting.
+
 Dump validates indent, depth, and finite floating values while emitting into a
 capped destination. It applies the exact sorted-key, number, escape, and
 whitespace rules above. A successful call returns one fresh owned String.
 Validation or resource failure produces the diagnostic described below rather
 than a `json.Error`, because the public return type is not a `Result`.
 Before emission, runtime-to-codec conversion applies the same root-inclusive,
-key-exclusive 262,144-node materialization limit.
+key-exclusive 262,144-node materialization limit. Runtime-to-codec conversion
+and deterministic emission are iterative; dumping does not use the recursive
+parser service.
 
 Equality and pattern matching follow the ordinary enum and collection rules.
 Float equality remains IEEE equality. A program can explicitly construct a
@@ -240,8 +260,12 @@ argument; consuming accessors transfer one payload out of the supplied value
 or consume the unmatched value.
 
 Parsing and dumping are synchronous observable calls. Argument and receiver
-expressions are evaluated in ordinary call-site source order. There is no
-process-global parser state, serializer setting, or key-order configuration.
+expressions are evaluated in ordinary call-site source order. Once a
+`json.parse` call has been admitted, cancellation does not abandon the codec
+job: the call waits for its result, and the task observes cancellation at its
+next ordinary cancellation boundary. There is no process-global mutable
+parser configuration, serializer setting, or key-order configuration; the
+process-global codec service carries work, not language-visible parse state.
 
 ## Diagnostics
 
@@ -270,6 +294,11 @@ depth, node, and byte limits, key order, number spelling, escaping, indentation,
 and diagnostic categories. For one input or value, both backends MUST produce
 the same Aurora result and exact dump bytes.
 
+Both backends use the same bounded codec service for `json.parse`. The direct
+backend holds value-table read access only long enough to validate and copy
+the shared source String; it does not hold that access while waiting for
+service admission or completion.
+
 Runtime, direct-codegen, analysis, language-server, fixture, and
 executable-reference coverage maintain this surface across the two backends.
 
@@ -289,6 +318,12 @@ independently accepts the same maximum output size and value depth.
 Parse/runtime materialization and dump/runtime conversion additionally accept
 at most 262,144 JSON value nodes, counting the root and values but not object
 keys.
+
+The dynamic-`json.parse` codec service admits two operations process-wide. Its
+two 2 MiB-stack workers are initialized lazily and intentionally live until
+process exit; Aurora 0.1 has no codec-service shutdown, join, sizing, or
+capacity configuration API. The service capacity does not govern
+`json.is_valid`, `json.parse_string_map`, or `json.stringify_map`.
 
 Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
 Schema validation, MessagePack, CBOR, Protobuf, and other binary formats are

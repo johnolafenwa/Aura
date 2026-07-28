@@ -997,7 +997,7 @@ impl<'a> NativeCodegen<'a> {
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
             yield_now => ("aurora_direct_yield_now", [], None),
             sleep_value_void => ("aurora_direct_sleep_value_void", [types::I64], None),
-            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
         let mut functions = HashMap::new();
@@ -4007,6 +4007,7 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::StartTask {
                 returns_handle,
                 result_is_copy,
+                stack_size,
                 task_group,
                 function,
                 args,
@@ -4014,6 +4015,7 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_start_task(
                 *returns_handle,
                 *result_is_copy,
+                stack_size.as_ref(),
                 task_group,
                 function,
                 args,
@@ -11422,6 +11424,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         returns_handle: bool,
         result_is_copy: bool,
+        stack_size: Option<&Operand>,
         task_group: &Operand,
         function: &str,
         args: &[MirArg],
@@ -11471,6 +11474,20 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .iconst(types::I64, if result_is_copy { 1 } else { 0 });
+        let (stack_size_present_value, stack_size_value) = match stack_size {
+            Some(stack_size) => {
+                let target = DirectType::Scalar(ScalarKind::Int64);
+                let value = self.load_operand_for_target(stack_size, &target)?;
+                (
+                    self.builder.ins().iconst(types::I64, 1),
+                    self.coerce_value(value, &target)?.values[0],
+                )
+            }
+            None => (
+                self.builder.ins().iconst(types::I64, 0),
+                self.builder.ins().iconst(types::I64, 0),
+            ),
+        };
         let group = self.load_operand(task_group)?;
         let group = self.ensure_opaque(group)?;
         let task_group_value = group.values[0];
@@ -11483,6 +11500,8 @@ impl<'a> FunctionCompiler<'a> {
                 returns_handle_value,
                 task_group_value,
                 result_is_copy_value,
+                stack_size_present_value,
+                stack_size_value,
             ],
         );
         let ty = if returns_handle {
@@ -12229,8 +12248,14 @@ fn validate_rvalue(
         Rvalue::VariantPayload { scrutinee, .. } => validate_operand(scrutinee),
         Rvalue::Try { value } => validate_operand(value),
         Rvalue::StartTask {
-            task_group, args, ..
+            stack_size,
+            task_group,
+            args,
+            ..
         } => {
+            if let Some(stack_size) = stack_size {
+                validate_non_consuming_operand(stack_size, "a task stack size")?;
+            }
             validate_non_consuming_operand(task_group, "a task-group receiver")?;
             for argument in args {
                 validate_operand(&argument.value)?;

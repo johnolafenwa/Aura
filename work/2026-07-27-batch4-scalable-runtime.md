@@ -259,7 +259,7 @@ before-reactor baseline is recorded in
   coverage, executable reference integrity, all 683 migration manifests, docs,
   npm and cargo audits, warning-denied Clippy, and hygiene. Cargo audit retains
   only the repository's allowed `rustls-pemfile` unmaintained warning.
-- Phase 5.4 stack-diet investigation found that the 1 MiB default is a
+- Phase 5.4 stack-diet investigation found that the 1 MiB default was a
   containment measure for deep host-library frames, not an Aurora-frame
   requirement. DNS/connect work and WebSocket handshakes are already
   offloaded, but HTTP URL/build/parsing, rustls handshake/data paths, and
@@ -275,13 +275,71 @@ before-reactor baseline is recorded in
   override surface is collision-free
   `TaskGroup.start_with_stack(bytes, target, args...)` and
   `start_soon_with_stack(...)`; this avoids stealing a named argument from the
-  child function. The initial proof target is a 256 KiB default with explicit
-  overrides from 256 KiB through 64 MiB, deterministic rejection outside that
-  range, and parity across MIR/direct task starts.
+  child function.
+- The contractual pre-change report comes from a clean detached worktree at
+  baseline commit `5af134a2b1be9b54771e43f36ac355c68882c002`, using a fresh
+  release build. Raw report: `/tmp/aurora-phase54-before.json`; SHA-256:
+  `405f3acb61126aed87ee6bebdb0d2abb3e98feef9f3992f6f0d42e32bffdfb2f`.
+  The 10,000-sleeper control passes with 204,193,792-byte worst
+  whole-process peak RSS and 196,935,680-byte worst incremental peak RSS. The
+  new 100,000-sleeper plus 1,000-timer gate is the required red proof:
+  1,980,628,992-byte worst whole-process peak RSS and 1,972,830,208-byte
+  incremental peak RSS exceed the 1.5 GiB ceiling. Its 4 ms arm span and 5 ms
+  p99 still pass. The ordinary timer gate passes at 5 ms arm span and 3 ms
+  p99; idle CPU peaks at 0.000019655072722165167%; starvation peaks at 12 ms;
+  and the five-run native int64 median is 14.373750 ms.
+- The implemented default is guarded 512 KiB, not the investigation's initial
+  256 KiB target. Explicit overrides remain guarded and deterministic from
+  256 KiB through 64 MiB; 256 KiB is reserved for measured shallow tasks and
+  is never implied by an ordinary task start. Both task-start surfaces carry
+  the same behavior through MIR and direct lowering.
+- The 512 KiB selection came from the complete compiled Aurora HTTP example:
+  making 256 KiB the global default left both the language-execution frames
+  and the protocol path on that capacity and terminated with `SIGBUS`;
+  512 KiB completed. The distinct isolated Rust runtime round trip forces only
+  its direct protocol-calling children to 256 KiB and now completes. That
+  narrower result proves the deep protocol frames moved to service-worker
+  stacks, but excludes MIR/direct language-execution frames and is not
+  evidence for a 256 KiB global default.
+- Deep HTTP, rustls, and WebSocket host-library frames now execute through a
+  dedicated bounded protocol-step service with two 2 MiB-stack workers and a
+  bounded queue. It does not replace reactor readiness: descriptor waits,
+  deadlines, cancellation, and protocol-state transitions remain owned by the
+  scheduler protocol. Generic filesystem/resolver blocking work remains on
+  the separate generic pool.
+- Dynamic `json.parse` uses another dedicated service rather than consuming
+  the protocol or generic pool. It has two 2 MiB-stack workers and exactly two
+  in-flight operations. Admission precedes the fallible source copy, non-task
+  callers wait on a condition variable, lightweight-task callers park on
+  availability, and an RAII reservation restores capacity after completion or
+  failure. Parsing on the service is paired with iterative runtime conversion,
+  JSON writing, rendering, and canonical `json.Value` cloning so the supported
+  depth does not reintroduce recursive host frames on a 512 KiB coroutine
+  stack. Cancellation of an admitted synchronous JSON parse remains deferred
+  until the operation publishes its result, preserving the existing
+  synchronous call contract. The legacy `json.is_valid` and
+  `json.parse_string_map` helpers retain their bounded caller-side paths and
+  never enter this service; `json.stringify_map` remains caller-side too.
+- Exact full `npm run ci` is green on the complete Phase 5.4 implementation:
+  280 CLI tests, 1,007 compiler library tests, the complete forced MIR/direct
+  parity matrix in 543.05 seconds, 81 LSP tests, 13 extension tests, both
+  coverage gates, executable reference integrity, all 683 migration
+  manifests, docs, npm and cargo audits, warning-denied Clippy, and hygiene.
+  Cargo audit retains only the repository's allowed `rustls-pemfile`
+  unmaintained warning.
+- Frozen compiler coverage passes at 67,159/69,851 lines (96.146082%),
+  4,446/4,587 functions (96.926095%), and 99,186/105,100 regions
+  (94.372978%), above the frozen 96.13/96.89/94.35 floors. LSP coverage is
+  100% across statements, branches, functions, and lines. Every closure test
+  pins observable behavior, a stable diagnostic, or backend parity; no
+  synthetic line-execution test or exclusion was added.
+- The clean contractual post-change benchmark and its evidence commit remain
+  pending. Phase 5.4 is not accepted until that report is recorded.
 
 ## Follow-up
 
-Begin the stack-diet stage with protocol service offload, guarded smaller task
-stacks, a collision-free per-task override, and measured incremental memory per
-parked task. Coverage floors remain frozen until the one-time Batch 4 sign-off
-re-ratchet.
+Commit the fully gated implementation, then capture the clean contractual
+post-change report and publish the measured whole-process and incremental cost
+per parked task. Do not advance to scheduler soundness until that benchmark
+and its evidence commit are recorded. Coverage floors remain frozen until the
+one-time Batch 4 sign-off re-ratchet.

@@ -181,8 +181,10 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; requires clone-safe `T`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; requires clone-safe `T`. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage and starts a child task. |
-| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child without returning a handle. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Captures arguments and starts a child on the guarded 512 KiB default stack. |
+| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Starts a child on the guarded 512 KiB default stack without returning a handle. |
+| `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Starts a child with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
+| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Same explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
 | `TaskGroup.cancel` | `cancel() -> None` | Signals cancellation to children. |
 
 ## I/O And Filesystem

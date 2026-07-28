@@ -282,8 +282,19 @@ MIR execution amortizes the cooperative yield with 8 units of function-local
 loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
 yielding. A program proven to have no possible sibling Aurora task elides the
 runtime check entirely. These backend strategies may produce different valid
-interleavings; scheduling order is not observable language order. Each
-lightweight task reserves a fixed 1 MiB coroutine stack.
+interleavings; scheduling order is not observable language order. An ordinary
+lightweight task requests 512 KiB of writable coroutine stack. The
+`TaskGroup.start_with_stack` and `start_soon_with_stack` methods accept an
+exact `int64` request from 256 KiB through 64 MiB inclusive. Accepted requests
+are rounded upward to the host page size and guard-protected; out-of-range
+requests are rejected rather than clamped. This surface is Provisional under
+ADR-0032. The 256 KiB lower bound is an explicit minimum for measured shallow
+tasks, not the general default. The complete compiled Aurora HTTP example,
+including its MIR/direct language-execution frames, proved unsafe when
+256 KiB was the global task default and succeeds with the 512 KiB default.
+The separate isolated runtime round trip that forces protocol callers to
+256 KiB proves that service workers now own the deep host protocol frames; it
+does not measure the full compiled task stack.
 
 `yield_now()` places the current lightweight task back in the ready set and
 returns when the scheduler selects it again. It gives other runnable tasks an
@@ -300,6 +311,37 @@ not resume a later wait. If no task is ready, the scheduler blocks until the
 next event or deadline; there is no periodic park tick.
 
 Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
+
+Deep HTTP parsing/construction, TLS operations, and maintained Unix WebSocket
+protocol steps run on a distinct bounded protocol-step service. Its two named
+workers have 2 MiB native stacks and share a 64-job queue. A job owns its
+protocol state for one bounded, nonblocking library step. The coroutine waits
+for the state to return before it observes cancellation or waits for descriptor
+readiness again, so there is never an abandoned protocol state with two
+owners, and no resource mutex remains held across the worker wait. Reactor
+readiness, absolute deadlines, and cancellation remain scheduler-side
+concerns. The process-global pool is lazily initialized and shared by every
+lightweight scheduler. Its workers intentionally live until process exit;
+Aurora 0.1 has no runtime pool shutdown or join surface. The non-Unix
+WebSocket fallback retains its compatibility path. Resolver, listener-bind,
+and file reads use the generic blocking-I/O pool. TLS asset bytes are read
+there before PEM parsing and rustls construction run on protocol workers.
+
+Dynamic `json.parse` uses a third, independent process-global service with two
+2 MiB-stack workers and total in-flight capacity two. A task reserves capacity
+before making the fallible owned copy of its parse source; saturation parks a
+lightweight task through the scheduler rather than spinning. Once admitted,
+synchronous `json.parse` waits through codec completion, so cancellation is
+observed at the task's next ordinary cancellation boundary rather than
+abandoning the codec job. Its dependency-owned recursive parsing runs on the
+service stack, while runtime materialization, JSON-aware cloning/rendering,
+and dump conversion/emission use iterative traversals. The direct backend
+waits for admission without value-table access, then holds read access only
+long enough to copy the source and releases it before submission and
+completion waiting. The legacy `json.is_valid` and `json.parse_string_map`
+helpers remain bounded caller-side compatibility operations and do not use
+this service. Codec workers are process-lifetime and have no Aurora 0.1
+shutdown or configuration surface.
 
 `Task[T]` and `Queue[T]` are copy handles to shared runtime state. Copying a handle does not duplicate the underlying task or queue.
 

@@ -54,8 +54,35 @@ This page documents known current limits of the Aurora compiler and runtime.
   backedge and eventually yields from a tight loop, but one long loop body or
   long straight-line computation can still delay every other Aurora task. The
   automatic checks do not inspect cancellation.
-- Every lightweight task reserves a fixed 1 MiB coroutine stack. The MIR/direct runtime entry thread reserves 64 MiB, and maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
+- Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
+  `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
+  `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
+  are rounded upward to the host page size and guard-protected; smaller and
+  larger requests are rejected rather than clamped. The MIR/direct runtime
+  entry thread reserves 64 MiB, and maintained execution paths stop with a
+  friendly recursion-depth diagnostic after 256 nested Aurora calls. The
+  override API is Provisional under ADR-0032. The 256 KiB lower bound is an
+  opt-in minimum for measured shallow tasks, not the generally safe default;
+  the complete compiled Aurora HTTP example faulted when 256 KiB was the
+  global default and succeeds at 512 KiB. An isolated runtime protocol
+  round trip succeeds with 256 KiB callers because it excludes compiled
+  language-execution frames; it proves the service offload boundary, not a
+  256 KiB whole-program default.
+- The clean Mac14,9 incremental RSS per parked task and the combined
+  100,000-sleeper timer/RSS result are pending measurement. Whole-process peak
+  RSS divided by task count is not an incremental per-task value and is not a
+  published limit.
 - The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. No high-scale task-count claim is made for 0.1.
+- Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a
+  distinct protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
+  Each submitted job is a bounded, nonblocking step and returns owned protocol
+  state before cancellation or reactor waiting resumes. The non-Unix
+  WebSocket fallback does not use this Phase 5.4 service. The pool is
+  process-global, lazily initialized, shared by all lightweight schedulers,
+  and intentionally process-lifetime; it has no 0.1 runtime shutdown or join
+  API. File reads, resolver work, and listener binding remain on the generic
+  blocking-I/O pool; TLS asset bytes are read there before PEM parsing and
+  rustls construction run on protocol workers.
 - Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
@@ -75,9 +102,18 @@ This page documents known current limits of the Aurora compiler and runtime.
   root-inclusive 262,144-value materialization limit, and independent 64 MiB
   parse-input and dump-output caps. Exceeding the node limit or encountering a
   controlled parse/conversion allocation failure traps with `AU4005`; it is not
-  a `json.Error` variant. It has no arbitrary-precision number, streaming
-  codec, or derived class/enum schemas. TOML and the legacy JSON compatibility
-  helpers remain restricted to typed `Map[String, String]`.
+  a `json.Error` variant. Dynamic `json.parse` uses a separate process-global
+  service with two 2 MiB-stack workers and total in-flight capacity two;
+  capacity is reserved before the fallible source copy, and saturated
+  lightweight tasks park through the scheduler. Once admitted, synchronous
+  parse defers cancellation until codec completion. Runtime materialization,
+  JSON-aware clone/render, and dumping use iterative traversals. The service is
+  process-lifetime and has no 0.1 sizing or shutdown API. The legacy
+  `json.is_valid` and `json.parse_string_map` helpers retain their bounded
+  caller-side compatibility paths and do not use that service; legacy JSON
+  string-map and TOML helpers remain restricted to typed
+  `Map[String, String]`. JSON has no arbitrary-precision number, streaming
+  codec, or derived class/enum schemas.
 - `random.Rng` provides one fixed deterministic stream with integer, floating,
   and mutable-Vec shuffle operations. There is no global generator, state
   serialization, reseeding, jump/substream operation, distribution library,

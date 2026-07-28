@@ -140,6 +140,33 @@ That is Aurora's maintained replacement for fire-and-forget task creation. Backg
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
 
+### Per-task Stack Overrides
+
+`TaskGroup.start(...)` and `start_soon(...)` use Aurora's guarded 512 KiB
+default task stack. A child with a measured task-local stack requirement can
+request a custom capacity without changing its target arguments:
+
+```python
+with group = TaskGroup():
+    task = group.start_with_stack(1024 * 1024, deep_worker, input)
+    group.start_soon_with_stack(2 * 1024 * 1024, deep_sink, jobs)
+```
+
+Both size arguments have exact type `int64`. The accepted range is 262,144
+through 67,108,864 bytes inclusive (256 KiB through 64 MiB). Aurora rejects
+out-of-range requests rather than clamping them. Accepted requests are rounded
+up to the host page size and protected by the platform stack allocator's guard
+pages. Use the ordinary start methods unless a real workload demonstrates the
+need for a custom capacity.
+
+The lower 256 KiB bound is also available for an explicitly measured shallow
+task, but it is not the generally safe default. Aurora's complete compiled
+HTTP example faulted when 256 KiB was used as the global task default during
+integration and succeeds with the 512 KiB default. A separate runtime-only
+round trip succeeds with forced 256 KiB protocol callers because the deep
+host frames execute on service workers; that narrower check does not include
+the compiled program's MIR/direct execution frames.
+
 Associated methods without `self` work too:
 
 ```python
@@ -253,12 +280,26 @@ Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in
 parallel. The compiler inserts a cooperative scheduling check on every loop
 backedge, including a normal body tail and `continue`, so a tight loop no
 longer freezes ready timers, Queue operations, or socket work indefinitely.
-`break` and `return` leave the loop without taking that check. Each lightweight
-task still reserves a fixed 1 MiB coroutine stack. Descriptor registrations
+`break` and `return` leave the loop without taking that check. Each ordinary
+lightweight task requests a guarded 512 KiB coroutine stack; the explicit
+stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
 and blocking-pool events notify the scheduler directly. With nothing ready,
 the scheduler blocks until an event or deadline rather than waking on a
 periodic tick.
+
+Deep HTTP, TLS, and maintained Unix WebSocket library steps run on a distinct
+bounded protocol service with deep native worker stacks. Protocol state
+returns to the lightweight task after each bounded, nonblocking step and
+before cancellation or reactor waiting resumes. The clean incremental RSS per
+parked task and the combined 100,000-sleeper timer/RSS result remain pending
+the contractual Mac14,9 measurement; Aurora does not mislabel whole-process
+RSS divided by task count as an incremental task cost.
+
+The protocol service starts lazily and lives until process exit; Aurora 0.1
+does not expose a shutdown or join operation for it. File reads, resolver work,
+and listener binding use the generic blocking-I/O pool. TLS asset bytes are
+read there before PEM parsing and rustls construction run on protocol workers.
 
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 

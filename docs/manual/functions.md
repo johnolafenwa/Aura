@@ -270,7 +270,10 @@ Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 
 ## Callable Targets And Task Starts
 
-Aurora 0.1 does not provide general first-class function variables, lambdas, or closures. The task API has a specific callable-target form: `TaskGroup.start` and `start_soon` accept a named function or an associated method without `self`.
+Aurora 0.1 does not provide general first-class function variables, lambdas,
+or closures. The task API has a specific callable-target form: the ordinary
+and explicit-stack `TaskGroup` start methods accept a named function or an
+associated method without `self`.
 
 ```python
 def work(value: int32) -> int32:

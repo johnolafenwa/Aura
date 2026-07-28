@@ -43,6 +43,115 @@ fn test_runtime() -> MirRuntime {
     )
 }
 
+#[test]
+fn mir_task_stack_override_accepts_contract_boundaries_and_reports_dynamic_violations() {
+    let runtime = test_runtime();
+    let mut env = Env::default();
+
+    assert_eq!(
+        runtime
+            .evaluate_task_stack_size(&Operand::Int(262_144), &env)
+            .expect("the minimum task stack override should be accepted"),
+        262_144
+    );
+    assert_eq!(
+        runtime
+            .evaluate_task_stack_size(&Operand::Int(67_108_864), &env)
+            .expect("the maximum task stack override should be accepted"),
+        67_108_864
+    );
+
+    for (name, bytes) in [("below", 262_143), ("above", 67_108_865)] {
+        env.define_typed(
+            name,
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_signed(bytes)),
+        );
+        let error = runtime
+            .evaluate_task_stack_size(&Operand::Place(name.to_string()), &env)
+            .expect_err("an out-of-contract dynamic stack override should fail");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            format!("task stack size must be between 262144 and 67108864 bytes, found {bytes}")
+        );
+    }
+
+    env.define_typed("not_bytes", Type::named("bool"), Value::Bool(true));
+    let error = runtime
+        .evaluate_task_stack_size(&Operand::Place("not_bytes".to_string()), &env)
+        .expect_err("malformed MIR must not pass a non-int64 task stack size to the scheduler");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "task stack size must evaluate to an int64 value"
+    );
+}
+
+#[test]
+fn mir_task_waits_report_unrepresentable_deadlines_and_completed_cancellation() {
+    let blocker = ChannelValue::new();
+    let unblocker = blocker.clone();
+    let pending_task = TaskValue::from_handle(std::thread::spawn(move || {
+        let _ = unblocker.recv_with_cancellation(None, None);
+        Ok(Value::Unit)
+    }));
+    let mut runtime = test_runtime();
+
+    let join_error = runtime
+        .join_task(pending_task.clone(), Some(StdDuration::MAX))
+        .expect_err("an unrepresentable task-result deadline should be diagnosed");
+    assert_eq!(join_error.code, "AU4001");
+    assert!(
+        join_error
+            .message
+            .contains("task result timeout exceeds the host deadline range"),
+        "unexpected task-result deadline diagnostic: {join_error:?}"
+    );
+    let wait_any_error = runtime
+        .wait_any(vec![pending_task.clone()], Some(StdDuration::MAX))
+        .expect_err("an unrepresentable wait-any deadline should be diagnosed");
+    assert_eq!(wait_any_error.code, "AU4001");
+    assert_eq!(
+        wait_any_error.message,
+        "timeout overflows the MIR runtime deadline range"
+    );
+    let wait_all_error = runtime
+        .wait_all(Vec::new(), Some(StdDuration::MAX))
+        .expect_err("an unrepresentable wait-all deadline should be diagnosed");
+    assert_eq!(wait_all_error.code, "AU4001");
+    assert_eq!(
+        wait_all_error.message,
+        "timeout overflows the MIR runtime deadline range"
+    );
+    blocker.close();
+    let _ =
+        pending_task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+
+    let result = crate::runtime_value::run_lightweight_root_task(|| {
+        let cancelled_task =
+            crate::runtime_value::spawn_lightweight_task(|| -> crate::diag::Result<Value> {
+                crate::runtime_value::cancel_current_lightweight_task_boundary()
+            })?;
+        match cancelled_task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .expect("cancelled task completion should be observable")
+        {
+            crate::runtime_value::TaskWaitStatus::Cancelled => {}
+            other => panic!("expected a cancelled lightweight task, found {other:?}"),
+        }
+
+        let mut runtime = test_runtime();
+        assert_eq!(
+            runtime.wait_any(vec![cancelled_task], Some(StdDuration::from_secs(1)))?,
+            super::wait_any_cancelled()
+        );
+        Ok(Value::Unit)
+    })
+    .expect("wait_any should report cancellation already completed by a child task");
+    assert_eq!(result, Value::Unit);
+}
+
 fn mir_arg(name: Option<&str>, value: Operand) -> MirArg {
     MirArg {
         name: name.map(str::to_string),
@@ -5573,6 +5682,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
             value: Rvalue::StartTask {
                 returns_handle: true,
                 result_is_copy: true,
+                stack_size: None,
                 task_group: Operand::Unit,
                 function: "worker".to_string(),
                 args: Vec::new(),

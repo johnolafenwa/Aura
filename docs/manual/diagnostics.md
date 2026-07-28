@@ -290,6 +290,12 @@ requested, secure operating-system entropy failure, or allocation failure. A
 secure operation never recovers by substituting bytes from the deterministic
 generator.
 
+An explicit task-stack request has exact type `int64` and an inclusive
+262,144..67,108,864-byte range. `AU2002` rejects an out-of-range literal during
+checking. A dynamic value outside that range and a stack-allocation or
+platform-size failure trap with `AU4005`; Aurora never clamps the request or
+silently substitutes the default.
+
 JSON input-data failures are typed `json.Error` values rather than diagnostics.
 Parse allocation failure or exceeding the shared 262,144-value
 materialization limit uses `AU4005` instead. `json.dumps` uses `AU4003` for an

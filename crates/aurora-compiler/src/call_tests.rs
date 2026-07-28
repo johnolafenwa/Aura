@@ -339,6 +339,14 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinMember::TaskGroupStartSoon.detail(),
         "start_soon(function, own ...) -> None"
     );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.detail(),
+        "start_with_stack(bytes: int64, function, own ...) -> Task[T]"
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartSoonWithStack.detail(),
+        "start_soon_with_stack(bytes: int64, function, own ...) -> None"
+    );
     assert!(BuiltinMember::TaskResultOrNone
         .docs()
         .contains("Option.None"));
@@ -551,6 +559,10 @@ fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
 
 #[test]
 fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
+    assert_eq!(BuiltinFunction::Print.argument_passing(1), None);
+    assert_eq!(BuiltinFunction::Print.argument_name(1), None);
+    assert_eq!(BuiltinClassConstructor::RandomRng.argument_name(1), None);
+
     let owned = [
         (BuiltinMember::VecPush, 0),
         (BuiltinMember::VecSet, 1),
@@ -614,6 +626,31 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         BuiltinMember::TaskGroupStart.variadic_argument_passing(),
         Some(ReceiverKind::Value)
     );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.argument_passing(0),
+        Some(ReceiverKind::Borrow)
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.argument_passing(1),
+        Some(ReceiverKind::Borrow)
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.variadic_argument_passing(),
+        Some(ReceiverKind::Value)
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.argument_name(0),
+        Some("bytes")
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.argument_name(1),
+        Some("function")
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartWithStack.argument_name(2),
+        Some("variadic argument")
+    );
+    assert_eq!(BuiltinMember::VecLen.argument_name(0), None);
     assert_eq!(
         BuiltinMember::VecPush.receiver_passing(),
         ReceiverKind::BorrowMut
@@ -734,6 +771,16 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("Task", "result", BuiltinMember::TaskResult),
         ("TaskGroup", "start", BuiltinMember::TaskGroupStart),
         ("TaskGroup", "start_soon", BuiltinMember::TaskGroupStartSoon),
+        (
+            "TaskGroup",
+            "start_with_stack",
+            BuiltinMember::TaskGroupStartWithStack,
+        ),
+        (
+            "TaskGroup",
+            "start_soon_with_stack",
+            BuiltinMember::TaskGroupStartSoonWithStack,
+        ),
         ("TaskGroup", "cancel", BuiltinMember::TaskGroupCancel),
     ];
 

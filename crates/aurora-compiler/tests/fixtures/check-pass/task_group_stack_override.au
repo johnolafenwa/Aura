@@ -1,0 +1,16 @@
+def worker(left: int32, right: int32) -> int32:
+    return left + right
+
+def publish(value: int32) -> None:
+    print(value)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task: Task[int32] = group.start_with_stack(
+            262144,
+            worker,
+            right=2,
+            left=1
+        )
+        group.start_soon_with_stack(67108864, publish, 9)
+        return task.result_or(-1)

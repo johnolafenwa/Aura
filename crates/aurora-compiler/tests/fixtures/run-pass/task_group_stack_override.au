@@ -1,0 +1,28 @@
+def stack_bytes() -> int64:
+    print("stack")
+    return 262144
+
+def argument(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def publish_sum(values: Queue[int32], left: int32, right: int32) -> None:
+    values.put(left + right)
+
+def publish(values: Queue[int32], value: int32) -> None:
+    values.put(value)
+
+def main() -> int32:
+    values = Queue[int32]()
+    with TaskGroup() as group:
+        group.start_with_stack(
+            stack_bytes(),
+            publish_sum,
+            values,
+            right=argument("right", 2),
+            left=argument("left", 1)
+        )
+        group.start_soon_with_stack(67108864, publish, values, 9)
+    print(values.get_or(-1))
+    print(values.get_or(-1))
+    return 0

@@ -562,14 +562,9 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
     where
         E: de::Error,
     {
-        i64::try_from(value).map(JsonValue::Int).or_else(|_| {
-            let value = value as f64;
-            if value.is_finite() {
-                Ok(JsonValue::Float(value))
-            } else {
-                Err(E::custom("JSON number is outside float64 range"))
-            }
-        })
+        i64::try_from(value)
+            .map(JsonValue::Int)
+            .or_else(|_| Ok(JsonValue::Float(value as f64)))
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -878,52 +873,147 @@ fn write_value(
     output: &mut BoundedOutput,
     value: &JsonValue,
     indent: Option<usize>,
-    depth: usize,
+    root_depth: usize,
 ) -> Result<(), JsonCodecError> {
-    match value {
-        JsonValue::Null => output.push_str("null"),
-        JsonValue::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
-        JsonValue::Int(value) => write_int(output, *value),
-        JsonValue::Float(value) if value.is_finite() => write_float(output, *value),
-        JsonValue::Float(_) => Err(JsonCodecError::NonFiniteNumber),
-        JsonValue::String(value) => write_string(output, value),
-        JsonValue::Array(values) => {
-            let child_depth = checked_dump_depth(depth)?;
-            output.push_str("[")?;
-            for (index, value) in values.iter().enumerate() {
-                if index > 0 {
-                    output.push_str(",")?;
+    enum WriteFrame<'a> {
+        Array {
+            values: &'a [JsonValue],
+            next_index: usize,
+            depth: usize,
+            child_depth: usize,
+        },
+        Object {
+            sorted: Vec<SortedObjectEntry<'a>>,
+            next_sorted_index: usize,
+            depth: usize,
+            child_depth: usize,
+        },
+    }
+
+    let mut frames = Vec::new();
+    let mut next = Some((value, root_depth));
+
+    loop {
+        if let Some((value, depth)) = next.take() {
+            match value {
+                JsonValue::Null => output.push_str("null")?,
+                JsonValue::Bool(value) => output.push_str(if *value { "true" } else { "false" })?,
+                JsonValue::Int(value) => write_int(output, *value)?,
+                JsonValue::Float(value) if value.is_finite() => write_float(output, *value)?,
+                JsonValue::Float(_) => return Err(JsonCodecError::NonFiniteNumber),
+                JsonValue::String(value) => write_string(output, value)?,
+                JsonValue::Array(values) => {
+                    let child_depth = checked_dump_depth(depth)?;
+                    output.push_str("[")?;
+                    if let Some(value) = values.first() {
+                        write_item_prefix(output, indent, child_depth)?;
+                        frames.try_reserve(1).map_err(allocation_error)?;
+                        frames.push(WriteFrame::Array {
+                            values,
+                            next_index: 1,
+                            depth,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    } else {
+                        write_container_suffix(output, indent, depth, false)?;
+                        output.push_str("]")?;
+                    }
                 }
-                write_item_prefix(output, indent, child_depth)?;
-                write_value(output, value, indent, child_depth)?;
+                JsonValue::Object(entries) => {
+                    let child_depth = checked_dump_depth(depth)?;
+                    let sorted = sorted_object_entries_with_capacity(entries, entries.len())?;
+                    output.push_str("{")?;
+                    if sorted.is_empty() {
+                        write_container_suffix(output, indent, depth, false)?;
+                        output.push_str("}")?;
+                    } else {
+                        let mut last_duplicate = 0;
+                        let key = sorted[last_duplicate].1;
+                        while last_duplicate + 1 < sorted.len()
+                            && sorted[last_duplicate + 1].1 == key
+                        {
+                            last_duplicate += 1;
+                        }
+                        let value = sorted[last_duplicate].2;
+                        write_item_prefix(output, indent, child_depth)?;
+                        write_string(output, key)?;
+                        output.push_str(if indent.is_some() { ": " } else { ":" })?;
+                        frames.try_reserve(1).map_err(allocation_error)?;
+                        frames.push(WriteFrame::Object {
+                            sorted,
+                            next_sorted_index: last_duplicate + 1,
+                            depth,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    }
+                }
             }
-            write_container_suffix(output, indent, depth, !values.is_empty())?;
-            output.push_str("]")
+        } else {
+            let frame = frames
+                .pop()
+                .expect("iterative JSON writer always has a pending frame");
+            match frame {
+                WriteFrame::Array {
+                    values,
+                    next_index,
+                    depth,
+                    child_depth,
+                } => {
+                    if let Some(value) = values.get(next_index) {
+                        output.push_str(",")?;
+                        write_item_prefix(output, indent, child_depth)?;
+                        frames.try_reserve(1).map_err(allocation_error)?;
+                        frames.push(WriteFrame::Array {
+                            values,
+                            next_index: next_index + 1,
+                            depth,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    } else {
+                        write_container_suffix(output, indent, depth, !values.is_empty())?;
+                        output.push_str("]")?;
+                    }
+                }
+                WriteFrame::Object {
+                    sorted,
+                    next_sorted_index,
+                    depth,
+                    child_depth,
+                } => {
+                    if next_sorted_index < sorted.len() {
+                        let mut last_duplicate = next_sorted_index;
+                        let key = sorted[last_duplicate].1;
+                        while last_duplicate + 1 < sorted.len()
+                            && sorted[last_duplicate + 1].1 == key
+                        {
+                            last_duplicate += 1;
+                        }
+                        let value = sorted[last_duplicate].2;
+                        output.push_str(",")?;
+                        write_item_prefix(output, indent, child_depth)?;
+                        write_string(output, key)?;
+                        output.push_str(if indent.is_some() { ": " } else { ":" })?;
+                        frames.try_reserve(1).map_err(allocation_error)?;
+                        frames.push(WriteFrame::Object {
+                            sorted,
+                            next_sorted_index: last_duplicate + 1,
+                            depth,
+                            child_depth,
+                        });
+                        next = Some((value, child_depth));
+                    } else {
+                        write_container_suffix(output, indent, depth, !sorted.is_empty())?;
+                        output.push_str("}")?;
+                    }
+                }
+            }
         }
-        JsonValue::Object(entries) => {
-            let child_depth = checked_dump_depth(depth)?;
-            let sorted = sorted_object_entries_with_capacity(entries, entries.len())?;
-            output.push_str("{")?;
-            let mut sorted_index = 0;
-            let mut emitted = 0;
-            while sorted_index < sorted.len() {
-                let key = sorted[sorted_index].1;
-                while sorted_index + 1 < sorted.len() && sorted[sorted_index + 1].1 == key {
-                    sorted_index += 1;
-                }
-                let value = sorted[sorted_index].2;
-                if emitted > 0 {
-                    output.push_str(",")?;
-                }
-                write_item_prefix(output, indent, child_depth)?;
-                write_string(output, key)?;
-                output.push_str(if indent.is_some() { ": " } else { ":" })?;
-                write_value(output, value, indent, child_depth)?;
-                emitted += 1;
-                sorted_index += 1;
-            }
-            write_container_suffix(output, indent, depth, !entries.is_empty())?;
-            output.push_str("}")
+
+        if next.is_none() && frames.is_empty() {
+            return Ok(());
         }
     }
 }

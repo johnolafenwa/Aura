@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::ptr;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 unsafe fn release(value: *mut OpaqueValue) {
     if !value.is_null() {
@@ -418,6 +418,28 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(aurora_direct_map_is_empty(map), 1);
         release(map);
 
+        let sys_args_name = b"sys::args";
+        let sys_args = aurora_direct_host_builtin(
+            sys_args_name.as_ptr(),
+            sys_args_name.len(),
+            aurora_direct_arg_buffer_new(0),
+            0,
+        );
+        let expected_args = std::env::args().skip(1).collect::<Vec<_>>();
+        let actual_args = match cloned_value(sys_args) {
+            Value::Vec(values) => values
+                .elements
+                .into_iter()
+                .map(|value| match value {
+                    Value::String(value) => value,
+                    other => panic!("sys.args returned non-string element: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("sys.args returned non-vector value: {other:?}"),
+        };
+        assert_eq!(actual_args, expected_args);
+        release(sys_args);
+
         let set = aurora_direct_set_empty();
         assert_eq!(aurora_direct_set_is_empty(set), 1);
         assert_eq!(aurora_direct_set_insert_in_place(set, int_value(1)), 1);
@@ -745,8 +767,17 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
                 .read(&mut request)
                 .expect("HTTP fixture should read request");
             stream
-                .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nX-Test: yes\r\n\r\nok")
-                .expect("HTTP fixture should write response");
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\nX-Test: yes\r\n\r\n",
+                )
+                .expect("HTTP fixture should write response headers");
+            stream
+                .flush()
+                .expect("HTTP fixture should flush response headers");
+            thread::sleep(Duration::from_millis(5));
+            stream
+                .write_all(b"1;kind=text\r\no\r\n1\r\nk\r\n0\r\nX-Done: yes\r\n\r\n")
+                .expect("HTTP fixture should write chunked response body");
         });
         let http_response = expect_result_ok_payload(aurora_direct_net_http_request_bytes_timeout(
             string_value("POST"),

@@ -1077,6 +1077,78 @@ test("compiler bridge exposes yield_now completion and hover metadata", async ()
   }
 });
 
+test("compiler bridge exposes guarded TaskGroup stack override completion and hover", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-task-stack-"));
+  const source = [
+    "def produce(value: int64) -> int64:",
+    "    return value",
+    "def announce(value: int64):",
+    "    print(value)",
+    "def main():",
+    "    with group = TaskGroup():",
+    "        task = group.start_with_stack(262144, produce, 7)",
+    "        group.start_soon_with_stack(524288, announce, 8)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [line, name, signature] of [
+      [6, "start_with_stack", "start_with_stack(bytes: int64, function, own ...) -> Task[T]"],
+      [
+        7,
+        "start_soon_with_stack",
+        "start_soon_with_stack(bytes: int64, function, own ...) -> None"
+      ]
+    ]) {
+      const character = source.split("\n")[line].indexOf(name) + 1;
+      const hover = compilerHoverAtPosition(analysis, line, character);
+      assert.ok(hover, `${name} should expose builtin hover`);
+      assert.ok(
+        hover.value.includes(signature),
+        `${name} hover should expose ${signature}, found ${hover.value}`
+      );
+      assert.ok(
+        hover.value.includes(
+          "The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+        ),
+        `${name} hover should distinguish the opt-in minimum from the safe default`
+      );
+    }
+
+    const completionSource = [
+      "def main():",
+      "    with group = TaskGroup():",
+      "        group.",
+      ""
+    ].join("\n");
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      2,
+      completionSource.split("\n")[2].length,
+      "."
+    );
+    assert.ok(completions);
+    const details = new Map(completions.map((item) => [item.name, item.detail]));
+    assert.equal(
+      details.get("start_with_stack"),
+      "start_with_stack(bytes: int64, function, own ...) -> Task[T]"
+    );
+    assert.equal(
+      details.get("start_soon_with_stack"),
+      "start_soon_with_stack(bytes: int64, function, own ...) -> None"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge exposes invalid assert diagnostics at the keyword", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-invalid-assert-"));
   const source = ["def main():", "    assert 1", ""].join("\n");

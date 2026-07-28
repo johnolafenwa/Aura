@@ -61,6 +61,40 @@ with group = TaskGroup():
 
 "Fire and forget" still has a parent here. The children are only forgotten by the local code; the runtime is still responsible for them.
 
+## Choosing A Custom Task Stack
+
+Ordinary tasks use a guarded 512 KiB stack. That is the safe default for
+application code and keeps large task populations economical. If measurement
+shows that one child has a different task-local stack requirement, use a
+collision-free stack override:
+
+```python
+def deep_worker(depth: int32) -> int32:
+    return visit_tree(depth)
+
+with group = TaskGroup():
+    task = group.start_with_stack(1024 * 1024, deep_worker, 128)
+```
+
+Use `start_soon_with_stack(bytes, function, ...)` when the child does not
+return a retained handle. The byte count is exact `int64` and must be from
+256 KiB through 64 MiB inclusive. Aurora rejects a smaller or larger value
+instead of silently clamping it. Accepted capacities are rounded upward to
+the host page size and guard-protected.
+
+Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
+the ordinary default: Aurora's complete compiled HTTP example faulted when
+256 KiB was the global task default during integration and succeeds with the
+512 KiB default. The lower-level runtime round trip that succeeds with
+256 KiB protocol callers intentionally omits compiled Aurora execution
+frames; it proves that deep protocol frames run on service workers, not that
+every complete Aurora task is safe at 256 KiB.
+
+The method name is deliberately separate from `start`: a forwarded target may
+have its own parameter named `stack_size`, so Aurora does not steal a named
+argument from the child. Prefer the ordinary methods until profiling
+demonstrates a need; a larger reservation is not a performance hint.
+
 ## Ownership When Starting Tasks
 
 Starting a task creates **owned captures**. Each argument moves or copies into
@@ -234,11 +268,32 @@ parallel. Every loop backedge includes an automatic scheduling check. Normal
 loop tails and `continue` take the check; `break` and `return` leave without
 it. This keeps a tight loop from freezing timers, queues, and sockets
 indefinitely, but one long loop body or long straight-line computation can
-still delay siblings. Each task reserves a fixed 1 MiB coroutine stack.
+still delay siblings. Ordinary tasks request a guarded 512 KiB coroutine
+stack, with an explicit per-child override available through the two
+`_with_stack` methods.
 Scheduler waits are event-driven: descriptors stay registered, deadlines are
 kept in a timer heap, and Queue, task-completion, and blocking-pool events
 notify the scheduler directly. An idle scheduler blocks until an event or
 deadline instead of waking on a periodic tick.
+
+Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
+protocol-step service with deep native worker stacks. Each step is bounded and
+nonblocking; the child gets ownership of its protocol state back before
+observing cancellation or returning to reactor readiness waiting. This is why
+ordinary application tasks no longer need to reserve enough coroutine stack
+for the deepest maintained third-party protocol frame.
+
+The protocol-step pool starts lazily and lives until the Aurora process exits;
+there is no 0.1 shutdown or join call. File reads, resolver work, and listener
+binding continue through the generic blocking-I/O pool. For TLS assets, that
+generic pool reads the bytes and the protocol workers perform PEM parsing and
+rustls construction.
+
+The clean same-process incremental RSS per parked task and the combined
+100,000-sleeper timer/RSS result are still pending the contractual Mac14,9
+measurement. A whole-process peak divided by the task count would include the
+runtime, executable, root task, pools, and queues, so it is not presented as
+the per-task cost.
 
 MIR execution checks every loop backedge and yields every 8 backedges. Native
 concurrent programs use a function-local 4,096-iteration fuel budget, and

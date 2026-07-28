@@ -55,14 +55,42 @@ with group = TaskGroup():
 | constructor | `TaskGroup()` | Creates a task group resource. |
 | `start` | `start(function, own ...) -> Task[T]` | Captures arguments into task-owned storage, starts a child task, and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Captures arguments into task-owned storage and starts a child task without returning a handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Starts a child with an explicit guarded stack-capacity request and returns its handle. |
+| `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Starts a child with an explicit guarded stack-capacity request without returning a handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
-`start` and `start_soon` accept named functions and associated methods without
-`self`. Every argument is copied or moved into task-owned capture storage. A
-bare shared target parameter borrows from that storage for the child call; an
-`own` parameter consumes it. `mut`
+All four start methods accept named functions and associated methods without
+`self`. Every target argument is copied or moved into task-owned capture
+storage. A bare shared target parameter borrows from that storage for the
+child call; an `own` parameter consumes it. `mut`
 targets are rejected because detached mutable capture has no caller-visible
 writeback.
+
+Ordinary `start` and `start_soon` request the 524,288-byte (512 KiB) default.
+The two `_with_stack` methods take an exact `int64` byte count before the
+callable target. Accepted requests are 262,144 through 67,108,864 bytes
+inclusive (256 KiB through 64 MiB). Values outside that range are rejected,
+not clamped. An accepted request is rounded upward to the host page size and
+the platform stack allocator adds guard-page protection; guard pages are not
+part of the requested writable capacity. The separate method names avoid
+stealing a keyword that could belong to the target's own arguments. This
+surface is Provisional under ADR-0032.
+
+The 256 KiB lower bound is an opt-in minimum for a task whose shallow stack use
+has been measured; it is not the generally safe default. During integration,
+the complete compiled Aurora HTTP example faulted when 256 KiB was used as the
+global task default and succeeded with the 512 KiB default. An isolated
+runtime-level HTTP regression does succeed when only its protocol-calling
+children are forced to 256 KiB: that test proves deep host protocol frames
+stay on the service workers, but it excludes the compiled program's
+MIR/direct language-execution frames. Keep the ordinary default unless
+measurement of the complete task justifies a custom size.
+
+```python
+with group = TaskGroup():
+    parser = group.start_with_stack(512 * 1024, parse_document, source)
+    group.start_soon_with_stack(2 * 1024 * 1024, deep_worker, jobs)
+```
 
 On normal scope exit, the runtime joins children that continue making bounded progress. It cancels a child left in an indefinitely blocked group-owned wait so cleanup cannot deadlock forever. A failure already observed through its `Task` result is not raised a second time; an unread child failure aborts the group scope and wakes dependent queue/task waits.
 
@@ -221,7 +249,8 @@ operations, and socket work proceed. `break` and `return` leave the loop
 without taking that check. A single long loop body or long straight-line CPU
 work can still delay siblings. The inserted check does not inspect
 cancellation; tasks that must stop on request still call `cancelled()`. Each
-lightweight task reserves a fixed 1 MiB coroutine stack. When no task is ready,
+ordinary lightweight task requests a guarded 512 KiB coroutine stack; the two
+explicit stack-start methods may request up to 64 MiB. When no task is ready,
 the event reactor blocks until a notification, descriptor event, or deadline;
 it does not wake on a periodic scheduler tick.
 
@@ -236,7 +265,8 @@ For operating-system child processes, use the `process` module and decide explic
 Concurrency introduces no `async`, `await`, or detached-spawn grammar.
 `TaskGroup`, `Task`, `Queue`, `yield_now`, `sleep`, `cancelled`, `wait_any`, and
 `wait_all` use ordinary construction and call syntax; structured groups use
-the ordinary `with` statement. Queue iteration uses only
+the ordinary `with` statement. Stack overrides are ordinary member calls, not
+new task or spawn grammar. Queue iteration uses only
 `for item in queue:`. Duration
 literal spelling is defined in [Lexical Structure](/manual/lexical-structure)
 and the relevant statement and call productions are in
@@ -249,7 +279,9 @@ resource. Queue sends, fallback values, task captures, and returned outcome
 payloads use the exact owned positions shown in the API tables above. Task
 targets are named functions or associated methods without `self`; generic
 targets must infer all type arguments. Bare shared and `own` target parameters
-are supported, while `mut` targets are rejected. Queue
+are supported, while `mut` targets are rejected. An explicit stack capacity
+must have exact type `int64`; the first callable argument and every capture
+retain the same typing rules as an ordinary start. Queue
 iteration yields `T` by ownership transfer: the bare form is accepted, while
 the `own` and `mut` modifiers are rejected. Timeout and capacity expressions
 must have the documented exact types. Task-result and multi-task observations infer clone-safety obligations
@@ -274,10 +306,24 @@ task-completion, and blocking-pool readiness is delivered by direct
 notification. With no ready work, the scheduler blocks until an event or
 deadline rather than polling on a fixed tick.
 
+Dynamic `json.parse` uses a separate process-global codec service with two
+2 MiB-stack workers and total in-flight capacity two. The runtime reserves one
+of those slots before it makes the fallible owned source copy. A saturated
+lightweight task parks on a scheduler-aware availability notification rather
+than spinning. Once admitted, synchronous `json.parse` waits for codec
+completion; cancellation is deferred to the task's next ordinary cancellation
+boundary. The legacy `json.is_valid` and `json.parse_string_map` helpers remain
+bounded caller-side compatibility operations and do not use the service. The
+service is distinct from the protocol and generic blocking-I/O pools and lives
+until process exit. The remaining stack-safety and backend rules are in
+[Execution Model](/manual/execution-model) and [JSON Module](/manual/json).
+
 ## Ownership And Evaluation Order
 
 Call arguments are evaluated before a task can use its captured values; every
 non-copy capture moves into child-owned storage and a copy capture is copied.
+For a stack override, the capacity expression is evaluated once before the
+callable target and its captures.
 The child then borrows or consumes that storage according to the target's
 declaration-stable parameter mode. `put` owns its offered value and returns it
 inside `SendError` when no send occurs. Queue iteration captures the copyable
@@ -292,7 +338,7 @@ is therefore significant.
 `AU1101` reports malformed concurrency syntax, including unavailable spawn
 forms. `AU2001` reports unknown concurrency types, functions, or members,
 including removed `Channel` names. `AU2002` covers generic, duration, capacity,
-task-vector, argument, and outcome type mismatch. `AU2004` reports invalid
+task-vector, stack-byte, argument, and outcome type mismatch. `AU2004` reports invalid
 constructor or method argument binding. `AU2006` reports an explicit or
 inherited trait method that collides with a builtin `Queue[T]`, `Task[T]`, or
 `TaskGroup` member. `AU2999` covers unsupported targets, removed method aliases,
@@ -310,6 +356,10 @@ reports a general runtime trap, including zero or negative Queue capacity.
 deadline because these APIs have no typed InvalidInput carrier. `AU4002`
 reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
 violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
+`AU2002` rejects an out-of-range literal stack request during checking.
+`AU4005` reports the exact same range violation for a dynamic request and
+reports task-stack allocation or platform-size failure; neither path clamps or
+falls back to the default.
 
 ## Backend Support
 
@@ -317,6 +367,8 @@ Structured groups, task targets and captures, Queue operations and iteration,
 wait helpers, sleep, cancellation, compiler-inserted loop safepoints, and
 user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for noncolliding
 method names are maintained on both MIR execution and direct native generation.
+Default and explicit guarded stack requests use the same scheduler allocation
+path on both backends.
 MIR checks each backedge and yields every 8 backedges. Native code uses 4,096
 units of function-local fuel between yields when sibling tasks are possible
 and elides the check when the program proves that no sibling task can exist.
@@ -334,8 +386,10 @@ Task execution is cooperative, single-threaded, and non-preemptive. Loop
 backedges have compiler-inserted scheduling checks, but one long loop body or
 long straight-line computation can still delay siblings. The checks do not
 inspect cancellation. Scheduling order among simultaneously ready tasks is
-deliberately unspecified. Each lightweight task reserves a fixed 1 MiB
-coroutine stack, and the MIR/direct entry thread reserves 64 MiB. The scheduler
+deliberately unspecified. Ordinary lightweight tasks request 512 KiB of
+writable coroutine stack; an explicit request is limited to 64 MiB. Requests
+are page-rounded and guard-protected. The MIR/direct entry thread reserves
+64 MiB. The scheduler
 keeps descriptor registrations persistent and blocks until an event or
 deadline when idle; it does not use a periodic readiness scan. Nested Aurora
 calls stop at 256 frames. The process-wide blocking pool uses 2
@@ -354,13 +408,34 @@ sleep, cooperative cancellation, task-result observation, multi-task waits,
 computed Duration arithmetic, and compiler-inserted loop-backedge safepoints
 are implemented. Phase 5.1 adds persistent reactor registrations, heap-managed
 deadlines, and direct Queue, task-completion, and blocking-pool wakeups; Phase
-5.3 adds the automatic loop checks. The host-timer policy recorded by ADR-0019
-is Accepted. Multicore Aurora task execution is reserved for the later
+5.3 adds the automatic loop checks. Phase 5.4 moves deep HTTP, TLS, and
+maintained Unix WebSocket library steps to a distinct bounded protocol service
+with two named 2 MiB-stack workers and a 64-job queue, then makes ordinary
+coroutine stacks guarded 512 KiB requests and adds the Provisional ADR-0032
+override methods. HTTP URL/request/response construction, head parsing, and
+chunk decoding; rustls construction, handshake, I/O, and close notification;
+and Unix WebSocket construction, handshake, framing, and close run there.
+Protocol state is owned by one bounded, nonblocking service step at a time and
+is returned before the coroutine observes cancellation or resumes reactor
+waiting. The process-global pool is initialized lazily, shared by all
+lightweight schedulers, remains alive until process exit, and intentionally
+has no 0.1 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
+compatibility path. Plain socket/reactor operations remain scheduler-side;
+resolver, listener-bind, and file-read work uses the generic blocking-I/O pool.
+TLS asset bytes are read there, while PEM parsing and rustls construction run
+on protocol workers. Phase 5.4 also adds the bounded dynamic-`json.parse`
+service and scheduler-aware admission described above; it does not move the
+legacy JSON compatibility helpers. The host-timer policy recorded by ADR-0019
+is Accepted.
+Multicore Aurora task execution is reserved for the later
 pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
 `mut` task targets, statically enforced single-observer resource
 results, Transfer boundary checks, typed heterogeneous selection, configurable
 blocking-pool sizing, native frame parity, and detached task syntax are
-unavailable. Smaller or configurable coroutine stacks are also later work. The capacity boundary is pinned by
+unavailable. The clean Mac14,9 same-process incremental RSS per parked task
+and the combined 100,000-sleeper timer/RSS result are pending measurement;
+whole-process peak RSS divided by task count is not published as that cost.
+The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
 both backends.

@@ -1,0 +1,10 @@
+def requested_stack_bytes() -> int64:
+    return 67108865
+
+def worker() -> int32:
+    return 1
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_soon_with_stack(requested_stack_bytes(), worker)
+    return 0
