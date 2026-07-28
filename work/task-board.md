@@ -14,10 +14,11 @@ Last updated: 2026-07-28
   worktree opened from that clean checkpoint with compiler coverage floors
   frozen at `96.13/96.89/94.35`; see
   `work/2026-07-27-batch4-scalable-runtime.md`.
-- Current stage: Phase 5.8 typed heterogeneous select has cleared focused
-  implementation review, its completion matrix, the frozen compiler-coverage
-  gate, and exact full CI. The isolated implementation commit and clean-tree
-  contractual benchmark remain before Phase 5.9.
+- Current stage: Phase 5.8 typed heterogeneous select is complete at
+  implementation commit `3e15b8a`; focused review, the completion matrix,
+  frozen compiler coverage, exact full CI, and clean-tree contractual
+  benchmark are green under the standing massive-RSS escape hatch. Phase 5.9
+  configurable blocking-pool work is next.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -364,8 +365,16 @@ Last updated: 2026-07-28
   ordered `peer_addr` after `shutdown_write`; contention reproduced the race
   and the test now proves live addresses before shutdown without changing
   runtime code or timeouts. The user-owned `personal/file_ops.au` remains
-  byte-identical and excluded. The implementation commit and clean-tree
-  benchmark remain before Phase 5.8 sign-off.
+  byte-identical and excluded.
+- Phase 5.8's clean-tree contractual report at `3e15b8a` has empty dirty and
+  competing-process inventories. The 10,000-sleeper, timer, idle, starvation,
+  and mandatory multicore gates pass. All seven multicore pairs pass with a
+  1.020775x paired median ratio, 1.021596x ratio of medians, and 398.54%
+  median four-task CPU. Massive concurrency remains the sole red gate under
+  the accepted escape hatch at 1,720,057,856 bytes, with its 4 ms arm span and
+  2 ms p99 passing. Raw report
+  `/private/tmp/aurora-phase58-after-typed-select.json`, SHA-256
+  `f72889aa83b8a222517808ef39df91d62a175109bc8806c3628602884a8c9ea2`.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

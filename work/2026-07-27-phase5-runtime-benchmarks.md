@@ -557,3 +557,68 @@ gate and every maintained control pass, so the Phase 5.4 escape hatch permits
 the stage to proceed without a massive-concurrency claim. This report is the
 current Phase 5.7 benchmark evidence; the Phase 5.6 values above remain the
 historical pre-multicore comparison.
+
+## Phase 5.8 typed heterogeneous select
+
+The accepted Phase 5.7 report above is the before-stage baseline. Phase 5.8
+adds typed heterogeneous Queue/Task/deadline selection through one composite
+reactor registration. The implementation does not change integer lowering,
+loop safepoints, worker dispatch, or the CPU-scaling workload's executed path.
+The complete suite was nevertheless repeated to pin memory, timer, idle,
+starvation, multicore, and native-loop behavior.
+
+The contractual run used a detached clean worktree at the implementation
+commit so unrelated user files in the main worktree could not enter benchmark
+provenance:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+python3 scripts/bench-scalable-runtime.py \
+  --label phase58-after-typed-select \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --multicore-repeats 7 \
+  --idle-seconds 30 \
+  --json /private/tmp/aurora-phase58-after-typed-select.json
+```
+
+The report records clean implementation commit
+`3e15b8a50010b51b8ffd832f5036d7aac8882299`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. The
+host is the same Mac14,9 Apple M2 Pro with 10 physical/logical cores and
+16 GiB RAM, running Darwin 25.5.0. The freshly qualified locked release
+`aura` SHA-256 is
+`c760cb374267c9475a45c348c44c0817e37473029b04e867abb2785d5c264ce7`.
+Raw report: `/private/tmp/aurora-phase58-after-typed-select.json`; SHA-256:
+`f72889aa83b8a222517808ef39df91d62a175109bc8806c3628602884a8c9ea2`.
+
+| Workload | Repetitions | Contractual post-select result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 206,585,856 bytes worst whole-process peak RSS; 198,475,776 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,720,057,856 bytes worst whole-process peak RSS; 1,711,783,936 bytes worst incremental peak RSS; 4 ms worst arm span; 2 ms worst p99 | RSS FAIL against 1.5 GiB; timer gates PASS under the recorded escape hatch |
+| 1,000 timers | 3 | 6 ms worst arm span; 1 ms worst p99 | PASS |
+| 10 idle tasks | 3 | 0.0006353396996670736% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 18 ms worst result | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | paired median ratio 1.020775x; ratio of medians 1.021596x; four-task median 0.796642 s versus one-task median 0.779801 s; 398.54% median four-task process CPU; all seven pairs pass | PASS, valid ratio at most 1.6 with at least 150% CPU |
+| V6 int32 loop | 5 plus warmup | median 49.064750 ms; MAD 0.461292 ms; p95 50.737000 ms; best 48.522000 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | median 18.423417 ms; MAD 0.105500 ms; p95 18.823875 ms; best 18.317917 ms | recorded stage evidence |
+
+Every workload completed naturally with its exact protocol marker, zero
+status, empty standard error, and no sampling error. The mandatory multicore
+sample is valid on 10 physical cores, has no failed pair, and is well inside
+both the 1.6 ratio and 150% CPU requirements. The runner exits nonzero solely
+because the accepted massive-concurrency RSS gate remains unavailable. That
+workload improved by about 13.5% versus Phase 5.7 but still exceeds 1.5 GiB,
+so the massive-concurrency marketing restriction remains unchanged.
+
+The contractual absolute CPU times were 34-46% slower than the earlier
+Phase 5.7 observation even though benchmark source hashes were identical and a
+code audit found no new logic on either timed hot path. A same-session,
+21-repetition control built both clean commits independently: Phase 5.7 versus
+Phase 5.8 best times were both 48.4 ms for int32 and 14.9 versus 15.4 ms for
+int64. The common contractual slowdown is therefore recorded as host
+core-placement, QoS, or thermal variance rather than a Phase 5.8 regression.
+This evidence establishes that typed selection did not materially regress the
+maintained runtime gates; it does not make a new absolute performance claim.

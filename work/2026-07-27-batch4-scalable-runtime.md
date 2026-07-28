@@ -705,8 +705,19 @@ snapshot. The main worktree also contains unrelated user-owned trailing spaces
 in `personal/file_ops.au`; that file was temporarily isolated for this one
 gate and restored byte-identically (SHA-256
 `70c359fe35e5b7c82ecba741d54f8b7b5374fb3244de2f20b50c3832cdc3a32d`).
-It is excluded from the implementation commit. The isolated implementation
-commit and clean-tree contractual benchmark remain before Phase 5.8 sign-off.
+It is excluded from implementation commit `3e15b8a`.
+
+The clean-tree contractual report at `3e15b8a` has empty dirty and competing
+process inventories. The 10,000-sleeper, standalone timer, idle, starvation,
+and mandatory multicore gates pass. All seven multicore pairs pass; the paired
+median ratio is 1.020775x, ratio of medians is 1.021596x, and median four-task
+CPU is 398.54%. The 100,000-sleeper plus 1,000-timer workload remains the sole
+red gate under the accepted RSS escape hatch at 1,720,057,856 bytes, while its
+4 ms arm span and 2 ms p99 pass. Its RSS is about 13.5% lower than Phase 5.7,
+but the massive-concurrency claim remains unavailable. The raw report is
+`/private/tmp/aurora-phase58-after-typed-select.json`, SHA-256
+`f72889aa83b8a222517808ef39df91d62a175109bc8806c3628602884a8c9ea2`.
+Phase 5.8 is signed off; Phase 5.9 configurable blocking-pool work is next.
 
 ## Follow-up
 
@@ -715,9 +726,9 @@ landed separately at `ec3fd61` before implementation and defines Phase 5.8's
 variadic positional `select` over Queue, Task, and relative-Duration sources,
 the typed `SelectOutcome[Q, T]` result, cancellation-first/lowest-index
 arbitration, non-repeatable Task observation consumption, and mandatory atomic
-registration plus loser cleanup. Phase 5.8's focused implementation and frozen
-coverage gates and exact full CI are green. The isolated implementation commit
-and its clean-tree benchmark remain.
+registration plus loser cleanup. Phase 5.8 implementation is committed at
+`3e15b8a`; its focused gates, frozen coverage, exact full CI, and clean-tree
+benchmark are complete. Phase 5.9 configurable blocking-pool work is next.
 
 The massive-concurrency memory claim remains unavailable under the recorded
 escape hatch. Coverage floors remain frozen until the one-time Batch 4
