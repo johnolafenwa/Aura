@@ -728,8 +728,25 @@ the typed `SelectOutcome[Q, T]` result, cancellation-first/lowest-index
 arbitration, non-repeatable Task observation consumption, and mandatory atomic
 registration plus loser cleanup. Phase 5.8 implementation is committed at
 `3e15b8a`; its focused gates, frozen coverage, exact full CI, and clean-tree
-benchmark are complete. Phase 5.9 configurable blocking-pool work is next.
+benchmark are complete. Phase 5.9's provisional ADR-0035 landed at `cc450c9`
+and its implementation landed at `d921313`.
 
-The massive-concurrency memory claim remains unavailable under the recorded
-escape hatch. Coverage floors remain frozen until the one-time Batch 4
+Phase 5.9 exact full CI is green with 296 CLI tests, 1,130 compiler tests, the
+serialized parity matrix in 837.22 seconds, 89 LSP tests, 13 extension tests,
+both coverage gates, reference/docs/audits/Clippy/hygiene, and frozen compiler
+coverage of 70,514/73,341 lines, 4,683/4,830 functions, and
+103,704/109,782 regions. No synthetic coverage test or exclusion was added;
+three unreachable defensive admission branches were restructured away.
+
+The clean-tree Phase 5.9 report at `d921313` passes every contractual gate.
+The 100,000-sleeper plus 1,000-timer workload now passes the previously
+unavailable memory gate at 1,457,848,320 bytes worst whole-process RSS, with a
+4 ms worst arm span and 3 ms worst p99. All seven multicore pairs pass at a
+1.020214x paired median ratio and 398.49% median four-task CPU. Raw report
+`/private/tmp/aurora-phase59-after-configurable-blocking-pool.json`, SHA-256
+`d9947ddc4c65c7ff7f592585d85530f92f10045b73fa66f25dfd5a1b2dabf21a`.
+The maintained Mac14,9 baseline can therefore make the bounded
+100,000-sleeper claim; this remains measured hardware evidence rather than a
+portable guarantee. Phase 5.9 is complete and Phase 5.10 native structured
+frames is next. Coverage floors remain frozen until the one-time Batch 4
 sign-off re-ratchet.

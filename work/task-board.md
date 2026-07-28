@@ -19,9 +19,11 @@ Last updated: 2026-07-28
   frozen compiler coverage, exact full CI, and clean-tree contractual
   benchmark are green under the standing massive-RSS escape hatch. Phase 5.9
   configurable blocking-pool implementation, product-path parity, saturation
-  matrix, independent audit, frozen coverage, and exact full CI are complete;
-  its clean-tree contractual benchmark is the remaining Phase 5.9 gate. Its
-  provisional contract landed alone as ADR-0035 at `cc450c9`.
+  matrix, independent audit, frozen coverage, exact full CI, and clean-tree
+  contractual benchmark are complete. Its provisional contract landed alone
+  as ADR-0035 at `cc450c9`, and implementation landed at `d921313`. Phase 5.10
+  native structured frames is next; no implementation begins before its
+  provisional ADR lands.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -398,7 +400,16 @@ Last updated: 2026-07-28
   4,683/4,830 functions (96.95652173913044%), and 103,704/109,782 regions
   (94.4635732633765%). No synthetic coverage test or exclusion was added;
   three unreachable defensive admission branches were restructured away.
-  The clean-tree contractual benchmark remains before Phase 5.9 closes.
+  The clean-tree contractual benchmark at `d921313` is fully green on the
+  Mac14,9 M2 Pro: 10,000 sleepers peak at 206,962,688 bytes; standalone timer
+  p99 is at most 3 ms; idle CPU peaks at 0.001075%; starvation latency peaks
+  at 18 ms; all seven multicore pairs pass with a 1.020214x paired median
+  ratio and 398.49% median four-task CPU. The 100,000-sleeper plus
+  1,000-timer gate also passes for the first time at 1,457,848,320 bytes,
+  4 ms arm span, and 3 ms p99. Raw report
+  `/private/tmp/aurora-phase59-after-configurable-blocking-pool.json`, SHA-256
+  `d9947ddc4c65c7ff7f592585d85530f92f10045b73fa66f25dfd5a1b2dabf21a`.
+  Phase 5.9 is complete.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

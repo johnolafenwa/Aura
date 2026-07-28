@@ -463,11 +463,11 @@ grep -Fq 'distinct bounded protocol-step service' docs/manual/execution-model.md
 grep -Fq 'This protocol-step pool is lazily initialized and shared by every' docs/manual/execution-model.md
 grep -Fq 'and file reads use the generic blocking-I/O pool.' docs/manual/execution-model.md
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
-grep -Fq 'Phase 5.7 pinned-worker measurement' docs/manual/current-limits.md
-grep -Fq '206,503,936 bytes of worst whole-process RSS and 197,885,952' docs/manual/current-limits.md
-grep -Fq '1,989,033,984 bytes worst' docs/manual/current-limits.md
-grep -Fq '`1.077123x` paired median wall-time ratio with `393.61%`' docs/manual/current-limits.md
-grep -Fq 'memory claim. The host uses 16 KiB pages' docs/manual/current-limits.md
+grep -Fq 'Phase 5.9 measurement' docs/manual/current-limits.md
+grep -Fq '206,962,688 bytes of worst whole-process RSS and 198,492,160' docs/manual/current-limits.md
+grep -Fq '1,457,848,320 bytes worst' docs/manual/current-limits.md
+grep -Fq '`1.020214x` paired median wall-time ratio with `398.49%`' docs/manual/current-limits.md
+grep -Fq 'passes the 1.5 GiB gate' docs/manual/current-limits.md
 grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md

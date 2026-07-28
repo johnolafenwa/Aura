@@ -639,20 +639,17 @@ Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
 wait machinery for atomic registration, deterministic one-winner arbitration,
 cross-worker wakeups, and loser cleanup. It adds no statement syntax.
 Preemptive scheduling, `mut` task targets, native frame parity, and detached
-task syntax are unavailable. On the
-clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked sleepers used
-206,503,936 bytes of worst whole-process RSS and 197,885,952 bytes above their
-same-process pre-spawn baseline.
+task syntax are unavailable. On the clean Mac14,9 Phase 5.9 measurement,
+10,000 parked sleepers used 206,962,688 bytes of worst whole-process RSS and
+198,492,160 bytes above their same-process pre-spawn baseline.
 
-That Phase 5.7 combined 100,000-sleeper plus 1,000-timer run passed its 5 ms
-arm-span and 3 ms p99 timer gates but reached 1,989,033,984 bytes worst
-whole-process RSS, so Aurora does not claim that population fits in 1.5 GiB.
-On this 16 KiB-page host, one resident stack page per 101,000 stackful children
-already exceeds that ceiling before task metadata. This measured escape-hatch
-result cannot be repaired by reducing only the demand-paged virtual stack
-reservation. The same contractual run passes the mandatory four-worker
-scaling gate at a `1.077123x` paired median wall-time ratio with `393.61%`
-median four-task process CPU.
+That Phase 5.9 combined 100,000-sleeper plus 1,000-timer run used
+1,457,848,320 bytes worst whole-process RSS and passed its timer gates with a
+4 ms arm span and 3 ms p99. The maintained baseline therefore passes the
+1.5 GiB gate with stable timers. This is measured Mac14,9 evidence rather than
+a portable task-count guarantee. The same contractual run passes the
+mandatory four-worker scaling gate at a `1.020214x` paired median wall-time
+ratio with `398.49%` median four-task process CPU.
 The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on

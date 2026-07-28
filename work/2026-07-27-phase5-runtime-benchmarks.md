@@ -622,3 +622,63 @@ int64. The common contractual slowdown is therefore recorded as host
 core-placement, QoS, or thermal variance rather than a Phase 5.8 regression.
 This evidence establishes that typed selection did not materially regress the
 maintained runtime gates; it does not make a new absolute performance claim.
+
+## Phase 5.9 configurable blocking-I/O pool
+
+The accepted Phase 5.8 report above is the before-stage baseline. Phase 5.9
+adds exact process-wide blocking-worker configuration, an optional bound on
+accepted pending jobs, FIFO scheduler-aware admission, and deterministic
+timeout/cancellation behavior on both sides of the acceptance boundary. The
+task scheduler, coroutine stack size, safepoint policy, and timed CPU workload
+are unchanged. The full maintained benchmark was nevertheless repeated to
+pin the complete runtime contract.
+
+The contractual run used a detached clean worktree at the implementation
+commit:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+python3 scripts/bench-scalable-runtime.py \
+  --label phase59-after-configurable-blocking-pool \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --multicore-repeats 7 \
+  --idle-seconds 30 \
+  --json /private/tmp/aurora-phase59-after-configurable-blocking-pool.json
+```
+
+The report records clean implementation commit
+`d92131399bacf63b7ae43ac12745aed183038883`, no dirty files, empty competing
+process inventories, `contractual: true`, and no non-contractual reasons. The
+host is the same Mac14,9 Apple M2 Pro with 10 physical/logical cores and
+16 GiB RAM, running Darwin 25.5.0. The freshly qualified locked release
+`aura` SHA-256 is
+`b49246ee9cc4af82cee945d027605bb9ad47742f225d652456a37c898b608a0c`.
+Raw report:
+`/private/tmp/aurora-phase59-after-configurable-blocking-pool.json`; SHA-256:
+`d9947ddc4c65c7ff7f592585d85530f92f10045b73fa66f25dfd5a1b2dabf21a`.
+
+| Workload | Repetitions | Contractual post-pool result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 206,962,688 bytes worst whole-process peak RSS; 198,492,160 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 1,457,848,320 bytes worst whole-process peak RSS; 1,449,525,248 bytes worst incremental peak RSS; 4 ms worst arm span; 3 ms worst p99 | PASS, whole-process peak at most 1.5 GiB and stable timers |
+| 1,000 timers | 3 | arm spans 6, 6, 7 ms; p99 1, 3, 1 ms | PASS |
+| 10 idle tasks | 3 | 0.001074327945503786% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 18 ms worst result | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | paired median ratio 1.020214x; ratio of medians 1.020275x; four-task median 0.796815 s versus one-task median 0.780980 s; 398.49% median four-task process CPU; all seven pairs pass | PASS, valid ratio at most 1.6 with at least 150% CPU |
+| V6 int32 loop | 5 plus warmup | median 48.824791 ms; MAD 0.191166 ms; p95 50.831458 ms; best 48.633625 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | median 16.324583 ms; MAD 0.275041 ms; p95 19.039625 ms; best 16.049542 ms | recorded stage evidence |
+
+Every workload completed naturally with its exact protocol marker, zero
+status, empty standard error, and no sampling error. All contractual gates
+pass. The mandatory multicore sample is valid on 10 physical cores and is
+well inside both the 1.6 ratio and 150% CPU requirements.
+
+This is also the first contractual Batch 4 observation in which the
+100,000-sleeper plus 1,000-timer workload passes the 1.5 GiB RSS gate together
+with stable timers. The earlier escape-hatch records remain valid historical
+measurements, but the maintained Mac14,9 baseline can now make the bounded
+100,000-sleeper claim. It is a measured baseline, not a portable guarantee for
+every operating system, allocator, workload, or host.

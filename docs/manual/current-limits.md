@@ -88,20 +88,18 @@ This page documents known current limits of the Aurora compiler and runtime.
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.
-- On the clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked
-  sleepers used 206,503,936 bytes of worst whole-process RSS and 197,885,952
-  bytes above the same-process pre-spawn baseline.
-- That Phase 5.7 combined 100,000-sleeper plus 1,000-timer benchmark passed its
-  5 ms timer-arm-span and 3 ms p99 gates but reached 1,989,033,984 bytes worst
-  whole-process RSS, above 1.5 GiB. Aurora therefore makes no 100,000-task
-  memory claim. The host uses 16 KiB pages; one resident page for each of
-  101,000 stackful children already requires 1,654,784,000 bytes before task
-  metadata. Reducing a demand-paged virtual stack reservation cannot remove
-  that physical-page floor.
+- On the clean Mac14,9 Phase 5.9 measurement, 10,000 parked sleepers used
+  206,962,688 bytes of worst whole-process RSS and 198,492,160 bytes above the
+  same-process pre-spawn baseline.
+- That Phase 5.9 combined 100,000-sleeper plus 1,000-timer benchmark used
+  1,457,848,320 bytes worst whole-process RSS and passed its stable-timer
+  controls with a 4 ms arm span and 3 ms p99. The maintained baseline
+  therefore passes the 1.5 GiB gate. This is measured Mac14,9 evidence, not a
+  portable task-count guarantee.
 - The same contractual run passed the mandatory four-worker scaling gate at a
-  `1.077123x` paired median wall-time ratio with `393.61%` median four-task
+  `1.020214x` paired median wall-time ratio with `398.49%` median four-task
   process CPU. This is runtime evidence, not a portable speedup guarantee.
-- The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. No high-scale task-count claim is made for 0.1.
+- The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. Aurora 0.1's maintained high-scale claim is limited to the measured 100,000-sleeper Mac14,9 baseline above.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a
   distinct protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
   Each submitted job is a bounded, nonblocking step and returns owned protocol

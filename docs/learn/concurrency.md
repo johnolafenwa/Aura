@@ -368,15 +368,15 @@ pending backlog, not admission waiters or a stuck OS call, so unrelated
 blocking-I/O host work still cannot run until some worker returns when every
 worker is occupied.
 
-On the clean Mac14,9 Phase 5.7 pinned-worker measurement, 10,000 parked
-sleepers used 206,503,936 bytes worst whole-process RSS and 197,885,952
-incremental bytes above their same-process baseline. The combined
-100,000-sleeper plus 1,000-timer run kept timer arm span at 5 ms and p99 at
-3 ms but reached 1,989,033,984 bytes worst whole-process RSS, so Aurora does
-not claim that population fits in 1.5 GiB. A 16 KiB resident page per
-stackful child already exceeds that ceiling before metadata. The mandatory
-four-worker workload passed at a `1.077123x` paired median wall-time ratio
-with `393.61%` median four-task process CPU.
+On the clean Mac14,9 Phase 5.9 measurement, 10,000 parked sleepers used
+206,962,688 bytes worst whole-process RSS and 198,492,160 incremental bytes
+above their same-process baseline. The combined 100,000-sleeper plus
+1,000-timer run used 1,457,848,320 bytes worst whole-process RSS while keeping
+timer arm span at 4 ms and p99 at 3 ms, so the maintained baseline passes the
+1.5 GiB gate with stable timers. This is a measured hardware baseline, not a
+portable task-count guarantee. The mandatory four-worker workload passed at a
+`1.020214x` paired median wall-time ratio with `398.49%` median four-task
+process CPU.
 
 MIR execution checks every loop backedge and yields every 8 backedges. Native
 concurrent programs use a function-local 4,096-iteration fuel budget, and

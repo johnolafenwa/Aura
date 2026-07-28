@@ -394,14 +394,15 @@ preemption, or parallel speedup for every workload.
 Deep HTTP, TLS, and maintained Unix WebSocket library steps run on a distinct
 bounded protocol service with deep native worker stacks. Protocol state
 returns to the lightweight task after each bounded, nonblocking step and
-before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase 5.7
-pinned-worker measurement, 10,000 parked sleepers used 206,503,936 bytes worst
-whole-process RSS and 197,885,952 incremental bytes above their same-process
-baseline. The combined 100,000-sleeper plus 1,000-timer run passed its 5 ms
-arm-span and 3 ms p99 timer gates but reached 1,989,033,984 bytes worst RSS.
-Aurora makes no claim that population fits in 1.5 GiB. The same contractual
-run passed the mandatory four-worker scaling gate at a `1.077123x` paired
-median wall-time ratio with `393.61%` median four-task process CPU.
+before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase 5.9
+measurement, 10,000 parked sleepers used 206,962,688 bytes worst whole-process
+RSS and 198,492,160 incremental bytes above their same-process baseline. The
+combined 100,000-sleeper plus 1,000-timer run used 1,457,848,320 bytes worst
+RSS and passed its stable-timer controls with a 4 ms arm span and 3 ms p99.
+The maintained baseline therefore passes the 1.5 GiB gate; this is measured
+hardware evidence, not a portable task-count guarantee. The same contractual
+run passed the mandatory four-worker scaling gate at a `1.020214x` paired
+median wall-time ratio with `398.49%` median four-task process CPU.
 
 The protocol service starts lazily and lives until process exit; Aurora 0.1
 does not expose a shutdown or join operation for it. File reads, resolver work,
