@@ -129,9 +129,9 @@ after generic specialization. Copy data, `String`, structurally transferable
 collections and user data, and Queue/Task handle identities can cross.
 Capability views, `random.Rng`, `TaskGroup`, and live file, process, or network
 resources cannot. `Transfer` is derived by the compiler rather than implemented
-as a user trait. The current runtime remains single-worker; Phase 5.7 must make
-the state behind Queue/Task handles cross-worker thread-safe before multicore
-execution.
+as a user trait. Queue and Task handle state is synchronized for cross-worker
+use; all other captures and results remain owned, share-nothing `Transfer`
+values.
 
 ## `Queue[T]`: Typed Channels
 
@@ -283,18 +283,32 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in
-parallel. Every loop backedge includes an automatic scheduling check. Normal
-loop tails and `continue` take the check; `break` and `return` leave without
-it. This keeps a tight loop from freezing timers, queues, and sockets
-indefinitely, but one long loop body or long straight-line computation can
-still delay siblings. Ordinary tasks request a guarded 512 KiB coroutine
-stack, with an explicit per-child override available through the two
-`_with_stack` methods.
-Scheduler waits are event-driven: descriptors stay registered, deadlines are
-kept in a timer heap, and Queue, task-completion, and blocking-pool events
-notify the scheduler directly. An idle scheduler blocks until an event or
-deadline instead of waking on a periodic tick.
+Aurora 0.1 runs task bodies on cooperative pinned workers on both maintained
+backends. The runtime uses the available parallelism reported by the host by
+default; provisional
+`AURORA_WORKERS=<positive integer>` selects an explicit count. A task receives
+a stable assignment when it is spawned. Its coroutine stack never migrates,
+work is not stolen, and `yield_now()` yields only to runnable work on that
+worker.
+
+Every loop backedge includes an automatic scheduling check. Normal loop tails
+and `continue` take the check; `break` and `return` leave without it. This
+keeps a tight loop from freezing timers, queues, and sockets assigned to the
+same worker indefinitely, but one long loop body or long straight-line
+computation can still delay same-worker siblings. Ordinary tasks request a
+guarded 512 KiB coroutine stack, with an explicit per-child override available
+through the two `_with_stack` methods. Scheduler waits are event-driven:
+descriptors stay registered, deadlines are kept in a timer heap, and Queue,
+task-completion, and blocking-pool events notify the responsible worker
+directly. An idle worker blocks until local work, an event, or a deadline
+instead of waking on a periodic tick.
+
+Queue and Task handles are the cross-worker channels. Other captures and
+results remain owned `Transfer` values, so the model stays share-nothing.
+Cancellation and diagnostics remain per task. Scheduling, independent task
+completion, and printed-output order are unspecified; Aurora exposes no worker
+identity or affinity API. Pinned workers enable multicore task execution, but
+do not promise preemption, work stealing, or speedup for every workload.
 
 Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
@@ -309,11 +323,12 @@ binding continue through the generic blocking-I/O pool. For TLS assets, that
 generic pool reads the bytes and the protocol workers perform PEM parsing and
 rustls construction.
 
-On the clean Mac14,9 measurement, 10,000 parked sleepers used 197,836,800
-incremental bytes above their same-process baseline: an amortized upper bound
-of 19,784 bytes (19.32 KiB) per requested sleeper, including scheduler
-metadata and shared workload growth. The combined 100,000-sleeper plus
-1,000-timer run kept timer arm span and p99 at 3 ms but reached
+On the clean Mac14,9 Phase 5.6 pre-multicore measurement, 10,000 parked
+sleepers used 197,836,800 incremental bytes above their same-process baseline:
+an amortized upper bound of 19,784 bytes (19.32 KiB) per requested sleeper,
+including scheduler metadata and shared workload growth. That Phase 5.6
+combined 100,000-sleeper plus 1,000-timer run kept timer arm span and p99 at
+3 ms but reached
 1,978,384,384 bytes worst whole-process RSS, so Aurora does not claim that
 population fits in 1.5 GiB. A 16 KiB resident page per stackful child already
 exceeds that ceiling before metadata.

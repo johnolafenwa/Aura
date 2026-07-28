@@ -1,0 +1,128 @@
+def produce(
+    jobs: Queue[int32],
+    producer: int32,
+    item_count: int32
+) -> int32:
+    for sequence in range(item_count):
+        jobs.put(producer * 1000 + sequence)
+    return item_count
+
+def consume(
+    jobs: Queue[int32],
+    turns: Queue[int32],
+    receipts: Queue[int32]
+) -> int32:
+    mut consumed: int32 = 0
+    while true:
+        match turns.get(timeout=5s):
+            case QueueReceive.Item(ticket):
+                match jobs.get(timeout=5s):
+                    case QueueReceive.Item(encoded):
+                        receipts.put(ticket * 10000 + encoded)
+                        turns.put(ticket + 1)
+                        consumed += 1
+                    case QueueReceive.Closed:
+                        turns.put(ticket)
+                        return consumed
+                    case QueueReceive.TimedOut:
+                        turns.put(ticket)
+                        return -1
+                    case QueueReceive.Cancelled:
+                        turns.put(ticket)
+                        return -2
+            case QueueReceive.Closed:
+                return -3
+            case QueueReceive.TimedOut:
+                return -4
+            case QueueReceive.Cancelled:
+                return -5
+    return consumed
+
+def completed_count(task: Task[int32]) -> int32:
+    match task.result(timeout=10s):
+        case TaskResult.Ready(value):
+            return value
+        case TaskResult.Error(_):
+            return -10
+        case TaskResult.TimedOut:
+            return -11
+        case TaskResult.Cancelled:
+            return -12
+
+def main() -> int32:
+    producer_count: int32 = 4
+    item_count: int32 = 200
+    total_items: int32 = producer_count * item_count
+    jobs = Queue[int32](capacity=32)
+    turns = Queue[int32](capacity=1)
+    receipts = Queue[int32]()
+    turns.put(0)
+
+    with TaskGroup() as tasks:
+        consumer_a = tasks.start(consume, jobs, turns, receipts)
+        consumer_b = tasks.start(consume, jobs, turns, receipts)
+        consumer_c = tasks.start(consume, jobs, turns, receipts)
+        consumer_d = tasks.start(consume, jobs, turns, receipts)
+
+        producer_a = tasks.start(produce, jobs, 0, item_count)
+        producer_b = tasks.start(produce, jobs, 1, item_count)
+        producer_c = tasks.start(produce, jobs, 2, item_count)
+        producer_d = tasks.start(produce, jobs, 3, item_count)
+
+        produced: int32 = (
+            completed_count(producer_a)
+            + completed_count(producer_b)
+            + completed_count(producer_c)
+            + completed_count(producer_d)
+        )
+        if produced != total_items:
+            return 10
+        jobs.close()
+
+        consumed_a: int32 = completed_count(consumer_a)
+        consumed_b: int32 = completed_count(consumer_b)
+        consumed_c: int32 = completed_count(consumer_c)
+        consumed_d: int32 = completed_count(consumer_d)
+        if consumed_a <= 0 or consumed_b <= 0 or consumed_c <= 0 or consumed_d <= 0:
+            return 11
+        consumed: int32 = consumed_a + consumed_b + consumed_c + consumed_d
+        if consumed != total_items:
+            return 12
+
+    mut ordered: Map[int32, int32] = {}
+    for _ in range(total_items):
+        match receipts.get(timeout=5s):
+            case QueueReceive.Item(receipt):
+                ticket: int32 = receipt // 10000
+                encoded: int32 = receipt % 10000
+                if ticket < 0 or ticket >= total_items:
+                    return 13
+                if ordered.contains_key(ticket):
+                    return 14
+                ordered[ticket] = encoded
+            case QueueReceive.Closed:
+                return 15
+            case QueueReceive.TimedOut:
+                return 16
+            case QueueReceive.Cancelled:
+                return 17
+
+    mut expected: Vec[int32] = [0, 0, 0, 0]
+    for ticket in range(total_items):
+        if not ordered.contains_key(ticket):
+            return 18
+        encoded: int32 = ordered[ticket]
+        producer: int32 = encoded // 1000
+        sequence: int32 = encoded % 1000
+        if producer < 0 or producer >= producer_count:
+            return 19
+        if sequence != expected[producer]:
+            return 20
+        expected[producer] += 1
+
+    print(total_items)
+    print(expected[0])
+    print(expected[1])
+    print(expected[2])
+    print(expected[3])
+    return 0

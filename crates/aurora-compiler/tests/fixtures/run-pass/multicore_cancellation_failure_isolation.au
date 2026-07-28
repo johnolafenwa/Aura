@@ -1,0 +1,109 @@
+def wait_for_release(
+    ready: Queue[int32],
+    release: Queue[int32],
+    marker: int32
+) -> int32:
+    ready.put(marker)
+    match release.get(timeout=5s):
+        case QueueReceive.Item(_):
+            return marker
+        case QueueReceive.Closed:
+            return -1
+        case QueueReceive.TimedOut:
+            return -2
+        case QueueReceive.Cancelled:
+            return -3
+
+def fail_alpha(ready: Queue[int32], release: Queue[int32]) -> int32:
+    released: int32 = wait_for_release(ready, release, 1)
+    if released == 1:
+        assert false, "alpha-worker-failure"
+        return -10
+    return -11
+
+def fail_beta(ready: Queue[int32], release: Queue[int32]) -> int32:
+    released: int32 = wait_for_release(ready, release, 2)
+    if released == 2:
+        assert false, "beta-worker-failure"
+        return -12
+    return -13
+
+def wait_until_ready(ready: Queue[int32]) -> bool:
+    match ready.get(timeout=5s):
+        case QueueReceive.Item(_):
+            return true
+        case QueueReceive.Closed:
+            return false
+        case QueueReceive.TimedOut:
+            return false
+        case QueueReceive.Cancelled:
+            return false
+
+def error_contains(task: Task[int32], marker: String) -> bool:
+    match task.result(timeout=5s):
+        case TaskResult.Ready(_):
+            return false
+        case TaskResult.Error(message):
+            return message.contains(marker)
+        case TaskResult.TimedOut:
+            return false
+        case TaskResult.Cancelled:
+            return false
+
+def observe_cancellation(
+    ready: Queue[int32],
+    marker: int32
+) -> int32:
+    ready.put(marker)
+    sleep(5s)
+    if cancelled():
+        return marker
+    return -20
+
+def completed_value(task: Task[int32]) -> int32:
+    match task.result(timeout=5s):
+        case TaskResult.Ready(value):
+            return value
+        case TaskResult.Error(_):
+            return -30
+        case TaskResult.TimedOut:
+            return -31
+        case TaskResult.Cancelled:
+            return -32
+
+def main() -> int32:
+    failure_ready = Queue[int32]()
+    failure_release = Queue[int32]()
+    with TaskGroup() as failures:
+        alpha = failures.start(fail_alpha, failure_ready, failure_release)
+        beta = failures.start(fail_beta, failure_ready, failure_release)
+        if not wait_until_ready(failure_ready):
+            return 10
+        if not wait_until_ready(failure_ready):
+            return 11
+        failure_release.put(1)
+        failure_release.put(1)
+        print(error_contains(alpha, "alpha-worker-failure"))
+        print(error_contains(beta, "beta-worker-failure"))
+
+    cancellation_ready = Queue[int32]()
+    with TaskGroup() as cancellations:
+        first = cancellations.start(observe_cancellation, cancellation_ready, 41)
+        second = cancellations.start(observe_cancellation, cancellation_ready, 42)
+        third = cancellations.start(observe_cancellation, cancellation_ready, 43)
+        fourth = cancellations.start(observe_cancellation, cancellation_ready, 44)
+        if not wait_until_ready(cancellation_ready):
+            return 12
+        if not wait_until_ready(cancellation_ready):
+            return 13
+        if not wait_until_ready(cancellation_ready):
+            return 14
+        if not wait_until_ready(cancellation_ready):
+            return 15
+        cancellations.cancel()
+        print(completed_value(first))
+        print(completed_value(second))
+        print(completed_value(third))
+        print(completed_value(fourth))
+
+    return 0

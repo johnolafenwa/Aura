@@ -215,10 +215,11 @@ conditional. It is copyable only when `T` is copyable, when `T` is
 This prevents a nested handle such as `Task[Task[String]]` from being copied
 to duplicate a single-consumer result right.
 
-This classification is the implemented Phase 5.6 contract. Aurora continues
-to execute task bodies on one scheduler thread until the separate Phase 5.7
-pinned-worker gate passes; that stage must make the state behind transferable
-Queue and Task handles cross-worker thread-safe before multicore execution.
+This classification is the Phase 5.6 boundary used by the pinned-worker
+runtime. Queue and Task handle state is synchronized for cross-worker use;
+all other task captures and results remain owned, structural `Transfer` values.
+The boundary therefore stays share-nothing even when sibling task bodies run
+on different pinned workers.
 
 ## Builtin Generic Types
 

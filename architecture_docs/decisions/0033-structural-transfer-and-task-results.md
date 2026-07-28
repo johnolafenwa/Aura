@@ -7,8 +7,8 @@
 
 ## Context
 
-Aurora's Phase 5.7 pinned-worker runtime will be allowed to run sibling tasks
-on different host threads. Values captured by a child or returned through its
+Aurora's Phase 5.7 pinned-worker runtime can run sibling task bodies on
+different host threads. Values captured by a child or returned through its
 task handle can therefore cross a worker boundary. Move checking alone is not
 enough to make that safe: a uniquely owned value can still contain
 thread-affine host state, and a shared or mutable capability is an alias rather
@@ -49,9 +49,9 @@ The following types are `Transfer`:
 - `Queue[T]` and `Task[T]` handles, independently of the stored payload,
   because transferring a handle transfers only its handle identity rather than
   the payload itself; constructing a `Queue[T]` or sending through
-  `put`/`try_put` separately requires `T: Transfer`. Phase 5.7 must make the
-  referenced runtime state cross-worker thread-safe before a handle can
-  actually be used by different workers.
+  `put`/`try_put` separately requires `T: Transfer`. Phase 5.7 synchronizes the
+  referenced runtime state so a handle can be used by tasks pinned to different
+  workers.
 
 Structural derivation follows nested fields and payloads and reports the first
 non-`Transfer` leaf together with its containing path. Recursive class and
@@ -181,12 +181,27 @@ does not make a successful value available to another observer.
 
 ### Runtime phase boundary
 
-Phase 5.6 establishes the static contract while Aurora task execution remains
-cooperative and single-threaded. It does not make the current request broker,
-task state, queue internals, or task-handle internals thread-safe. Phase 5.7
-must implement and prove those synchronization changes before enabling more
-than one Aurora worker. Passing Phase 5.6 therefore does not itself constitute
-a multicore claim.
+Phase 5.6 established the static contract while Aurora task execution remained
+cooperative and single-worker. Phase 5.7 retains cooperative scheduling and
+uses N pinned workers: N defaults to the available parallelism reported by the
+host, and the
+provisional `AURORA_WORKERS=<positive integer>` environment override selects
+an explicit count. Each child receives a stable worker assignment when it is
+spawned. Coroutine stacks never migrate, no worker steals another's work, and
+`yield_now()` yields only to runnable tasks assigned to the current worker.
+
+Queue and Task handle internals are the synchronized cross-worker
+communication paths. Every other capture and result remains owned
+compiler-derived `Transfer` data, preserving the share-nothing contract. A
+task's cancellation and diagnostic context are isolated from tasks executing
+on other workers.
+
+MIR and direct-native task execution have the same contract. Ready-task order,
+independent completion order, and program-output order are unspecified.
+Aurora exposes no worker-index or affinity-introspection API. Phase 5.7's
+multicore claim is limited to Aurora task execution; it does not promise
+preemption, migration, work stealing, a particular speedup, or broader
+automatic parallelism.
 
 ## Consequences
 
@@ -194,7 +209,7 @@ Ordinary owned data can move into and out of tasks without user ceremony, and
 the rule composes through user models. Thread-affine resources remain local to
 the task that owns them; programs communicate transferable descriptions,
 bytes, results, or handle identities instead. Phase 5.7 supplies the
-cross-worker synchronization behind those handles.
+cross-worker synchronization behind Queue and Task handles.
 
 Changing a nested field can change the `Transfer` status of every aggregate
 that contains it. Phase 5.6 conservatively rejects an unresolved generic type
@@ -212,7 +227,7 @@ messages.
 | --- | --- |
 | Positive leaves | Every copy scalar/category and `String` crosses task-start and task-result boundaries on MIR and direct backends. |
 | Recursive positives | Nested `Vec`, `Map`, `Set`, tuple, class, enum, `Option`, `Result`, and recursive user data pass exactly when every stored component is `Transfer`. |
-| Transferable handle identity | `Queue[T]` and `Task[T]` handles cross independently of `T` without inspecting, cloning, or transferring the stored payload; Phase 5.7 must make the referenced runtime state cross-worker thread-safe before multicore use. |
+| Transferable handle identity | `Queue[T]` and `Task[T]` handles cross independently of `T` without inspecting, cloning, or transferring the stored payload; Phase 5.7 synchronizes the referenced runtime state for cross-worker use. |
 | Queue payloads | Construction plus `put`/`try_put` require `T: Transfer`; handle copies and handle-only `get`/fallback/`close` operations do not recheck `T`. Nested negative payloads report the complete reason with `AU3008`. |
 | Negative leaves | Shared/mutable capabilities, `random.Rng`, `TaskGroup`, and representative filesystem, process, network, HTTP, WebSocket, and TLS resources are rejected as captures and results. |
 | Nested diagnostics | A failure through each aggregate kind names the boundary and the complete field/element/payload path to the non-`Transfer` leaf, with ownership-oriented guidance. |
@@ -223,7 +238,7 @@ messages.
 | Duplication diagnostics | Boundary rejection is `AU3008`; cloning, collection `get`, and implicit aggregate/container copies that duplicate a right are `AU3009`; a second observation of an already-consumed binding is `AU3001`; shared-access consumption is `AU3002`. |
 | No user escape hatch | A same-named ordinary user trait and its implementations confer no compiler-derived Transfer property; annotations and other source assertions cannot override structural classification. |
 | Editor and diagnostics parity | Compiler-service/LSP results preserve the stable code, nested reason, primary boundary span, guidance, and MIR/direct fixture parity. |
-| Phase boundary | Scheduler tests remain single-worker through Phase 5.6; no test or documentation claims parallel execution before the pinned-worker gate. |
+| Phase boundary | Phase 5.6 evidence remains explicitly single-worker; Phase 5.7 evidence pins default and overridden worker counts, stable spawn-time assignment, no migration or stealing, local-worker yield, synchronized Queue/Task wakeups, Transfer isolation, per-task cancellation/diagnostics, unspecified scheduling/output order, and MIR/direct parity. |
 
 The ADR moves from Provisional only after the focused semantic, fixture,
 compiler-service, both-backend parity, full-CI, and frozen-coverage gates pass.

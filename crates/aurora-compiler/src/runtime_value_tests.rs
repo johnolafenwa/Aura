@@ -33,6 +33,7 @@ use crate::runtime_reactor::{RuntimeReactor, WaitKey};
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -1715,7 +1716,7 @@ fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
     });
 
     let started = Instant::now();
-    let received_after = super::run_lightweight_root_task(move || {
+    let received_after = super::run_lightweight_root_task_with_worker_count(1, move || {
         let hot_stop = stop.clone();
         let hot = super::spawn_lightweight_task(move || {
             while !hot_stop.load(Ordering::SeqCst) {
@@ -1975,10 +1976,10 @@ fn force_reset_releases_the_task_context_and_spawn_buffer() {
 }
 
 #[test]
-fn nested_spawns_are_fifo_and_an_immediate_child_wait_is_safe() {
+fn single_worker_nested_spawns_preserve_admission_fifo_and_immediate_child_waits() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let root_order = order.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let first_order = root_order.clone();
         let first = spawn_lightweight_task(move || {
             lock_mutex(&first_order).push("first");
@@ -2068,7 +2069,7 @@ fn pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown() {
 
     let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let task_drops = drops.clone();
-    run_lightweight_root_task(move || {
+    super::run_lightweight_root_task_with_worker_count(1, move || {
         spawn_lightweight_task(move || {
             let _probe = DropProbe(task_drops);
             let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
@@ -2097,7 +2098,7 @@ fn pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown() {
 fn direct_cleanup_can_spawn_a_child_before_the_parent_is_retired() {
     let spawned = Arc::new(Mutex::new(None));
     let spawned_probe = spawned.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         unsafe {
             spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
                 CancellationContext::default(),
@@ -2111,10 +2112,17 @@ fn direct_cleanup_can_spawn_a_child_before_the_parent_is_retired() {
                 },
             )?;
         }
-        let _ = super::yield_now_current_lightweight_task();
-        let task = lock_mutex(&spawned)
-            .take()
-            .expect("direct cleanup should publish its child");
+        let deadline = Instant::now() + StdDuration::from_secs(1);
+        let task = loop {
+            if let Some(task) = lock_mutex(&spawned).take() {
+                break task;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "direct cleanup should publish its child before the test deadline"
+            );
+            let _ = super::yield_now_current_lightweight_task();
+        };
         wait_task_ready(&task)
     });
     assert_eq!(
@@ -2127,7 +2135,7 @@ fn direct_cleanup_can_spawn_a_child_before_the_parent_is_retired() {
 fn explicit_stack_tasks_preserve_single_consumer_results_through_forced_cleanup() {
     let forced_cleanups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let cleanup_probe = forced_cleanups.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let completed = super::spawn_lightweight_task_with_stack_and_result_repeatability(
             512 * 1024,
             false,
@@ -2158,7 +2166,14 @@ fn explicit_stack_tasks_preserve_single_consumer_results_through_forced_cleanup(
                 },
             )?
         };
-        let _ = super::yield_now_current_lightweight_task();
+        let deadline = Instant::now() + StdDuration::from_secs(1);
+        while cancelled.completed_result().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the force-cleaned task should complete before the test deadline"
+            );
+            let _ = super::yield_now_current_lightweight_task();
+        }
         assert!(matches!(
             cancelled.completed_result(),
             Some(TaskExecutionResult::Cancelled)
@@ -4328,7 +4343,7 @@ fn json_codec_service_bounds_admission_and_recovers_permits_after_failures() {
     });
 
     super::reset_json_codec_source_clone_count();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let parse_pool = saturated_pool.clone();
         let parse = spawn_lightweight_task(move || {
             let (source, reservation) =
@@ -4372,7 +4387,7 @@ fn json_codec_service_bounds_admission_and_recovers_permits_after_failures() {
     );
 
     let cancellation_pool = super::JsonCodecPool::start_with_limits(1, 1);
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let group = TaskGroupValue::new(&CancellationContext::default());
         let cancellation = group.child_cancellation();
         let parse = spawn_lightweight_task_with_cancellation(cancellation, move || {
@@ -5233,6 +5248,584 @@ fn task_execution_finalization_maps_failures_to_task_results() {
     assert!(cancelled_root
         .message
         .contains("root Aurora task was cancelled"));
+}
+
+#[test]
+fn lightweight_worker_count_defaults_and_rejects_invalid_overrides() {
+    assert_eq!(super::decode_lightweight_worker_count(None, 7).unwrap(), 7);
+    assert_eq!(
+        super::decode_lightweight_worker_count(Some(OsStr::new("1")), 7).unwrap(),
+        1
+    );
+    assert_eq!(
+        super::decode_lightweight_worker_count(Some(OsStr::new("16")), 7).unwrap(),
+        16
+    );
+
+    for invalid in ["", "0", "-1", "+2", " 2", "2 ", "two"] {
+        let error = super::decode_lightweight_worker_count(Some(OsStr::new(invalid)), 7)
+            .expect_err("invalid worker overrides must be diagnosed before execution");
+        assert_eq!(error.code, "AU4006");
+        assert_eq!(
+            error.message,
+            format!("invalid AURORA_WORKERS value `{invalid}`: expected a positive integer")
+        );
+    }
+
+    let overflow = format!("{}0", usize::MAX);
+    let error = super::decode_lightweight_worker_count(Some(OsStr::new(&overflow)), 7)
+        .expect_err("an overflowing worker count must be rejected");
+    assert_eq!(error.code, "AU4006");
+    assert_eq!(
+        error.message,
+        format!("invalid AURORA_WORKERS value `{overflow}`: expected a positive integer")
+    );
+
+    let error = super::decode_lightweight_worker_count(None, 0)
+        .expect_err("an impossible zero-core host must not create an empty runtime");
+    assert_eq!(error.code, "AU4006");
+}
+
+#[test]
+fn lightweight_worker_runner_rejects_an_empty_pool_before_starting_work() {
+    let entry_ran = Arc::new(AtomicBool::new(false));
+    let entry_probe = entry_ran.clone();
+    let error = super::run_lightweight_root_task_with_worker_count(0, move || {
+        entry_probe.store(true, Ordering::SeqCst);
+        Ok(Value::Unit)
+    })
+    .expect_err("an empty worker pool must be diagnosed");
+
+    assert_eq!(error.code, "AU4006");
+    assert_eq!(error.message, "Aurora runtime requires at least one worker");
+    assert!(
+        !entry_ran.load(Ordering::SeqCst),
+        "invalid worker configuration must fail before the root entry runs"
+    );
+}
+
+#[test]
+fn worker_coordinator_preserves_round_robin_admission_and_shutdown_accounting() {
+    let workers = super::LightweightWorkerCoordinator::new(2);
+    let first_reactor = RuntimeReactor::new().expect("first worker reactor should initialize");
+    let second_reactor = RuntimeReactor::new().expect("second worker reactor should initialize");
+    workers.register_reactor(0, first_reactor.handle());
+    workers.register_reactor(1, second_reactor.handle());
+
+    let cleanup_count = Arc::new(AtomicUsize::new(0));
+    let mut tasks = Vec::new();
+    for _ in 0..3 {
+        let cleanup_probe = cleanup_count.clone();
+        let (task, request) = super::prepare_lightweight_task(
+            None,
+            None,
+            true,
+            Box::new(|| Ok(Value::Unit)),
+            Some(Box::new(move || {
+                cleanup_probe.fetch_add(1, Ordering::SeqCst);
+            })),
+        )
+        .expect("coordinator admission task should prepare");
+        workers.submit(request);
+        tasks.push(task);
+    }
+
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 3);
+    assert_eq!(workers.next_task_id(), 1);
+    assert_eq!(workers.next_task_id(), 2);
+    let requests = [
+        workers
+            .take_request(0)
+            .expect("the first request belongs to worker zero"),
+        workers
+            .take_request(1)
+            .expect("the second request belongs to worker one"),
+        workers
+            .take_request(0)
+            .expect("round-robin admission returns to worker zero"),
+    ];
+    assert!(
+        workers.take_request(1).is_none(),
+        "worker one must not receive a fourth request"
+    );
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 0);
+    for request in requests {
+        assert!(
+            super::cancel_unadmitted_lightweight_task(request).is_none(),
+            "ordinary cancellation cleanup must not report a panic"
+        );
+    }
+    assert_eq!(cleanup_count.load(Ordering::SeqCst), 3);
+    assert!(tasks.iter().all(|task| matches!(
+        task.completed_result(),
+        Some(TaskExecutionResult::Cancelled)
+    )));
+
+    workers.mark_cleanup_complete(0);
+    workers.mark_cleanup_complete(0);
+    assert!(
+        !workers.cleanup_is_globally_complete(),
+        "one worker reporting twice must not complete global cleanup"
+    );
+    workers.mark_cleanup_complete(1);
+    assert!(workers.cleanup_is_globally_complete());
+
+    workers.fail(Diagnostic::new("first worker failure"));
+    workers.fail(Diagnostic::new("later worker failure"));
+    assert_eq!(
+        workers
+            .fatal_diagnostic()
+            .expect("the coordinator must retain its first fatal error")
+            .message,
+        "first worker failure"
+    );
+    assert!(workers.shutdown.load(Ordering::SeqCst));
+
+    let mut late_reactor =
+        RuntimeReactor::new().expect("late worker reactor should still initialize");
+    workers.register_reactor(0, late_reactor.handle());
+    let started = Instant::now();
+    assert!(late_reactor
+        .poll(Some(StdDuration::from_secs(1)))
+        .expect("shutdown wake should be observable")
+        .is_empty());
+    assert!(
+        started.elapsed() < StdDuration::from_millis(250),
+        "a worker registered during shutdown must be woken immediately"
+    );
+}
+
+#[test]
+fn unadmitted_cleanup_panics_are_diagnosed_after_terminalizing_the_task() {
+    let cleanup_count = Arc::new(AtomicUsize::new(0));
+    let cleanup_probe = cleanup_count.clone();
+    let (task, request) = super::prepare_lightweight_task(
+        None,
+        None,
+        true,
+        Box::new(|| Ok(Value::Unit)),
+        Some(Box::new(move || {
+            cleanup_probe.fetch_add(1, Ordering::SeqCst);
+            panic!("cleanup contract violation");
+        })),
+    )
+    .expect("cleanup-containment task should prepare");
+
+    let diagnostic = super::cancel_unadmitted_lightweight_task(request)
+        .expect("a cleanup panic must become a runtime diagnostic");
+    assert!(diagnostic
+        .message
+        .contains("Aurora task cleanup panicked: cleanup contract violation"));
+    assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            task.completed_result(),
+            Some(TaskExecutionResult::Cancelled)
+        ),
+        "cleanup failure must not leave a durable task handle Running"
+    );
+}
+
+#[test]
+fn worker_infrastructure_failures_cancel_root_cleanup_once_and_return_diagnostics() {
+    let cases = [
+        (
+            super::LightweightWorkerFaults {
+                reactor_initialization_at: Some(0),
+                ..Default::default()
+            },
+            "failed to initialize Aurora worker 0 reactor",
+            true,
+            true,
+        ),
+        (
+            super::LightweightWorkerFaults {
+                worker_panic_at: Some(0),
+                ..Default::default()
+            },
+            "internal error: Aurora worker 0 panicked: injected Aurora worker panic",
+            false,
+            true,
+        ),
+        (
+            super::LightweightWorkerFaults {
+                thread_spawn_at: Some(1),
+                ..Default::default()
+            },
+            "failed to start Aurora worker 1",
+            false,
+            false,
+        ),
+    ];
+
+    for (faults, expected, cleanup_panics, entry_must_not_run) in cases {
+        let entry_ran = Arc::new(AtomicBool::new(false));
+        let entry_probe = entry_ran.clone();
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let cleanup_probe = cleanup_count.clone();
+        let suspend_started_entry = !entry_must_not_run;
+        let error = super::run_lightweight_root_task_on_workers_with_faults(
+            2,
+            Box::new(move || {
+                entry_probe.store(true, Ordering::SeqCst);
+                if suspend_started_entry {
+                    let _ = super::yield_current_lightweight_wait(super::TaskWaitRegistration {
+                        recv_channels: Vec::new(),
+                        ignore_closed_recv_channels: false,
+                        send_channels: Vec::new(),
+                        task_waits: Vec::new(),
+                        deadline: None,
+                        cancellation: None,
+                        fd_wait: None,
+                    });
+                }
+                Ok(Value::Unit)
+            }),
+            Some(Box::new(move || {
+                cleanup_probe.fetch_add(1, Ordering::SeqCst);
+                if cleanup_panics {
+                    panic!("cleanup panic during worker failure recovery");
+                }
+            })),
+            faults,
+        )
+        .expect_err("the injected worker infrastructure failure must reach the caller");
+
+        assert!(
+            error.message.contains(expected),
+            "unexpected injected failure diagnostic: {error:?}"
+        );
+        if entry_must_not_run {
+            assert!(
+                !entry_ran.load(Ordering::SeqCst),
+                "worker failure before admission must not run the root entry"
+            );
+        }
+        assert_eq!(
+            cleanup_count.load(Ordering::SeqCst),
+            1,
+            "failed admission must run root cleanup exactly once"
+        );
+    }
+}
+
+#[test]
+fn lightweight_tasks_are_pinned_across_yield_timer_and_queue_waits() {
+    let result = super::run_lightweight_root_task_with_worker_count(3, || {
+        let channel = ChannelValue::new();
+        let receiver_channel = channel.clone();
+        let receiver = spawn_lightweight_task(move || {
+            let before = super::current_lightweight_worker_index()
+                .expect("a running task must know its pinned worker");
+            super::yield_now_with_runtime_scheduler();
+            let after_yield = super::current_lightweight_worker_index()
+                .expect("yield must resume on the same worker");
+            let value = receiver_channel
+                .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+                .expect("the sender should provide a queue item");
+            let after_queue = super::current_lightweight_worker_index()
+                .expect("queue wake must resume on the same worker");
+            let _ = sleep_with_runtime_scheduler(StdDuration::from_millis(2), None);
+            let after_timer = super::current_lightweight_worker_index()
+                .expect("timer wake must resume on the same worker");
+            Ok(Value::Tuple(TupleValue {
+                element_types: vec![Type::named("int64"); 5],
+                elements: vec![
+                    Value::Int(IntegerValue::from_signed(before as i128)),
+                    Value::Int(IntegerValue::from_signed(after_yield as i128)),
+                    value,
+                    Value::Int(IntegerValue::from_signed(after_queue as i128)),
+                    Value::Int(IntegerValue::from_signed(after_timer as i128)),
+                ],
+            }))
+        })?;
+        let sender = spawn_lightweight_task(move || {
+            channel
+                .send(Value::Int(IntegerValue::from_signed(29)))
+                .map_err(|_| Diagnostic::new("test queue unexpectedly rejected its item"))?;
+            Ok(Value::Unit)
+        })?;
+        let receiver_value = wait_task_ready(&receiver)?;
+        let _ = wait_task_ready(&sender)?;
+        Ok(receiver_value)
+    })
+    .expect("the pinned-worker run should complete");
+
+    let Value::Tuple(values) = result else {
+        panic!("expected affinity tuple, got {result:?}");
+    };
+    let worker_ids = [
+        &values.elements[0],
+        &values.elements[1],
+        &values.elements[3],
+        &values.elements[4],
+    ]
+    .into_iter()
+    .map(|value| match value {
+        Value::Int(value) => value.as_i128().expect("worker index must be signed"),
+        other => panic!("expected worker index, got {other:?}"),
+    })
+    .collect::<Vec<_>>();
+    assert!(
+        worker_ids.iter().all(|worker| *worker == worker_ids[0]),
+        "one coroutine migrated across workers: {worker_ids:?}"
+    );
+    assert_eq!(
+        values.elements[2],
+        Value::Int(IntegerValue::from_signed(29))
+    );
+}
+
+#[test]
+fn lightweight_workers_make_cpu_progress_concurrently() {
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Barrier::new(3));
+    let result = super::run_lightweight_root_task_with_worker_count(3, {
+        let active = active.clone();
+        let maximum = maximum.clone();
+        let release = release.clone();
+        move || {
+            let mut tasks = Vec::new();
+            for _ in 0..2 {
+                let active = active.clone();
+                let maximum = maximum.clone();
+                let release = release.clone();
+                tasks.push(spawn_lightweight_task(move || {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(now, Ordering::SeqCst);
+                    release.wait();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(Value::Unit)
+                })?);
+            }
+            release.wait();
+            for task in tasks {
+                let _ = wait_task_ready(&task)?;
+            }
+            Ok(Value::Unit)
+        }
+    });
+
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(
+        maximum.load(Ordering::SeqCst),
+        2,
+        "two pinned workers must execute CPU-bound task bodies at the same time"
+    );
+}
+
+#[test]
+fn cross_worker_task_completion_error_cancellation_and_claim_races_are_atomic() {
+    let race = Arc::new(Barrier::new(3));
+    let result = super::run_lightweight_root_task_with_worker_count(4, {
+        let race = race.clone();
+        move || {
+            let owned = super::spawn_lightweight_task_with_result_repeatability(false, || {
+                Ok(Value::String("owned".to_string()))
+            })?;
+            assert_eq!(wait_task_ready(&owned)?, Value::String("owned".to_string()));
+
+            let first_task = owned.clone();
+            let first_race = race.clone();
+            let first = spawn_lightweight_task(move || {
+                first_race.wait();
+                Ok(Value::Bool(first_task.claim_result_observation().is_ok()))
+            })?;
+            let second_task = owned.clone();
+            let second_race = race.clone();
+            let second = spawn_lightweight_task(move || {
+                second_race.wait();
+                Ok(Value::Bool(second_task.claim_result_observation().is_ok()))
+            })?;
+            race.wait();
+            let claims = [wait_task_ready(&first)?, wait_task_ready(&second)?];
+            assert_eq!(
+                claims
+                    .iter()
+                    .filter(|value| **value == Value::Bool(true))
+                    .count(),
+                1,
+                "exactly one worker may claim a non-repeatable task result"
+            );
+
+            let failed = spawn_lightweight_task(|| Err(Diagnostic::new("worker failure")))?;
+            let failure = wait_task_ready(&failed)
+                .expect_err("a cross-worker task error must wake and reach its observer");
+            assert_eq!(failure.message, "worker failure");
+
+            let cancelled = spawn_lightweight_task(|| {
+                cancel_current_lightweight_task_boundary();
+            })?;
+            match cancelled
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Cancelled => {}
+                other => panic!("expected cross-worker cancellation, got {other:?}"),
+            }
+            Ok(Value::Unit)
+        }
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+}
+
+#[test]
+fn task_group_and_queue_registration_precede_remote_task_submission() {
+    let registered = Arc::new(AtomicBool::new(false));
+    let result = super::run_lightweight_root_task_with_worker_count(2, {
+        let registered = registered.clone();
+        move || {
+            let group = TaskGroupValue::new(&CancellationContext::default());
+            let queue = ChannelValue::new();
+            let entry_registered = registered.clone();
+            let registration_flag = registered.clone();
+            let registration_group = group.clone();
+            let registration_queue = queue.clone();
+            let task = super::spawn_lightweight_task_with_result_repeatability_registered(
+                true,
+                move || {
+                    assert!(
+                        entry_registered.load(Ordering::SeqCst),
+                        "remote execution must not begin before group and queue publication"
+                    );
+                    Ok(Value::Unit)
+                },
+                move |task| {
+                    registration_group.register_task(task.clone());
+                    registration_queue.register_producer_task(task);
+                    registration_flag.store(true, Ordering::SeqCst);
+                },
+            )?;
+
+            assert!(
+                registered.load(Ordering::SeqCst),
+                "the spawn API must return only after registration"
+            );
+            assert_eq!(group.drain_tasks(), vec![task.clone()]);
+            assert_eq!(queue.registered_producer_tasks(), vec![task.clone()]);
+            wait_task_ready(&task)
+        }
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+}
+
+#[test]
+fn direct_cleanup_runs_once_on_the_task_pinned_worker() {
+    let entry_worker = Arc::new(AtomicUsize::new(usize::MAX));
+    let cleanup_worker = Arc::new(AtomicUsize::new(usize::MAX));
+    let cleanup_count = Arc::new(AtomicUsize::new(0));
+    let result = super::run_lightweight_root_task_with_worker_count(3, {
+        let entry_worker = entry_worker.clone();
+        let cleanup_worker = cleanup_worker.clone();
+        let cleanup_count = cleanup_count.clone();
+        move || {
+            let entry_probe = entry_worker.clone();
+            let cleanup_probe = cleanup_worker.clone();
+            let count_probe = cleanup_count.clone();
+            let task = unsafe {
+                spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                    CancellationContext::default(),
+                    move || {
+                        entry_probe.store(
+                            super::current_lightweight_worker_index()
+                                .expect("direct task entry must run on a worker"),
+                            Ordering::SeqCst,
+                        );
+                        super::exit_current_lightweight_task(TaskExecutionResult::Cancelled);
+                    },
+                    move || {
+                        cleanup_probe.store(
+                            super::current_lightweight_worker_index()
+                                .expect("direct cleanup must retain its task context"),
+                            Ordering::SeqCst,
+                        );
+                        count_probe.fetch_add(1, Ordering::SeqCst);
+                    },
+                )?
+            };
+            match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Cancelled => Ok(Value::Unit),
+                other => panic!("expected force-cleaned task cancellation, got {other:?}"),
+            }
+        }
+    });
+
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_ne!(entry_worker.load(Ordering::SeqCst), usize::MAX);
+    assert_eq!(
+        cleanup_worker.load(Ordering::SeqCst),
+        entry_worker.load(Ordering::SeqCst),
+        "a generated task's external cleanup must run on its pinned worker"
+    );
+    assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn shutdown_drains_spawn_races_without_leaving_running_handles() {
+    let release = Arc::new(Barrier::new(2));
+    let raced_task = Arc::new(Mutex::new(None::<TaskValue>));
+    let cleanup_count = Arc::new(AtomicUsize::new(0));
+    let result = super::run_lightweight_root_task_with_worker_count(3, {
+        let release = release.clone();
+        let raced_task = raced_task.clone();
+        let cleanup_count = cleanup_count.clone();
+        move || {
+            let child_release = release.clone();
+            let child_task = raced_task.clone();
+            let child_cleanup = cleanup_count.clone();
+            let _spawner = spawn_lightweight_task(move || {
+                child_release.wait();
+                let task = unsafe {
+                    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                        CancellationContext::default(),
+                        || {
+                            let _ = super::yield_current_lightweight_wait(
+                                super::TaskWaitRegistration {
+                                    recv_channels: Vec::new(),
+                                    ignore_closed_recv_channels: false,
+                                    send_channels: Vec::new(),
+                                    task_waits: Vec::new(),
+                                    deadline: None,
+                                    cancellation: None,
+                                    fd_wait: None,
+                                },
+                            );
+                            Ok(Value::Unit)
+                        },
+                        move || {
+                            child_cleanup.fetch_add(1, Ordering::SeqCst);
+                        },
+                    )?
+                };
+                *lock_mutex(&child_task) = Some(task);
+                Ok(Value::Unit)
+            })?;
+            release.wait();
+            Ok(Value::Unit)
+        }
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+
+    let task = lock_mutex(&raced_task)
+        .clone()
+        .expect("the racing spawn must publish its durable task handle");
+    assert!(
+        matches!(
+            task.completed_result(),
+            Some(TaskExecutionResult::Cancelled | TaskExecutionResult::Ready(_))
+        ),
+        "shutdown must not abandon an admitted or inbox-resident task as Running"
+    );
+    assert_eq!(
+        cleanup_count.load(Ordering::SeqCst),
+        1,
+        "the shutdown race must run generated cleanup exactly once"
+    );
 }
 
 #[test]
@@ -6710,7 +7303,7 @@ fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
     const SMALL_STACK: usize = 256 * 1024;
     let timeout = StdDuration::from_secs(5);
     let body = vec![0x6du8; 4 * 1024 * 1024];
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let listener = HttpListenerValue::bind("127.0.0.1:0")
             .map_err(|error| Diagnostic::new(error.to_string()))?;
         let address = listener
@@ -6790,7 +7383,7 @@ fn forced_256_kib_websocket_data_serializes_clones_without_blocking_siblings() {
             .expect("websocket client should connect");
     let first_socket = socket.clone();
     let second_socket = socket.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let first = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
             assert_eq!(
                 first_socket
@@ -6863,7 +7456,7 @@ fn forced_256_kib_tls_handshake_and_data_preserve_sibling_timer_progress() {
     let timer_progressed = Arc::new(AtomicBool::new(false));
     let timer_progressed_in_task = timer_progressed.clone();
     let timer_progressed_in_client = timer_progressed.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let timer = spawn_lightweight_task(move || {
             sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
@@ -7016,7 +7609,7 @@ fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
 fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
     let timeout = StdDuration::from_millis(250);
     let start = Instant::now();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let task = spawn_lightweight_task(move || {
             let value = run_blocking_io(
                 move || {
@@ -7064,7 +7657,7 @@ fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
 fn protocol_steps_run_on_the_dedicated_service_and_resume_siblings() {
     let sibling_progressed = Arc::new(AtomicBool::new(false));
     let sibling_progressed_in_task = sibling_progressed.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let sibling = spawn_lightweight_task(move || {
             sleep_with_runtime_scheduler(StdDuration::from_millis(5), None)
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
@@ -7314,7 +7907,7 @@ fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
     let resolver_finished = Arc::new(AtomicBool::new(false));
     let task_resolver_finished = resolver_finished.clone();
 
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let connect = spawn_lightweight_task(move || {
             let resolver_finished = task_resolver_finished.clone();
             let stream = TcpStreamValue::connect_with_operations(
@@ -7624,7 +8217,7 @@ fn tcp_connect_candidates_share_one_timeout_budget() {
 fn unix_connect_offloads_a_slow_connect_without_starving_a_sibling_timer() {
     let connect_finished = Arc::new(AtomicBool::new(false));
     let task_connect_finished = connect_finished.clone();
-    let result = run_lightweight_root_task(move || {
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let connect = spawn_lightweight_task(move || {
             let connect_finished = task_connect_finished.clone();
             let stream = UnixStreamValue::connect_with_operation(

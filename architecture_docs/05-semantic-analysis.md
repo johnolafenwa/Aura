@@ -155,8 +155,9 @@ boundary.
 All copy types and `String` are transferable. Collections and user aggregates
 are transferable when every stored component is; `Queue[T]` and `Task[T]`
 handles are transferable because only handle identity, not stored payload,
-crosses. The runtime state behind those handles remains single-worker here and
-must become cross-worker thread-safe in Phase 5.7 before multicore execution.
+crosses. Phase 5.7 synchronizes the runtime state behind those handles for
+cross-worker use while every other admitted boundary value remains owned and
+share-nothing.
 Capability views, `random.Rng`, `TaskGroup`, and live host resources are not
 transferable unless a later compiler-owned whitelist proves a particular type
 safe. Reading a Copy value through shared or mutable access still produces an
@@ -185,9 +186,11 @@ single-consumer right uses `AU3009`, and reuse after a consuming observation
 uses ordinary `AU3001`.
 
 This section describes the implemented Provisional Phase 5.6 semantic
-contract. It does not imply that the Phase 5.5 single-threaded scheduler or
-request broker is thread-safe. Pinned-worker execution remains a separate
-Phase 5.7 runtime gate.
+contract. Phase 5.7 uses it as the admission boundary for spawn-time pinned
+workers on both backends: Queue and Task handles may communicate across
+workers, while all other captures and results cross as owned `Transfer`
+values. The semantic property does not by itself promise preemption, work
+stealing, a scheduling order, or parallel speedup.
 
 ## A tiny Aurora-like type checker in Rust
 

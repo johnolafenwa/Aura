@@ -254,8 +254,9 @@ transferable collections and user data, and Queue/Task handle identities can
 cross. `random.Rng`, `TaskGroup`, capability views, and live file, process, or
 network resources cannot. Keep a live resource on the task that creates it and
 exchange owned descriptions, bytes, snapshot results, or handles. Aurora still
-executes task bodies on one scheduler worker; Phase 5.7 must make the state
-behind those handles cross-worker thread-safe before multicore execution.
+uses this rule as the share-nothing boundary between pinned scheduler workers.
+Queue and Task handle state is synchronized across workers; every other
+capture and result crosses as owned `Transfer` data.
 
 For a non-repeatable but transferable task result, the first call to
 `result`, `result_or_none`, or `result_or` consumes the task handle even if it

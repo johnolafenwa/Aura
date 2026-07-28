@@ -2118,7 +2118,7 @@ proposal. The normative detail is in the language manual and ADR-0006.
 
 Use this as the short public description:
 
-> **Aurora is a readable, Python-inspired compiled language with explicit ownership and structured concurrency. It is designed for developers who want clean syntax, typed failure, native deployment, and one modern toolchain. Aurora 0.1 task execution is cooperative and single-threaded.**
+> **Aurora is a readable, Python-inspired compiled language with explicit ownership and structured concurrency. It is designed for developers who want clean syntax, typed failure, native deployment, and one modern toolchain. Aurora 0.1 task execution is cooperative across pinned workers, with owned `Transfer` values and Queue/Task handles as its cross-worker boundary.**
 
 ---
 

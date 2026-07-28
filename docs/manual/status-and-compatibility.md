@@ -73,23 +73,35 @@ Aurora 0.1 uses structured concurrency:
 
 There is no `Channel`, language-level `select`, bare `spawn`, or detached task.
 
-Task bodies execute on one cooperative scheduler thread rather than in
-parallel. Compiler-inserted checks on every loop backedge prevent a tight loop
-from starving ready timers, Queue operations, and sockets indefinitely.
-Ordinary loop tails and `continue` participate; `break` and `return` bypass the
-backedge. The checks do not inspect cancellation, and one long loop body can
-still delay siblings. Ordinary tasks request a guarded 512 KiB coroutine stack;
-explicit requests may range through 64 MiB. Waits
+Task bodies execute on pinned cooperative scheduler workers on both maintained
+backends. The default worker count is the available parallelism reported by
+the host; the
+provisional `AURORA_WORKERS=<positive integer>` override selects an explicit
+count. A child receives a stable worker assignment when it is spawned. Its
+coroutine stack never migrates, work is not stolen, and `yield_now()` yields
+only to runnable work on that worker.
+
+Compiler-inserted checks on every loop backedge prevent a tight loop from
+starving ready timers, Queue operations, and sockets assigned to the same
+worker indefinitely. Ordinary loop tails and `continue` participate; `break`
+and `return` bypass the backedge. The checks do not inspect cancellation, and
+one long loop body can still delay same-worker siblings. Ordinary tasks request
+a guarded 512 KiB coroutine stack; explicit requests may range through 64 MiB.
+Waits
 use persistent descriptor registrations, heap-managed deadlines, and direct
-Queue, task-completion, and blocking-pool notifications; an idle scheduler
-blocks until an event or deadline without a periodic tick.
+Queue, task-completion, and blocking-pool notifications; an idle worker blocks
+until work, an event, or a deadline without a periodic tick.
 
 Provisional ADR-0033 implements compiler-derived structural Transfer checks for
 task captures, task results, and Queue payloads, plus conditional task-handle
-Copy and statically single-consumer non-repeatable results. It does not enable
-parallel task execution. Multiple pinned workers and cross-worker-thread-safe
-runtime-handle internals remain the distinct Phase 5.7 gate. See [Execution
-Model](/manual/execution-model) and [Current Limits](/manual/current-limits).
+Copy and statically single-consumer non-repeatable results. Queue and Task
+handles are the maintained cross-worker channels; all other boundary values
+remain owned and share-nothing through `Transfer`. Cancellation and diagnostic
+context stay per task. Scheduling, completion, and program-output order are
+unspecified. This is a multicore guarantee for task execution, not a guarantee
+of preemption, work stealing, worker introspection, detached tasks, or parallel
+speedup for every program. See [Execution Model](/manual/execution-model) and
+[Current Limits](/manual/current-limits).
 
 ## Platform And Distribution Support
 

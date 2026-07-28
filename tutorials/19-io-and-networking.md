@@ -480,12 +480,14 @@ The socket runtime also threads task-group cancellation into maintained socket w
 
 This surface is deliberately explicit but no longer relies on the old blocking/polling split:
 
-- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
+- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
+  run through the pinned-worker runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
 - hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the bounded blocking service
 - process waits and captured child stdio pipes use the same scheduler-backed wait path
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
-- ordinary file operations now offload through the shared scheduler-backed runtime instead of pinning a lightweight task on a blocking host thread
+- ordinary file operations offload through the pinned-worker scheduler-backed
+  runtime instead of pinning a lightweight task on a blocking host thread
 
 Current process notes:
 

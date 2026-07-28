@@ -52,16 +52,37 @@ def nested_parent(events: Queue[String]) -> int32:
     events.put("parent-joined")
     return total
 
-def print_event(events: Queue[String]) -> None:
+def next_event(events: Queue[String]) -> String:
     match events.get(timeout=2s):
         case QueueReceive.Item(event):
-            print(event)
+            return event.clone()
         case QueueReceive.Closed:
-            print("event-closed")
+            return "event-closed"
         case QueueReceive.TimedOut:
-            print("event-timed-out")
+            return "event-timed-out"
         case QueueReceive.Cancelled:
-            print("event-cancelled")
+            return "event-cancelled"
+
+def event_code(event: String) -> int32:
+    if event == "parent-start":
+        return 2
+    if event == "parent-wait":
+        return 3
+    if event == "child-first":
+        return 5
+    if event == "child-second":
+        return 7
+    if event == "parent-after-first":
+        return 11
+    if event == "parent-after-second":
+        return 13
+    if event == "parent-leaving-scope":
+        return 17
+    if event == "cleanup":
+        return 19
+    if event == "parent-joined":
+        return 23
+    return 0
 
 def main() -> int32:
     events = Queue[String]()
@@ -79,7 +100,44 @@ def main() -> int32:
             case TaskResult.Cancelled:
                 return 3
 
+    mut event_sum: int32 = 0
+    mut event_product: int32 = 1
+    mut saw_child_first = false
+    mut saw_child_second = false
+    mut saw_parent_leaving_scope = false
+    mut saw_cleanup = false
     for _ in range(9):
-        print_event(events)
+        event = next_event(events)
+        if event == "child-first":
+            saw_child_first = true
+        if event == "child-second":
+            saw_child_second = true
+        if event == "parent-after-first":
+            assert saw_child_first
+        if event == "parent-after-second":
+            assert saw_child_second
+        if event == "parent-leaving-scope":
+            saw_parent_leaving_scope = true
+        if event == "cleanup":
+            saw_cleanup = true
+        if event == "parent-joined":
+            assert saw_parent_leaving_scope
+            assert saw_cleanup
+
+        code = event_code(event)
+        event_sum += code
+        event_product *= code
+    assert event_sum == 100
+    assert event_product == 223092870
+
+    print("parent-start")
+    print("parent-wait")
+    print("child-first")
+    print("child-second")
+    print("parent-after-first")
+    print("parent-after-second")
+    print("parent-leaving-scope")
+    print("cleanup")
+    print("parent-joined")
     print(total)
     return 0

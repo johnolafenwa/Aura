@@ -125,40 +125,42 @@ fn command_output_with_timeout(
     let mut child = command
         .spawn()
         .unwrap_or_else(|error| panic!("{context}: failed to spawn command: {error}"));
-    let status = match wait_with_timeout(&mut child, timeout) {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            if let Some(mut pipe) = child.stdout.take() {
-                let _ = pipe.read_to_end(&mut stdout);
-            }
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_end(&mut stderr);
-            }
-            panic!(
-                "{context}: command did not finish within {timeout:?}; stdout was:\n{}\nstderr was:\n{}",
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
-        }
+    let mut stdout_pipe = child.stdout.take().expect("captured stdout should exist");
+    let mut stderr_pipe = child.stderr.take().expect("captured stderr should exist");
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = Vec::new();
+        stdout_pipe
+            .read_to_end(&mut stdout)
+            .expect("captured stdout should be readable");
+        stdout
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = Vec::new();
+        stderr_pipe
+            .read_to_end(&mut stderr)
+            .expect("captured stderr should be readable");
+        stderr
+    });
+
+    let status = wait_with_timeout(&mut child, timeout);
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let stdout = stdout_reader
+        .join()
+        .expect("stdout reader should not panic");
+    let stderr = stderr_reader
+        .join()
+        .expect("stderr reader should not panic");
+    let Some(status) = status else {
+        panic!(
+            "{context}: command did not finish within {timeout:?}; stdout was:\n{}\nstderr was:\n{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
     };
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("captured stdout should exist")
-        .read_to_end(&mut stdout)
-        .expect("captured stdout should be readable");
-    child
-        .stderr
-        .take()
-        .expect("captured stderr should exist")
-        .read_to_end(&mut stderr)
-        .expect("captured stderr should be readable");
+
     std::process::Output {
         status,
         stdout,
@@ -406,8 +408,24 @@ fn assert_run_and_direct_source_stdout_with_timeout(
     timeout: std::time::Duration,
     expected_stdout: &str,
 ) {
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        prefix,
+        source,
+        timeout,
+        expected_stdout,
+        None,
+    );
+}
+
+fn assert_run_and_direct_source_stdout_with_timeout_and_workers(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    expected_stdout: &str,
+    worker_count: Option<usize>,
+) {
     let (_temp, _source_path, mut run_child) =
-        run_aura_source_with_timeout(prefix, source, timeout);
+        run_aura_source_with_timeout_and_workers(prefix, source, timeout, worker_count);
     let run_status = wait_with_timeout(&mut run_child, timeout).unwrap_or_else(|| {
         run_child
             .kill()
@@ -424,8 +442,12 @@ fn assert_run_and_direct_source_stdout_with_timeout(
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
 
-    let (_temp, _source_path, mut direct_child) =
-        build_direct_source_with_timeout(&format!("{prefix}-direct"), source, timeout);
+    let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout_and_workers(
+        &format!("{prefix}-direct"),
+        source,
+        timeout,
+        worker_count,
+    );
     let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
         direct_child
             .kill()
@@ -438,6 +460,51 @@ fn assert_run_and_direct_source_stdout_with_timeout(
     assert!(
         direct_status.success(),
         "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
+}
+
+fn assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    expected_stdout: &str,
+    worker_count: usize,
+) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+
+    let mut mir = Command::new(aura_bin());
+    mir.env("AURORA_WORKERS", worker_count.to_string())
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir = command_output_with_timeout(mir, timeout, "forced-MIR fixture");
+    assert!(
+        mir.status.success(),
+        "{prefix} MIR run should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected_stdout);
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build direct fixture");
+    assert!(
+        build.status.success(),
+        "{prefix} direct fixture should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let mut direct = generated_binary(&output_path);
+    direct.env("AURORA_WORKERS", worker_count.to_string());
+    let direct = command_output_with_timeout(direct, timeout, "direct fixture");
+    assert!(
+        direct.status.success(),
+        "{prefix} direct run should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&direct.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
@@ -502,10 +569,22 @@ fn run_aura_source_with_timeout(
     source: &str,
     timeout: std::time::Duration,
 ) -> (TempDir, PathBuf, std::process::Child) {
+    run_aura_source_with_timeout_and_workers(prefix, source, timeout, None)
+}
+
+fn run_aura_source_with_timeout_and_workers(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    worker_count: Option<usize>,
+) -> (TempDir, PathBuf, std::process::Child) {
     let (temp, source_path) = write_temp_source(prefix, source);
-    let child = Command::new(aura_bin())
-        .arg("run")
-        .arg(&source_path)
+    let mut command = Command::new(aura_bin());
+    command.arg("run").arg(&source_path);
+    if let Some(worker_count) = worker_count {
+        command.env("AURORA_WORKERS", worker_count.to_string());
+    }
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -521,6 +600,15 @@ fn build_direct_source_with_timeout(
     prefix: &str,
     source: &str,
     timeout: std::time::Duration,
+) -> (TempDir, PathBuf, std::process::Child) {
+    build_direct_source_with_timeout_and_workers(prefix, source, timeout, None)
+}
+
+fn build_direct_source_with_timeout_and_workers(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    worker_count: Option<usize>,
 ) -> (TempDir, PathBuf, std::process::Child) {
     let (temp, source_path) = write_temp_source(prefix, source);
     let output_path = temp.path().join("out");
@@ -538,7 +626,11 @@ fn build_direct_source_with_timeout(
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let child = generated_binary(&output_path)
+    let mut command = generated_binary(&output_path);
+    if let Some(worker_count) = worker_count {
+        command.env("AURORA_WORKERS", worker_count.to_string());
+    }
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1009,7 +1101,7 @@ def main() -> int32:
 }
 
 #[test]
-fn queue_consumers_share_work_without_starvation() {
+fn queue_consumers_share_work_fairly_on_one_worker() {
     let source = r#"def consumer(q: Queue[int32]) -> int32:
     mut got: int32 = 0
     for value in q:
@@ -1043,6 +1135,7 @@ def main() -> int32:
 
     let (_temp, source_path) = write_temp_source("aurora-queue-fairness", source);
     let output = Command::new(aura_bin())
+        .env("AURORA_WORKERS", "1")
         .arg("run")
         .arg(&source_path)
         .output()
@@ -1127,11 +1220,26 @@ fn scheduler_mixed_wakeups_complete_in_mir_and_direct_backends() {
 }
 
 #[test]
-fn nested_scheduler_spawns_preserve_fifo_join_and_backend_parity() {
-    // A child spawned by a running task must enter the same scheduler queue
-    // before its parent can resume from waiting on that child. The fixture also
-    // pins the 256 KiB nested-stack override and structured cleanup at the
-    // nested TaskGroup boundary.
+fn yield_now_fairness_remains_observable_on_one_worker() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/yield_now_fairness.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/yield_now_fairness.stdout");
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-yield-now-one-worker",
+        source,
+        std::time::Duration::from_secs(20),
+        expected,
+        Some(1),
+    );
+}
+
+#[test]
+fn nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity() {
+    // Nested child starts, result waits, the 256 KiB stack override, and
+    // structured cleanup must all complete on both backends. The fixture
+    // validates the event multiset rather than freezing a cross-worker order.
     let source =
         include_str!("../../aurora-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.au");
     let expected = include_str!(
@@ -1144,6 +1252,249 @@ fn nested_scheduler_spawns_preserve_fifo_join_and_backend_parity() {
         std::time::Duration::from_secs(20),
         expected,
     );
+}
+
+#[test]
+fn explicit_four_worker_queue_and_task_handles_match_backends() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.stdout"
+    );
+    let (temp, source_path) = write_temp_source("aurora-four-worker-task-parity", source);
+
+    let mut mir = Command::new(aura_bin());
+    mir.env("AURORA_WORKERS", "4")
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir = command_output_with_timeout(
+        mir,
+        std::time::Duration::from_secs(20),
+        "four-worker MIR task parity",
+    );
+    assert!(
+        mir.status.success(),
+        "four-worker MIR run should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build four-worker direct fixture");
+    assert!(
+        build.status.success(),
+        "four-worker direct fixture should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let mut direct = generated_binary(&output_path);
+    direct.env("AURORA_WORKERS", "4");
+    let direct = command_output_with_timeout(
+        direct,
+        std::time::Duration::from_secs(20),
+        "four-worker direct task parity",
+    );
+    assert!(
+        direct.status.success(),
+        "four-worker direct run should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn explicit_four_worker_queue_stress_preserves_integrity_and_per_producer_fifo() {
+    // Four consumers still contend across workers for admission to the next
+    // receive. The one-slot ticket Queue serializes only observation/dequeue,
+    // letting the fixture reconstruct order without fixing producer interleaving.
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
+
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-four-worker-queue-stress",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        4,
+    );
+}
+
+#[test]
+fn explicit_four_worker_cancellation_and_task_failures_remain_isolated() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.stdout"
+    );
+
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-four-worker-cancellation-failure-isolation",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        4,
+    );
+}
+
+#[test]
+fn four_worker_prints_are_complete_atomic_lines_on_both_backends() {
+    let source = r#"def print_many(label: String) -> None:
+    value32: float32 = 1.25
+    for index in range(200):
+        print(f"{label}:{index}:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        print(true)
+        print(value32)
+        print(2.5)
+
+def main():
+    with TaskGroup() as tasks:
+        tasks.start_soon(print_many, "alpha")
+        tasks.start_soon(print_many, "beta")
+        tasks.start_soon(print_many, "gamma")
+        tasks.start_soon(print_many, "delta")
+"#;
+    let (temp, source_path) = write_temp_source("aurora-four-worker-atomic-print", source);
+
+    let assert_complete_lines = |stdout: Vec<u8>, backend: &str| {
+        let mut actual = String::from_utf8(stdout)
+            .expect("atomic print output should be UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        for label in ["alpha", "beta", "gamma", "delta"] {
+            for index in 0..200 {
+                expected.push(format!(
+                    "{label}:{index}:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                ));
+                expected.push("true".to_string());
+                expected.push("1.25".to_string());
+                expected.push("2.5".to_string());
+            }
+        }
+        actual.sort();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "{backend} concurrent print calls must each publish one complete line"
+        );
+    };
+
+    let mut mir = Command::new(aura_bin());
+    mir.env("AURORA_WORKERS", "4")
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path);
+    let mir = command_output_with_timeout(
+        mir,
+        std::time::Duration::from_secs(20),
+        "four-worker MIR atomic print",
+    );
+    assert!(
+        mir.status.success(),
+        "four-worker MIR atomic-print fixture should run, stderr was:\n{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+    assert_complete_lines(mir.stdout, "MIR");
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build atomic-print fixture");
+    assert!(
+        build.status.success(),
+        "atomic-print fixture should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let mut command = generated_binary(&output_path);
+    command.env("AURORA_WORKERS", "4");
+    let output = command_output_with_timeout(
+        command,
+        std::time::Duration::from_secs(20),
+        "four-worker direct atomic print",
+    );
+    assert!(
+        output.status.success(),
+        "four-worker atomic-print fixture should run, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_complete_lines(output.stdout, "direct");
+}
+
+#[test]
+fn invalid_worker_override_is_au4006_on_mir_and_direct_backends() {
+    let source = r#"def child() -> int32:
+    return 7
+
+def main():
+    with TaskGroup() as tasks:
+        task = tasks.start(child)
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.TimedOut:
+                print("timed-out")
+            case TaskResult.Cancelled:
+                print("cancelled")
+"#;
+    let (temp, source_path) = write_temp_source("aurora-invalid-worker-override", source);
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build worker-override diagnostic fixture");
+    assert!(
+        build.status.success(),
+        "worker-override diagnostic fixture should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    for invalid in ["0", "two"] {
+        let expected =
+            format!("invalid AURORA_WORKERS value `{invalid}`: expected a positive integer");
+
+        let mir = Command::new(aura_bin())
+            .env("AURORA_WORKERS", invalid)
+            .args(["run", "--backend", "mir"])
+            .arg(&source_path)
+            .output()
+            .expect("failed to run invalid worker override through MIR");
+        assert!(
+            !mir.status.success(),
+            "invalid worker override `{invalid}` unexpectedly succeeded through MIR"
+        );
+        let mir_stderr = String::from_utf8_lossy(&mir.stderr);
+        assert!(mir_stderr.contains("error[AU4006]"), "{mir_stderr}");
+        assert!(mir_stderr.contains(&expected), "{mir_stderr}");
+
+        let direct = generated_binary(&output_path)
+            .env("AURORA_WORKERS", invalid)
+            .output()
+            .expect("failed to run invalid worker override through direct backend");
+        assert!(
+            !direct.status.success(),
+            "invalid worker override `{invalid}` unexpectedly succeeded through direct backend"
+        );
+        let direct_stderr = String::from_utf8_lossy(&direct.stderr);
+        assert!(direct_stderr.contains("error[AU4006]"), "{direct_stderr}");
+        assert!(direct_stderr.contains(&expected), "{direct_stderr}");
+    }
 }
 
 #[test]
@@ -7178,8 +7529,14 @@ def main() -> int32:
             left=argument("left", 1)
         )
         group.start_soon_with_stack(67108864, publish, values, 9)
-    print(values.get_or(-1))
-    print(values.get_or(-1))
+    first = values.get_or(-1)
+    second = values.get_or(-1)
+    if first < second:
+        print(first)
+        print(second)
+    else:
+        print(second)
+        print(first)
     return 0
 "#;
 
@@ -7400,7 +7757,13 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-cancelled-yields", source, "9999\n");
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-cancelled-yields",
+        source,
+        std::time::Duration::from_secs(20),
+        "9999\n",
+        Some(1),
+    );
 }
 
 #[test]
@@ -7439,11 +7802,12 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout_with_timeout(
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aurora-loop-backedge-safepoints",
         source,
         std::time::Duration::from_secs(10),
         "true\ntrue\n",
+        Some(1),
     );
 }
 
@@ -7515,11 +7879,12 @@ def main() -> int32:
 
     // Readiness must arrive in the first half of the 200 ms hot loop. Without
     // a cooperative backedge, the accept task cannot resume until the loop ends.
-    assert_run_and_direct_source_stdout_with_timeout(
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aurora-loop-backedge-socket-safepoints",
         source,
         std::time::Duration::from_secs(10),
         "true\n",
+        Some(1),
     );
 }
 

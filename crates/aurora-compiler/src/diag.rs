@@ -206,6 +206,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "runtime",
         title: "resource or I/O failure",
     },
+    DiagnosticCodeInfo {
+        code: "AU4006",
+        band: "runtime",
+        title: "invalid runtime configuration",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

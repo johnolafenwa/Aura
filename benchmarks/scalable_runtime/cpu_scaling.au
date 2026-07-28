@@ -1,0 +1,122 @@
+import io
+import sys
+
+
+def cpu_worker(
+    index: int32,
+    iterations: int64,
+    prepared: Queue[int32],
+    release: Queue[int32],
+    results: Queue[int64]
+):
+    prepared.put(index)
+    match release.get():
+        case QueueReceive.Item(_):
+            mut state: int64 = index as int64 + 1
+            mut iteration: int64 = 0
+            while iteration < iterations:
+                state = state * 48271 % 2147483647
+                iteration += 1
+            results.put(state)
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
+            pass
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def main() -> int32:
+    args = sys.args()
+    if args.len() != 1:
+        return 2
+
+    mut task_count: int32 = 0
+    match args.get(0):
+        case Option.Some(text):
+            match parse_int32(text):
+                case Result.Ok(value):
+                    if value != 1 and value != 4:
+                        return 2
+                    task_count = value
+                case Result.Err(_):
+                    return 2
+        case Option.None:
+            return 2
+
+    iterations: int64 = 80000000
+    prepared = Queue[int32]()
+    release = Queue[int32]()
+    results = Queue[int64]()
+
+    with TaskGroup() as group:
+        for index in range(task_count):
+            group.start_soon(
+                cpu_worker,
+                index,
+                iterations,
+                prepared,
+                release,
+                results
+            )
+
+        mut prepared_count: int32 = 0
+        while prepared_count < task_count:
+            match prepared.get():
+                case QueueReceive.Item(_):
+                    prepared_count += 1
+                case QueueReceive.Closed:
+                    return 3
+                case QueueReceive.TimedOut:
+                    return 3
+                case QueueReceive.Cancelled:
+                    return 3
+
+        print(f"READY multicore {task_count} {iterations} 48271 2147483647")
+        if not flush_stdout():
+            return 4
+        if not read_control("GO multicore"):
+            return 5
+
+        for token in range(task_count):
+            release.put(token)
+
+        mut checksum: int64 = 0
+        mut result_count: int32 = 0
+        while result_count < task_count:
+            match results.get():
+                case QueueReceive.Item(value):
+                    checksum += value
+                    result_count += 1
+                case QueueReceive.Closed:
+                    return 6
+                case QueueReceive.TimedOut:
+                    return 6
+                case QueueReceive.Cancelled:
+                    return 6
+
+        print(f"DONE multicore {task_count} {checksum}")
+        if not flush_stdout():
+            return 7
+        if not read_control("ACK multicore"):
+            return 8
+
+    return 0

@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
 use std::io::{self, BufRead, Read, Seek, Write};
@@ -16,7 +17,7 @@ use std::process::{
     Stdio as StdProcessStdio,
 };
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
@@ -50,7 +51,7 @@ use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
 use crate::runtime_reactor::{
-    IoInterest, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
+    IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
 };
 use crate::sema::Type;
 
@@ -796,8 +797,10 @@ struct FdWaitRegistration {
 }
 
 struct LightweightTaskContext {
-    spawn_requests: Rc<RefCell<VecDeque<PreparedLightweightTask>>>,
+    spawn_target: LightweightTaskSpawnTarget,
     task_id: u64,
+    #[cfg_attr(not(test), allow(dead_code))]
+    worker_index: usize,
     yielder: Cell<*const Yielder<RuntimeSchedulerWakeReason, TaskYield>>,
     cancellation: Option<CancellationContext>,
 }
@@ -806,17 +809,24 @@ struct LightweightTaskRecord {
     state: Arc<TaskState>,
     context: Rc<LightweightTaskContext>,
     coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskExecutionResult>,
-    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
-type LightweightTaskEntry = Box<dyn FnOnce() -> std::result::Result<Value, Diagnostic> + 'static>;
+type LightweightTaskEntry =
+    Box<dyn FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static>;
 
 struct PreparedLightweightTask {
     state: Arc<TaskState>,
     stack: DefaultStack,
     cancellation: Option<CancellationContext>,
     entry: LightweightTaskEntry,
-    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
+}
+
+#[derive(Clone)]
+enum LightweightTaskSpawnTarget {
+    Local(Rc<RefCell<VecDeque<PreparedLightweightTask>>>),
+    Workers(Arc<LightweightWorkerCoordinator>),
 }
 
 struct LightweightTaskWait {
@@ -836,6 +846,24 @@ struct LightweightTaskScheduler {
     reactor_failure: Option<Diagnostic>,
     ready_turns_since_local_reactor_poll: u32,
     ready_turns_since_io_reactor_poll: u32,
+    worker_index: usize,
+    workers: Option<Arc<LightweightWorkerCoordinator>>,
+}
+
+struct LightweightWorkerInbox {
+    requests: Mutex<VecDeque<PreparedLightweightTask>>,
+    reactor: Mutex<Option<ReactorHandle>>,
+    cleanup_complete: AtomicBool,
+}
+
+struct LightweightWorkerCoordinator {
+    inboxes: Vec<LightweightWorkerInbox>,
+    next_worker: AtomicUsize,
+    next_task_id: AtomicU64,
+    pending_requests: AtomicUsize,
+    shutdown: AtomicBool,
+    cleanup_workers: AtomicUsize,
+    fatal: Mutex<Option<Diagnostic>>,
 }
 
 // Deep HTTP, TLS, and WebSocket library frames run on the bounded protocol
@@ -1917,6 +1945,11 @@ pub(crate) fn current_lightweight_task_id() -> Option<u64> {
     with_current_lightweight_task_context(|context| context.task_id)
 }
 
+#[cfg(test)]
+pub(crate) fn current_lightweight_worker_index() -> Option<usize> {
+    with_current_lightweight_task_context(|context| context.worker_index)
+}
+
 #[derive(Debug)]
 pub(crate) struct TaskCancelledSignal;
 
@@ -2284,12 +2317,52 @@ fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
     })
 }
 
+fn complete_lightweight_task_state(task_state: &Arc<TaskState>, result: TaskExecutionResult) {
+    task_state
+        .waits_without_deadline
+        .store(false, Ordering::SeqCst);
+    {
+        let mut state = lock_mutex(&task_state.handle);
+        *state = TaskHandle::Completed(result.clone());
+        task_state.ready.notify_all();
+    }
+    wake_reactor_subscribers(&task_state.completion_reactor_subscribers);
+    notify_group_failure_wake_flags(task_state, &result);
+    notify_group_completion_wake_flags(task_state);
+    notify_runtime_scheduler_if_started();
+}
+
+fn cancel_unadmitted_lightweight_task(request: PreparedLightweightTask) -> Option<Diagnostic> {
+    let PreparedLightweightTask {
+        state,
+        stack,
+        cancellation,
+        entry,
+        forced_exit_cleanup,
+    } = request;
+    drop(entry);
+    drop(cancellation);
+    drop(stack);
+    let cleanup_panic = forced_exit_cleanup.and_then(|cleanup| {
+        panic::catch_unwind(AssertUnwindSafe(cleanup))
+            .err()
+            .map(|payload| {
+                Diagnostic::new(format!(
+                    "internal error: Aurora task cleanup panicked: {}",
+                    task_panic_message(&*payload)
+                ))
+            })
+    });
+    complete_lightweight_task_state(&state, TaskExecutionResult::Cancelled);
+    cleanup_panic
+}
+
 fn prepare_lightweight_task(
     cancellation: Option<CancellationContext>,
     stack_size: Option<usize>,
     result_is_repeatable: bool,
     entry: LightweightTaskEntry,
-    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
 ) -> std::result::Result<(TaskValue, PreparedLightweightTask), Diagnostic> {
     let stack = allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
     let state = new_lightweight_task_state(result_is_repeatable);
@@ -2308,7 +2381,190 @@ fn prepare_lightweight_task(
     ))
 }
 
+pub(crate) fn decode_lightweight_worker_count(
+    override_value: Option<&OsStr>,
+    available_workers: usize,
+) -> std::result::Result<usize, Diagnostic> {
+    let Some(raw) = override_value else {
+        return if available_workers > 0 {
+            Ok(available_workers)
+        } else {
+            Err(Diagnostic::coded(
+                "AU4006",
+                "Aurora runtime detected zero available workers",
+            ))
+        };
+    };
+    let rendered = raw.to_string_lossy();
+    let valid_digits = !rendered.is_empty() && rendered.bytes().all(|byte| byte.is_ascii_digit());
+    if valid_digits {
+        if let Ok(workers) = rendered.parse::<usize>() {
+            if workers > 0 {
+                return Ok(workers);
+            }
+        }
+    }
+    Err(Diagnostic::coded(
+        "AU4006",
+        format!("invalid AURORA_WORKERS value `{rendered}`: expected a positive integer"),
+    ))
+}
+
+fn lightweight_worker_count() -> std::result::Result<usize, Diagnostic> {
+    let available = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    decode_lightweight_worker_count(std::env::var_os("AURORA_WORKERS").as_deref(), available)
+}
+
+#[derive(Clone, Copy, Default)]
+struct LightweightWorkerFaults {
+    #[cfg(test)]
+    reactor_initialization_at: Option<usize>,
+    #[cfg(test)]
+    worker_panic_at: Option<usize>,
+    #[cfg(test)]
+    thread_spawn_at: Option<usize>,
+}
+
+impl LightweightWorkerFaults {
+    fn reactor_initialization_error(self, worker_index: usize) -> Option<io::Error> {
+        #[cfg(test)]
+        if self.reactor_initialization_at == Some(worker_index) {
+            return Some(io::Error::other(
+                "injected Aurora worker reactor initialization failure",
+            ));
+        }
+        let _ = worker_index;
+        None
+    }
+
+    fn should_panic_worker(self, worker_index: usize) -> bool {
+        #[cfg(test)]
+        if self.worker_panic_at == Some(worker_index) {
+            return true;
+        }
+        let _ = worker_index;
+        false
+    }
+
+    fn thread_spawn_error(self, worker_index: usize) -> Option<io::Error> {
+        #[cfg(test)]
+        if self.thread_spawn_at == Some(worker_index) {
+            return Some(io::Error::other(
+                "injected Aurora worker thread spawn failure",
+            ));
+        }
+        let _ = worker_index;
+        None
+    }
+}
+
+impl LightweightWorkerCoordinator {
+    fn new(worker_count: usize) -> Arc<Self> {
+        Arc::new(Self {
+            inboxes: (0..worker_count)
+                .map(|_| LightweightWorkerInbox {
+                    requests: Mutex::new(VecDeque::new()),
+                    reactor: Mutex::new(None),
+                    cleanup_complete: AtomicBool::new(false),
+                })
+                .collect(),
+            next_worker: AtomicUsize::new(0),
+            next_task_id: AtomicU64::new(1),
+            pending_requests: AtomicUsize::new(0),
+            shutdown: AtomicBool::new(false),
+            cleanup_workers: AtomicUsize::new(0),
+            fatal: Mutex::new(None),
+        })
+    }
+
+    fn submit(&self, request: PreparedLightweightTask) {
+        let worker_index = self.next_worker.fetch_add(1, Ordering::SeqCst) % self.inboxes.len();
+        self.pending_requests.fetch_add(1, Ordering::SeqCst);
+        lock_mutex(&self.inboxes[worker_index].requests).push_back(request);
+        let reactor = lock_mutex(&self.inboxes[worker_index].reactor).clone();
+        if let Some(reactor) = reactor {
+            if let Err(error) = reactor.notify_control() {
+                self.fail(Diagnostic::coded(
+                    "AU4005",
+                    format!("failed to wake Aurora worker {worker_index}: {error}"),
+                ));
+            }
+        }
+    }
+
+    fn register_reactor(&self, worker_index: usize, reactor: ReactorHandle) {
+        *lock_mutex(&self.inboxes[worker_index].reactor) = Some(reactor.clone());
+        if self.shutdown.load(Ordering::SeqCst) {
+            let _ = reactor.notify_control();
+        }
+    }
+
+    fn take_request(&self, worker_index: usize) -> Option<PreparedLightweightTask> {
+        let request = lock_mutex(&self.inboxes[worker_index].requests).pop_front()?;
+        self.pending_requests.fetch_sub(1, Ordering::SeqCst);
+        Some(request)
+    }
+
+    fn next_task_id(&self) -> u64 {
+        self.next_task_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn fail(&self, diagnostic: Diagnostic) {
+        let mut fatal = lock_mutex(&self.fatal);
+        if fatal.is_none() {
+            *fatal = Some(diagnostic);
+        }
+        drop(fatal);
+        self.begin_shutdown();
+    }
+
+    fn begin_shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        self.notify_all_workers();
+    }
+
+    fn notify_all_workers(&self) {
+        for inbox in &self.inboxes {
+            if let Some(reactor) = lock_mutex(&inbox.reactor).as_ref() {
+                let _ = reactor.notify_control();
+            }
+        }
+    }
+
+    fn fatal_diagnostic(&self) -> Option<Diagnostic> {
+        lock_mutex(&self.fatal).clone()
+    }
+
+    fn mark_cleanup_complete(&self, worker_index: usize) {
+        if self.inboxes[worker_index]
+            .cleanup_complete
+            .swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        self.cleanup_workers.fetch_add(1, Ordering::SeqCst);
+        self.notify_all_workers();
+    }
+
+    fn cleanup_is_globally_complete(&self) -> bool {
+        self.cleanup_workers.load(Ordering::SeqCst) == self.inboxes.len()
+            && self.pending_requests.load(Ordering::SeqCst) == 0
+    }
+}
+
+impl LightweightTaskSpawnTarget {
+    fn submit(&self, request: PreparedLightweightTask) {
+        match self {
+            Self::Local(requests) => requests.borrow_mut().push_back(request),
+            Self::Workers(workers) => workers.submit(request),
+        }
+    }
+}
+
 impl LightweightTaskScheduler {
+    #[cfg(test)]
     fn new() -> Self {
         Self {
             next_task_id: 1,
@@ -2322,20 +2578,55 @@ impl LightweightTaskScheduler {
             reactor_failure: None,
             ready_turns_since_local_reactor_poll: 0,
             ready_turns_since_io_reactor_poll: 0,
+            worker_index: 0,
+            workers: None,
         }
     }
 
+    fn new_for_worker(
+        worker_index: usize,
+        workers: Arc<LightweightWorkerCoordinator>,
+        faults: LightweightWorkerFaults,
+    ) -> std::result::Result<Self, Diagnostic> {
+        let reactor = faults
+            .reactor_initialization_error(worker_index)
+            .map_or_else(RuntimeReactor::new, Err)
+            .map_err(|error| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!("failed to initialize Aurora worker {worker_index} reactor: {error}"),
+                )
+            })?;
+        workers.register_reactor(worker_index, reactor.handle());
+        Ok(Self {
+            next_task_id: 1,
+            next_wait_epoch: 1,
+            spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
+            ready: VecDeque::new(),
+            waiting: BTreeMap::new(),
+            tasks: BTreeMap::new(),
+            reactor,
+            reactor_failure: None,
+            ready_turns_since_local_reactor_poll: 0,
+            ready_turns_since_io_reactor_poll: 0,
+            worker_index,
+            workers: Some(workers),
+        })
+    }
+
+    #[cfg(test)]
     fn spawn_task<F>(
         &mut self,
         cancellation: Option<CancellationContext>,
         entry: F,
     ) -> std::result::Result<TaskValue, Diagnostic>
     where
-        F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+        F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
     {
         self.spawn_task_with_stack(cancellation, None, entry)
     }
 
+    #[cfg(test)]
     fn spawn_task_with_stack<F>(
         &mut self,
         cancellation: Option<CancellationContext>,
@@ -2343,20 +2634,21 @@ impl LightweightTaskScheduler {
         entry: F,
     ) -> std::result::Result<TaskValue, Diagnostic>
     where
-        F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+        F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
     {
         self.spawn_task_with_forced_exit_cleanup(cancellation, stack_size, entry, None)
     }
 
+    #[cfg(test)]
     fn spawn_task_with_forced_exit_cleanup<F>(
         &mut self,
         cancellation: Option<CancellationContext>,
         stack_size: Option<usize>,
         entry: F,
-        forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
+        forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
     ) -> std::result::Result<TaskValue, Diagnostic>
     where
-        F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+        F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
     {
         let (task, request) = prepare_lightweight_task(
             cancellation,
@@ -2370,12 +2662,23 @@ impl LightweightTaskScheduler {
     }
 
     fn admit_spawn_request(&mut self, request: PreparedLightweightTask) {
-        let task_id = self.next_task_id;
-        self.next_task_id += 1;
+        let task_id = if let Some(workers) = &self.workers {
+            workers.next_task_id()
+        } else {
+            let task_id = self.next_task_id;
+            self.next_task_id += 1;
+            task_id
+        };
+        let spawn_target = self
+            .workers
+            .as_ref()
+            .map(|workers| LightweightTaskSpawnTarget::Workers(workers.clone()))
+            .unwrap_or_else(|| LightweightTaskSpawnTarget::Local(self.spawn_requests.clone()));
 
         let context = Rc::new(LightweightTaskContext {
-            spawn_requests: self.spawn_requests.clone(),
+            spawn_target,
             task_id,
+            worker_index: self.worker_index,
             yielder: Cell::new(std::ptr::null()),
             cancellation: request.cancellation,
         });
@@ -2414,6 +2717,21 @@ impl LightweightTaskScheduler {
         }
     }
 
+    fn drain_worker_requests(&mut self, admit: bool) {
+        let Some(workers) = self.workers.clone() else {
+            return;
+        };
+        while let Some(request) = workers.take_request(self.worker_index) {
+            if admit {
+                self.admit_spawn_request(request);
+            } else {
+                if let Some(diagnostic) = cancel_unadmitted_lightweight_task(request) {
+                    workers.fail(diagnostic);
+                }
+            }
+        }
+    }
+
     fn complete_task(
         &mut self,
         task_id: u64,
@@ -2421,18 +2739,7 @@ impl LightweightTaskScheduler {
         result: TaskExecutionResult,
     ) {
         self.disarm_wait(task_id);
-        task_state
-            .waits_without_deadline
-            .store(false, Ordering::SeqCst);
-        {
-            let mut state = lock_mutex(&task_state.handle);
-            *state = TaskHandle::Completed(result.clone());
-            task_state.ready.notify_all();
-        }
-        wake_reactor_subscribers(&task_state.completion_reactor_subscribers);
-        notify_group_failure_wake_flags(task_state, &result);
-        notify_group_completion_wake_flags(task_state);
-        notify_runtime_scheduler_if_started();
+        complete_lightweight_task_state(task_state, result);
     }
 
     fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
@@ -2451,6 +2758,7 @@ impl LightweightTaskScheduler {
         // happens to the parent so a child can be waited immediately and FIFO
         // order remains child-before-parent on a yielding turn.
         self.drain_spawn_requests();
+        self.drain_worker_requests(true);
         match outcome {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
                 self.tasks.insert(task_id, record);
@@ -2645,45 +2953,56 @@ impl LightweightTaskScheduler {
         Ok(())
     }
 
+    #[cfg(test)]
     fn wait_for_external_events(&mut self) -> io::Result<()> {
         let keys = self.reactor.poll(None)?;
         self.admit_reactor_keys(keys);
         Ok(())
     }
 
-    fn run_until_root(&mut self, root: &TaskValue) -> std::result::Result<Value, Diagnostic> {
+    fn run_worker(&mut self, root: &TaskValue) {
+        let workers = self
+            .workers
+            .clone()
+            .expect("a worker scheduler must have a coordinator");
         loop {
+            self.drain_worker_requests(true);
             if let Some(diagnostic) = self.reactor_failure.take() {
-                return Err(diagnostic);
+                workers.fail(diagnostic);
             }
-            if let Some(result) = root.completed_result() {
-                return match result {
-                    TaskExecutionResult::Ready(result) => result,
-                    TaskExecutionResult::Cancelled => {
-                        Err(Diagnostic::new("root Aurora task was cancelled"))
-                    }
-                };
+            if workers.fatal_diagnostic().is_some() {
+                workers.begin_shutdown();
+            }
+            if root.completed_result().is_some() {
+                workers.begin_shutdown();
+            }
+            if workers.shutdown.load(Ordering::SeqCst) {
+                break;
             }
 
             if !self.ready.is_empty() {
                 self.ready_turns_since_local_reactor_poll += 1;
                 self.ready_turns_since_io_reactor_poll += 1;
-                if self.ready_turns_since_io_reactor_poll >= READY_TURNS_PER_IO_REACTOR_POLL {
-                    self.ready_turns_since_local_reactor_poll = 0;
-                    self.ready_turns_since_io_reactor_poll = 0;
-                    if let Err(error) = self.admit_reactor_events_nonblocking() {
-                        return Err(reactor_failure_diagnostic("admitting ready events", error));
-                    }
-                } else if self.ready_turns_since_local_reactor_poll
-                    >= READY_TURNS_PER_LOCAL_REACTOR_POLL
-                {
-                    self.ready_turns_since_local_reactor_poll = 0;
-                    if let Err(error) = self.admit_local_reactor_events_nonblocking() {
-                        return Err(reactor_failure_diagnostic("admitting local events", error));
-                    }
+                let poll_result =
+                    if self.ready_turns_since_io_reactor_poll >= READY_TURNS_PER_IO_REACTOR_POLL {
+                        self.ready_turns_since_local_reactor_poll = 0;
+                        self.ready_turns_since_io_reactor_poll = 0;
+                        self.admit_reactor_events_nonblocking()
+                    } else if self.ready_turns_since_local_reactor_poll
+                        >= READY_TURNS_PER_LOCAL_REACTOR_POLL
+                    {
+                        self.ready_turns_since_local_reactor_poll = 0;
+                        self.admit_local_reactor_events_nonblocking()
+                    } else {
+                        Ok(())
+                    };
+                if let Err(error) = poll_result {
+                    workers.fail(reactor_failure_diagnostic("admitting ready events", error));
+                    continue;
                 }
                 if let Some(diagnostic) = self.reactor_failure.take() {
-                    return Err(diagnostic);
+                    workers.fail(diagnostic);
+                    continue;
                 }
             }
 
@@ -2694,9 +3013,33 @@ impl LightweightTaskScheduler {
 
             self.ready_turns_since_local_reactor_poll = 0;
             self.ready_turns_since_io_reactor_poll = 0;
-            if let Err(error) = self.wait_for_external_events() {
-                return Err(reactor_failure_diagnostic("waiting", error));
+            match self.reactor.poll(None) {
+                Ok(keys) => self.admit_reactor_keys(keys),
+                Err(error) => workers.fail(reactor_failure_diagnostic("waiting", error)),
             }
+        }
+
+        self.retire_all_tasks();
+        workers.mark_cleanup_complete(self.worker_index);
+        loop {
+            self.drain_worker_requests(false);
+            if workers.cleanup_is_globally_complete() {
+                workers.notify_all_workers();
+                break;
+            }
+            let _ = self.reactor.poll(Some(StdDuration::from_millis(10)));
+        }
+    }
+
+    fn retire_all_tasks(&mut self) {
+        let task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        for task_id in task_ids {
+            self.disarm_wait(task_id);
+        }
+        self.drain_spawn_requests();
+        while let Some((task_id, record)) = self.tasks.pop_first() {
+            self.cancel_task_record(task_id, record);
+            self.drain_spawn_requests();
         }
     }
 
@@ -2729,31 +3072,27 @@ impl LightweightTaskScheduler {
 
 impl Drop for LightweightTaskScheduler {
     fn drop(&mut self) {
-        let task_ids: Vec<_> = self.waiting.keys().copied().collect();
-        for task_id in task_ids {
-            self.disarm_wait(task_id);
-        }
         // Root completion and reactor failures may leave structured children
         // suspended. Retire every admitted or prepared request explicitly so
         // no task handle stays Running and direct-task external state is never
         // abandoned.
-        self.drain_spawn_requests();
-        while let Some((task_id, record)) = self.tasks.pop_first() {
-            self.cancel_task_record(task_id, record);
-            self.drain_spawn_requests();
-        }
+        self.retire_all_tasks();
     }
 }
 
-fn enqueue_lightweight_task(
+fn enqueue_lightweight_task<R>(
     cancellation: Option<CancellationContext>,
     stack_size: Option<usize>,
     result_is_repeatable: bool,
     entry: LightweightTaskEntry,
-    forced_exit_cleanup: Option<Box<dyn FnOnce()>>,
-) -> std::result::Result<TaskValue, Diagnostic> {
-    let Some(spawn_requests) =
-        with_current_lightweight_task_context(|context| context.spawn_requests.clone())
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    R: FnOnce(&TaskValue),
+{
+    let Some(spawn_target) =
+        with_current_lightweight_task_context(|context| context.spawn_target.clone())
     else {
         return Err(Diagnostic::new(
             "lightweight Aurora task start requires an active task scheduler",
@@ -2766,25 +3105,53 @@ fn enqueue_lightweight_task(
         entry,
         forced_exit_cleanup,
     )?;
-    spawn_requests.borrow_mut().push_back(request);
+    register_before_submit(&task);
+    spawn_target.submit(request);
     Ok(task)
 }
 
 pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
-    enqueue_lightweight_task(None, None, true, Box::new(entry), None)
+    enqueue_lightweight_task(None, None, true, Box::new(entry), None, |_| {})
 }
 
+#[cfg(test)]
 pub(crate) fn spawn_lightweight_task_with_result_repeatability<F>(
     result_is_repeatable: bool,
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
-    enqueue_lightweight_task(None, None, result_is_repeatable, Box::new(entry), None)
+    enqueue_lightweight_task(
+        None,
+        None,
+        result_is_repeatable,
+        Box::new(entry),
+        None,
+        |_| {},
+    )
+}
+
+pub(crate) fn spawn_lightweight_task_with_result_repeatability_registered<F, R>(
+    result_is_repeatable: bool,
+    entry: F,
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    R: FnOnce(&TaskValue),
+{
+    enqueue_lightweight_task(
+        None,
+        None,
+        result_is_repeatable,
+        Box::new(entry),
+        None,
+        register_before_submit,
+    )
 }
 
 #[cfg(test)]
@@ -2793,18 +3160,19 @@ pub(crate) fn spawn_lightweight_task_with_stack<F>(
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
-    enqueue_lightweight_task(None, Some(stack_size), true, Box::new(entry), None)
+    enqueue_lightweight_task(None, Some(stack_size), true, Box::new(entry), None, |_| {})
 }
 
+#[cfg(test)]
 pub(crate) fn spawn_lightweight_task_with_stack_and_result_repeatability<F>(
     stack_size: usize,
     result_is_repeatable: bool,
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
     enqueue_lightweight_task(
         None,
@@ -2812,6 +3180,27 @@ where
         result_is_repeatable,
         Box::new(entry),
         None,
+        |_| {},
+    )
+}
+
+pub(crate) fn spawn_lightweight_task_with_stack_and_result_repeatability_registered<F, R>(
+    stack_size: usize,
+    result_is_repeatable: bool,
+    entry: F,
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    R: FnOnce(&TaskValue),
+{
+    enqueue_lightweight_task(
+        None,
+        Some(stack_size),
+        result_is_repeatable,
+        Box::new(entry),
+        None,
+        register_before_submit,
     )
 }
 
@@ -2845,9 +3234,16 @@ pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
-    enqueue_lightweight_task(Some(cancellation), None, true, Box::new(entry), None)
+    enqueue_lightweight_task(
+        Some(cancellation),
+        None,
+        true,
+        Box::new(entry),
+        None,
+        |_| {},
+    )
 }
 
 /// Starts a task whose generated stack must be reset instead of force-unwound.
@@ -2865,8 +3261,8 @@ pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cl
     forced_exit_cleanup: C,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
-    C: FnOnce() + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    C: FnOnce() + Send + 'static,
 {
     unsafe {
         spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack(
@@ -2895,8 +3291,8 @@ pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cl
     forced_exit_cleanup: C,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
-    C: FnOnce() + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    C: FnOnce() + Send + 'static,
 {
     enqueue_lightweight_task(
         Some(cancellation),
@@ -2904,6 +3300,7 @@ where
         true,
         Box::new(entry),
         Some(Box::new(forced_exit_cleanup)),
+        |_| {},
     )
 }
 
@@ -2914,6 +3311,7 @@ where
 ///
 /// This has the same forced-exit ownership requirements as
 /// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
+#[cfg(test)]
 pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability<
     F,
     C,
@@ -2925,8 +3323,8 @@ pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cl
     forced_exit_cleanup: C,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
-    C: FnOnce() + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    C: FnOnce() + Send + 'static,
 {
     enqueue_lightweight_task(
         Some(cancellation),
@@ -2934,17 +3332,204 @@ where
         result_is_repeatable,
         Box::new(entry),
         Some(Box::new(forced_exit_cleanup)),
+        |_| {},
     )
+}
+
+pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered<
+    F,
+    C,
+    R,
+>(
+    cancellation: CancellationContext,
+    stack_size: Option<usize>,
+    result_is_repeatable: bool,
+    entry: F,
+    forced_exit_cleanup: C,
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    C: FnOnce() + Send + 'static,
+    R: FnOnce(&TaskValue),
+{
+    enqueue_lightweight_task(
+        Some(cancellation),
+        stack_size,
+        result_is_repeatable,
+        Box::new(entry),
+        Some(Box::new(forced_exit_cleanup)),
+        register_before_submit,
+    )
+}
+
+fn run_lightweight_root_task_on_workers_with_faults(
+    worker_count: usize,
+    entry: LightweightTaskEntry,
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
+    faults: LightweightWorkerFaults,
+) -> std::result::Result<Value, Diagnostic> {
+    let workers = LightweightWorkerCoordinator::new(worker_count);
+    let (root, request) = prepare_lightweight_task(None, None, true, entry, forced_exit_cleanup)?;
+    workers.submit(request);
+
+    let mut threads = Vec::with_capacity(worker_count);
+    let mut failed_spawn_at = None;
+    for worker_index in 0..worker_count {
+        let workers_for_thread = workers.clone();
+        let root_for_thread = root.clone();
+        let builder = thread::Builder::new().name(format!("aurora-worker-{worker_index}"));
+        let spawn_result = if let Some(error) = faults.thread_spawn_error(worker_index) {
+            Err(error)
+        } else {
+            builder.spawn(move || {
+                let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+                    if faults.should_panic_worker(worker_index) {
+                        panic!("injected Aurora worker panic");
+                    }
+                    match LightweightTaskScheduler::new_for_worker(
+                        worker_index,
+                        workers_for_thread.clone(),
+                        faults,
+                    ) {
+                        Ok(mut scheduler) => scheduler.run_worker(&root_for_thread),
+                        Err(error) => {
+                            workers_for_thread.fail(error);
+                            while let Some(request) = workers_for_thread.take_request(worker_index)
+                            {
+                                if let Some(diagnostic) =
+                                    cancel_unadmitted_lightweight_task(request)
+                                {
+                                    workers_for_thread.fail(diagnostic);
+                                }
+                            }
+                            workers_for_thread.mark_cleanup_complete(worker_index);
+                            while !workers_for_thread.cleanup_is_globally_complete() {
+                                while let Some(request) =
+                                    workers_for_thread.take_request(worker_index)
+                                {
+                                    if let Some(diagnostic) =
+                                        cancel_unadmitted_lightweight_task(request)
+                                    {
+                                        workers_for_thread.fail(diagnostic);
+                                    }
+                                }
+                                thread::yield_now();
+                            }
+                        }
+                    }
+                }));
+                if let Err(payload) = outcome {
+                    workers_for_thread.fail(Diagnostic::new(format!(
+                        "internal error: Aurora worker {worker_index} panicked: {}",
+                        task_panic_message(&*payload)
+                    )));
+                    while let Some(request) = workers_for_thread.take_request(worker_index) {
+                        if let Some(diagnostic) = cancel_unadmitted_lightweight_task(request) {
+                            workers_for_thread.fail(diagnostic);
+                        }
+                    }
+                    workers_for_thread.mark_cleanup_complete(worker_index);
+                    while !workers_for_thread.cleanup_is_globally_complete() {
+                        while let Some(request) = workers_for_thread.take_request(worker_index) {
+                            if let Some(diagnostic) = cancel_unadmitted_lightweight_task(request) {
+                                workers_for_thread.fail(diagnostic);
+                            }
+                        }
+                        thread::yield_now();
+                    }
+                }
+            })
+        };
+        match spawn_result {
+            Ok(worker) => threads.push(worker),
+            Err(error) => {
+                workers.fail(Diagnostic::coded(
+                    "AU4005",
+                    format!("failed to start Aurora worker {worker_index}: {error}"),
+                ));
+                failed_spawn_at = Some(worker_index);
+                break;
+            }
+        }
+    }
+
+    if let Some(first_missing) = failed_spawn_at {
+        for worker_index in first_missing..worker_count {
+            workers.mark_cleanup_complete(worker_index);
+        }
+        while !workers.cleanup_is_globally_complete() {
+            for worker_index in first_missing..worker_count {
+                while let Some(request) = workers.take_request(worker_index) {
+                    if let Some(diagnostic) = cancel_unadmitted_lightweight_task(request) {
+                        workers.fail(diagnostic);
+                    }
+                }
+            }
+            thread::yield_now();
+        }
+    }
+
+    for worker in threads {
+        if let Err(payload) = worker.join() {
+            workers.fail(Diagnostic::new(format!(
+                "internal error: Aurora worker thread panicked: {}",
+                task_panic_message(&*payload)
+            )));
+        }
+    }
+
+    if let Some(diagnostic) = workers.fatal_diagnostic() {
+        return Err(diagnostic);
+    }
+    match root.completed_result() {
+        Some(TaskExecutionResult::Ready(result)) => result,
+        Some(TaskExecutionResult::Cancelled) => {
+            Err(Diagnostic::new("root Aurora task was cancelled"))
+        }
+        None => Err(Diagnostic::new(
+            "internal error: Aurora workers stopped before the root task completed",
+        )),
+    }
+}
+
+fn run_lightweight_root_task_on_workers(
+    worker_count: usize,
+    entry: LightweightTaskEntry,
+    forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
+) -> std::result::Result<Value, Diagnostic> {
+    run_lightweight_root_task_on_workers_with_faults(
+        worker_count,
+        entry,
+        forced_exit_cleanup,
+        LightweightWorkerFaults::default(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn run_lightweight_root_task_with_worker_count<F>(
+    worker_count: usize,
+    entry: F,
+) -> std::result::Result<Value, Diagnostic>
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+{
+    install_lightweight_task_panic_hook();
+    if worker_count == 0 {
+        return Err(Diagnostic::coded(
+            "AU4006",
+            "Aurora runtime requires at least one worker",
+        ));
+    }
+    run_lightweight_root_task_on_workers(worker_count, Box::new(entry), None)
 }
 
 pub(crate) fn run_lightweight_root_task<F>(entry: F) -> std::result::Result<Value, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
     install_lightweight_task_panic_hook();
-    let mut scheduler = Box::new(LightweightTaskScheduler::new());
-    let root = scheduler.spawn_task(None, entry)?;
-    scheduler.run_until_root(&root)
+    run_lightweight_root_task_on_workers(lightweight_worker_count()?, Box::new(entry), None)
 }
 
 /// Runs a generated root task whose stack must be reset on forced exit.
@@ -2963,18 +3548,15 @@ pub(crate) unsafe fn run_lightweight_root_task_with_forced_exit_cleanup<F, C>(
     forced_exit_cleanup: C,
 ) -> std::result::Result<Value, Diagnostic>
 where
-    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
-    C: FnOnce() + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
+    C: FnOnce() + Send + 'static,
 {
     install_lightweight_task_panic_hook();
-    let mut scheduler = Box::new(LightweightTaskScheduler::new());
-    let root = scheduler.spawn_task_with_forced_exit_cleanup(
-        None,
-        None,
-        entry,
+    run_lightweight_root_task_on_workers(
+        lightweight_worker_count()?,
+        Box::new(entry),
         Some(Box::new(forced_exit_cleanup)),
-    )?;
-    scheduler.run_until_root(&root)
+    )
 }
 
 impl PartialEq for VecValue {
@@ -9053,8 +9635,9 @@ impl TaskGroupValue {
         }
     }
 
-    // Invariant: every task must be registered before its worker thread is spawned so a later
-    // drain sees the complete task set.
+    // Task-start adapters invoke this during prepared-task publication, before
+    // the prepared task enters any worker inbox. A later drain therefore sees
+    // the complete task set even when the selected worker is already idle.
     pub(crate) fn register_task(&self, task: TaskValue) {
         task.register_group_failure_wake_flag(self.inner.failure_wake_flag.clone());
         task.register_group_completion_wake_flag(self.inner.completion_wake_flag.clone());

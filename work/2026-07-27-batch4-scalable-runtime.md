@@ -520,11 +520,102 @@ timers, idle CPU, starvation latency, and V6 controls all pass. The
 full provenance and measurements are in
 `work/2026-07-27-phase5-runtime-benchmarks.md`.
 
+## Phase 5.7 pinned-worker multicore
+
+The runtime now owns N OS worker threads, defaulting to
+`std::thread::available_parallelism()` and accepting a strict positive
+`AURORA_WORKERS` override. Each worker owns one scheduler, reactor, ready
+queue, wait table, and every coroutine assigned to it. Prepared task entries
+are `Send`, but admitted coroutines are not: round-robin inbox publication
+chooses the permanent worker before coroutine construction, so stackful
+coroutines never migrate.
+
+The coordinator provides globally unique task IDs, durable per-worker inboxes,
+control wakeups, root-completion/fatal shutdown, partial worker-start cleanup,
+and final inbox draining. Queue, Task, TaskGroup, cancellation, result claims,
+and native opaque values use synchronized shared state. Each task keeps a
+task-local cancellation context; only explicit TaskGroup cancellation,
+failure, and completion signals are shared. Direct runtime diagnostics remain
+worker-local and keyed by the globally unique task ID. Generated-task forced
+cleanup runs exactly once on the task's pinned worker after admission; a
+request assigned to a worker that fails to start is instead drained by the
+supervisor. Normal idle workers still block on `reactor.poll(None)`; no
+periodic fallback tick was accepted.
+
+Task creation has an explicit prepare-register-publish invariant. MIR and
+direct adapters register TaskGroup membership and every captured Queue
+producer through a synchronous pre-submit callback after fallible stack/state
+preparation and before the prepared request enters any worker inbox. A
+deterministic runtime test asserts that remote entry cannot observe
+registration as incomplete. This closes both structured-cleanup loss and
+Queue iteration's premature no-producer conclusion for immediately completing
+tasks.
+
+The behavioral matrix includes:
+
+- stable worker identity across `yield_now`, Queue wake, and timer wake
+- simultaneous CPU progress on distinct workers
+- one-winner non-repeatable Task result claims
+- cross-worker completion, cancellation, and distinct failure diagnostics
+- shutdown racing a nested start without a Running handle or double cleanup
+- four-producer/four-consumer Queue integrity over 800 items, including no
+  loss, no duplication, and producer-local FIFO without a global producer
+  order
+- complete per-call output lines under four-worker MIR and direct execution
+- explicit single-worker preservation for tests whose contract is local
+  cooperative fairness rather than global execution order
+
+The mandatory multicore workload uses an exact READY/GO/DONE/ACK protocol,
+fixed Park-Miller checksums, four explicit workers for both lanes, seven
+alternating one-task/four-task pairs, minimum signal duration, CPU
+corroboration, core qualification, and MAD rejection. The first calibration
+measured the wall gate green but correctly invalidated CPU evidence at 9.5%.
+Investigation proved the macOS runner treated `proc_pid_rusage` mach
+absolute-time ticks as nanoseconds. The fixed runner applies the host
+`mach_timebase_info` ratio (`125/3` here), with a regression test. The fresh
+calibration is valid and passes: paired median ratio `1.061645x`, ratio of
+medians `1.058870x`, four-task median `0.576568s`, one-task median
+`0.544513s`, four-task median CPU `397.21%`, and relative MAD below `0.004`.
+
+Focused verification is green: 1,072 compiler-library tests under default
+parallelism; 118 native-runtime tests twice under default parallelism; the
+four-worker Queue/Task, stress, cancellation/failure, and atomic-output
+fixtures on MIR and direct; AU4006 diagnostics on both backends; one-worker
+fairness fixtures; 45 benchmark-runner tests; formatting; warning-denied
+Clippy; and diff hygiene. Frozen compiler coverage passes at 69,108/71,883
+lines (96.139560%), 4,581/4,726 functions (96.931866%), and
+101,829/107,849 regions (94.418122%), above the unchanged
+96.13/96.89/94.35 floors. The closure tests pin worker reactor-init failure,
+partial worker-start failure, cleanup-panic containment, coordinator shutdown
+accounting, zero-worker AU4006, and direct Queue producer registration. No
+synthetic test or coverage exclusion was added. Exact full CI, the isolated
+implementation commit, and the clean-tree contractual full benchmark remain
+before Phase 5.7 sign-off.
+
+Exact full `npm run ci` is green on the final Phase 5.7 implementation tree:
+45 benchmark-runner tests; 288 CLI tests and 1,072 compiler-library tests
+under the default-parallel Rust workspace; the complete serialized forced
+MIR/direct fixture matrix in 559.03 seconds; 85 LSP tests; 13 extension tests;
+compiler coverage at the totals above; LSP coverage at 100%; reference
+integrity over 34 pages, 247 fences, and 118 verified blocks; all 683 migration
+manifests and the stale-syntax sweep; docs build; npm and Rust audits;
+warning-denied Clippy; and hygiene. Cargo audit retains only the repository's
+allowed `rustls-pemfile` unmaintained warning.
+
+One follow-up was deliberately not absorbed. Direct compilation rejected an
+`int32 != int32` comparison whose operand came from a function result while
+MIR accepted it; the fixture uses equivalent positive equality. Worker-thread
+spawn and reactor-init failure cleanup are now fault-injected and proven to
+terminalize pending handles and run cleanup exactly once, including when
+cleanup itself panics. A persistent kernel `mio::Waker` failure would require
+a second registered control primitive for formal recovery; the implementation
+keeps control state durable, retries terminal shutdown notification, and does
+not weaken the no-periodic-tick contract.
+
 ## Follow-up
 
-Phase 5.6 is complete at implementation commit `7dcdd70` plus its benchmark
-evidence commit. Begin Phase 5.7 pinned-worker multicore with failing worker
-lifecycle, affinity, cross-worker wake, cleanup, and performance-gate tests.
-The massive-concurrency memory claim remains unavailable under the recorded
-escape hatch. Coverage floors remain frozen until the one-time Batch 4
-sign-off re-ratchet.
+Create the isolated Phase 5.7 implementation commit, run the clean-tree
+contractual benchmark, and commit its evidence; then begin Phase 5.8 typed
+select. The massive-concurrency memory claim
+remains unavailable under the recorded escape hatch. Coverage floors remain
+frozen until the one-time Batch 4 sign-off re-ratchet.

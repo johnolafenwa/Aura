@@ -12,6 +12,11 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
 - Migrate a checkout with `python3 scripts/capability_migrate.py apply`, then verify the recorded migration with `python3 scripts/capability_migrate.py check`.
 - Removed borrowed-return labels and `borrow`/`borrow mut` return capabilities, superseding the borrowed-return contract. Copy-valued borrowed returns become ordinary owned returns; APIs returning access into non-copy owners must instead return an owned result, handle, index, or expose the operation on the owner.
 - Bumped the native artifact-cache format to `aurora-native-cache-v4`, preventing native artifacts compiled with the old capability metadata from being reused.
+- Changed lightweight task execution from one cooperative scheduler thread to
+  pinned OS workers. The runtime uses the host's available parallelism by
+  default; `AURORA_WORKERS=<positive integer>` selects an explicit worker
+  count. Queue order remains FIFO per producer, but global sibling execution
+  and output order are deliberately unspecified.
 
 - Built a typed bootstrap compiler, MIR runtime, direct native backend, package/workspace support, structured concurrency, file/network/process APIs, LSP, VS Code extension, and maintained book.
 - Froze syntax expansion while the 0.1 distribution, safety validation, editor responsiveness, and control-plane standard library are hardened.

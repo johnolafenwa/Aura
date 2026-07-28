@@ -1515,7 +1515,9 @@ fn direct_duration_runtime_surface_is_checked_exact_and_uses_floor_division() {
         .contains("unknown Duration constructor unit `7`"));
 
     let duration_ptr = duration_nanoseconds_value(1);
+    let duration_address = duration_ptr as usize;
     let error = run_lightweight_root_task(move || {
+        let duration_ptr = duration_address as *mut super::OpaqueValue;
         super::with_task_runtime_error_capture(|| {
             let _ = super::aurora_direct_duration_to_float(duration_ptr, 7);
             Ok(Value::Unit)
@@ -1528,7 +1530,9 @@ fn direct_duration_runtime_surface_is_checked_exact_and_uses_floor_division() {
     unsafe { release_value(duration_ptr) };
 
     let string_ptr = string_value("1ms");
+    let string_address = string_ptr as usize;
     let error = run_lightweight_root_task(move || {
+        let string_ptr = string_address as *mut super::OpaqueValue;
         super::with_task_runtime_error_capture(|| {
             let _ = super::aurora_direct_duration_to_float(
                 string_ptr,
@@ -5704,6 +5708,21 @@ unsafe extern "C-unwind" fn direct_task_fresh_duration(
     duration_value(125)
 }
 
+unsafe extern "C-unwind" fn direct_task_sends_to_captured_queue(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 1);
+    assert!(!args.is_null());
+    let queue = unsafe { *args } as *mut OpaqueValue;
+    let sent = super::aurora_direct_channel_send(queue, int_value(41));
+    unsafe {
+        super::aurora_direct_release_value(sent);
+        super::aurora_direct_release_value(queue);
+    }
+    super::aurora_direct_box_unit()
+}
+
 unsafe extern "C-unwind" fn direct_task_violates_owned_ledger_invariant(
     args: *const i64,
     arg_count: usize,
@@ -5869,6 +5888,7 @@ fn native_runtime_direct_root_forced_exit_discards_state_once_but_normal_return_
 
 #[test]
 fn native_runtime_scheduler_teardown_releases_unstarted_direct_task_external_state() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("queued direct task argument");
     unsafe {
@@ -5877,7 +5897,7 @@ fn native_runtime_scheduler_teardown_releases_unstarted_direct_task_external_sta
     let args_address = Box::into_raw(Box::new(vec![argument as i64])) as usize;
     let claim_flag_address = super::allocate_direct_task_claim_flag();
 
-    let result = run_lightweight_root_task(move || {
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(1, move || {
         let task = unsafe {
             super::spawn_direct_task_with_external_state(
                 CancellationContext::default(),
@@ -5886,6 +5906,7 @@ fn native_runtime_scheduler_teardown_releases_unstarted_direct_task_external_sta
                 claim_flag_address,
                 true,
                 None,
+                |_| {},
             )?
         };
         drop(task);
@@ -5910,6 +5931,7 @@ fn native_runtime_scheduler_teardown_releases_unstarted_direct_task_external_sta
 
 #[test]
 fn native_runtime_scheduler_teardown_releases_started_direct_task_ledger_exactly_once() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     DIRECT_TEARDOWN_TASK_STARTED.store(false, Ordering::Release);
     let argument = string_value("started direct task argument");
@@ -5921,7 +5943,7 @@ fn native_runtime_scheduler_teardown_releases_started_direct_task_ledger_exactly
     let args_address = Box::into_raw(Box::new(vec![argument as i64, queue as i64])) as usize;
     let claim_flag_address = super::allocate_direct_task_claim_flag();
 
-    let result = run_lightweight_root_task(move || {
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(1, move || {
         let task = unsafe {
             super::spawn_direct_task_with_external_state(
                 CancellationContext::default(),
@@ -5930,6 +5952,7 @@ fn native_runtime_scheduler_teardown_releases_started_direct_task_ledger_exactly
                 claim_flag_address,
                 true,
                 None,
+                |_| {},
             )?
         };
         drop(task);
@@ -5965,6 +5988,7 @@ fn native_runtime_scheduler_teardown_releases_started_direct_task_ledger_exactly
 
 #[test]
 fn native_runtime_normal_direct_task_completion_releases_external_state_once() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let argument = int_value(17);
     unsafe {
@@ -5982,6 +6006,7 @@ fn native_runtime_normal_direct_task_completion_releases_external_state_once() {
                 claim_flag_address,
                 true,
                 None,
+                |_| {},
             )?
         };
         match task
@@ -6018,6 +6043,7 @@ fn native_runtime_normal_direct_task_completion_releases_external_state_once() {
 
 #[test]
 fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let result = run_lightweight_root_task(move || {
         let args = super::aurora_direct_arg_buffer_new(0);
@@ -6066,7 +6092,67 @@ fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
 }
 
 #[test]
+fn native_runtime_direct_task_registers_captured_queue_before_submission() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(move || {
+        let queue = super::aurora_direct_channel_new(std::ptr::null_mut());
+        let args = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(args, 0, queue as i64);
+        let group = super::aurora_direct_task_group_new();
+        let task = unsafe {
+            super::aurora_direct_start_task_call(
+                direct_task_sends_to_captured_queue as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+
+        assert_eq!(
+            expect_queue_receive_item_int(
+                super::aurora_direct_channel_recv_with_registered_producers(queue)
+            ),
+            41,
+            "registered-producer iteration must wait for the admitted direct task instead of reporting a premature close"
+        );
+        assert_eq!(
+            expect_variant_ptr(super::aurora_direct_task_join(task), "TaskResult", "Ready",),
+            vec![Value::Unit]
+        );
+        assert!(expect_variant_ptr(
+            super::aurora_direct_channel_recv_with_registered_producers(queue),
+            "QueueReceive",
+            "Closed",
+        )
+        .is_empty());
+
+        unsafe {
+            release_value(task);
+            release_value(group);
+            release_value(queue);
+        }
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("captured Queue producer registration should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        baseline,
+        "normal completion must release the direct task claim flag"
+    );
+}
+
+#[test]
 fn native_runtime_invalid_task_stack_releases_transferred_arguments() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("invalid-stack retained argument");
     let argument_address = argument as usize;
@@ -6147,6 +6233,7 @@ fn rejected_direct_task_start(
 
 #[test]
 fn native_runtime_task_start_validation_releases_owned_abi_state() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let cases = [
         (
@@ -6212,6 +6299,7 @@ fn native_runtime_task_start_validation_releases_owned_abi_state() {
 
 #[test]
 fn native_runtime_task_stack_allocation_failure_releases_transferred_arguments() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("allocation-failure retained argument");
     let argument_address = argument as usize;
@@ -6291,6 +6379,7 @@ fn lightweight_task_stack_allocation_rounds_up_and_includes_a_guard_page() {
 
 #[test]
 fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let external = string_value("spawn failure argument");
     unsafe {
@@ -6307,6 +6396,7 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
             claim_flag_address,
             true,
             None,
+            |_| {},
         )
     }
     .expect_err("starting outside a scheduler should fail");
@@ -6328,6 +6418,7 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
 
 #[test]
 fn native_runtime_direct_task_claim_flag_survives_late_scope_unwind() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let result = run_lightweight_root_task(move || {
         let args = super::aurora_direct_arg_buffer_new(0);
@@ -6369,6 +6460,7 @@ fn native_runtime_direct_task_claim_flag_survives_late_scope_unwind() {
 
 #[test]
 fn native_runtime_direct_task_external_state_survives_panic_before_result_handoff() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("panic-path argument");
     let argument_address = argument as usize;
@@ -6421,6 +6513,7 @@ fn native_runtime_direct_task_external_state_survives_panic_before_result_handof
 
 #[test]
 fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     assert_eq!(super::aurora_direct_unbox_i64(int_value(17)), 17);
     assert_eq!(super::aurora_direct_unbox_f64(float_value(2.5)), 2.5);
     assert_eq!(super::aurora_direct_unbox_bool(bool_value(true)), 1);
@@ -6749,7 +6842,9 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     let buffer = super::aurora_direct_arg_buffer_new(2);
     super::aurora_direct_arg_buffer_store(buffer, 0, int_value(20) as i64);
     super::aurora_direct_arg_buffer_store(buffer, 1, int_value(22) as i64);
+    let buffer_address = buffer as usize;
     let started_sum = run_lightweight_root_task(move || {
+        let buffer = buffer_address as *mut i64;
         let group = super::aurora_direct_task_group_new();
         let task = unsafe {
             take_value(super::aurora_direct_start_task_call(
@@ -8587,6 +8682,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
 
 #[test]
 fn direct_runtime_helper_errors_surface_expected_diagnostics() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     if let Ok(case) = std::env::var("AURORA_DIRECT_RUNTIME_CASE") {
         match case.as_str() {
             "bytes-value-type" => {
@@ -12473,6 +12569,7 @@ unsafe extern "C-unwind" fn direct_task_cancel_while_holding_argument(
 
 #[test]
 fn native_runtime_direct_forced_exit_releases_frame_owned_argument_references() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let claim_flag_baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("owned by the direct task frame");
     let argument_address = argument as usize;
@@ -12524,6 +12621,7 @@ fn native_runtime_direct_forced_exit_releases_frame_owned_argument_references() 
 
 #[test]
 fn native_runtime_direct_cancellation_releases_frame_owned_argument_references() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let claim_flag_baseline = super::direct_task_claim_flag_live_count();
     let argument = string_value("owned by the cancelled direct task frame");
     let argument_address = argument as usize;
@@ -13281,7 +13379,9 @@ fn native_assert_failure_preserves_default_custom_empty_whitespace_and_span() {
 #[test]
 fn native_assert_failure_rejects_non_string_messages_without_consuming_them() {
     let message = int_value(17);
+    let message_address = message as usize;
     let diagnostic = run_lightweight_root_task(move || {
+        let message = message_address as *mut super::OpaqueValue;
         super::with_task_runtime_error_capture(|| {
             super::aurora_direct_assert_fail(message as i64, 6, 4);
         })

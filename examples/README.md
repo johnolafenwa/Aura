@@ -4,6 +4,16 @@ This directory contains runnable Aurora programs for the current compiler bootst
 
 The examples are organized by topic so they can serve both as quick references and as a companion to the `tutorials/` directory.
 
+Concurrency examples run on Aurora's pinned-worker scheduler on both maintained
+backends. The runtime uses the host's available cores by default; the
+provisional `AURORA_WORKERS=<positive integer>` environment override selects a
+specific worker count for testing or deployment. A task is assigned when it is
+spawned and its coroutine stack never migrates or participates in work
+stealing. Queue and Task handles are the maintained cross-worker channels;
+every other task capture and result remains an owned, compiler-checked
+`Transfer` value. Examples never rely on task scheduling, completion, or
+printed-output order unless they explicitly coordinate that order.
+
 ## Categories
 
 ### `basics/`
@@ -608,7 +618,8 @@ single task-result right on the first attempt.
   - `Queue.get_or(default, timeout=...)` for the ordinary timeout case
   - prints `timeout`
 - `bounded_queue.au`
-  - `Queue[T](capacity=...)` and `Queue.put(...)` waiting for bounded-capacity space on the shared scheduler
+  - `Queue[T](capacity=...)` and `Queue.put(...)` waiting for bounded-capacity
+    space on the pinned-worker scheduler
   - prints:
     - `queued 1`
     - `queued 2`

@@ -669,20 +669,27 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task
-bodies are not parallel. Every loop backedge has a compiler-inserted scheduling
-check, including the ordinary body tail and `continue`; `break` and `return`
-bypass it. Tight loops therefore no longer starve ready timers, queues, or
-sockets indefinitely, although a single long loop body can still delay
-siblings. The check does not inspect cancellation. Ordinary tasks request a
-guarded 512 KiB coroutine stack. The two explicit stack-start methods accept
-an exact `int64` byte request from 256 KiB through 64 MiB inclusive, reject
-out-of-range values without clamping, and page-round accepted requests. The
-256 KiB lower bound is for measured shallow tasks, not the generally safe
-default. The complete compiled Aurora HTTP example requires the 512 KiB
-default; an isolated runtime round trip can use 256 KiB protocol callers
-because it excludes the compiled program's language-execution frames and
-keeps deep host protocol frames on service workers.
+Aurora 0.1 executes task bodies on cooperative pinned scheduler workers on
+both maintained backends. The default count is the available parallelism
+reported by the host; the
+provisional `AURORA_WORKERS=<positive integer>` override selects an explicit
+count. Each child receives a stable assignment at spawn time. Coroutine stacks
+never migrate, work is not stolen, and `yield_now()` yields only to runnable
+work on the local worker.
+
+Every loop backedge has a compiler-inserted scheduling check, including the
+ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
+therefore no longer starve ready timers, queues, or sockets assigned to the
+same worker indefinitely, although a single long loop body can still delay
+same-worker siblings. The check does not inspect cancellation. Ordinary tasks
+request a guarded 512 KiB coroutine stack. The two explicit stack-start
+methods accept an exact `int64` byte request from 256 KiB through 64 MiB
+inclusive, reject out-of-range values without clamping, and page-round
+accepted requests. The 256 KiB lower bound is for measured shallow tasks, not
+the generally safe default. The complete compiled Aurora HTTP example requires
+the 512 KiB default; an isolated runtime round trip can use 256 KiB protocol
+callers because it excludes the compiled program's language-execution frames
+and keeps deep host protocol frames on service workers.
 Scheduler waits use persistent descriptor
 registrations, a timer heap, and direct Queue, task-completion, and
 blocking-pool notifications; an idle scheduler blocks until an event or
@@ -698,9 +705,12 @@ listener, socket, stream, HTTP-exchange, WebSocket, and TLS resources do not.
 an ordinary same-named trait cannot confer the property. A Copy value read
 through access becomes an owned snapshot and may cross; non-copy access cannot.
 
-The current scheduler remains single-worker. Phase 5.7 must make the runtime
-state behind Queue and Task handles cross-worker thread-safe before multicore
-execution.
+Queue and Task handle state is synchronized across workers. All other task
+captures and results remain owned `Transfer` data, preserving a share-nothing
+boundary. Cancellation and diagnostic context stay per task, while task
+scheduling, independent completion, and output order remain unspecified.
+Aurora exposes no worker-introspection API and promises neither work stealing
+nor parallel speedup for every workload.
 
 Task results are repeatable only for copy `T`, `Queue[...]`, or recursively
 repeatable `Task[...]`. `Task[T]` is always transferable but is copyable only
@@ -713,12 +723,13 @@ attempted duplication of a single-consumer right is `AU3009`, and using a
 directly observed handle again is moved-value `AU3001`.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
-protocol-step service with deep native worker stacks. The clean Mac14,9
-10,000-sleeper measurement records 197,836,800 incremental bytes, an
-amortized upper bound of 19,784 bytes (19.32 KiB) per requested sleeper
-including scheduler metadata and shared workload growth. The 100,000-sleeper
-plus 1,000-timer run passed 3 ms timer gates but reached 1,978,384,384 bytes
-worst RSS, so Aurora does not claim that population fits in 1.5 GiB.
+protocol-step service with deep native worker stacks. The clean Mac14,9 Phase
+5.6 pre-multicore 10,000-sleeper measurement records 197,836,800 incremental
+bytes, an amortized upper bound of 19,784 bytes (19.32 KiB) per requested
+sleeper including scheduler metadata and shared workload growth. That Phase
+5.6 100,000-sleeper plus 1,000-timer run passed 3 ms timer gates but reached
+1,978,384,384 bytes worst RSS, so Aurora does not claim that population fits
+in 1.5 GiB.
 
 The protocol service is lazily initialized and remains alive until process
 exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
@@ -752,8 +763,8 @@ Current collection notes:
 - bare Set iteration is shared; `for value in own set:` consumes
 - `for value in mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on
-  the shared runtime scheduler; construction, `put`, and `try_put` require a
-  structurally `Transfer` payload type
+  the pinned-worker runtime scheduler; construction, `put`, and `try_put`
+  require a structurally `Transfer` payload type
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
 - `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
@@ -842,8 +853,11 @@ Current expression/ergonomics limitations:
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,
   `TaskGroup()`, its four start methods, `yield_now()`, `wait_any(...)`, and
   `wait_all(...)` surface
-- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
-- Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
+- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
+  use the pinned-worker evented runtime scheduler
+- Aurora tasks are pinned-worker scheduler-backed lightweight tasks, and
+  ordinary file I/O offloads through that runtime instead of pinning a task on
+  a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not
 - every function return is owned: copy results are ordinary copies, while a

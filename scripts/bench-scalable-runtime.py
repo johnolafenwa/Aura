@@ -32,6 +32,7 @@ from typing import BinaryIO, Dict, Iterable, List, NamedTuple, Optional, Sequenc
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+REPORT_SCHEMA_VERSION = 3
 MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 READY_LINE_BYTES = 256
 READY_TIMEOUT_SECONDS = 20.0
@@ -43,6 +44,7 @@ NATURAL_COMPLETION_TIMEOUT_SECONDS = 40.0
 RSS_SAMPLE_INTERVAL_SECONDS = 0.05
 IDLE_SAMPLE_INTERVAL_SECONDS = 0.25
 TIMER_SAMPLE_INTERVAL_SECONDS = 0.05
+MULTICORE_SAMPLE_INTERVAL_SECONDS = 0.025
 SLEEPER_RSS_LIMIT_BYTES = 512 * 1024 * 1024
 MASSIVE_RSS_LIMIT_BYTES = 1536 * 1024 * 1024
 MASSIVE_SLEEPER_COUNT = 100_000
@@ -54,6 +56,18 @@ TIMER_ARM_SPAN_LIMIT_MS = 10.0
 STARVATION_SLEEP_MS = 10
 STARVATION_LATENCY_LIMIT_MS = 50
 EXPECTED_V6_STDOUT = b"10000000\n"
+MULTICORE_WORKERS = 4
+MULTICORE_TASK_COUNTS = (1, 4)
+MULTICORE_ITERATIONS = 80_000_000
+MULTICORE_MULTIPLIER = 48_271
+MULTICORE_MODULUS = 2_147_483_647
+MULTICORE_MIN_REPEATS = 5
+MULTICORE_DEFAULT_REPEATS = 7
+MULTICORE_MIN_SIGNAL_SECONDS = 0.250
+MULTICORE_MAX_RELATIVE_MAD = 0.15
+MULTICORE_MIN_FOUR_TASK_CPU_PERCENT = 150.0
+MULTICORE_GATE_RATIO = 1.6
+MULTICORE_TIMEOUT_SECONDS = 120.0
 
 WORKLOADS = {
     "sleepers": ROOT / "benchmarks/scalable_runtime/10k_sleepers.au",
@@ -62,6 +76,7 @@ WORKLOADS = {
     "timers": ROOT / "benchmarks/scalable_runtime/1000_timers.au",
     "idle": ROOT / "benchmarks/scalable_runtime/idle_10_tasks.au",
     "starvation": ROOT / "benchmarks/scalable_runtime/sleeper_vs_hot_loop.au",
+    "multicore": ROOT / "benchmarks/scalable_runtime/cpu_scaling.au",
     "int32": ROOT / "benchmarks/direct_integer_loops/int32_loop.au",
     "int64": ROOT / "benchmarks/direct_integer_loops/int64_loop.au",
 }
@@ -77,6 +92,7 @@ class Options(NamedTuple):
     repeats: int
     timer_repeats: int
     v6_repeats: int
+    multicore_repeats: int
     idle_seconds: float
     json_path: pathlib.Path
     allow_competing_processes: bool
@@ -92,6 +108,13 @@ class ProcessRow(NamedTuple):
 class ProcessStats(NamedTuple):
     rss_bytes: int
     cpu_seconds: float
+
+
+class MachTimebaseInfo(ctypes.Structure):
+    _fields_ = [
+        ("numer", ctypes.c_uint32),
+        ("denom", ctypes.c_uint32),
+    ]
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -140,6 +163,94 @@ def duration_summary(values: Sequence[float]) -> Dict[str, float]:
         "p95_s": nearest_rank(numeric, 0.95),
         "best_s": min(numeric),
     }
+
+
+def park_miller_checksum(
+    *,
+    tasks: int,
+    iterations: int,
+    multiplier: int = MULTICORE_MULTIPLIER,
+    modulus: int = MULTICORE_MODULUS,
+) -> int:
+    if tasks <= 0 or iterations < 0 or multiplier <= 0 or modulus <= 1:
+        raise BenchmarkError("invalid Park-Miller checksum parameters")
+    factor = pow(multiplier, iterations, modulus)
+    return sum((seed * factor) % modulus for seed in range(1, tasks + 1))
+
+
+def parse_multicore_ready_line(
+    line: bytes,
+    *,
+    expected_tasks: int,
+    expected_iterations: int,
+    expected_multiplier: int,
+    expected_modulus: int,
+) -> Dict[str, int]:
+    fields = line.rstrip(b"\n").split(b" ")
+    if (
+        not line.endswith(b"\n")
+        or len(fields) != 6
+        or fields[:2] != [b"READY", b"multicore"]
+    ):
+        raise BenchmarkError("unexpected multicore READY line: " + repr(line))
+    try:
+        tasks, iterations, multiplier, modulus = (
+            int(field.decode("ascii")) for field in fields[2:]
+        )
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid multicore READY integer field") from error
+    observed = (tasks, iterations, multiplier, modulus)
+    expected = (
+        expected_tasks,
+        expected_iterations,
+        expected_multiplier,
+        expected_modulus,
+    )
+    if observed != expected:
+        raise BenchmarkError(
+            "unexpected multicore READY values: expected "
+            + repr(expected)
+            + ", got "
+            + repr(observed)
+        )
+    return {
+        "tasks": tasks,
+        "iterations": iterations,
+        "multiplier": multiplier,
+        "modulus": modulus,
+    }
+
+
+def parse_multicore_done_line(
+    line: bytes, *, expected_tasks: int, expected_checksum: int
+) -> Dict[str, int]:
+    fields = line.rstrip(b"\n").split(b" ")
+    if (
+        not line.endswith(b"\n")
+        or len(fields) != 4
+        or fields[:2] != [b"DONE", b"multicore"]
+    ):
+        raise BenchmarkError("unexpected multicore DONE line: " + repr(line))
+    try:
+        tasks = int(fields[2].decode("ascii"))
+        checksum = int(fields[3].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BenchmarkError("invalid multicore DONE integer field") from error
+    if tasks != expected_tasks:
+        raise BenchmarkError(
+            "unexpected multicore DONE task count: expected "
+            + str(expected_tasks)
+            + ", got "
+            + str(tasks)
+        )
+    if checksum != expected_checksum:
+        raise BenchmarkError(
+            "unexpected multicore checksum: expected "
+            + str(expected_checksum)
+            + ", got "
+            + str(checksum)
+        )
+    return {"tasks": tasks, "checksum": checksum}
 
 
 def read_bounded_line(stream: BinaryIO, maximum_bytes: int) -> bytes:
@@ -595,6 +706,151 @@ def starvation_gate_summary(
     }
 
 
+def multicore_gate_summary(
+    pairs: Sequence[Dict[str, object]],
+    *,
+    host: Dict[str, object],
+) -> Dict[str, object]:
+    if len(pairs) < MULTICORE_MIN_REPEATS:
+        raise BenchmarkError(
+            "multicore benchmark requires at least "
+            + str(MULTICORE_MIN_REPEATS)
+            + " paired repetitions"
+        )
+    if len(pairs) % 2 == 0:
+        raise BenchmarkError("multicore paired repetition count must be odd")
+
+    one_task_durations: List[float] = []
+    four_task_durations: List[float] = []
+    four_task_cpu_percent: List[float] = []
+    paired_ratios: List[float] = []
+    pass_pair_indexes: List[int] = []
+    failed_pair_indexes: List[int] = []
+    for index, pair in enumerate(pairs):
+        expected_order = [1, 4] if index % 2 == 0 else [4, 1]
+        if pair.get("repeat") != index or pair.get("order") != expected_order:
+            raise BenchmarkError(
+                "multicore repetitions must preserve their alternating paired order"
+            )
+        runs = pair.get("runs")
+        if not isinstance(runs, dict):
+            raise BenchmarkError("multicore pair has no run map")
+        one = runs.get("1")
+        four = runs.get("4")
+        if not isinstance(one, dict) or not isinstance(four, dict):
+            raise BenchmarkError("multicore pair must contain one- and four-task runs")
+        one_elapsed = float(one["elapsed_s"])
+        four_elapsed = float(four["elapsed_s"])
+        four_cpu = float(four["process_cpu_percent"])
+        if (
+            not math.isfinite(one_elapsed)
+            or not math.isfinite(four_elapsed)
+            or one_elapsed <= 0.0
+            or four_elapsed <= 0.0
+            or not math.isfinite(four_cpu)
+            or four_cpu < 0.0
+        ):
+            raise BenchmarkError("multicore timing observations must be finite")
+        ratio = four_elapsed / one_elapsed
+        one_task_durations.append(one_elapsed)
+        four_task_durations.append(four_elapsed)
+        four_task_cpu_percent.append(four_cpu)
+        paired_ratios.append(ratio)
+        if ratio <= MULTICORE_GATE_RATIO:
+            pass_pair_indexes.append(index)
+        else:
+            failed_pair_indexes.append(index)
+
+    one_summary = duration_summary(one_task_durations)
+    four_summary = duration_summary(four_task_durations)
+    ratio_summary = duration_summary(paired_ratios)
+    one_relative_mad = (
+        float(one_summary["mad_s"]) / float(one_summary["median_s"])
+    )
+    four_relative_mad = (
+        float(four_summary["mad_s"]) / float(four_summary["median_s"])
+    )
+    ratio_of_medians = (
+        float(four_summary["median_s"]) / float(one_summary["median_s"])
+    )
+    paired_median_ratio = float(ratio_summary["median_s"])
+    median_four_task_cpu_percent = statistics.median(four_task_cpu_percent)
+
+    affinity_cpus = host.get("affinity_cpus")
+    physical_cores = host.get("physical_cores")
+    logical_cpus = host.get("logical_cpus")
+    qualified_cores = (
+        int(affinity_cpus)
+        if isinstance(affinity_cpus, int)
+        else int(physical_cores)
+        if isinstance(physical_cores, int)
+        else int(logical_cpus)
+        if isinstance(logical_cpus, int)
+        else 0
+    )
+    core_source = (
+        "affinity_cpus"
+        if isinstance(affinity_cpus, int)
+        else "physical_cores"
+        if isinstance(physical_cores, int)
+        else "logical_cpus"
+    )
+    invalid_reasons: List[str] = []
+    if qualified_cores < MULTICORE_WORKERS:
+        invalid_reasons.append(
+            "process affinity permits fewer than 4 CPUs"
+            if core_source == "affinity_cpus"
+            else "host has fewer than 4 qualified physical cores"
+            if core_source == "physical_cores"
+            else "host has fewer than 4 qualified logical CPUs"
+        )
+    if float(one_summary["median_s"]) < MULTICORE_MIN_SIGNAL_SECONDS:
+        invalid_reasons.append(
+            "one-task median is below the 250 ms minimum timing signal"
+        )
+    if one_relative_mad > MULTICORE_MAX_RELATIVE_MAD:
+        invalid_reasons.append("one-task MAD/median exceeds 15%")
+    if four_relative_mad > MULTICORE_MAX_RELATIVE_MAD:
+        invalid_reasons.append("four-task MAD/median exceeds 15%")
+    if median_four_task_cpu_percent < MULTICORE_MIN_FOUR_TASK_CPU_PERCENT:
+        invalid_reasons.append(
+            "four-task median process CPU is below 150% of wall time"
+        )
+
+    return {
+        "worker_environment": {"AURORA_WORKERS": str(MULTICORE_WORKERS)},
+        "paired_repeats": len(pairs),
+        "one_task_summary": one_summary,
+        "four_task_summary": four_summary,
+        "paired_ratio_summary": ratio_summary,
+        "paired_median_ratio": paired_median_ratio,
+        "ratio_of_medians": ratio_of_medians,
+        "limit_ratio": MULTICORE_GATE_RATIO,
+        "operator": "<=",
+        "pass_pair_indexes": pass_pair_indexes,
+        "failed_pair_indexes": failed_pair_indexes,
+        "one_task_relative_mad": one_relative_mad,
+        "four_task_relative_mad": four_relative_mad,
+        "relative_mad_limit": MULTICORE_MAX_RELATIVE_MAD,
+        "median_four_task_process_cpu_percent": median_four_task_cpu_percent,
+        "minimum_four_task_process_cpu_percent": (
+            MULTICORE_MIN_FOUR_TASK_CPU_PERCENT
+        ),
+        "core_qualification": {
+            "source": core_source,
+            "observed": qualified_cores,
+            "required": MULTICORE_WORKERS,
+            "passed": qualified_cores >= MULTICORE_WORKERS,
+        },
+        "invalid_reasons": invalid_reasons,
+        "valid": not invalid_reasons,
+        "passed": (
+            not invalid_reasons
+            and paired_median_ratio <= MULTICORE_GATE_RATIO
+        ),
+    }
+
+
 def parse_macos_ps_rss_bytes(text: str) -> int:
     try:
         kibibytes = int(text.strip())
@@ -603,17 +859,45 @@ def parse_macos_ps_rss_bytes(text: str) -> int:
     return kibibytes * 1024
 
 
-def parse_macos_rusage_v2(record: bytes) -> ProcessStats:
+def parse_macos_rusage_v2(
+    record: bytes,
+    *,
+    timebase_numer: int = 1,
+    timebase_denom: int = 1,
+) -> ProcessStats:
     # Darwin's rusage_info_v2 starts with a 16-byte UUID, followed by
-    # nanosecond user/system times. ri_resident_size is the seventh u64 field.
+    # user/system times in mach absolute-time ticks. ri_resident_size is the
+    # seventh u64 field.
     if len(record) < 72:
         raise BenchmarkError("macOS process rusage record is incomplete")
-    user_time_ns, system_time_ns = struct.unpack_from("=QQ", record, 16)
+    if timebase_numer <= 0 or timebase_denom <= 0:
+        raise BenchmarkError("macOS mach timebase must be positive")
+    user_time_ticks, system_time_ticks = struct.unpack_from("=QQ", record, 16)
     resident_size = struct.unpack_from("=Q", record, 64)[0]
+    cpu_nanoseconds = (
+        (user_time_ticks + system_time_ticks)
+        * timebase_numer
+        / timebase_denom
+    )
     return ProcessStats(
         rss_bytes=int(resident_size),
-        cpu_seconds=(user_time_ns + system_time_ns) / 1_000_000_000.0,
+        cpu_seconds=cpu_nanoseconds / 1_000_000_000.0,
     )
+
+
+@functools.lru_cache(maxsize=1)
+def macos_mach_timebase() -> Tuple[int, int]:
+    try:
+        function = ctypes.CDLL(None).mach_timebase_info
+    except (AttributeError, OSError) as error:
+        raise OSError("macOS mach_timebase_info is unavailable") from error
+    function.argtypes = [ctypes.POINTER(MachTimebaseInfo)]
+    function.restype = ctypes.c_int
+    info = MachTimebaseInfo()
+    result = function(ctypes.byref(info))
+    if result != 0 or info.numer == 0 or info.denom == 0:
+        raise OSError("macOS mach_timebase_info returned an invalid timebase")
+    return int(info.numer), int(info.denom)
 
 
 @functools.lru_cache(maxsize=1)
@@ -641,7 +925,12 @@ def read_macos_proc_pid_rusage(pid: int) -> ProcessStats:
         if error_number == 3:
             raise ProcessLookupError(pid)
         raise OSError(error_number, os.strerror(error_number))
-    return parse_macos_rusage_v2(buffer.raw)
+    timebase_numer, timebase_denom = macos_mach_timebase()
+    return parse_macos_rusage_v2(
+        buffer.raw,
+        timebase_numer=timebase_numer,
+        timebase_denom=timebase_denom,
+    )
 
 
 def parse_linux_status_rss_bytes(text: str) -> int:
@@ -818,6 +1107,18 @@ def require_monitor_evidence(monitor: ProcessMonitor, benchmark: str) -> None:
         raise BenchmarkError(benchmark + " produced no process samples")
 
 
+def controlled_runtime_environment(
+    *, worker_count: Optional[int] = None
+) -> Dict[str, str]:
+    environment = dict(os.environ)
+    environment.pop("AURORA_WORKERS", None)
+    if worker_count is not None:
+        if worker_count <= 0:
+            raise BenchmarkError("controlled worker count must be positive")
+        environment["AURORA_WORKERS"] = str(worker_count)
+    return environment
+
+
 def launch_binary(binary: pathlib.Path) -> subprocess.Popen:
     return subprocess.Popen(
         [str(binary)],
@@ -825,6 +1126,7 @@ def launch_binary(binary: pathlib.Path) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
+        env=controlled_runtime_environment(),
         shell=False,
     )
 
@@ -1128,6 +1430,7 @@ def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
+        env=controlled_runtime_environment(),
         shell=False,
         check=False,
     )
@@ -1161,6 +1464,7 @@ def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=ROOT,
+            env=controlled_runtime_environment(worker_count=1),
             shell=False,
             check=False,
             timeout=STARVATION_TIMEOUT_SECONDS,
@@ -1182,11 +1486,171 @@ def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
     )
     return {
         "command": [str(binary)],
+        "environment": {"AURORA_WORKERS": "1"},
         "elapsed_s": elapsed,
         **observation,
         "stdout": result.stdout.decode("ascii"),
         "returncode": result.returncode,
     }
+
+
+def run_multicore_once(
+    binary: pathlib.Path, *, tasks: int
+) -> Dict[str, object]:
+    if tasks not in MULTICORE_TASK_COUNTS:
+        raise BenchmarkError("multicore task count must be 1 or 4")
+    environment = controlled_runtime_environment(
+        worker_count=MULTICORE_WORKERS
+    )
+    process = subprocess.Popen(
+        [str(binary), str(tasks)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=ROOT,
+        env=environment,
+        shell=False,
+    )
+    monitor = ProcessMonitor(
+        process.pid,
+        sample_interval_seconds=MULTICORE_SAMPLE_INTERVAL_SECONDS,
+        allow_macos_ps_fallback=False,
+    )
+    try:
+        ready = read_process_ready_line(
+            process,
+            "multicore",
+            timeout_seconds=READY_TIMEOUT_SECONDS,
+        )
+        ready_observation = parse_multicore_ready_line(
+            ready,
+            expected_tasks=tasks,
+            expected_iterations=MULTICORE_ITERATIONS,
+            expected_multiplier=MULTICORE_MULTIPLIER,
+            expected_modulus=MULTICORE_MODULUS,
+        )
+        expected_checksum = park_miller_checksum(
+            tasks=tasks,
+            iterations=MULTICORE_ITERATIONS,
+        )
+        started_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
+        monitor.start()
+        started = time.perf_counter()
+        assert process.stdin is not None
+        process.stdin.write(b"GO multicore\n")
+        process.stdin.flush()
+        done = read_process_ready_line(
+            process,
+            "multicore",
+            timeout_seconds=MULTICORE_TIMEOUT_SECONDS,
+        )
+        elapsed = time.perf_counter() - started
+        finished_stats = read_process_stats(
+            process.pid, allow_macos_ps_fallback=False
+        )
+        done_observation = parse_multicore_done_line(
+            done,
+            expected_tasks=tasks,
+            expected_checksum=expected_checksum,
+        )
+        monitor.stop()
+
+        process.stdin.write(b"ACK multicore\n")
+        process.stdin.flush()
+        process.stdin.close()
+        process.stdin = None
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.communicate(timeout=3.0)
+            raise BenchmarkError(
+                "multicore benchmark did not exit after ACK"
+            ) from error
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        monitor.stop()
+    require_monitor_evidence(monitor, "multicore")
+    if process.returncode != 0:
+        raise BenchmarkError(
+            "multicore benchmark exited with status " + str(process.returncode)
+        )
+    if stderr:
+        raise BenchmarkError(
+            "multicore benchmark wrote unexpected stderr: "
+            + stderr.decode("utf-8", errors="replace")
+        )
+    if stdout:
+        raise BenchmarkError(
+            "multicore benchmark emitted trailing output after DONE: "
+            + repr(stdout)
+        )
+    cpu_delta = max(
+        0.0, finished_stats.cpu_seconds - started_stats.cpu_seconds
+    )
+    return {
+        "command": [str(binary), str(tasks)],
+        "environment": {"AURORA_WORKERS": str(MULTICORE_WORKERS)},
+        "ready": ready.decode("ascii"),
+        "ready_observation": ready_observation,
+        "go": "GO multicore\n",
+        "done": done.decode("ascii"),
+        "done_observation": done_observation,
+        "ack": "ACK multicore\n",
+        "elapsed_s": elapsed,
+        "cpu_start_s": started_stats.cpu_seconds,
+        "cpu_end_s": finished_stats.cpu_seconds,
+        "process_cpu_s": cpu_delta,
+        "process_cpu_percent": cpu_delta / elapsed * 100.0,
+        "process_samples": monitor.samples,
+        "sample_interval_s": monitor.sample_interval_seconds,
+        "sampling_error": monitor.sampling_error,
+        "completion": {
+            "returncode": process.returncode,
+            "stdout": "",
+            "stderr": "",
+        },
+    }
+
+
+def run_multicore_benchmark(
+    binary: pathlib.Path, *, repeats: int
+) -> Dict[str, object]:
+    if repeats < MULTICORE_MIN_REPEATS or repeats % 2 == 0:
+        raise BenchmarkError(
+            "multicore repeats must be odd and at least "
+            + str(MULTICORE_MIN_REPEATS)
+        )
+    warmups = {
+        "1": run_multicore_once(binary, tasks=1),
+        "4": run_multicore_once(binary, tasks=4),
+    }
+    pairs: List[Dict[str, object]] = []
+    for repeat in range(repeats):
+        order = (1, 4) if repeat % 2 == 0 else (4, 1)
+        runs: Dict[str, Dict[str, object]] = {}
+        for tasks in order:
+            runs[str(tasks)] = run_multicore_once(binary, tasks=tasks)
+        one_elapsed = float(runs["1"]["elapsed_s"])
+        four_elapsed = float(runs["4"]["elapsed_s"])
+        ratio = four_elapsed / one_elapsed
+        pairs.append(
+            {
+                "repeat": repeat,
+                "order": list(order),
+                "runs": runs,
+                "paired_ratio": ratio,
+                "pair_passed": ratio <= MULTICORE_GATE_RATIO,
+            }
+        )
+    return {"warmups": warmups, "pairs": pairs}
 
 
 def build_workloads(
@@ -1399,6 +1863,14 @@ def validate_options(options: Options, root: pathlib.Path = ROOT) -> None:
     if options.repeats <= 0 or options.timer_repeats <= 0 or options.v6_repeats <= 0:
         raise BenchmarkError("all repeat counts must be positive")
     if (
+        options.multicore_repeats < MULTICORE_MIN_REPEATS
+        or options.multicore_repeats % 2 == 0
+    ):
+        raise BenchmarkError(
+            "--multicore-repeats must be odd and at least "
+            + str(MULTICORE_MIN_REPEATS)
+        )
+    if (
         not math.isfinite(options.idle_seconds)
         or options.idle_seconds <= 0
         or options.idle_seconds > 30
@@ -1533,6 +2005,12 @@ def hardware_record() -> Dict[str, object]:
                 memory_bytes = int(line.split()[1]) * 1024
                 break
     uname = platform.uname()
+    affinity_cpus = None
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            affinity_cpus = len(os.sched_getaffinity(0))
+        except OSError:
+            affinity_cpus = None
     return {
         "system": system,
         "release": uname.release,
@@ -1543,6 +2021,7 @@ def hardware_record() -> Dict[str, object]:
         "cpu_model": cpu_model,
         "logical_cpus": os.cpu_count(),
         "physical_cores": physical_cores,
+        "affinity_cpus": affinity_cpus,
         "memory_bytes": memory_bytes,
         "python": platform.python_version(),
     }
@@ -1635,6 +2114,11 @@ def parse_options(argv: Optional[Sequence[str]] = None) -> Options:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--timer-repeats", type=int, default=3)
     parser.add_argument("--v6-repeats", type=int, default=5)
+    parser.add_argument(
+        "--multicore-repeats",
+        type=int,
+        default=MULTICORE_DEFAULT_REPEATS,
+    )
     parser.add_argument("--idle-seconds", type=float, default=30.0)
     parser.add_argument("--json", type=pathlib.Path, required=True, dest="json_path")
     parser.add_argument(
@@ -1649,6 +2133,7 @@ def parse_options(argv: Optional[Sequence[str]] = None) -> Options:
         repeats=arguments.repeats,
         timer_repeats=arguments.timer_repeats,
         v6_repeats=arguments.v6_repeats,
+        multicore_repeats=arguments.multicore_repeats,
         idle_seconds=arguments.idle_seconds,
         json_path=arguments.json_path,
         allow_competing_processes=arguments.allow_competing_processes,
@@ -1687,7 +2172,7 @@ def execute(options: Options) -> Dict[str, object]:
     host = hardware_record()
     repository = repository_record(ROOT)
     report: Dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": REPORT_SCHEMA_VERSION,
         "label": options.label,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runner_command": [sys.executable, str(pathlib.Path(__file__).resolve()), *sys.argv[1:]],
@@ -1698,6 +2183,7 @@ def execute(options: Options) -> Dict[str, object]:
             "repeats": options.repeats,
             "timer_repeats": options.timer_repeats,
             "v6_repeats": options.v6_repeats,
+            "multicore_repeats": options.multicore_repeats,
             "idle_seconds": options.idle_seconds,
             "ready_timeout_seconds": READY_TIMEOUT_SECONDS,
             "massive_ready_timeout_seconds": MASSIVE_READY_TIMEOUT_SECONDS,
@@ -1711,6 +2197,16 @@ def execute(options: Options) -> Dict[str, object]:
             "rss_sample_interval_seconds": RSS_SAMPLE_INTERVAL_SECONDS,
             "idle_sample_interval_seconds": IDLE_SAMPLE_INTERVAL_SECONDS,
             "timer_sample_interval_seconds": TIMER_SAMPLE_INTERVAL_SECONDS,
+            "multicore_sample_interval_seconds": (
+                MULTICORE_SAMPLE_INTERVAL_SECONDS
+            ),
+            "multicore_iterations": MULTICORE_ITERATIONS,
+            "multicore_workers": MULTICORE_WORKERS,
+            "multicore_min_signal_seconds": MULTICORE_MIN_SIGNAL_SECONDS,
+            "multicore_max_relative_mad": MULTICORE_MAX_RELATIVE_MAD,
+            "multicore_min_four_task_cpu_percent": (
+                MULTICORE_MIN_FOUR_TASK_CPU_PERCENT
+            ),
             "allow_competing_processes": options.allow_competing_processes,
         },
         "quiet_process_checks": {
@@ -1773,6 +2269,10 @@ def execute(options: Options) -> Dict[str, object]:
         v6 = run_v6_benchmark(
             binaries["int32"], binaries["int64"], options.v6_repeats
         )
+        multicore = run_multicore_benchmark(
+            binaries["multicore"],
+            repeats=options.multicore_repeats,
+        )
 
     sleeper_rss_gate = rss_gate_summary(
         sleepers,
@@ -1791,6 +2291,10 @@ def execute(options: Options) -> Dict[str, object]:
     idle_cpu_max = max(float(run["cpu_percent"]) for run in idle)
     all_arm_spans_valid = all(bool(run["arm_span_valid"]) for run in timers)
     starvation_gate = starvation_gate_summary(starvation)
+    multicore_gate = multicore_gate_summary(
+        multicore["pairs"],
+        host=host,
+    )
     gates = {
         "sleepers_peak_rss": sleeper_rss_gate,
         "massive_concurrency": massive_gate,
@@ -1819,6 +2323,7 @@ def execute(options: Options) -> Dict[str, object]:
             "passed": idle_cpu_max < IDLE_CPU_LIMIT_PERCENT,
         },
         "starvation_latency": starvation_gate,
+        "multicore_scaling": multicore_gate,
     }
     report["benchmarks"] = {
         "sleepers": {"runs": sleepers},
@@ -1834,6 +2339,7 @@ def execute(options: Options) -> Dict[str, object]:
         "idle": {"runs": idle},
         "starvation": {"runs": starvation},
         "v6": v6,
+        "multicore": multicore,
     }
     report["gates"] = gates
     report["performance_gates_passed"] = all(

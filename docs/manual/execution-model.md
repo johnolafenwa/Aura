@@ -272,7 +272,16 @@ as a cleanup mechanism.
 
 ## Tasks And Scheduler
 
-Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. A task can also yield explicitly with `yield_now()`. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
+Aurora lightweight tasks run on cooperative pinned scheduler workers. The
+runtime uses the available parallelism reported by the host by default; the
+`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+count. Each child receives a stable assignment when it is spawned. Its
+coroutine stack never migrates and the runtime does not steal tasks between
+workers. Operations such as queue waits, task waits, sleep, nonblocking
+sockets, and scheduler-integrated I/O yield instead of creating one OS thread
+per Aurora task. A task can also yield explicitly with `yield_now()`. The
+bounded blocking-worker pool may execute host calls concurrently, but those
+service workers do not run Aurora code.
 
 The compiler inserts a cooperative scheduling check on every semantic loop
 backedge. Reaching the ordinary tail of a `while` or `for` body participates,
@@ -282,12 +291,12 @@ the scheduler so ready timers, Queue operations, and socket work are not
 starved indefinitely.
 
 A loop safepoint is not preemption and does not inspect cancellation. A single
-long iteration can still delay every sibling until the body reaches its
+long iteration can still delay every sibling pinned to the same worker until the body reaches its
 backedge, and long straight-line CPU work with no loop or scheduler operation
 can do the same. Use `cancelled()` when the task must observe cancellation, and
 use `yield_now()` when the program needs an explicit scheduling point between
 chosen chunks. Neither automatic nor explicit yielding specifies which ready
-task runs next.
+local task runs next.
 
 MIR execution amortizes the cooperative yield with 8 units of function-local
 loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
@@ -307,21 +316,33 @@ The separate isolated runtime round trip that forces protocol callers to
 256 KiB proves that service workers now own the deep host protocol frames; it
 does not measure the full compiled task stack.
 
-`yield_now()` places the current lightweight task back in the ready set and
-returns when the scheduler selects it again. It gives other runnable tasks an
-opportunity to proceed without waiting for an event or deadline, but neither a
-different task running nor any particular ready-task order is guaranteed. With
-no current schedulable lightweight task, it returns without effect.
+`yield_now()` places the current lightweight task back in its worker's ready
+set and returns when that worker selects it again. It gives other runnable
+local tasks an opportunity to proceed without waiting for an event or
+deadline, but it does not migrate the coroutine, steal work, guarantee that a
+different task runs, or specify a ready-task order. With no current
+schedulable lightweight task, it returns without effect.
 
 The scheduler owns a persistent event reactor. Nonblocking descriptors remain
 registered across scheduler turns, deadlines are ordered in a timer heap, and
-Queue, task-completion, and blocking-pool events notify the ready queue
-directly. Registration uses a check-subscribe-check protocol with wait epochs,
+Queue, task-completion, and blocking-pool events notify the responsible ready
+queue directly, including across workers. Registration uses a
+check-subscribe-check protocol with wait epochs,
 so a readiness edge racing with suspension is not lost and stale wakeups do
 not resume a later wait. If no task is ready, the scheduler blocks until the
 next event or deadline; there is no periodic park tick.
 
-Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
+Queue and Task handles are the maintained cross-worker communication surface.
+Every other capture and result is owned `Transfer` data, preserving the
+share-nothing boundary. Cancellation and diagnostic context are installed per
+task and remain isolated across workers.
+
+Scheduling order among multiple ready tasks, completion order among
+independent tasks, and program-output order are not specified. Programs
+coordinate through queues, task results, cancellation, and other documented
+synchronization rather than timing assumptions. Aurora exposes no worker
+identity or affinity API. The multicore guarantee applies to task execution;
+it does not promise preemption, work stealing, or speedup for every workload.
 
 Starting a child from a running task does not mutate the live scheduler
 through an alias. The runtime first prepares the child's guarded stack and
@@ -379,8 +400,10 @@ transferable result has a unique observation right;
 each direct result call consumes it on every outcome, and multi-task waits
 consume the complete task vector. `wait_any` abandons the unchosen rights.
 Task captures, results, and Queue payloads must also satisfy the structural
-Transfer check before the separate pinned-worker stage can enable parallel
-task execution.
+Transfer check before the child is admitted to its spawn-time pinned worker.
+Queue and Task handle state is synchronized for cross-worker notification and
+observation; every other value crossing the boundary remains owned and
+share-nothing.
 
 The runtime also protects a non-repeatable stored result with an atomic
 one-winner claim. A failed second claim traps with `AU4001` and

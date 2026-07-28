@@ -11,6 +11,8 @@ use std::process;
 use std::slice;
 use std::str;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
@@ -40,7 +42,7 @@ use crate::runtime_value::{
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
     sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
-    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability,
+    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -111,9 +113,9 @@ impl Default for DirectTaskRuntimeState {
 }
 
 thread_local! {
-    // Native Aurora tasks are stackful coroutines multiplexed on one OS thread, so
-    // ordinary thread-local flags leak across every yield. Keep all resumable direct
-    // runtime state behind the current lightweight-task identity instead.
+    // Each pinned worker multiplexes several stackful native tasks, so an
+    // ordinary worker-local flag would leak across every yield. Keep all
+    // resumable direct state behind the globally unique task identity instead.
     static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, DirectTaskRuntimeState>> =
         const { RefCell::new(BTreeMap::new()) };
 }
@@ -121,7 +123,19 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     static DIRECT_VALUE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
-    static DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+static DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static DIRECT_TASK_CLAIM_FLAG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn direct_task_claim_flag_test_guard() -> MutexGuard<'static, ()> {
+    match DIRECT_TASK_CLAIM_FLAG_TEST_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn direct_task_runtime_key() -> u64 {
@@ -2335,24 +2349,21 @@ pub extern "C-unwind" fn aurora_direct_print_u64(value: u64) {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
     task_runtime_boundary(|| {
-        write_stdout(&render_float(value));
-        write_stdout("\n");
+        write_stdout(&format!("{}\n", render_float(value)));
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_f32(value: f64) {
     task_runtime_boundary(|| {
-        write_stdout(&render_float32(value as f32));
-        write_stdout("\n");
+        write_stdout(&format!("{}\n", render_float32(value as f32)));
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
     task_runtime_boundary(|| {
-        write_stdout(render_bool(value));
-        write_stdout("\n");
+        write_stdout(&format!("{}\n", render_bool(value)));
     })
 }
 
@@ -3970,9 +3981,9 @@ pub extern "C-unwind" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i6
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        let rendered = unsafe { with_value(value, Value::render) };
+        let mut rendered = unsafe { with_value(value, Value::render) };
+        rendered.push('\n');
         write_stdout(&rendered);
-        write_stdout("\n");
     })
 }
 
@@ -8556,7 +8567,7 @@ unsafe fn release_abandoned_direct_task_args(args_address: usize) {
 fn allocate_direct_task_claim_flag() -> usize {
     let address = Box::into_raw(Box::new(AtomicBool::new(false))) as usize;
     #[cfg(test)]
-    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(|count| count.set(count.get() + 1));
+    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
     address
 }
 
@@ -8573,11 +8584,14 @@ unsafe fn release_direct_task_claim_flag(claim_flag_address: usize) {
         drop(Box::from_raw(claim_flag_address as *mut AtomicBool));
     }
     #[cfg(test)]
-    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(|count| {
-        let current = count.get();
-        assert!(current > 0, "direct task claim-flag live count underflowed");
-        count.set(current - 1);
-    });
+    assert!(
+        DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_sub(1)
+            })
+            .is_ok(),
+        "direct task claim-flag live count underflowed"
+    );
 }
 
 unsafe fn release_direct_task_external_state(args_address: usize, claim_flag_address: usize) {
@@ -8606,7 +8620,7 @@ impl Drop for DirectTaskExternalStateGuard {
 
 #[cfg(test)]
 fn direct_task_claim_flag_live_count() -> usize {
-    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.with(Cell::get)
+    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.load(Ordering::SeqCst)
 }
 
 unsafe fn consume_direct_task_result(result_ptr: *mut OpaqueValue, result_is_copy: bool) -> Value {
@@ -8646,14 +8660,18 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     }
 }
 
-unsafe fn spawn_direct_task_with_external_state(
+unsafe fn spawn_direct_task_with_external_state<R>(
     cancellation: CancellationContext,
     thunk: NativeThunk,
     args_address: usize,
     claim_flag_address: usize,
     result_is_copy: bool,
     stack_size: Option<usize>,
-) -> std::result::Result<TaskValue, Diagnostic> {
+    register_before_submit: R,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    R: FnOnce(&TaskValue),
+{
     let entry = move || {
         // This guard is created on the coroutine stack rather than captured by
         // the force-reset closure. Normal return and ordinary Rust unwinding
@@ -8683,12 +8701,13 @@ unsafe fn spawn_direct_task_with_external_state(
         }
     };
     let task = unsafe {
-        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability(
+        spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered(
             cancellation,
             stack_size,
             result_is_copy,
             entry,
             forced_exit_cleanup,
+            register_before_submit,
         )
     };
     match task {
@@ -8794,18 +8813,18 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
                 claim_flag_address,
                 result_is_copy != 0,
                 stack_size,
+                |task| {
+                    group.register_task(task.clone());
+                    for queue in &queue_producers {
+                        queue.register_producer_task(task);
+                    }
+                },
             )
         };
         let task = match task {
             Ok(task) => task,
             Err(error) => runtime_diagnostic_error(error),
         };
-
-        group.register_task(task.clone());
-        for queue in queue_producers {
-            queue.register_producer_task(&task);
-        }
-
         if returns_handle == 0 {
             return boxed_value(Value::Unit);
         }

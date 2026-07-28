@@ -58,7 +58,13 @@ Aurora's MIR runtime centers around:
 
 That is why `run` wraps execution in a thread builder instead of just calling a function directly.
 
-This dedicated thread is the one thread that executes Aurora task bodies. It reserves a 64 MiB host stack. Lightweight child tasks are stackful coroutines scheduled on that same thread, with a guarded 512 KiB default stack. `TaskGroup.start_with_stack` and `start_soon_with_stack` can select a guarded stack from 256 KiB through 64 MiB for an individual child.
+This dedicated entry thread reserves a 64 MiB host stack. Aurora task bodies
+execute as stackful coroutines on the pinned-worker scheduler. The worker
+count defaults to the available parallelism reported by the host, and a child
+remains on its
+spawn-time worker. Lightweight tasks use a guarded 512 KiB default stack.
+`TaskGroup.start_with_stack` and `start_soon_with_stack` can select a guarded
+stack from 256 KiB through 64 MiB for an individual child.
 
 Bounded process-lifetime services keep blocking and stack-heavy host work off
 the coroutine stacks: the blocking-I/O pool owns ordinary blocking calls, the
@@ -67,7 +73,7 @@ the recursive parser frames for dynamic `json.parse`. The legacy
 `json.is_valid` and `json.parse_string_map` compatibility helpers remain
 bounded caller-side operations and do not enter that service. These services
 resume the pinned coroutine after completion; they do not execute Aurora task
-bodies or make the language runtime parallel.
+bodies and are distinct from the pinned-worker task-execution parallelism.
 
 ## The core execution loop
 
@@ -183,12 +189,17 @@ Aurora's MIR runtime supports:
 
 Important details:
 
-- task-group children run as stackful coroutines on the single Aurora scheduler thread, with shared cancellation state
+- task-group children run as stackful coroutines on stable spawn-time workers,
+  with per-task cancellation state
 - task groups provide child cancellation scopes
 - `wait_any(...)` and `wait_all(...)` reuse the shared runtime scheduler deadline helpers
 - `Queue.get(timeout=...)` and I/O methods use deadline-aware helpers
-- compiler-inserted loop-backedge safepoints eventually yield from a hot loop, but one long iteration or straight-line CPU region can still starve sibling tasks
-- descriptor registrations persist in the reactor, deadlines live in a timer heap, and Queue, task-completion, and worker-pool events notify the scheduler directly
+- compiler-inserted loop-backedge safepoints eventually yield from a hot loop
+  to runnable work on the local worker, but one long iteration or straight-line
+  CPU region can still starve siblings pinned there
+- descriptor registrations persist in the reactor, deadlines live in a timer
+  heap, and Queue, task-completion, and worker-pool events notify the
+  responsible worker directly
 
 ### Scheduler ownership and nested starts
 
@@ -225,12 +236,28 @@ completes. Scheduler-owned containment callbacks are non-panicking host
 cleanup; a panic would interrupt retirement of the remaining task records and
 is forbidden by their internal safety contract.
 
-This design removes the aliased mutable-scheduler pattern, but it is still
-single-threaded: the task context and broker deliberately use `Rc`/`RefCell`.
-Provisional ADR-0033 defines the Phase 5.6 structural Transfer checks that must
-precede a second worker; those static checks do not make this broker or the
-runtime handles thread-safe. Pinned workers, synchronized Queue/Task internals,
-and multicore task execution remain the separate Phase 5.7 gate.
+Phase 5.7 hosts this scheduler state on N pinned workers. N defaults to the
+available parallelism reported by the host; the provisional
+`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+count. A child is assigned when admitted at spawn time and keeps that worker
+for its lifetime. Its coroutine stack never migrates and no worker steals
+another worker's ready tasks. Consequently `yield_now()` requeues only on the
+current worker.
+
+Queue and Task handle internals provide the synchronized cross-worker
+notification and observation paths. Provisional ADR-0033 supplies the
+share-nothing boundary for everything else: captures and results cross only as
+owned `Transfer` values, while live host authority and capability views remain
+on their owning task. Current-task cancellation and diagnostic context are
+installed and restored per task, so activity on one worker cannot borrow or
+replace another worker's ambient task state.
+
+MIR and direct-native tasks use the same pinned-worker contract. Ready-task
+order, independent completion order, and emitted-output order remain
+unspecified. The runtime exposes no worker identity or affinity control and
+makes no promise of preemption, migration, work stealing, or workload-wide
+parallel speedup; the multicore claim is limited to admitted Aurora task
+execution.
 
 ## Networking and I/O
 

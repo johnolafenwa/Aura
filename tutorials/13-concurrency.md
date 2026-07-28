@@ -1,6 +1,9 @@
 # Concurrency
 
-Aurora's maintained concurrency surface is built around scheduler-backed lightweight tasks, structured task groups, typed queues, and explicit wait helpers. Queue waits, task waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all share the same runtime scheduler.
+Aurora's maintained concurrency surface is built around pinned-worker
+scheduler-backed lightweight tasks, structured task groups, typed queues, and
+explicit wait helpers. Queue waits, task waits, `sleep(...)`, socket waits,
+and the maintained HTTP helpers all use the same pinned-worker runtime.
 
 The maintained user-facing model is:
 
@@ -156,9 +159,9 @@ type; source code cannot declare or implement a `Transfer` trait. Copy data,
 Queue/Task handle identities can cross. Shared or mutable access,
 `random.Rng`, `TaskGroup`, and live host resources cannot.
 
-This is a static boundary established before multicore execution. Phase 5.7
-must make the state behind Queue and Task handles cross-worker thread-safe
-before more than one Aurora worker may use them.
+This static boundary remains the share-nothing rule during multicore task
+execution. Queue and Task handle state is synchronized for cross-worker use;
+every other capture and result crosses as owned `Transfer` data.
 
 A bare target parameter still grants shared access, but it borrows from the
 child's owned capture rather than the caller's value. An `own` parameter may
@@ -322,28 +325,45 @@ If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scop
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
-Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in
-parallel. The compiler inserts a cooperative scheduling check on every loop
-backedge, including a normal body tail and `continue`, so a tight loop no
-longer freezes ready timers, Queue operations, or socket work indefinitely.
-`break` and `return` leave the loop without taking that check. Each ordinary
+Aurora 0.1 runs task bodies on cooperative pinned scheduler workers on both
+maintained backends. The default worker count is the available parallelism
+reported by the host;
+the provisional `AURORA_WORKERS=<positive integer>` environment override
+selects an explicit count. A task receives its stable worker assignment when
+it is spawned. Its coroutine stack never migrates, the runtime does not steal
+work, and `yield_now()` yields only to runnable work on that worker.
+
+The compiler inserts a cooperative scheduling check on every loop backedge,
+including a normal body tail and `continue`, so a tight loop no longer freezes
+ready timers, Queue operations, or socket work assigned to the same worker
+indefinitely. `break` and `return` leave the loop without taking that check.
+One long loop body or straight-line computation can still delay same-worker
+siblings, and the check does not inspect cancellation. Each ordinary
 lightweight task requests a guarded 512 KiB coroutine stack; the explicit
 stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
-and blocking-pool events notify the scheduler directly. With nothing ready,
-the scheduler blocks until an event or deadline rather than waking on a
-periodic tick.
+and blocking-pool events notify the responsible worker directly. With nothing
+ready locally, a worker blocks until work, an event, or a deadline rather than
+waking on a periodic tick.
+
+Queue and Task handles are the maintained cross-worker channels. Every other
+task capture and result stays owned and share-nothing through structural
+`Transfer`. Cancellation and diagnostic context remain isolated per task.
+Scheduling, independent completion, and printed-output order are unspecified,
+and Aurora exposes no worker-index or affinity-introspection API. Pinned
+workers enable multicore task execution; they do not promise work stealing,
+preemption, or parallel speedup for every workload.
 
 Deep HTTP, TLS, and maintained Unix WebSocket library steps run on a distinct
 bounded protocol service with deep native worker stacks. Protocol state
 returns to the lightweight task after each bounded, nonblocking step and
-before cancellation or reactor waiting resumes. On the clean Mac14,9
-measurement, 10,000 parked sleepers used 197,836,800 incremental bytes above
-their same-process baseline, an amortized upper bound of 19,784 bytes
-(19.32 KiB) per requested sleeper including scheduler metadata and shared
-workload growth. The 100,000-sleeper plus 1,000-timer run passed its 3 ms timer
-gates but reached 1,978,384,384 bytes worst RSS. Aurora makes no claim that
-population fits in 1.5 GiB.
+before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase 5.6
+pre-multicore measurement, 10,000 parked sleepers used 197,836,800 incremental
+bytes above their same-process baseline, an amortized upper bound of 19,784
+bytes (19.32 KiB) per requested sleeper including scheduler metadata and shared
+workload growth. That Phase 5.6 100,000-sleeper plus 1,000-timer run passed its
+3 ms timer gates but reached 1,978,384,384 bytes worst RSS. Aurora makes no
+claim that population fits in 1.5 GiB.
 
 The protocol service starts lazily and lives until process exit; Aurora 0.1
 does not expose a shutdown or join operation for it. File reads, resolver work,
@@ -470,7 +490,8 @@ See:
 
 The runtime is intentionally simple:
 
-- queue waits, task waits, `sleep(...)`, socket waits, and HTTP waits all use the shared runtime scheduler
+- queue waits, task waits, `sleep(...)`, socket waits, and HTTP waits all use
+  the pinned-worker runtime scheduler
 - the scheduler keeps descriptor registrations persistent, orders deadlines in
   a timer heap, receives direct Queue/task-completion/blocking-pool
   notifications, and blocks without a periodic idle tick

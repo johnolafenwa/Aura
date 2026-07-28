@@ -1,0 +1,62 @@
+def worker(
+    ready: Queue[int32],
+    release: Queue[int32],
+    value: int32
+) -> int32:
+    ready.put(value)
+    match release.get(timeout=2s):
+        case QueueReceive.Item(_):
+            return value * 10
+        case QueueReceive.Closed:
+            return -1
+        case QueueReceive.TimedOut:
+            return -2
+        case QueueReceive.Cancelled:
+            return -3
+
+def wait_until_ready(ready: Queue[int32]) -> bool:
+    match ready.get(timeout=2s):
+        case QueueReceive.Item(_):
+            return true
+        case QueueReceive.Closed:
+            return false
+        case QueueReceive.TimedOut:
+            return false
+        case QueueReceive.Cancelled:
+            return false
+
+def print_result(task: Task[int32]) -> None:
+    match task.result(timeout=2s):
+        case TaskResult.Ready(value):
+            print(value)
+        case TaskResult.Error(_):
+            print(-4)
+        case TaskResult.TimedOut:
+            print(-5)
+        case TaskResult.Cancelled:
+            print(-6)
+
+def main():
+    ready = Queue[int32]()
+    release = Queue[int32]()
+
+    with TaskGroup() as tasks:
+        first = tasks.start(worker, ready, release, 1)
+        second = tasks.start(worker, ready, release, 2)
+        third = tasks.start(worker, ready, release, 3)
+        fourth = tasks.start(worker, ready, release, 4)
+
+        wait_until_ready(ready)
+        wait_until_ready(ready)
+        wait_until_ready(ready)
+        wait_until_ready(ready)
+
+        release.put(1)
+        release.put(1)
+        release.put(1)
+        release.put(1)
+
+        print_result(first)
+        print_result(second)
+        print_result(third)
+        print_result(fourth)

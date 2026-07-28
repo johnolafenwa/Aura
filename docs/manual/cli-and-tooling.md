@@ -56,6 +56,19 @@ cargo run -p aura -- run examples/control_flow/while_break_continue.au
 
 Runtime diagnostics include source context where possible.
 
+Task execution uses the available parallelism reported by the host by default.
+The provisional
+`AURORA_WORKERS` environment override accepts a positive integer, including a
+count larger than the host's available-core count. For example,
+`AURORA_WORKERS=4 aura run app.au` selects four pinned task workers.
+`AURORA_WORKERS=1` preserves single-worker cooperative execution through the
+same pinned-worker architecture.
+
+MIR runs, forced-direct runs, and standalone direct binaries use the same
+override. Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing
+values stop execution with `AU4006` and identify the raw invalid value.
+Checking, analysis, completion, and formatting do not start the task runtime.
+
 ## Building
 
 ```bash

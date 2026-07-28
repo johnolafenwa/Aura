@@ -49,11 +49,31 @@ This page documents known current limits of the Aurora compiler and runtime.
 - MIR runtime traps include Aurora function names and source spans in an innermost-first call-chain note. A trap escaping a structured child task also includes the child entry and its spawn ancestry.
 - Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to the later native-frames stage of the Batch 4 runtime work.
 - Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to that Batch 4 native-frames stage; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
-- Aurora task code executes on one cooperative scheduler thread per program. Aurora 0.1 does not run two Aurora tasks in parallel; blocking-worker threads perform host operations only.
+- Aurora task code executes on pinned cooperative scheduler workers. The
+  default count is the available parallelism reported by the host; the
+  `AURORA_WORKERS=<positive integer>` override selects an explicit count.
+  Assignment happens when a child is spawned and remains stable for its
+  lifetime: coroutine stacks never migrate and the runtime does not steal work
+  between workers.
+- A positive `AURORA_WORKERS` value may exceed the host's available-core count.
+  Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values
+  are rejected before execution with `AU4006` and
+  ``invalid AURORA_WORKERS value `<raw>`: expected a positive integer``.
 - Scheduling is cooperative, not preemptive. The compiler checks every loop
-  backedge and eventually yields from a tight loop, but one long loop body or
-  long straight-line computation can still delay every other Aurora task. The
+  backedge and eventually yields from a tight loop, but only to runnable work
+  assigned to that task's worker. One long loop body or long straight-line
+  computation can still delay siblings pinned to the same worker. The
   automatic checks do not inspect cancellation.
+- Queue and Task handles are the maintained cross-worker communication
+  surface. All other task captures and results must be owned `Transfer` values,
+  preserving a share-nothing boundary. A task's cancellation and diagnostic
+  context remain isolated from work executing on other workers.
+- Task scheduling, cross-worker completion, and program-output order are
+  unspecified. There is no worker-index or affinity-introspection API.
+- Pinned task execution is maintained on the MIR and direct native backends.
+  Aurora does not promise work stealing, preemption, detached tasks, a
+  particular parallel speedup, or broader automatic parallelism outside task
+  execution.
 - Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
   `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
   `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
@@ -68,12 +88,15 @@ This page documents known current limits of the Aurora compiler and runtime.
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.
-- On the clean Mac14,9 measurement, 10,000 parked sleepers used 205,389,824
-  bytes of worst whole-process RSS and 197,836,800 bytes above the
-  same-process pre-spawn baseline. The incremental result is an amortized
-  upper bound of 19,784 bytes (19.32 KiB) per requested sleeper; it includes
-  scheduler metadata and shared workload growth, not only a stack page.
-- The combined 100,000-sleeper plus 1,000-timer benchmark passed its 3 ms
+- On the clean Mac14,9 Phase 5.6 pre-multicore measurement, 10,000 parked
+  sleepers used 205,389,824 bytes of worst whole-process RSS and 197,836,800
+  bytes above the same-process pre-spawn baseline. The incremental result is
+  an amortized upper bound of 19,784 bytes (19.32 KiB) per requested sleeper;
+  it includes scheduler metadata and shared workload growth, not only a stack
+  page. Phase 5.7's clean contractual measurement supersedes these historical
+  figures when recorded.
+- That Phase 5.6 combined 100,000-sleeper plus 1,000-timer benchmark passed its
+  3 ms
   timer-arm-span and 3 ms p99 gates but reached 1,978,384,384 bytes worst
   whole-process RSS, above 1.5 GiB. Aurora therefore makes no 100,000-task
   memory claim. The host uses 16 KiB pages; one resident page for each of

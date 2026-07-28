@@ -23,6 +23,12 @@ def main() -> int32:
             left=argument("left", 1)
         )
         group.start_soon_with_stack(67108864, publish, values, 9)
-    print(values.get_or(-1))
-    print(values.get_or(-1))
+    first = values.get_or(-1)
+    second = values.get_or(-1)
+    if first < second:
+        print(first)
+        print(second)
+    else:
+        print(second)
+        print(first)
     return 0

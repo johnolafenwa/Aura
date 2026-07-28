@@ -24,6 +24,65 @@ SPEC.loader.exec_module(bench)
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_multicore_protocol_is_exact_and_checksum_is_mathematical(self) -> None:
+        self.assertEqual(bench.REPORT_SCHEMA_VERSION, 3)
+        expected = bench.park_miller_checksum(
+            tasks=4,
+            iterations=7,
+            multiplier=48_271,
+            modulus=2_147_483_647,
+        )
+        factor = pow(48_271, 7, 2_147_483_647)
+        self.assertEqual(
+            expected,
+            sum((seed * factor) % 2_147_483_647 for seed in range(1, 5)),
+        )
+        self.assertEqual(
+            bench.parse_multicore_ready_line(
+                b"READY multicore 4 7 48271 2147483647\n",
+                expected_tasks=4,
+                expected_iterations=7,
+                expected_multiplier=48_271,
+                expected_modulus=2_147_483_647,
+            ),
+            {
+                "tasks": 4,
+                "iterations": 7,
+                "multiplier": 48_271,
+                "modulus": 2_147_483_647,
+            },
+        )
+        self.assertEqual(
+            bench.parse_multicore_done_line(
+                ("DONE multicore 4 " + str(expected) + "\n").encode("ascii"),
+                expected_tasks=4,
+                expected_checksum=expected,
+            ),
+            {"tasks": 4, "checksum": expected},
+        )
+
+        malformed = [
+            b"READY multicore 1 7 48271 2147483647 extra\n",
+            b"READY multicore 4 8 48271 2147483647\n",
+            b"READY multicore 4 7 0 2147483647\n",
+        ]
+        for line in malformed:
+            with self.subTest(line=line):
+                with self.assertRaises(bench.BenchmarkError):
+                    bench.parse_multicore_ready_line(
+                        line,
+                        expected_tasks=4,
+                        expected_iterations=7,
+                        expected_multiplier=48_271,
+                        expected_modulus=2_147_483_647,
+                    )
+        with self.assertRaisesRegex(bench.BenchmarkError, "checksum"):
+            bench.parse_multicore_done_line(
+                b"DONE multicore 4 123\n",
+                expected_tasks=4,
+                expected_checksum=expected,
+            )
+
     def test_phase_lines_are_exact_and_phase_specific(self) -> None:
         self.assertEqual(
             bench.parse_phase_line(
@@ -191,6 +250,124 @@ class ProtocolTests(unittest.TestCase):
 
 
 class StatisticsTests(unittest.TestCase):
+    def multicore_pairs(
+        self,
+        one_task: list[float],
+        four_task: list[float],
+        *,
+        four_cpu_percent: float = 200.0,
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "repeat": index,
+                "order": [1, 4] if index % 2 == 0 else [4, 1],
+                "runs": {
+                    "1": {
+                        "elapsed_s": one,
+                        "process_cpu_percent": 100.0,
+                    },
+                    "4": {
+                        "elapsed_s": four,
+                        "process_cpu_percent": four_cpu_percent,
+                    },
+                },
+            }
+            for index, (one, four) in enumerate(zip(one_task, four_task))
+        ]
+
+    def test_multicore_gate_uses_paired_median_and_inclusive_boundaries(self) -> None:
+        pairs = self.multicore_pairs(
+            [0.50, 0.50, 0.50, 0.50, 0.50],
+            [0.80, 0.80, 0.80, 0.80, 0.80],
+            four_cpu_percent=150.0,
+        )
+        gate = bench.multicore_gate_summary(
+            pairs,
+            host={"physical_cores": 4, "logical_cpus": 4},
+        )
+        self.assertEqual(gate["paired_median_ratio"], 1.6)
+        self.assertEqual(gate["ratio_of_medians"], 1.6)
+        self.assertEqual(gate["pass_pair_indexes"], [0, 1, 2, 3, 4])
+        self.assertEqual(gate["invalid_reasons"], [])
+        self.assertTrue(gate["passed"])
+
+    def test_multicore_gate_invalidates_short_noisy_underprovisioned_evidence(
+        self,
+    ) -> None:
+        short = bench.multicore_gate_summary(
+            self.multicore_pairs([0.24] * 5, [0.30] * 5),
+            host={"physical_cores": 4, "logical_cpus": 4},
+        )
+        self.assertIn("one-task median", short["invalid_reasons"][0])
+        self.assertFalse(short["passed"])
+
+        noisy = bench.multicore_gate_summary(
+            self.multicore_pairs(
+                [0.40, 0.40, 0.50, 0.60, 0.60],
+                [0.48, 0.48, 0.60, 0.72, 0.72],
+            ),
+            host={"physical_cores": 4, "logical_cpus": 4},
+        )
+        self.assertTrue(
+            any("MAD/median" in reason for reason in noisy["invalid_reasons"])
+        )
+        self.assertFalse(noisy["passed"])
+
+        cores = bench.multicore_gate_summary(
+            self.multicore_pairs([0.50] * 5, [0.60] * 5),
+            host={"physical_cores": 3, "logical_cpus": 8},
+        )
+        self.assertTrue(
+            any("physical cores" in reason for reason in cores["invalid_reasons"])
+        )
+        self.assertFalse(cores["passed"])
+
+        affinity = bench.multicore_gate_summary(
+            self.multicore_pairs([0.50] * 5, [0.60] * 5),
+            host={
+                "affinity_cpus": 2,
+                "physical_cores": 8,
+                "logical_cpus": 8,
+            },
+        )
+        self.assertEqual(
+            affinity["core_qualification"]["source"],
+            "affinity_cpus",
+        )
+        self.assertTrue(
+            any("affinity" in reason for reason in affinity["invalid_reasons"])
+        )
+        self.assertFalse(affinity["passed"])
+
+        cpu = bench.multicore_gate_summary(
+            self.multicore_pairs(
+                [0.50] * 5,
+                [0.60] * 5,
+                four_cpu_percent=149.99,
+            ),
+            host={"physical_cores": 4, "logical_cpus": 4},
+        )
+        self.assertTrue(
+            any("process CPU" in reason for reason in cpu["invalid_reasons"])
+        )
+        self.assertFalse(cpu["passed"])
+
+    def test_multicore_gate_requires_odd_alternating_five_pair_minimum(self) -> None:
+        too_few = self.multicore_pairs([0.50] * 3, [0.60] * 3)
+        with self.assertRaisesRegex(bench.BenchmarkError, "at least 5"):
+            bench.multicore_gate_summary(
+                too_few,
+                host={"physical_cores": 4, "logical_cpus": 4},
+            )
+
+        wrong_order = self.multicore_pairs([0.50] * 5, [0.60] * 5)
+        wrong_order[1]["order"] = [1, 4]
+        with self.assertRaisesRegex(bench.BenchmarkError, "alternat"):
+            bench.multicore_gate_summary(
+                wrong_order,
+                host={"physical_cores": 4, "logical_cpus": 4},
+            )
+
     def test_nearest_rank_percentiles_and_summary(self) -> None:
         values = [5.0, 1.0, 4.0, 2.0, 3.0]
         self.assertEqual(bench.nearest_rank(values, 0.50), 3.0)
@@ -320,6 +497,19 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertEqual(stats.rss_bytes, 123_456_789)
         self.assertEqual(stats.cpu_seconds, 2.0)
 
+    def test_macos_rusage_cpu_ticks_use_the_host_mach_timebase(self) -> None:
+        record = bytearray(160)
+        struct.pack_into("=Q", record, 16, 12_000_000)
+        struct.pack_into("=Q", record, 24, 12_000_000)
+        struct.pack_into("=Q", record, 64, 4096)
+        stats = bench.parse_macos_rusage_v2(
+            bytes(record),
+            timebase_numer=125,
+            timebase_denom=3,
+        )
+        self.assertEqual(stats.rss_bytes, 4096)
+        self.assertEqual(stats.cpu_seconds, 1.0)
+
     def test_timer_monitor_never_uses_ps_as_a_sampling_fallback(self) -> None:
         with mock.patch.object(bench.platform, "system", return_value="Darwin"):
             with mock.patch.object(
@@ -375,6 +565,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
                         repeats=1,
                         timer_repeats=1,
                         v6_repeats=1,
+                        multicore_repeats=7,
                         idle_seconds=0.01,
                         json_path=root / "result.json",
                         allow_competing_processes=False,
@@ -393,8 +584,43 @@ class ValidationAndExecutionTests(unittest.TestCase):
                         repeats=1,
                         timer_repeats=1,
                         v6_repeats=1,
+                        multicore_repeats=7,
                         idle_seconds=0.01,
                         json_path=root / "target/result.json",
+                        allow_competing_processes=False,
+                    ),
+                    root=root,
+                )
+
+    def test_cli_defaults_to_seven_multicore_pairs_and_rejects_even_counts(
+        self,
+    ) -> None:
+        options = bench.parse_options(
+            [
+                "--label",
+                "phase57",
+                "--aura",
+                "/tmp/aura",
+                "--json",
+                "/tmp/report.json",
+            ]
+        )
+        self.assertEqual(options.multicore_repeats, 7)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aura = self.make_executable(root, "aura", "exit 0\n")
+            with self.assertRaisesRegex(bench.BenchmarkError, "odd and at least 5"):
+                bench.validate_options(
+                    bench.Options(
+                        label="phase57",
+                        aura=aura,
+                        repeats=1,
+                        timer_repeats=1,
+                        v6_repeats=1,
+                        multicore_repeats=6,
+                        idle_seconds=1.0,
+                        json_path=root / "report.json",
                         allow_competing_processes=False,
                     ),
                     root=root,
@@ -447,6 +673,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
                         repeats=0,
                         timer_repeats=1,
                         v6_repeats=1,
+                        multicore_repeats=7,
                         idle_seconds=0.01,
                         json_path=root / "result.json",
                         allow_competing_processes=False,
@@ -467,12 +694,96 @@ class ValidationAndExecutionTests(unittest.TestCase):
             with self.assertRaisesRegex(bench.BenchmarkError, "stdout"):
                 bench.run_v6_once(invalid)
 
+    def test_multicore_run_uses_four_workers_and_exact_go_ack_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = self.make_executable(
+                root,
+                "multicore",
+                'test "$AURORA_WORKERS" = "4" || exit 20\n'
+                'test "$1" = "1" || exit 21\n'
+                'printf "READY multicore 1 0 48271 2147483647\\n"\n'
+                "IFS= read -r go\n"
+                'test "$go" = "GO multicore" || exit 22\n'
+                "sleep 0.05\n"
+                'printf "DONE multicore 1 1\\n"\n'
+                "IFS= read -r ack\n"
+                'test "$ack" = "ACK multicore" || exit 23\n',
+            )
+            with mock.patch.object(bench, "MULTICORE_ITERATIONS", 0):
+                result = bench.run_multicore_once(binary, tasks=1)
+        self.assertEqual(result["environment"], {"AURORA_WORKERS": "4"})
+        self.assertEqual(result["ready_observation"]["tasks"], 1)
+        self.assertEqual(result["done_observation"]["checksum"], 1)
+        self.assertGreaterEqual(result["elapsed_s"], 0.05)
+        self.assertEqual(result["completion"]["returncode"], 0)
+        self.assertEqual(result["completion"]["stdout"], "")
+        self.assertEqual(result["completion"]["stderr"], "")
+        self.assertGreater(len(result["process_samples"]), 0)
+
+    def test_multicore_run_rejects_protocol_noise_and_reaps_child(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            noisy = self.make_executable(
+                root,
+                "noisy",
+                'printf "READY multicore 1 0 48271 2147483647\\n"\n'
+                "IFS= read -r go\n"
+                'printf "DONE multicore 1 1\\nnoise\\n"\n'
+                "IFS= read -r ack\n",
+            )
+            with mock.patch.object(bench, "MULTICORE_ITERATIONS", 0):
+                with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
+                    bench.run_multicore_once(noisy, tasks=1)
+
+    def test_multicore_ready_timeout_reaps_the_child(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_path = root / "pid"
+            stalled = self.make_executable(
+                root,
+                "stalled",
+                'printf "%s" "$$" > "' + str(pid_path) + '"\n'
+                "sleep 5\n",
+            )
+            with mock.patch.object(bench, "READY_TIMEOUT_SECONDS", 1.0):
+                with self.assertRaisesRegex(bench.BenchmarkError, "timeout"):
+                    bench.run_multicore_once(stalled, tasks=1)
+            pid = int(pid_path.read_text(encoding="ascii"))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
+    def test_multicore_benchmark_warms_then_alternates_seven_pairs(self) -> None:
+        observations: list[int] = []
+
+        def fake_run(_binary: Path, tasks: int) -> dict[str, object]:
+            observations.append(tasks)
+            return {
+                "elapsed_s": 0.5 if tasks == 1 else 0.6,
+                "process_cpu_percent": 100.0 if tasks == 1 else 200.0,
+            }
+
+        with mock.patch.object(bench, "run_multicore_once", side_effect=fake_run):
+            result = bench.run_multicore_benchmark(
+                Path("/tmp/multicore"),
+                repeats=7,
+            )
+        self.assertEqual(observations[:2], [1, 4])
+        self.assertEqual(
+            observations[2:],
+            [1, 4, 4, 1, 1, 4, 4, 1, 1, 4, 4, 1, 1, 4],
+        )
+        self.assertEqual(len(result["pairs"]), 7)
+        self.assertEqual(result["pairs"][0]["order"], [1, 4])
+        self.assertEqual(result["pairs"][1]["order"], [4, 1])
+
     def test_starvation_run_records_elapsed_sleep_and_rejects_noise(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             valid = self.make_executable(
                 root,
                 "valid-starvation",
+                'test "$AURORA_WORKERS" = "1" || exit 20\n'
                 'printf "SAMPLE starvation 10 17\\nDONE starvation\\n"\n',
             )
             invalid = self.make_executable(
@@ -484,8 +795,18 @@ class ValidationAndExecutionTests(unittest.TestCase):
             self.assertEqual(result["sleep_ms"], 10)
             self.assertEqual(result["elapsed_ms"], 17)
             self.assertEqual(result["returncode"], 0)
+            self.assertEqual(result["environment"], {"AURORA_WORKERS": "1"})
             with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
                 bench.run_starvation(invalid)
+
+    def test_controlled_runtime_environment_scrubs_ambient_worker_override(self) -> None:
+        with mock.patch.dict(os.environ, {"AURORA_WORKERS": "99"}):
+            default_environment = bench.controlled_runtime_environment()
+            single_worker_environment = bench.controlled_runtime_environment(
+                worker_count=1
+            )
+        self.assertNotIn("AURORA_WORKERS", default_environment)
+        self.assertEqual(single_worker_environment["AURORA_WORKERS"], "1")
 
     def test_massive_run_records_incremental_rss_and_timer_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -585,6 +906,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
                     repeats=1,
                     timer_repeats=1,
                     v6_repeats=1,
+                    multicore_repeats=7,
                     idle_seconds=30.0,
                     json_path=root / "result.json",
                     allow_competing_processes=False,
@@ -659,6 +981,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
             repeats=1,
             timer_repeats=1,
             v6_repeats=1,
+            multicore_repeats=7,
             idle_seconds=1.0,
             json_path=Path("/tmp/result.json"),
             allow_competing_processes=False,

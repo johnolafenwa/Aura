@@ -174,10 +174,10 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/task_group_start.au`
   - execute the maintained queue/task concurrency surface
 - `cargo run -p aura -- run examples/concurrency/bounded_queue.au`
-  - execute bounded queues with `Queue[T](capacity=...)` on the shared
-    scheduler; task captures, task results, and Queue payloads use
-    compiler-derived structural `Transfer`, while non-repeatable task results
-    have one consuming observation right
+  - execute bounded queues with `Queue[T](capacity=...)` across the
+    pinned-worker scheduler; task captures, task results, and Queue payloads
+    use compiler-derived structural `Transfer`, while non-repeatable task
+    results have one consuming observation right
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- run examples/concurrency/yield_now.au`
@@ -272,7 +272,26 @@ Current `run` status:
 
 - `aura run` defaults to the MIR runtime for the current implemented Aurora surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
 - queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
-- scheduler waits use persistent descriptor registrations, a timer heap, and direct Queue, task-completion, and blocking-pool notifications; when idle, the cooperative single-threaded runtime blocks until an event or deadline without a periodic tick
+- task bodies use pinned scheduler workers: the default worker count is the
+  available parallelism reported by the host, and the provisional
+  `AURORA_WORKERS=<positive integer>` override selects an explicit count; each
+  child keeps its
+  spawn-time worker for its lifetime, with no stack migration or work stealing
+- scheduler waits use persistent descriptor registrations, a timer heap, and
+  direct Queue, task-completion, and blocking-pool notifications, including
+  cross-worker wakes; an idle worker blocks until local work, a notification,
+  an event, or a deadline without a periodic tick
+- `yield_now()` yields only to runnable work on the current task's worker;
+  task scheduling, cross-worker completion, and program-output order are
+  deliberately unspecified
+- Queue and Task handles are the maintained cross-worker communication
+  surface; compiler-derived `Transfer` keeps all other task captures and
+  results share-nothing, and cancellation and diagnostic context remain
+  isolated per task
+- MIR execution and direct native execution use the same pinned-worker
+  contract; this is a multicore claim for Aurora task execution, not a promise
+  of preemption, work stealing, detached tasks, worker introspection, or
+  parallel speedup for every workload
 - every loop backedge includes a compiler-inserted cooperative scheduling
   check; native concurrent code amortizes it with function-local fuel, while
   sequential native code elides checks when no sibling task can exist

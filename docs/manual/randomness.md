@@ -226,8 +226,9 @@ Cloning an enclosing value would not, so the transitive clone restrictions in
 the typing rules apply even when the generator is nested several type layers
 deep. An allowed Task- or Queue-handle copy is different: it copies handle
 identity, not the `Rng` value behind that handle, and therefore does not
-duplicate generator state. Phase 5.7 must make the referenced state
-cross-worker thread-safe before multicore use.
+duplicate generator state. Queue and Task handle state is synchronized for
+cross-worker use; the `Rng` itself remains non-`Transfer` and stays on its
+owning task.
 
 `shuffle(values: mut Vec[T])` borrows the caller's vector exclusively,
 mutates that same place, and returns `None`; it does not move, clone, or replace

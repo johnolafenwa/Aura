@@ -76,6 +76,7 @@ struct ReactorInbox {
 
 struct ReactorInboxState {
     commands: VecDeque<InboxCommand>,
+    control_pending: bool,
     wake_armed: bool,
 }
 
@@ -99,6 +100,15 @@ impl ReactorHandle {
         self.submit(InboxCommand::Cancel(key))
     }
 
+    /// Wakes the owning scheduler so it can inspect durable worker-control
+    /// state such as new task admission or shutdown. Control notifications
+    /// are coalesced independently of keyed wait commands.
+    pub(crate) fn notify_control(&self) -> io::Result<()> {
+        let mut state = lock_unpoisoned(&self.inbox.state);
+        state.control_pending = true;
+        self.wake_if_needed(&mut state)
+    }
+
     pub(crate) fn same_reactor(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inbox, &other.inbox)
     }
@@ -106,9 +116,15 @@ impl ReactorHandle {
     fn submit(&self, command: InboxCommand) -> io::Result<()> {
         let mut state = lock_unpoisoned(&self.inbox.state);
         state.commands.push_back(command);
+        self.wake_if_needed(&mut state)
+    }
+
+    fn wake_if_needed(&self, state: &mut ReactorInboxState) -> io::Result<()> {
         if state.wake_armed {
             return Ok(());
         }
+        // Leave `wake_armed` false on failure. The command or control flag is
+        // already durable under the mutex, so a later notification can retry.
         self.inbox.waker.wake()?;
         state.wake_armed = true;
         Ok(())
@@ -196,6 +212,7 @@ impl RuntimeReactor {
             id: NEXT_REACTOR_ID.fetch_add(1, Ordering::Relaxed),
             state: Mutex::new(ReactorInboxState {
                 commands: VecDeque::new(),
+                control_pending: false,
                 wake_armed: false,
             }),
             waker: Waker::new(poll.registry(), WAKER_TOKEN)?,
@@ -274,16 +291,21 @@ impl RuntimeReactor {
         self.cleanup_sources(key)
     }
 
-    /// Blocks until one or more keys are ready, or until `max_wait` elapses.
-    /// Waker-only events (for example, a newly inserted earlier timer) update
-    /// state and then continue polling instead of spuriously returning.
+    /// Blocks until one or more keys are ready, a control notification asks
+    /// the scheduler to inspect its worker state, or `max_wait` elapses.
+    /// Timer-update waker events continue polling rather than spuriously
+    /// returning; a control notification intentionally returns an empty key
+    /// list without disturbing any keyed waits.
     pub(crate) fn poll(&mut self, max_wait: Option<Duration>) -> io::Result<Vec<WaitKey>> {
         let caller_deadline = max_wait.and_then(|duration| Instant::now().checked_add(duration));
         loop {
-            self.drain_inbox()?;
+            let control_notified = self.drain_inbox()?;
             self.mark_expired_timers(Instant::now());
             if !self.ready.is_empty() {
                 return self.finish_ready();
+            }
+            if control_notified {
+                return Ok(Vec::new());
             }
             if caller_deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                 return Ok(Vec::new());
@@ -292,10 +314,13 @@ impl RuntimeReactor {
             let timeout = self.poll_timeout(caller_deadline);
             self.poll_mio_once(timeout)?;
 
-            self.drain_inbox()?;
+            let control_notified = self.drain_inbox()?;
             self.mark_expired_timers(Instant::now());
             if !self.ready.is_empty() {
                 return self.finish_ready();
+            }
+            if control_notified {
+                return Ok(Vec::new());
             }
             if caller_deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                 return Ok(Vec::new());
@@ -369,11 +394,13 @@ impl RuntimeReactor {
         deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
-    fn drain_inbox(&mut self) -> io::Result<()> {
-        let commands: Vec<_> = {
+    fn drain_inbox(&mut self) -> io::Result<bool> {
+        let (commands, control_notified) = {
             let mut state = lock_unpoisoned(&self.inbox.state);
             state.wake_armed = false;
-            state.commands.drain(..).collect()
+            let commands: Vec<_> = state.commands.drain(..).collect();
+            let control_notified = std::mem::take(&mut state.control_pending);
+            (commands, control_notified)
         };
         for command in commands {
             match command {
@@ -382,7 +409,7 @@ impl RuntimeReactor {
                 InboxCommand::Cancel(key) => self.cancel_wait(key)?,
             }
         }
-        Ok(())
+        Ok(control_notified)
     }
 
     fn mark_ready(&mut self, key: WaitKey) {
@@ -934,6 +961,97 @@ mod tests {
             reactor.poll(Some(Duration::ZERO)).unwrap(),
             vec![first, second]
         );
+    }
+
+    #[test]
+    fn control_notification_before_poll_is_durable_without_a_wait_key() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ReactorHandle>();
+
+        let mut reactor = RuntimeReactor::new().unwrap();
+        reactor.handle().notify_control().unwrap();
+
+        let started = Instant::now();
+        assert!(reactor
+            .poll(Some(Duration::from_secs(1)))
+            .unwrap()
+            .is_empty());
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "a durable control notification should make the next poll return promptly"
+        );
+    }
+
+    #[test]
+    fn control_notification_during_poll_wakes_without_fabricating_readiness() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let handle = reactor.handle();
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            handle.notify_control().unwrap();
+        });
+
+        let started = Instant::now();
+        assert!(reactor
+            .poll(Some(Duration::from_secs(2)))
+            .unwrap()
+            .is_empty());
+        sender.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "control notification should wake a blocked poll"
+        );
+    }
+
+    #[test]
+    fn repeated_control_notifications_coalesce_into_one_scheduler_turn() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let handle = reactor.handle();
+        for _ in 0..32 {
+            handle.notify_control().unwrap();
+        }
+        assert!(reactor
+            .poll(Some(Duration::from_secs(1)))
+            .unwrap()
+            .is_empty());
+
+        let sender = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            handle.notify_control().unwrap();
+        });
+        let started = Instant::now();
+        assert!(reactor
+            .poll(Some(Duration::from_secs(1)))
+            .unwrap()
+            .is_empty());
+        sender.join().unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(10),
+            "coalesced notifications must not leave extra control turns pending"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a fresh notification should still wake the next poll"
+        );
+    }
+
+    #[test]
+    fn shutdown_control_wake_preserves_existing_keyed_waits() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let parked = WaitKey(1, 1);
+        reactor.begin_wait(parked).unwrap();
+        reactor
+            .add_deadline(parked, Instant::now() + Duration::from_secs(60))
+            .unwrap();
+
+        reactor.handle().notify_control().unwrap();
+
+        assert!(reactor
+            .poll(Some(Duration::from_secs(1)))
+            .unwrap()
+            .is_empty());
+        assert!(reactor.is_waiting(parked));
+        assert!(reactor.next_deadline().is_some());
     }
 
     #[test]

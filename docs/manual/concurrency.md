@@ -1,8 +1,25 @@
 # Concurrency
 
-Aurora provides single-threaded scheduler-backed lightweight tasks, structured task groups, queues, task handles, cancellation checks, sleeping, and multi-task wait helpers. Scheduler waits use a persistent event reactor: descriptors stay registered, deadlines live in a timer heap, and Queue, task-completion, and blocking-pool events notify the scheduler directly.
+Aurora provides pinned-worker scheduler-backed lightweight tasks, structured
+task groups, queues, task handles, cancellation checks, sleeping, and
+multi-task wait helpers. Scheduler waits use a persistent event reactor:
+descriptors stay registered, deadlines live in a timer heap, and Queue,
+task-completion, and blocking-pool events notify the responsible worker
+directly.
 
 The maintained model is structured by default: child tasks should live inside a `TaskGroup`, and leaving the group scope waits for the children. Queue and task waits participate in the scheduler so a blocked task does not block the whole runtime.
+
+The runtime creates one pinned worker per unit of available parallelism
+reported by the host by default. The provisional
+`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+worker count. A child receives a stable worker assignment when it is
+spawned; its coroutine stack never migrates and the runtime performs no work
+stealing. This contract is shared by MIR execution and direct native
+execution. A positive override may exceed the host-reported default.
+`AURORA_WORKERS=1` preserves single-worker cooperative execution through the
+same worker-thread architecture.
+Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values are
+rejected before execution with `AU4006`.
 
 ## Duration Values
 
@@ -198,10 +215,11 @@ explicitly is still the clearest program shape.
 
 `yield_now()` places the current lightweight task back in the scheduler ready set
 and returns `None` when that task is selected to run again. It gives other
-runnable tasks an opportunity to proceed, but it does not guarantee that
-another task runs before it returns or specify which runnable task is selected.
-If there is no current schedulable lightweight task, the call returns without
-effect.
+runnable tasks assigned to the same pinned worker an opportunity to proceed,
+but it does not migrate the task, search another worker for work, guarantee
+that another task runs before it returns, or specify which runnable task is
+selected. If there is no current schedulable lightweight task, the call
+returns without effect.
 
 The call does not sleep, wait for an event or deadline, or inspect or change
 cancellation state. Use it between bounded chunks of CPU work when an explicit
@@ -247,17 +265,18 @@ while not cancelled():
 
 Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
 
-Aurora 0.1 task scheduling is cooperative and single-threaded. The compiler
+Aurora 0.1 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
 tail and `continue`, so a tight loop eventually lets ready timers, Queue
-operations, and socket work proceed. `break` and `return` leave the loop
-without taking that check. A single long loop body or long straight-line CPU
-work can still delay siblings. The inserted check does not inspect
-cancellation; tasks that must stop on request still call `cancelled()`. Each
-ordinary lightweight task requests a guarded 512 KiB coroutine stack; the two
-explicit stack-start methods may request up to 64 MiB. When no task is ready,
-the event reactor blocks until a notification, descriptor event, or deadline;
-it does not wake on a periodic scheduler tick.
+operations, and socket work on the same worker proceed. `break` and `return`
+leave the loop without taking that check. A single long loop body or long
+straight-line CPU work can still delay siblings pinned to that worker. The
+inserted check does not inspect cancellation; tasks that must stop on request
+still call `cancelled()`. Each ordinary lightweight task requests a guarded
+512 KiB coroutine stack; the two explicit stack-start methods may request up
+to 64 MiB. When a worker has no ready task, its event reactor blocks until a
+notification, descriptor event, or deadline; it does not wake on a periodic
+scheduler tick.
 
 ## Detached Work
 
@@ -320,20 +339,33 @@ and defaults already resolve complete concrete types.
 
 ## Runtime Semantics
 
-Aurora tasks run on one cooperative scheduler thread. Starting a child stores
-its captures in task-owned storage. Group exit observes or joins children,
-cancels an indefinitely blocked group-owned wait when required for cleanup,
-and propagates an unread child failure. Queue send and receive transfer one
-value by copy or move according to `T`; bounded queues suspend senders when
-full, close wakes waiters, and bare
-iteration repeatedly receives until its documented terminal condition.
+Aurora tasks run on cooperative pinned workers. The default worker count is
+the available parallelism reported by the host, while provisional
+`AURORA_WORKERS=<positive integer>` selects an explicit count. Starting a child
+stores its captures in task-owned storage and gives it a stable worker
+assignment. The child's coroutine stack remains on that worker for its entire
+lifetime; there is no migration or work stealing. Group exit observes or joins
+children, cancels an indefinitely blocked group-owned wait when required for
+cleanup, and propagates an unread child failure. Queue send and receive
+transfer one value by copy or move according to `T`; bounded queues suspend
+senders when full, close wakes waiters, and bare iteration repeatedly receives
+until its documented terminal condition.
 Timeout, cancellation, closure, and task failure are distinct enum outcomes.
 A nonpositive Queue capacity traps before a queue is constructed. Scheduling
-order among simultaneously ready tasks is not specified. Descriptor waits use
+order, completion order among independent tasks, and program-output order are
+not specified. Descriptor waits use
 persistent reactor registrations, deadlines use a timer heap, and Queue,
 task-completion, and blocking-pool readiness is delivered by direct
-notification. With no ready work, the scheduler blocks until an event or
-deadline rather than polling on a fixed tick.
+notification to the responsible worker. With no ready local work, a worker
+blocks until work, an event, or a deadline rather than polling on a fixed tick.
+
+Queue and Task handles are the maintained cross-worker communication surface.
+Their runtime state is synchronized so a Queue operation or task completion
+can wake a task pinned elsewhere. Every other captured argument and task result
+must be owned `Transfer` data, preserving a share-nothing boundary. Live host
+resources and capability views remain on their owning task. Cancellation and
+diagnostic state remain isolated per task: running or trapping on one worker
+does not replace another task's current cancellation or diagnostic context.
 
 A running child may create a nested `TaskGroup`, start grandchildren, and
 immediately wait on their returned handles on both backends. Child preparation
@@ -394,6 +426,8 @@ reports a general runtime trap, including zero or negative Queue capacity.
 deadline because these APIs have no typed InvalidInput carrier. `AU4002`
 reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
 violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
+`AU4006` reports an invalid pinned-worker runtime configuration, with
+``invalid AURORA_WORKERS value `<raw>`: expected a positive integer``.
 `AU2002` rejects an out-of-range literal stack request during checking.
 `AU4005` reports the exact same range violation for a dynamic request and
 reports task-stack allocation or platform-size failure; neither path clamps or
@@ -439,13 +473,18 @@ native-frames stage.
 
 ## Limits And Implementation-Defined Behavior
 
-Task execution is cooperative, single-threaded, and non-preemptive. Loop
+Task execution is cooperative, pinned-worker, and non-preemptive. Loop
 backedges have compiler-inserted scheduling checks, but one long loop body or
-long straight-line computation can still delay siblings. The checks do not
-inspect cancellation. Scheduling order among simultaneously ready tasks is
-deliberately unspecified. Ordinary lightweight tasks request 512 KiB of
-writable coroutine stack; an explicit request is limited to 64 MiB. Requests
-are page-rounded and guard-protected. The MIR/direct entry thread reserves
+long straight-line computation can still delay siblings assigned to the same
+worker. The checks do not inspect cancellation. Scheduling, independent task
+completion, and output order are deliberately unspecified. The worker count
+defaults to the available parallelism reported by the host and may be selected
+provisionally with a positive `AURORA_WORKERS` value. Assignments never migrate
+and work is not stolen.
+Aurora exposes no worker-index or affinity-introspection API. Ordinary
+lightweight tasks request 512 KiB of writable coroutine stack; an explicit
+request is limited to 64 MiB. Requests are page-rounded and guard-protected.
+The MIR/direct entry thread reserves
 64 MiB. The scheduler
 keeps descriptor registrations persistent and blocks until an event or
 deadline when idle; it does not use a periodic readiness scan. Nested Aurora
@@ -491,23 +530,26 @@ legacy JSON compatibility helpers. The host-timer policy recorded by ADR-0019
 is Accepted. Phase 5.5 gives the scheduler driver unique mutable ownership,
 routes nested starts through an owned internal broker, makes preparation
 failure synchronous, and contains scheduler teardown across MIR and direct
-tasks. It does not make the broker thread-safe or promise FIFO task execution.
-Multicore Aurora task execution is reserved for the later
-pinned-worker stage of the Batch 4 runtime work. Preemptive scheduling,
+tasks. Phase 5.7 makes Queue and Task handle state cross-worker safe and runs
+task bodies on spawn-time pinned workers on both backends. This is a multicore
+task-execution contract, not a guarantee of work stealing, preemption,
+particular speedup, task/output order, or broader automatic parallelism.
+Preemptive scheduling,
 `mut` task targets, typed heterogeneous selection, configurable blocking-pool
 sizing, native frame parity, and detached task syntax are unavailable. On the
-clean Mac14,9 measurement, 10,000 parked sleepers used
+clean Mac14,9 Phase 5.6 pre-multicore measurement, 10,000 parked sleepers used
 205,389,824 bytes of worst whole-process RSS and 197,836,800 bytes above their
 same-process pre-spawn baseline: an amortized upper bound of 19,784 bytes
 (19.32 KiB) per requested sleeper, including scheduler metadata and shared
 workload growth.
 
-The combined 100,000-sleeper plus 1,000-timer run passed its 3 ms arm-span and
-3 ms p99 timer gates but reached 1,978,384,384 bytes worst whole-process RSS,
-so Aurora does not claim that population fits in 1.5 GiB. On this 16 KiB-page
-host, one resident stack page per 101,000 stackful children already exceeds
-that ceiling before task metadata. This measured escape-hatch result cannot be
-repaired by reducing only the demand-paged virtual stack reservation.
+That Phase 5.6 combined 100,000-sleeper plus 1,000-timer run passed its 3 ms
+arm-span and 3 ms p99 timer gates but reached 1,978,384,384 bytes worst
+whole-process RSS, so Aurora does not claim that population fits in 1.5 GiB.
+On this 16 KiB-page host, one resident stack page per 101,000 stackful children
+already exceeds that ceiling before task metadata. This measured escape-hatch
+result cannot be repaired by reducing only the demand-paged virtual stack
+reservation.
 The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
@@ -515,6 +557,6 @@ both backends.
 
 Provisional ADR-0033 specifies the implemented Phase 5.6 contract: structural
 Transfer checks for task captures, task results, and Queue payloads, plus
-static repeatable/single-consumer task results. This does not make task
-execution parallel. Pinned workers and cross-worker-thread-safe Queue/Task
-internals remain the separate Phase 5.7 gate.
+static repeatable/single-consumer task results. Phase 5.7 retains that
+share-nothing boundary while allowing Queue and Task handle identity to
+communicate between pinned workers.

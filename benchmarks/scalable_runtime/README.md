@@ -23,6 +23,9 @@ mkdir -p target/scalable-runtime-benchmarks
 ./target/release/aura build --backend direct \
   -o target/scalable-runtime-benchmarks/sleeper-vs-hot-loop \
   benchmarks/scalable_runtime/sleeper_vs_hot_loop.au
+./target/release/aura build --backend direct \
+  -o target/scalable-runtime-benchmarks/cpu-scaling \
+  benchmarks/scalable_runtime/cpu_scaling.au
 ```
 
 Run the resulting binaries directly. Do not benchmark through `cargo run` or
@@ -158,7 +161,53 @@ DONE starvation
 
 The runner requires both lines exactly, rejects standard error, nonzero exit,
 negative elapsed time, extra output, and timeout, and uses the worst elapsed
-time across repetitions for the starvation gate.
+time across repetitions for the starvation gate. The runner forces
+`AURORA_WORKERS=1` for this workload so the measurement continues to prove
+cooperative safepoint progress on one worker after multicore becomes the
+default. Other non-multicore workloads explicitly remove any ambient
+`AURORA_WORKERS` override and therefore measure the production default.
+
+`cpu-scaling` is built once and invoked with either `1` or `4` as its sole
+program argument. Both timed shapes run with `AURORA_WORKERS=4`; changing the
+worker count between the legs invalidates the comparison. Each child first
+reports to a prepared queue and then parks on a release queue. Only after every
+child is parked does the parent emit and flush:
+
+```text
+READY multicore <tasks> 80000000 48271 2147483647
+```
+
+The host validates that line and starts the wall clock immediately before
+writing `GO multicore`. Each released child applies the Park-Miller recurrence
+`state = state * 48271 % 2147483647` for exactly 80,000,000 iterations,
+starting from `task_index + 1`. The parent sums the final states and emits:
+
+```text
+DONE multicore <tasks> <checksum>
+```
+
+The host independently derives the checksum with modular exponentiation,
+stops the wall interval at the complete `DONE` line, then writes
+`ACK multicore`. The child must exit zero after the acknowledgment, with empty
+standard error and no trailing standard output. Every timed process is sampled
+for process CPU while its PID is alive. A protocol mismatch, checksum mismatch,
+timeout, sampling failure, premature exit, output noise, or failure to reap
+after `ACK` invalidates the run.
+
+One excluded warmup of each shape precedes an odd number of paired
+repetitions. The default is seven pairs and the minimum is five. Pair order
+alternates `1,4`, then `4,1`, so drift is not assigned systematically to one
+shape. The primary gate is the median of the raw paired `T4 / T1` ratios,
+inclusive at 1.6. The report also preserves every duration and order, the
+ratio of medians, median/MAD/p95/best summaries, and the indexes of
+individually passing and failing pairs.
+
+Multicore evidence is invalid, rather than failing or passing the performance
+claim, when the host has fewer than four qualified cores, the one-task median
+is below 250 ms, either shape has `MAD / median > 15%`, or the four-task
+median process CPU is below 150% of wall time. Exactly four cores, a 250 ms
+signal, 15% relative MAD, 150% CPU corroboration, and a 1.6 paired-median
+ratio all satisfy their inclusive boundaries.
 
 ## Gate interpretation
 
@@ -182,6 +231,8 @@ The Batch 4 gates are:
 - p99 timer overshoot at no more than 5 ms under the 1,000-timer load.
 - less than 2% process CPU during the idle workload's stable window.
 - a 10 ms sleeper beside the hot loop completes within 50 ms.
+- four synchronized CPU-bound tasks complete within 1.6 times the wall time
+  of one task when both shapes use four workers.
 
 Timer millisecond readings are intentionally the language's public monotonic
 clock rather than a hidden host hook. Report the `READY` maximum-minus-minimum

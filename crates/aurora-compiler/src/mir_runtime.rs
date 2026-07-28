@@ -40,20 +40,21 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     runtime_value_to_json, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    spawn_lightweight_task_with_result_repeatability,
-    spawn_lightweight_task_with_stack_and_result_repeatability, task_group_cleanup_should_cancel,
-    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
-    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
-    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
-    yield_now_with_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue,
-    FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
-    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
+    spawn_lightweight_task_with_result_repeatability_registered,
+    spawn_lightweight_task_with_stack_and_result_repeatability_registered,
+    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
+    NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -3634,18 +3635,27 @@ impl MirRuntime {
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
         };
+        let register_before_submit = |task: &TaskValue| {
+            group_value.register_task(task.clone());
+            for queue in &producer_queues {
+                queue.register_producer_task(task);
+            }
+        };
         let task = match stack_size {
-            Some(stack_size) => spawn_lightweight_task_with_stack_and_result_repeatability(
-                stack_size,
+            Some(stack_size) => {
+                spawn_lightweight_task_with_stack_and_result_repeatability_registered(
+                    stack_size,
+                    result_is_repeatable,
+                    entry,
+                    register_before_submit,
+                )
+            }
+            None => spawn_lightweight_task_with_result_repeatability_registered(
                 result_is_repeatable,
                 entry,
+                register_before_submit,
             ),
-            None => spawn_lightweight_task_with_result_repeatability(result_is_repeatable, entry),
         }?;
-        group_value.register_task(task.clone());
-        for queue in producer_queues {
-            queue.register_producer_task(&task);
-        }
 
         if returns_handle {
             Ok(Value::Task(task))
