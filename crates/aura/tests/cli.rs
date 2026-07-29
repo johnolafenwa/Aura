@@ -26,6 +26,45 @@ fn serialize_bounded_blocking_pool_watchdog() -> std::sync::MutexGuard<'static, 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[cfg(unix)]
+fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+
+    // A normal source-checkout binary locks its selected Cargo target.
+    // Coverage launches an instrumented `aura`, which deliberately builds and
+    // locks an uninstrumented runtime in a separate repository target. Hold
+    // both real production paths so this behavioral test is profile-agnostic.
+    let mut target_dirs = vec![
+        target_dir.to_path_buf(),
+        repo_root().join("target/native-runtime-uninstrumented"),
+    ];
+    target_dirs.sort();
+    target_dirs.dedup();
+
+    target_dirs
+        .into_iter()
+        .map(|target_dir| {
+            fs::create_dir_all(&target_dir).expect("native runtime target directory should exist");
+            let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
+            let held_lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(&lock_path)
+                .expect("native runtime lock should be openable");
+            fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+                .expect("native runtime lock should be private");
+            assert_eq!(
+                unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX) },
+                0,
+                "the test should hold each real source-checkout build barrier"
+            );
+            held_lock
+        })
+        .collect()
+}
+
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
@@ -5753,8 +5792,6 @@ def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        c
 #[cfg(unix)]
 #[test]
 fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build() {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::PermissionsExt;
     use std::sync::mpsc;
 
     let temp = TempDir::new("aurora-build-concurrent-wait");
@@ -5767,20 +5804,7 @@ fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build(
     // on nor stalls unrelated direct-build tests running in parallel.
     let target_dir = temp.path().join("native-target");
     fs::create_dir_all(&target_dir).expect("native target directory should exist");
-    let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
-    let held_lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&lock_path)
-        .expect("native runtime lock should be openable");
-    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
-        .expect("native runtime lock should be private");
-    assert_eq!(
-        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX) },
-        0,
-        "the test should hold the real source-checkout build barrier"
-    );
+    let held_locks = hold_native_runtime_build_locks(&target_dir);
 
     let mut child = Command::new(aura_bin())
         .env("CARGO_TARGET_DIR", &target_dir)
@@ -5811,7 +5835,7 @@ fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build(
     });
 
     let observed = receiver.recv_timeout(std::time::Duration::from_secs(10));
-    drop(held_lock);
+    drop(held_locks);
     let barrier_error = match observed {
         Ok((Ok(_), line)) if line == "aura: waiting for a concurrent build...\n" => None,
         Ok((Ok(_), line)) => Some(format!(
@@ -5859,9 +5883,6 @@ fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build(
 #[cfg(unix)]
 #[test]
 fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = TempDir::new("aurora-build-json-concurrent-wait");
     let source_path = temp.path().join("main.au");
     fs::write(&source_path, "def main() -> int32:\n    return 0\n")
@@ -5873,20 +5894,7 @@ fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
     // reached this barrier before it was released.
     let target_dir = temp.path().join("native-target");
     fs::create_dir_all(&target_dir).expect("native target directory should exist");
-    let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
-    let held_lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&lock_path)
-        .expect("native runtime lock should be openable");
-    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
-        .expect("native runtime lock should be private");
-    assert_eq!(
-        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX) },
-        0,
-        "the test should hold the real source-checkout build barrier"
-    );
+    let held_locks = hold_native_runtime_build_locks(&target_dir);
 
     let mut child = Command::new(aura_bin())
         .env("CARGO_TARGET_DIR", &target_dir)
@@ -5927,7 +5935,7 @@ fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
         );
     }
 
-    drop(held_lock);
+    drop(held_locks);
     let status =
         wait_with_timeout(&mut child, std::time::Duration::from_secs(30)).unwrap_or_else(|| {
             let _ = child.kill();
