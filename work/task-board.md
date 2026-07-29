@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 
 ## Batch 4 of 6 (active)
 
@@ -14,53 +14,48 @@ Last updated: 2026-07-28
   worktree opened from that clean checkpoint with compiler coverage floors
   frozen at `96.13/96.89/94.35`; see
   `work/2026-07-27-batch4-scalable-runtime.md`.
-- Current stage: Phase 5.10 native structured frames is in final verification
-  after provisional ADR-0036 landed independently at `ad6bef6`. Phase 5.8 is
-  complete at implementation commit `3e15b8a`, and Phase 5.9 is complete at
-  implementation commit `d921313` after its provisional ADR-0035 landed at
-  `cc450c9`; both stages have green focused review, coverage, exact CI, and
-  clean-tree contractual benchmarks. Phase 5.10's compiler diagnostic model,
-  MIR capture,
-  native task-local stacks and ancestry, codegen/runtime ABI, two-pipe direct
-  JSON transport, analysis/LSP forwarding, and maintained documentation are
-  implemented. Both diagnostic-note parity masks are removed and all 53
-  maintained run-fail oracles pin their full Aurora call chains. The compiler
-  library passes all 1,147 tests; focused MIR/native/CLI checks pass; all 90
-  LSP tests pass at 100% coverage; reference integrity and the documentation
-  build are green. Three independently found transport defects are fixed and
+- Current stage: Phase 5.10 native structured frames is complete through
+  observable coverage-closure commit `181204b`, after provisional ADR-0036
+  landed independently at `ad6bef6`. The compiler diagnostic model, MIR
+  capture, native task-local call stacks and ancestry, codegen/runtime ABI,
+  two-pipe direct JSON transport, analysis/LSP forwarding, and maintained
+  documentation are implemented. Both diagnostic-note parity masks are
+  removed, and all 53 maintained run-fail oracles pin their full Aurora call
+  chains. Three independently found transport defects are fixed and
   regression-tested: post-launch automatic fallback, descendant
   descriptor/environment leakage, and child human output after a signalled
-  record failure. The complete serialized forced-backend matrix passes in
-  669.49 seconds across 239 run-pass and 53 run-fail fixtures. Clean-commit
-  coverage before the compact correction passes at 70,930/73,779 lines
-  (96.13846759%), 4,718/4,869 functions (96.89874718%), and
-  104,200/110,309 regions (94.46192060%). Exact CI passes every product gate;
-  its final hygiene
-  check reports only whitespace in the excluded user-owned
-  `personal/file_ops.au`. A corrected clean-commit CI replay, contractual
-  benchmark, one-time Batch 4 coverage re-ratchet, and checkpoint report
-  remain.
-  Phase 5.10 implementation commit `29ff7f6` passes exact clean detached CI,
-  including hygiene. Its first contractual benchmark is valid but rejected:
-  massive concurrency peaks at 2,040,184,832 bytes, 582,336,512 bytes above
-  Phase 5.9 and above the 1.5 GiB gate. The stable 10,000-sleeper signal adds
-  about 1.43 KiB per task. Audit isolates the regression to eagerly owned
-  native call/task frame vectors and strings retained by every suspended task,
-  with added coroutine-stack page pressure. A test-first compact internal
-  representation is implemented: validated immutable metadata is retained
-  without owned strings, depth-one call storage is inline, ancestry is shared
-  and iteratively retired, and owned diagnostic frames materialize only on the
-  first trap. The call-entry stack frame fell from 528 to 208 bytes. The
-  post-correction 10,000-sleeper control peaks at 210,305,024 bytes
-  whole-process and 202,784,768 bytes incremental, below every rejected-report
-  control run. A corrected clean commit, exact CI, and the contractual
-  100,000-task replay remain. The
-  first report also has one standalone timer outlier (14 ms arm span, 7 ms
-  p99), but all three massive-workload timer runs pass at 3-4 ms arm spans and
-  2 ms p99; requalify on a quiet host after the RSS fix before changing timer
-  behavior. Rejected report:
-  `/private/tmp/aurora-phase510-after-native-frames.json`, SHA-256
-  `012feee3e8a840c1c59c3c503572188b7bc4a8cc72b1ac3f30b5bb53f49f4528`.
+  record failure.
+  The exact-clean `181204b` CI is green: 45 benchmark-runner tests, 300 CLI
+  tests, 1,150 compiler-library tests, the serialized forced-backend parity
+  matrix in 623.99 seconds, 90 LSP tests, 13 extension tests, both coverage
+  gates, reference integrity, docs, audits, warning-denied Clippy, formatting,
+  and hygiene. Its log SHA-256 is
+  `0776403c16bd356cb46d42b1e3dcc19c0c09a0ebf29be0e0cf2e405f6fa6c910`;
+  the coverage JSON SHA-256 is
+  `e66a3db6c7f94f5cd2ea966c19717538b646ea6c001d9fa873b03bf44f219ddd`.
+  Final compiler coverage is 71,153/74,016 lines (96.131917%),
+  4,757/4,909 functions (96.903646%), and 104,478/110,598 regions
+  (94.466446%). The one-time Batch 4 re-ratchet is complete at the
+  downward-truncated `96.13/96.90/94.46` floors. LSP coverage remains 100%:
+  897/897 statements and lines, 245/245 branches, and 49/49 functions. No
+  synthetic coverage test or exclusion was added.
+  The clean contractual report at `181204b` uses release `aura` SHA-256
+  `50503389792f7f86efb8f021f983a3917855bad82e4fbc90b99414695331142a`;
+  report SHA-256
+  `8ba448a06a8efb505af723ed00b8248fc1aa44ed270b46df5c15d74ecb9bd986`.
+  The 10,000-sleeper peak is 207,798,272 bytes; standalone timers pass at
+  6 ms arm span and 1 ms p99; idle CPU is 0.001675461%; starvation is 14 ms;
+  and all seven multicore pairs pass at a 1.039673x paired median ratio and
+  396.73% median four-task CPU. The massive-run peaks are 1,170,735,104,
+  1,921,531,904, and 2,001,305,600 bytes, while all timer checks pass at
+  3 ms arm span and 2 ms p99. The raw 1.5 GiB RSS ceiling is therefore
+  recorded under the ratified escape hatch: 101,000 stackful children on this
+  16 KiB-page host have a one-resident-page floor of 1,654,784,000 bytes
+  before metadata. The bounded 100,000-sleeper claim is withdrawn; all other
+  contractual gates pass.
+  Phase 5.10 implementation and benchmark/coverage evidence are settled.
+  Checkpoint documentation is being finalized; exact final settled-tree CI
+  remains explicitly pending. Phase 6 has not started.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -463,17 +458,16 @@ Last updated: 2026-07-28
   updated. Independent audit defects covering post-launch fallback,
   inherited internal descriptors/environment variables, and child human
   output after a signalled record failure are fixed and regression-tested.
-  Focused verification is green for all 1,144 compiler-library tests, 7
-  compiler MIR backtrace tests, 6 CLI backtrace tests, the 4 direct JSON
-  cold/warm/wait/auto cases, all 90 LSP tests at 100% coverage, all 53
-  run-fail oracles, reference integrity, docs, formatting, and checks. The
-  full serialized parity matrix passes in 669.49 seconds across 239 run-pass
-  and 53 run-fail fixtures. Frozen-floor exact CI, the clean-commit
-  contractual benchmark, final coverage measurement, and Batch 4 checkpoint
-  remain. Frozen-floor coverage passes at 70,931/73,779 lines
-  (96.139822984860189%), 4,718/4,869 functions (96.898747176011497%), and
-  104,201/110,309 regions (94.462827149190005%). No synthetic coverage test
-  or exclusion was added and the floors remain frozen.
+  Compact metadata/storage at `1e1263d` and boxed, spawning-side task-state
+  construction at `c3278c4` reduce retained metadata and child scope stack
+  pressure without changing observable frame semantics. Observable closure
+  commit `181204b` pins restoration of outer task ancestry after a nested
+  runtime scope. Exact-clean CI, the contractual benchmark, final compiler
+  coverage, and the one-time `96.13/96.90/94.46` re-ratchet are complete;
+  their exact counts and hashes are recorded in the current-stage summary
+  above. The massive RSS result uses the documented 16 KiB-page escape hatch,
+  and the 100,000-sleeper claim is withdrawn. Final settled-tree CI remains
+  pending while checkpoint documentation is finalized.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the
@@ -490,10 +484,10 @@ Last updated: 2026-07-28
   without a second control primitive; the runtime preserves durable control
   state, retries shutdown notification, reports the fatal error, and keeps the
   ratified no-periodic-tick idle contract.
-- Standing rules: behavior-focused coverage only; floors remain frozen through
-  the batch; one truncated re-ratchet at sign-off; contained semantic
-  gap-fills may proceed provisionally, but larger language/runtime questions
-  stop for review; reference and parity surfaces move with behavior.
+- Standing rules: behavior-focused coverage only; the one-time Batch 4
+  re-ratchet is complete at `96.13/96.90/94.46`; contained semantic gap-fills
+  may proceed provisionally, but larger language/runtime questions stop for
+  review; reference and parity surfaces move with behavior.
 
 ## Batch 3 of 6 (complete)
 

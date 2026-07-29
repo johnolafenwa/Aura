@@ -640,17 +640,25 @@ Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
 wait machinery for atomic registration, deterministic one-winner arbitration,
 cross-worker wakeups, and loser cleanup. It adds no statement syntax.
 Preemptive scheduling, `mut` task targets, and detached task syntax are
-unavailable. On the clean Mac14,9 Phase 5.9 measurement,
-10,000 parked sleepers used 206,962,688 bytes of worst whole-process RSS and
-198,492,160 bytes above their same-process pre-spawn baseline.
+unavailable. On the clean Mac14,9 Phase 5.10 measurement at `181204b`,
+10,000 parked sleepers used 207,798,272 bytes of worst whole-process RSS and
+198,787,072 bytes above their same-process pre-spawn baseline, passing the
+512 MiB gate.
 
-That Phase 5.9 combined 100,000-sleeper plus 1,000-timer run used
-1,457,848,320 bytes worst whole-process RSS and passed its timer gates with a
-4 ms arm span and 3 ms p99. The maintained baseline therefore passes the
-1.5 GiB gate with stable timers. This is measured Mac14,9 evidence rather than
-a portable task-count guarantee. The same contractual run passes the
-mandatory four-worker scaling gate at a `1.020214x` paired median wall-time
-ratio with `398.49%` median four-task process CPU.
+Aurora does not maintain a 100,000-sleeper claim. The final Phase 5.10
+100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
+1,921,531,904, and 2,001,305,600 bytes, so two of three exceeded the 1.5 GiB
+gate. On this 16 KiB-page host, one resident page for each of the 101,000
+stackful child coroutines alone requires 1,654,784,000 bytes before task
+metadata or the root runtime. The earlier Phase 5.9 pass was therefore
+compression- and reclaim-dependent rather than a robust capacity guarantee.
+Under the ratified benchmark escape hatch, that result is retained as evidence
+without becoming a product claim. The maintained scale claim is limited to
+the contractual 10,000-sleeper bound plus the timer, idle, starvation, and
+multicore controls, all of which pass at Phase 5.10. The four-worker control
+has a `1.039673x` paired median wall-time ratio and `396.73%` median four-task
+process CPU; these are measured Mac14,9 results, not portable speedup
+guarantees.
 The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on

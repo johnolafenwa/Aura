@@ -94,18 +94,30 @@ This page documents known current limits of the Aurora compiler and runtime.
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.
-- On the clean Mac14,9 Phase 5.9 measurement, 10,000 parked sleepers used
-  206,962,688 bytes of worst whole-process RSS and 198,492,160 bytes above the
-  same-process pre-spawn baseline.
-- That Phase 5.9 combined 100,000-sleeper plus 1,000-timer benchmark used
-  1,457,848,320 bytes worst whole-process RSS and passed its stable-timer
-  controls with a 4 ms arm span and 3 ms p99. The maintained baseline
-  therefore passes the 1.5 GiB gate. This is measured Mac14,9 evidence, not a
-  portable task-count guarantee.
-- The same contractual run passed the mandatory four-worker scaling gate at a
-  `1.020214x` paired median wall-time ratio with `398.49%` median four-task
-  process CPU. This is runtime evidence, not a portable speedup guarantee.
-- The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline and has no periodic scheduler tick. Aurora 0.1's maintained high-scale claim is limited to the measured 100,000-sleeper Mac14,9 baseline above.
+- On the clean Mac14,9 Phase 5.10 measurement at `181204b`, 10,000 parked
+  sleepers used 207,798,272 bytes of worst whole-process RSS and 198,787,072
+  bytes above the same-process pre-spawn baseline, passing the maintained
+  512 MiB gate.
+- Aurora does not maintain a 100,000-sleeper claim. The final Phase 5.10
+  100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
+  1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB
+  gate. On this 16 KiB-page host, one resident page for each of the 101,000
+  stackful child coroutines alone requires 1,654,784,000 bytes before task
+  metadata or the root runtime. The Phase 5.9 passing observation was
+  compression- and reclaim-dependent, not a robust capacity guarantee.
+- The ratified benchmark escape hatch retains the 100,000-sleeper result as
+  evidence without turning it into a product claim. Aurora 0.1's maintained
+  scale claim is limited to the contractual 10,000-sleeper bound plus the
+  timer, idle, starvation, and multicore controls. All pass at Phase 5.10:
+  the standalone timers had a 6 ms worst arm span and 1 ms p99 overshoot,
+  idle CPU was below 2%, starvation latency was 14 ms, and the four-worker
+  control had a `1.039673x` paired median wall-time ratio with `396.73%`
+  median four-task process CPU. These are measured Mac14,9 results, not
+  portable capacity or speedup guarantees.
+- The scheduler uses persistent reactor registrations for nonblocking
+  descriptors, a timer heap for deadlines, and direct Queue, task-completion,
+  and blocking-pool notifications. When idle it blocks until an event or
+  deadline and has no periodic scheduler tick.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a
   distinct protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
   Each submitted job is a bounded, nonblocking step and returns owned protocol

@@ -463,11 +463,14 @@ grep -Fq 'distinct bounded protocol-step service' docs/manual/execution-model.md
 grep -Fq 'This protocol-step pool is lazily initialized and shared by every' docs/manual/execution-model.md
 grep -Fq 'and file reads use the generic blocking-I/O pool.' docs/manual/execution-model.md
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
-grep -Fq 'Phase 5.9 measurement' docs/manual/current-limits.md
-grep -Fq '206,962,688 bytes of worst whole-process RSS and 198,492,160' docs/manual/current-limits.md
-grep -Fq '1,457,848,320 bytes worst' docs/manual/current-limits.md
-grep -Fq '`1.020214x` paired median wall-time ratio with `398.49%`' docs/manual/current-limits.md
-grep -Fq 'passes the 1.5 GiB gate' docs/manual/current-limits.md
+grep -Fq 'Phase 5.10 measurement at `181204b`' docs/manual/current-limits.md
+grep -Fq '207,798,272 bytes of worst whole-process RSS and 198,787,072' docs/manual/current-limits.md
+grep -Fq 'Aurora does not maintain a 100,000-sleeper claim.' docs/manual/current-limits.md
+grep -Fq '1,170,735,104,' docs/manual/current-limits.md
+grep -Fq '1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB' docs/manual/current-limits.md
+grep -Fq 'compression- and reclaim-dependent, not a robust capacity guarantee.' docs/manual/current-limits.md
+grep -Fq 'The ratified benchmark escape hatch retains the 100,000-sleeper result as' docs/manual/current-limits.md
+grep -Fq '`1.039673x` paired median wall-time ratio with `396.73%`' docs/manual/current-limits.md
 grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md

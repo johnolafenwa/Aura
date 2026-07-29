@@ -747,6 +747,71 @@ unavailable memory gate at 1,457,848,320 bytes worst whole-process RSS, with a
 `d9947ddc4c65c7ff7f592585d85530f92f10045b73fa66f25dfd5a1b2dabf21a`.
 The maintained Mac14,9 baseline can therefore make the bounded
 100,000-sleeper claim; this remains measured hardware evidence rather than a
-portable guarantee. Phase 5.9 is complete and Phase 5.10 native structured
-frames is next. Coverage floors remain frozen until the one-time Batch 4
-sign-off re-ratchet.
+portable guarantee. Phase 5.9 is complete.
+
+## Phase 5.10 native structured runtime frames
+
+Provisional ADR-0036 landed independently at `ad6bef6`. The implementation
+family through observable closure commit `181204b` adds typed, always-present
+`call_frames` and `task_ancestry` arrays, once-only capture before cleanup,
+matching MIR/direct semantics, a bounded private native-record transport, and
+additive compiler-analysis/LSP forwarding without changing semantic interface
+version 2. Both diagnostic-note parity masks were removed, and all 53
+maintained run-fail oracles pin their complete Aurora call chains.
+
+Independent review found and closed post-launch automatic fallback,
+descendant internal-descriptor/environment leakage, and child human output
+after a signalled record failure. Compact metadata at `1e1263d` removed eager
+owned strings and reduced the native call-entry frame from 528 to 208 bytes.
+The boxed-state correction at `c3278c4` prebuilds pristine child state on the
+spawning task, preserves allocation identity through installation, and
+reduces the child scope-setup frame from 1,312 to 432 bytes. Closure commit
+`181204b` observably proves that leaving a nested native runtime scope restores
+the outer task ancestry. No synthetic coverage test or exclusion was added.
+
+Exact-clean full CI at `181204b02ca419d3f8cad683e8a0015499a4363b` is green:
+45 benchmark-runner tests, 300 CLI tests, 1,150 compiler-library tests, the
+serialized forced-backend parity matrix in 623.99 seconds, 90 LSP tests, 13
+extension tests, compiler and LSP coverage, executable reference integrity,
+the docs build, npm and Rust audits, warning-denied Clippy, formatting, and
+hygiene. The CI log SHA-256 is
+`0776403c16bd356cb46d42b1e3dcc19c0c09a0ebf29be0e0cf2e405f6fa6c910`;
+the exported compiler-coverage JSON SHA-256 is
+`e66a3db6c7f94f5cd2ea966c19717538b646ea6c001d9fa873b03bf44f219ddd`.
+
+Final compiler coverage is 71,153/74,016 lines (96.131917%),
+4,757/4,909 functions (96.903646%), and 104,478/110,598 regions
+(94.466446%). The one-time Batch 4 re-ratchet is complete at the
+downward-truncated `96.13/96.90/94.46` floors. LSP coverage remains 100%:
+897/897 statements and lines, 245/245 branches, and 49/49 functions.
+
+The clean contractual benchmark uses release `aura` SHA-256
+`50503389792f7f86efb8f021f983a3917855bad82e4fbc90b99414695331142a`.
+Raw report
+`/private/tmp/aurora-phase510-after-native-frames-state-prebuilt.json`,
+SHA-256
+`8ba448a06a8efb505af723ed00b8248fc1aa44ed270b46df5c15d74ecb9bd986`.
+The repository and competing-process inventories are clean.
+
+| Workload | Contractual result | Disposition |
+| --- | --- | --- |
+| 10,000 sleepers, 3 runs | 207,798,272 bytes worst whole-process peak; 198,787,072 bytes worst incremental peak | PASS, at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers, 3 runs | peaks 1,170,735,104, 1,921,531,904, and 2,001,305,600 bytes; 3 ms worst arm span; 2 ms worst p99 | Timer gates PASS; RSS uses the ratified escape hatch |
+| 1,000 standalone timers, 3 runs | 6 ms worst arm span; 1 ms worst p99 | PASS |
+| 10 idle tasks | 0.001675461% CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop, 3 runs | 14 ms worst latency | PASS, at most 50 ms |
+| Four-worker multicore, 7 paired runs | every pair passes; 1.039673x paired median; 396.73% median four-task CPU | PASS |
+
+The massive-RSS number does not establish the 1.5 GiB claim. On this
+16 KiB-page host, one resident page for each of the workload's 101,000
+stackful children is already 1,654,784,000 bytes before scheduler, task, timer,
+and diagnostic metadata. The raw RSS ceiling is therefore recorded under the
+ratified page-floor escape hatch, and the bounded 100,000-sleeper claim made
+after Phase 5.9 is withdrawn. All other contractual gates pass. A future
+stackless or safely copy-and-decommit architecture is required before that
+claim can be reinstated.
+
+Phase 5.10 implementation, exact-clean CI, contractual benchmark evidence,
+final coverage, and the one-time re-ratchet are complete. Checkpoint
+documentation is being finalized. Exact final settled-tree CI remains
+explicitly pending and Phase 6 has not started.

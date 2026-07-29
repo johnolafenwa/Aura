@@ -368,15 +368,16 @@ pending backlog, not admission waiters or a stuck OS call, so unrelated
 blocking-I/O host work still cannot run until some worker returns when every
 worker is occupied.
 
-On the clean Mac14,9 Phase 5.9 measurement, 10,000 parked sleepers used
-206,962,688 bytes worst whole-process RSS and 198,492,160 incremental bytes
-above their same-process baseline. The combined 100,000-sleeper plus
-1,000-timer run used 1,457,848,320 bytes worst whole-process RSS while keeping
-timer arm span at 4 ms and p99 at 3 ms, so the maintained baseline passes the
-1.5 GiB gate with stable timers. This is a measured hardware baseline, not a
-portable task-count guarantee. The mandatory four-worker workload passed at a
-`1.020214x` paired median wall-time ratio with `398.49%` median four-task
-process CPU.
+The clean Mac14,9 Phase 5.10 measurement at `181204b` does not support a
+maintained 100,000-task memory claim. The three 100,000-sleeper plus
+1,000-timer runs peaked at 1,170,735,104, 1,921,531,904, and 2,001,305,600
+bytes of whole-process RSS. The Phase 5 massive-RSS escape hatch therefore
+applies and the earlier “at most 1.5 GiB” claim is withdrawn. On this host, one
+16 KiB resident page for each of the 101,000 stackful children alone requires
+1,654,784,000 bytes before scheduler metadata or the root runtime. The lower
+Phase 5.9 result depended on macOS memory compression and is not a stable
+contract. The 10,000-sleeper, standalone-timer, idle-CPU, starvation, and
+mandatory multicore gates all pass.
 
 MIR execution checks every loop backedge and yields every 8 backedges. Native
 concurrent programs use a function-local 4,096-iteration fuel budget, and

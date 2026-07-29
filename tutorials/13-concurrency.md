@@ -398,15 +398,25 @@ preemption, or parallel speedup for every workload.
 Deep HTTP, TLS, and maintained Unix WebSocket library steps run on a distinct
 bounded protocol service with deep native worker stacks. Protocol state
 returns to the lightweight task after each bounded, nonblocking step and
-before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase 5.9
-measurement, 10,000 parked sleepers used 206,962,688 bytes worst whole-process
-RSS and 198,492,160 incremental bytes above their same-process baseline. The
-combined 100,000-sleeper plus 1,000-timer run used 1,457,848,320 bytes worst
-RSS and passed its stable-timer controls with a 4 ms arm span and 3 ms p99.
-The maintained baseline therefore passes the 1.5 GiB gate; this is measured
-hardware evidence, not a portable task-count guarantee. The same contractual
-run passed the mandatory four-worker scaling gate at a `1.020214x` paired
-median wall-time ratio with `398.49%` median four-task process CPU.
+before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase
+5.10 measurement, three runs of 10,000 parked sleepers peaked at 207,798,272,
+206,946,304, and 206,831,616 bytes whole-process RSS, all below the maintained
+512 MiB gate. Standalone 1,000-timer controls remained stable with a 6 ms
+maximum arm span and 1 ms worst p99 overshoot.
+
+The combined 100,000-sleeper plus 1,000-timer workload is not a maintained
+capacity claim. Its three clean runs peaked at 1,170,735,104, 1,921,531,904,
+and 2,001,305,600 bytes, so two runs exceeded 1.5 GiB even though their timers
+remained stable at a 3 ms maximum arm span and 2 ms worst p99 overshoot.
+Mac14,9 uses 16 KiB pages: 101,000 stackful tasks therefore have a
+1,654,784,000-byte one-page floor before scheduler, program, and process
+metadata. The earlier Phase 5.9 below-gate sample depended on nondeterministic
+memory compression and does not establish a repeatable bound. Under the
+roadmap's measured-best escape hatch, Aurora retains the result as benchmark
+evidence but makes no “100,000 tasks in 1.5 GiB” promise. This is not a hard
+100,000-task limit; it withdraws only that memory guarantee. The same current
+contractual report passes the four-worker scaling gate at a `1.039673x` paired
+median wall-time ratio with `396.73%` median four-task process CPU.
 
 The protocol service starts lazily and lives until process exit; Aurora 0.1
 does not expose a shutdown or join operation for it. File reads, resolver work,

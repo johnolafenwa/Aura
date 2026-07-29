@@ -682,3 +682,167 @@ with stable timers. The earlier escape-hatch records remain valid historical
 measurements, but the maintained Mac14,9 baseline can now make the bounded
 100,000-sleeper claim. It is a measured baseline, not a portable guarantee for
 every operating system, allocator, workload, or host.
+
+## Phase 5.10 native structured diagnostic frames
+
+The accepted Phase 5.9 report above remains the before-stage baseline. Phase
+5.10 replaces the direct backend's string-normalized runtime errors with
+structured native frame metadata and preserves task ancestry across nested
+runtime scopes. This changes task-local runtime state, so the 100,000-sleeper
+RSS gate is a required acceptance condition rather than an escape-hatch
+observation.
+
+### Rejected initial representation
+
+The first clean contractual run measured implementation commit
+`29ff7f606e3c0320c590947291a8f041db9e15cb`. Its native frame representation
+eagerly owned frame strings and vectors in every task-local runtime-state
+value. The qualified release Aura SHA-256 was
+`014f29cc51db393f27968a5722a4a2060a2f6e67c4b2cdfc643c8c4c88dd9b24`.
+Raw report:
+`/private/tmp/aurora-phase510-after-native-frames.json`; SHA-256:
+`012feee3e8a840c1c59c3c503572188b7bc4a8cc72b1ac3f30b5bb53f49f4528`.
+The report records no dirty files, empty competing-process inventories,
+`contractual: true`, and no non-contractual reasons.
+
+| Workload | Repetitions | Rejected initial-frame result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 221,282,304 bytes worst whole-process peak RSS; 212,680,704 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | 2,040,184,832 bytes worst whole-process peak RSS; 2,031,927,296 bytes worst incremental peak RSS; 4 ms worst arm span; 2 ms worst p99 | **RSS FAIL** against 1.5 GiB; embedded timer gates PASS |
+| 1,000 timers | 3 | arm spans 4, 4, 14 ms; valid-run p99 up to 7 ms, with the 14 ms-arm-span run excluded from the contractual p99 | **FAIL**, overlap and p99 controls |
+| 10 idle tasks | 3 | 0.0013306468811813544% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 14 ms worst result | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | paired median ratio 1.059896x; ratio of medians 1.061839x; 397.74% median four-task process CPU; all seven pairs pass | PASS |
+| V6 int32 loop | 5 plus warmup | median 34.675208 ms; MAD 1.216250 ms; p95 48.866375 ms; best 33.193333 ms | recorded rejected-run control |
+| V6 int64 loop | 5 plus warmup | median 12.875583 ms; MAD 1.014416 ms; p95 16.032750 ms; best 11.861167 ms | recorded rejected-run control |
+
+The run is retained as diagnostic evidence only. It cannot qualify Phase 5.10:
+the massive-concurrency peak is about 410 MiB over the 1.5 GiB limit, and the
+standalone timer controls also failed.
+
+### Rejected compact representation
+
+Commit `1e1263d` compacted inactive and active frame metadata rather than
+retaining eagerly owned strings and vectors. Commit `e171420` added the
+observable ABI regression for null required frame metadata and closed the
+compiler line-coverage floor without a synthetic line-execution test.
+
+The next clean contractual run measured
+`e1714205d13bc9511c8d99f6d0f7c9782548298f`. Its qualified release Aura
+SHA-256 was
+`a7e644bd05ebf8744a15cd2e00885b7e2803f3899211cab67e626ffd51912935`.
+Raw report:
+`/private/tmp/aurora-phase510-after-native-frames-compact.json`; SHA-256:
+`64868869cec520b438594214d8b62e0691cf921b8d062a1337fd0be82280ca60`.
+The report records no dirty files, empty competing-process inventories,
+`contractual: true`, and no non-contractual reasons.
+
+| Workload | Repetitions | Rejected compact-frame result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | peaks 210,255,872, 210,714,624, and 211,189,760 bytes; 203,030,528 bytes worst incremental peak RSS | PASS, whole-process peak at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | peaks 1,095,598,080, 1,629,388,800, and 1,831,649,280 bytes; 1,823,522,816 bytes worst incremental peak RSS; 3 ms worst arm span; 3 ms worst p99 | **RSS FAIL** against 1.5 GiB; embedded timer gates PASS |
+| 1,000 timers | 3 | arm spans 5, 6, 5 ms; 1 ms p99 in every run | PASS |
+| 10 idle tasks | 3 | 0.0009397762979994653% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 19 ms worst result | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | paired median ratio 1.011633x; ratio of medians 1.011328x; 395.58% median four-task process CPU; all seven pairs pass | PASS |
+| V6 int32 loop | 5 plus warmup | median 50.570916 ms; MAD 0.120293 ms; p95 51.054375 ms; best 49.949125 ms | recorded rejected-run control |
+| V6 int64 loop | 5 plus warmup | median 18.645500 ms; MAD 0.878334 ms; p95 20.151375 ms; best 17.293750 ms | recorded rejected-run control |
+
+Compaction restored the 10,000-sleeper result and every non-massive gate, but
+the massive result varied from below the limit to about 211 MiB above it. The
+stage therefore remained rejected; one favourable repetition was not treated
+as acceptance.
+
+### Boxed/prebuilt task-state correction and final contractual run
+
+Commit `c3278c4` boxes each task's direct runtime state and prebuilds the
+pristine state on the spawning task before the child coroutine begins. This
+removes the large state value and its construction from the child coroutine's
+scope while preserving allocation identity when the state is installed.
+Commit `181204b` adds the observable nested-task ancestry restoration
+regression, covering the normal completion path through the corrected scope
+without adding a synthetic coverage-only test.
+
+The final run measured clean commit
+`181204b02ca419d3f8cad683e8a0015499a4363b`. The runner found no dirty files
+and no competing Aurora `cargo`, `rustc`, or `aura` processes before either
+the build or timing phase. It records `contractual: true`, an empty
+`noncontractual_reasons` list, and a fresh successful locked release build.
+The qualified `aura 0.1.0` binary is 12,910,176 bytes with SHA-256
+`50503389792f7f86efb8f021f983a3917855bad82e4fbc90b99414695331142a`.
+
+The measured host was Mac14,9 with an Apple M2 Pro, 10 physical and 10 logical
+cores, 16 GiB of memory, and Darwin 25.5.0
+(`Darwin Kernel Version 25.5.0: Tue Jun 9 22:28:24 PDT 2026;
+root:xnu-12377.121.10~1/RELEASE_ARM64_T6020`). The exact command was:
+
+```bash
+cargo build --release --locked -p aura --target-dir target
+npm run bench:scalable-runtime -- \
+  --label phase510-after-native-frames-state-prebuilt \
+  --aura target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --multicore-repeats 7 \
+  --idle-seconds 30 \
+  --json /private/tmp/aurora-phase510-after-native-frames-state-prebuilt.json
+```
+
+Raw report:
+`/private/tmp/aurora-phase510-after-native-frames-state-prebuilt.json`;
+SHA-256:
+`8ba448a06a8efb505af723ed00b8248fc1aa44ed270b46df5c15d74ecb9bd986`.
+Run log:
+`/private/tmp/aurora-phase510-after-native-frames-state-prebuilt.log`;
+SHA-256:
+`4c8d5cf7149b0b224847ae8c9e3ba49b5b26e80d8e5e2d20559457e91e3a683b`.
+The concise extracted evidence is
+`/private/tmp/aurora-phase510-final-summary.json`; SHA-256:
+`edd1026137e2c800e7d63499c4104c38aa536673d87136732564e57530c6f304`.
+
+| Workload | Repetitions | Final boxed/prebuilt result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | whole-process peaks 207,798,272, 206,946,304, and 206,831,616 bytes; incremental peaks 198,574,080, 198,688,768, and 198,787,072 bytes; 207,798,272 bytes worst whole-process peak | PASS, at most 512 MiB |
+| 100,000 sleepers plus 1,000 timers | 3 | whole-process peaks 1,170,735,104, 1,921,531,904, and 2,001,305,600 bytes; incremental peaks 1,162,985,472, 1,913,192,448, and 1,993,097,216 bytes; ready RSS 1,009,532,928, 1,921,531,904, and 2,001,305,600 bytes; every run had 3 ms arm span and timer p50/p95/p99 of 1/2/2 ms; maxima 2, 3, and 3 ms | **RSS FAIL** against 1.5 GiB; embedded arm-span and p99 gates PASS |
+| 1,000 timers | 3 | arm spans 6, 4, and 4 ms; every run had p50/p95/p99 of 0/1/1 ms; maxima 2, 1, and 1 ms; worst p99 1 ms | PASS, arm span at most 10 ms and p99 at most 5 ms |
+| 10 idle tasks | 3 | CPU 0.001315454859327715%, 0.0016754605941909423%, and 0.0007211218436201194%; worst 0.0016754605941909423% | PASS, less than 2% CPU |
+| 10 ms sleeper beside hot loop | 3 | 14, 13, and 13 ms; worst 14 ms | PASS, at most 50 ms |
+| Four-worker CPU scaling | 7 paired repetitions | one-task/four-task seconds, ratio, and four-task CPU by pair: 0.558479125/0.581772959, 1.041709409x, 396.734801%; 0.558883334/0.579024375, 1.036038006x, 396.889826%; 0.564198959/0.582300833, 1.032084203x, 396.514917%; 0.557809875/0.586279833, 1.051038820x, 394.382397%; 0.563612250/0.579693541, 1.028532543x, 396.900108%; 0.556853833/0.582595542, 1.046227048x, 396.035886%; 0.559773083/0.581980708, 1.039672549x, 396.912018%; all seven pairs pass | PASS, valid ratio at most 1.6 with at least 150% CPU |
+| V6 int32 loop | 5 plus warmup | warmup 593.378958 ms; samples 48.803417, 37.830541, 36.904000, 36.724625, and 37.436334 ms; median 37.436334 ms; MAD 0.532334 ms; p95 48.803417 ms; best 36.724625 ms | recorded stage evidence |
+| V6 int64 loop | 5 plus warmup | warmup 559.237375 ms; samples 16.746292, 15.677542, 15.005584, 14.803625, and 14.965667 ms; median 15.005584 ms; MAD 0.201959 ms; p95 16.746292 ms; best 14.803625 ms | recorded stage evidence |
+
+The multicore aggregates are: one-task best/median/MAD/p95
+0.556853833/0.558883334/0.001073458/0.564198959 seconds; four-task
+best/median/MAD/p95
+0.579024375/0.581980708/0.000614834/0.586279833 seconds; paired-ratio
+best/median/MAD/p95 1.028532543/1.039672549/0.006554499/1.051038820.
+The ratio of medians is 1.041327720x, median four-task process CPU is
+396.734801%, and the one-task and four-task relative MAD values are
+0.001920721 and 0.001056451, both below the 0.15 bound.
+
+Every workload completed naturally with its required protocol output, zero
+status, and no sampling error. The 10,000-sleeper, standalone-timer, idle,
+starvation, multicore, and embedded massive-timer gates are green. The sole
+red result is the whole-process RSS of the massive-concurrency workload:
+2,001,305,600 bytes observed versus the 1,610,612,736-byte ceiling.
+
+The result also establishes that the 1.5 GiB requirement is below the
+platform's stack-page scale for this workload. The 101,000 simultaneous tasks
+(100,000 sleepers and 1,000 timer tasks) at one 16 KiB page each imply
+1,654,784,000 bytes before runtime objects, scheduler state, allocator
+overhead, or the rest of the process. That page-scale figure alone is
+44,171,264 bytes above the 1,610,612,736-byte gate. The very low first
+repetition and the earlier Phase 5.9 peak of 1,457,848,320 bytes are therefore
+treated as macOS residency/compression outliers, not evidence that Aurora can
+reliably hold the workload below the stated whole-process ceiling.
+
+The documented Phase 5 benchmark escape hatch is invoked after the eager,
+compact, and boxed/prebuilt representations all preserved behavior and all
+non-RSS gates while the clean repeated measurement still could not satisfy
+the physically mismatched RSS ceiling. Phase 5.10 may proceed on the boxed and
+prebuilt implementation, but Aurora withdraws the Phase 5.9 bounded
+100,000-sleeper claim. Massive concurrency remains unavailable as a supported
+claim on this runtime. The accepted maintained claim is 10,000 suspended tasks
+within 512 MiB, with stable timers, idle behavior, starvation latency, and
+four-worker scaling as measured above.

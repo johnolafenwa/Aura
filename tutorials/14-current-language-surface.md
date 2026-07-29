@@ -732,14 +732,24 @@ non-repeatable Task right is consumed at entry and a losing right is
 abandoned. The old statement-shaped `select` remains unsupported.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
-protocol-step service with deep native worker stacks. The clean Mac14,9 Phase
-5.9 10,000-sleeper measurement records 206,962,688 bytes worst whole-process
-RSS and 198,492,160 incremental bytes. Its 100,000-sleeper plus 1,000-timer
-run used 1,457,848,320 bytes worst RSS and passed stable-timer controls with a
-4 ms arm span and 3 ms p99. The maintained baseline therefore passes the
-1.5 GiB gate; this is measured hardware evidence, not a portable task-count
-guarantee. The mandatory four-worker workload passed at a `1.020214x` paired
-median wall-time ratio with `398.49%` median four-task process CPU.
+protocol-step service with deep native worker stacks. In the clean Mac14,9
+Phase 5.10 report, three 10,000-sleeper runs peaked at 207,798,272,
+206,946,304, and 206,831,616 bytes whole-process RSS, preserving the maintained
+512 MiB bound. Standalone 1,000-timer controls passed with a 6 ms maximum arm
+span and 1 ms worst p99 overshoot.
+
+Aurora does not maintain a “100,000 tasks in 1.5 GiB” claim. Three clean runs
+of 100,000 sleepers plus 1,000 timers peaked at 1,170,735,104, 1,921,531,904,
+and 2,001,305,600 bytes; two exceeded the proposed limit while timer behavior
+remained stable at a 3 ms maximum arm span and 2 ms worst p99 overshoot.
+Mac14,9 uses 16 KiB pages, giving those 101,000 stackful tasks a
+1,654,784,000-byte one-page floor before other runtime and process memory.
+The earlier Phase 5.9 below-gate sample depended on nondeterministic memory
+compression and is not a repeatable bound. The roadmap escape hatch therefore
+retains the measured result without publishing the massive-concurrency
+marketing claim. This does not impose a 100,000-task language limit. The
+current four-worker workload passes at a `1.039673x` paired median wall-time
+ratio with `396.73%` median four-task process CPU.
 
 The protocol service is lazily initialized and remains alive until process
 exit; it has no 0.1 shutdown or join surface. File reads, resolver work, and
