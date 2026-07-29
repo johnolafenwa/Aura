@@ -10533,11 +10533,15 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout_with_timeout(
+    // No producer exists in this semantic pin, so extra scheduler workers
+    // cannot affect the result. Keep one worker to avoid making the 15-second
+    // deadlock watchdog measure host-wide CLI-process oversubscription.
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aurora-queue-iteration-zero-producers",
         source,
         std::time::Duration::from_secs(15),
         "done\n",
+        Some(1),
     );
 }
 
