@@ -14,7 +14,7 @@ Current copy categories are:
 - `float32` and `float64`
 - `bool`
 - `Duration`
-- `Queue[T]` handles and, under Provisional ADR-0033, `Task[T]` handles whose
+- `Queue[T]` handles and, under Accepted ADR-0033, `Task[T]` handles whose
   result type is repeatable
 - tuples whose every element type is copyable
 - `copy class` values whose fields are copyable
@@ -28,7 +28,7 @@ print(a)
 print(b)
 ```
 
-`Queue[T]` is a copy handle to shared runtime state. Provisional ADR-0033 makes
+`Queue[T]` is a copy handle to shared runtime state. Accepted ADR-0033 makes
 `Task[T]` copyable only when `T` is repeatable. Copying an allowed handle does
 not duplicate the underlying queue, task, queued values, or stored result.
 
@@ -331,7 +331,7 @@ its declared mode. Copy task and queue handles still refer to shared runtime
 state. See
 [Concurrency](/manual/concurrency) and [Execution Model](/manual/execution-model#tasks-and-scheduler).
 
-Provisional ADR-0033 adds a separate `Transfer` check to task captures,
+Accepted ADR-0033 adds a separate `Transfer` check to task captures,
 results, Queue construction, and Queue `put`/`try_put`. Handle-only Queue
 operations do not recheck the payload. A bare target parameter can still borrow its
 child-owned capture for the call, but the captured value itself must be

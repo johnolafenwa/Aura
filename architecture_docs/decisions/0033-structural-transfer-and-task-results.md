@@ -1,7 +1,8 @@
 # ADR-0033: Structural Transfer and task-result consumption
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-28
+- Accepted: 2026-07-29 (Batch 4 checkpoint)
 - Roadmap decision: Batch 4, Phase 5.6
 - Amends: ADR-0008 and ADR-0020's task/queue clone-barrier availability
 
@@ -23,7 +24,7 @@ data to have one consumer. The current runtime can clone some stored results
 for every observation, but that implementation behavior is not a sound static
 contract for non-copy owned data and cannot be used for exclusive state.
 
-## Provisional decision
+## Decision
 
 ### `Transfer` is compiler-derived
 
@@ -240,5 +241,6 @@ messages.
 | Editor and diagnostics parity | Compiler-service/LSP results preserve the stable code, nested reason, primary boundary span, guidance, and MIR/direct fixture parity. |
 | Phase boundary | Phase 5.6 evidence remains explicitly single-worker; Phase 5.7 evidence pins default and overridden worker counts, stable spawn-time assignment, no migration or stealing, local-worker yield, synchronized Queue/Task wakeups, Transfer isolation, per-task cancellation/diagnostics, unspecified scheduling/output order, and MIR/direct parity. |
 
-The ADR moves from Provisional only after the focused semantic, fixture,
-compiler-service, both-backend parity, full-CI, and frozen-coverage gates pass.
+The focused semantic, fixture, compiler-service, both-backend parity, full-CI,
+and frozen-coverage gates passed at the Batch 4 checkpoint, including the
+Phase 5.7 pinned-worker completion evidence.

@@ -100,7 +100,7 @@ positions:
 - `bool`
 - `Duration`
 - `Queue[T]`
-- under Provisional ADR-0033, `Task[T]` only when `T` is repeatable as defined
+- under Accepted ADR-0033, `Task[T]` only when `T` is repeatable as defined
   in [Provisional Transfer Classification](#provisional-transfer-classification)
 - tuple values when every element type is copyable
 - `copy class` values whose fields are all copyable
@@ -172,7 +172,7 @@ one owner instead of cloning it.
 
 ## Provisional Transfer Classification
 
-Provisional ADR-0033 defines the static property used at a task boundary.
+Accepted ADR-0033 defines the static property used at a task boundary.
 `Transfer` means that ownership of a value may cross from one Aurora task
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
@@ -235,7 +235,7 @@ on different pinned workers.
 | `Set[T]` | Owned set of unique values. |
 | `MapEntry[K, V]` | Entry value returned by `Map.items()` and `Map.entries()`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
-| `Task[T]` | Transferable task-result handle; conditionally Copy under Provisional ADR-0033. |
+| `Task[T]` | Transferable task-result handle; conditionally Copy under Accepted ADR-0033. |
 | `SendError[T]` | Queue send failure that carries the unsent value. |
 | `QueueReceive[T]` | Queue receive outcome. |
 | `TaskResult[T]` | Task result outcome. |

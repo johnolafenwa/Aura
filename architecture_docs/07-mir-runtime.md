@@ -252,7 +252,7 @@ another worker's ready tasks. Consequently `yield_now()` requeues only on the
 current worker.
 
 Queue and Task handle internals provide the synchronized cross-worker
-notification and observation paths. Provisional ADR-0033 supplies the
+notification and observation paths. Accepted ADR-0033 supplies the
 share-nothing boundary for everything else: captures and results cross only as
 owned `Transfer` values, while live host authority and capability views remain
 on their owning task. Current-task cancellation and diagnostic context are

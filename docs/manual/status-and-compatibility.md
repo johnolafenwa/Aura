@@ -15,7 +15,7 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
 design history. Features mentioned only there—including `Channel`,
 statement-form `select`, detached spawn, attributes, and registry
-publishing—are not part of Aurora 0.1. Provisional ADR-0034 instead adds the
+publishing—are not part of Aurora 0.1. Accepted ADR-0034 instead adds the
 ordinary builtin call `select(source, ...)`; it adds no statement syntax.
 That addition reserves both the builtin function name `select` and builtin
 enum name `SelectOutcome`; existing user declarations with either name must
@@ -69,13 +69,13 @@ Aurora 0.1 uses structured concurrency:
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
 - `TaskGroup.start_soon(...)` starts a child whose result is not retained
-- Provisional ADR-0032 adds guarded 512 KiB default task stacks plus
+- Accepted ADR-0032 adds guarded 512 KiB default task stacks plus
   `TaskGroup.start_with_stack(...)` and `start_soon_with_stack(...)` overrides
   from the measured-shallow-task 256 KiB minimum through 64 MiB
 - `Queue[T]` provides bounded or unbounded task-aware communication
 - `yield_now()` provides an explicit cooperative scheduling point
 - `select(...)` provides a typed heterogeneous Queue/Task/deadline wait under
-  Provisional ADR-0034
+  Accepted ADR-0034
 - `wait_any(...)` and `wait_all(...)` coordinate task completion
 
 There is no `Channel`, statement-form `select`, bare `spawn`, or detached
@@ -100,7 +100,7 @@ use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle worker blocks
 until work, an event, or a deadline without a periodic tick.
 
-Under Provisional ADR-0035, the separate process-wide blocking-I/O pool is
+Under Accepted ADR-0035, the separate process-wide blocking-I/O pool is
 lazily initialized. The first runtime preflight reads its settings once and
 keeps that configuration immutable for the process lifetime without starting
 worker threads. First blocking submission creates the complete worker set;
@@ -117,7 +117,7 @@ and has any abandoned result discarded. The bound cannot interrupt host calls
 or guarantee unrelated blocking-I/O progress while all workers remain
 occupied.
 
-Provisional ADR-0033 implements compiler-derived structural Transfer checks for
+Accepted ADR-0033 implements compiler-derived structural Transfer checks for
 task captures, task results, and Queue payloads, plus conditional task-handle
 Copy and statically single-consumer non-repeatable results. Queue and Task
 handles are the maintained cross-worker channels; all other boundary values
@@ -128,7 +128,7 @@ of preemption, work stealing, worker introspection, detached tasks, or parallel
 speedup for every program. See [Execution Model](/manual/execution-model) and
 [Current Limits](/manual/current-limits).
 
-Provisional ADR-0036 defines complete typed runtime frames on both maintained
+Accepted ADR-0036 defines complete typed runtime frames on both maintained
 backends. Diagnostics carry innermost-first Aurora call frames and
 youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional

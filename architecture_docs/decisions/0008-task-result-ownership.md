@@ -4,7 +4,7 @@
 - Date: 2026-07-13
 - Roadmap decision: D8
 
-> **Static enforcement amendment (Phase 5.6).** Provisional ADR-0033 defines
+> **Static enforcement amendment (Phase 5.6).** Accepted ADR-0033 defines
 > the compiler-derived mechanism. `Task[T]` is copyable only when `T` is
 > copyable, a Queue handle, or a recursively repeatable Task handle.
 > Otherwise direct observation consumes the unique right on every outcome,

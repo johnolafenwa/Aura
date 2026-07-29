@@ -2,6 +2,36 @@
 
 Last updated: 2026-07-29
 
+## Batch 5 of 6 (active)
+
+- Authorized target: close B5.0-a through B5.0-f before Phase 6, then implement
+  capture-free function values, the callable-powered standard-library
+  additions, value-capturing expression lambdas, manifest-gated FFI v0, and a
+  proposal-only loan/view ADR. Stop at the Batch 5 checkpoint without
+  beginning Phase 7 or release work.
+- Entry state: Batch 4 is accepted at settled commit `4c9d9a2`. ADR-0032,
+  ADR-0033, and ADR-0036 are accepted by the Batch 4 checkpoint ruling.
+  ADR-0034 is Accepted after B5.0-b closed and passed independent audit;
+  ADR-0035 is Accepted after B5.0-c passed repeated default-parallel runs.
+  Compiler coverage floors remain frozen at
+  `96.13/96.90/94.46` until the single checkpoint re-ratchet.
+- Current stage: B5.0 implementation and broad verification are complete in
+  five isolated commits. Reachability-based TaskGroup joins retain reachable
+  producer/consumer work under artificial CPU load and still cancel true
+  deadlocks; queue-iteration producer lifetime remains distinct from general
+  handle reachability. Nested select payload typing, default-parallel
+  blocking-pool watchdogs, the Linux nightly TSan scheduler job, schema-4 V6
+  startup/loop reporting, `aura build` wait progress, MIR contention
+  documentation, and diagnostic wording are complete. The 308-test CLI suite,
+  1,157-test compiler suite, 49 benchmark-runner tests, reference integrity,
+  docs, workflow lint, formatting, and warning-denied Clippy are green. The
+  exact clean-tree full CI and frozen-floor coverage check are the remaining
+  B5.0 gate; no Phase 6 implementation has started.
+- Standing rules: test-first implementation; behavior-focused coverage only;
+  reference pages land with each new language surface; each Phase 6 stage is a
+  separately gated commit family; user-owned `personal/file_ops.au` and the
+  untracked ADR-0022 draft remain outside Batch 5 changes.
+
 ## Batch 4 of 6 (completed)
 
 - Authorized target: close B4.0-a through B4.0-d, then implement Phase 5's

@@ -1,7 +1,8 @@
 # ADR-0035: Configurable blocking-I/O pool
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-27
+- Accepted: 2026-07-29
 - Roadmap decision: Batch 4, Phase 5.9
 - Related: ADR-0019, ADR-0032, ADR-0033, and ADR-0034
 
@@ -26,7 +27,7 @@ merge that pool with the bounded protocol-step service or the JSON codec
 service, and it does not claim that Aurora can forcibly cancel an accepted
 host operation.
 
-## Provisional decision
+## Decision
 
 ### Process configuration
 
@@ -215,6 +216,8 @@ which are outside this decision.
 | Backend parity | Shared-runtime, forced-MIR, forced-direct, and standalone cases agree on configuration failures, FIFO admission, timeout/cancellation, late-result disposal, and observable completion. |
 | Compatibility and reference | Existing blocking I/O succeeds with both settings absent; maintained runtime/reference pages document defaults, capacity accounting, abandonment, and the fact that bounded admission cannot interrupt an accepted host call. |
 
-The ADR moves from Provisional only after the focused unit/race/stress,
+The Phase 5.9 implementation passed the focused unit/race/stress,
 forced-backend, standalone, reference, full-CI, benchmark, and frozen-coverage
-gates pass.
+gates. Batch 5 then serialized only the two mutually contending saturated-pool
+watchdogs and proved them repeatedly under default parallel test execution,
+completing the matrix without changing product behavior.

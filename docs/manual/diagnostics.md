@@ -69,12 +69,12 @@ collections, user classes, enum payloads, and other value wrappers. A generic
 definition over unresolved types records an inferred clone-safety obligation;
 `AU3007` is emitted at an unsafe concrete specialization, when a concrete
 requirement cannot be proved, or when an implementation would strengthen its
-trait method's contract. Under Provisional ADR-0033, `random.Rng` is not
+trait method's contract. Under Accepted ADR-0033, `random.Rng` is not
 Transfer: a task returning it and a Queue carrying it are rejected with
 `AU3008`, and the task handle is not copyable. Moving or removing a generator
 within one owning task remains valid because it leaves one owner.
 
-Provisional ADR-0033 reserves `AU3008` for a captured argument, task result, or
+Accepted ADR-0033 reserves `AU3008` for a captured argument, task result, or
 Queue payload that cannot cross a task-worker boundary. The diagnostic names
 the failed boundary and follows the specialized type to the first
 non-transferable leaf, including its field, tuple element, collection

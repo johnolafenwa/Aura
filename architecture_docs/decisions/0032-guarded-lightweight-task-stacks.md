@@ -1,7 +1,8 @@
 # ADR-0032: Guarded lightweight-task stacks
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-27
+- Accepted: 2026-07-29 (Batch 4 checkpoint)
 - Roadmap decision: Batch 4, Phase 5.4
 
 ## Context
@@ -36,7 +37,7 @@ task-local call shape. Adding a `stack_size=` option to `TaskGroup.start` or
 `start_soon` is not safe: those methods forward target arguments, so the option
 would collide with a target parameter of the same name.
 
-## Provisional decision
+## Decision
 
 - `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` use a default requested
   writable stack capacity of 524,288 bytes (512 KiB).
@@ -115,9 +116,8 @@ would collide with a target parameter of the same name.
   cancellation boundary. The direct backend copies the source while holding
   its value-table read access briefly, then releases that access before
   submitting or waiting for the codec result.
-- This API remains Provisional until the Batch 4 checkpoint reviews its
-  diagnostics, both-backend behavior, protocol cleanup tests, and measured
-  memory results.
+- The Batch 4 checkpoint accepted this API after reviewing its diagnostics,
+  both-backend behavior, protocol cleanup tests, and measured memory results.
 
 The 512 KiB default is a capacity request, not a promise that every task
 commits or touches 512 KiB of resident memory. Conversely, dividing whole

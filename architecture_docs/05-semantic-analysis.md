@@ -145,7 +145,7 @@ That is why move and borrow diagnostics come from `sema.rs`, not the parser.
 
 ## Provisional task-boundary Transfer analysis
 
-Phase 5.6 introduces the Provisional ADR-0033 design before Aurora enables
+Phase 5.6 introduces the Accepted ADR-0033 design before Aurora enables
 multiple workers. `Transfer` is a compiler-derived structural property, not a
 user trait. The checker must walk specialized collection, tuple, class, and
 enum storage and retain a path to the first non-transferable leaf so a

@@ -453,7 +453,7 @@ grep -Fq 'compiler-inserted scheduling checks on every ordinary and `continue` l
 grep -Fq 'fn loop_backedge_safepoints_prevent_timer_and_queue_starvation()' crates/aura/tests/cli.rs
 grep -Fq 'fn loop_backedge_safepoints_prevent_socket_readiness_starvation()' crates/aura/tests/cli.rs
 test -s benchmarks/scalable_runtime/sleeper_vs_hot_loop.au
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md
 grep -Fq '0032-guarded-lightweight-task-stacks.md' architecture_docs/decisions/README.md
 grep -Fq '| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` |' docs/manual/concurrency.md
 grep -Fq '| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` |' docs/manual/api-index.md
@@ -476,7 +476,7 @@ grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md
 grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aurora-language-server/test/compiler_bridge.test.js
 grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aurora-compiler/src/call.rs
-grep -Fq 'Provisional ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
+grep -Fq 'Accepted ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
@@ -713,12 +713,40 @@ if rg -n 'maintained interpreter|tree-walk interpreter' docs/manual; then
   exit 1
 fi
 
-# Phase 5.8: Provisional ADR-0034 is an implemented builtin call, not the
+# Batch 4 checkpoint ratification plus the Batch 5 select-payload closure:
+# guarded stacks, structural Transfer, typed select, and native structured
+# frames are Accepted everywhere they are named.
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0033-structural-transfer-and-task-results.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0036-native-structured-runtime-frames.md
+grep -Fq 'Accepted ADR-0033 structural Transfer' docs/manual/conformance.md
+grep -Fq 'Accepted ADR-0036 typed runtime call frames' docs/manual/conformance.md
+for accepted_adr in \
+  architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md \
+  architecture_docs/decisions/0033-structural-transfer-and-task-results.md \
+  architecture_docs/decisions/0034-typed-heterogeneous-select.md \
+  architecture_docs/decisions/0035-configurable-blocking-io-pool.md \
+  architecture_docs/decisions/0036-native-structured-runtime-frames.md; do
+  if grep -Fq '## Provisional decision' "$accepted_adr"; then
+    echo "accepted ADR retains a provisional decision heading: $accepted_adr" >&2
+    exit 1
+  fi
+done
+if rg -n 'Provisional ADR-003(2|3|4|5|6)' \
+  architecture_docs \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  README.md; then
+  echo "maintained reference still describes an accepted ADR as provisional" >&2
+  exit 1
+fi
+
+# Phase 5.8: Accepted ADR-0034 is an implemented builtin call, not the
 # historical statement form. Keep the normative reference, teaching track,
 # runnable example, and ADR ledger synchronized.
 test -s architecture_docs/decisions/0034-typed-heterogeneous-select.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0034-typed-heterogeneous-select.md
-grep -Fq '0034-typed-heterogeneous-select.md) — implemented provisionally in Phase 5.8, pending checkpoint ratification' architecture_docs/decisions/README.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0034-typed-heterogeneous-select.md
+grep -Fq '0034-typed-heterogeneous-select.md) — Accepted after the Batch 5 nested-payload closure' architecture_docs/decisions/README.md
 test -s examples/concurrency/typed_select.au
 grep -Fq 'execute typed heterogeneous Queue, Task, and relative-deadline selection' README.md
 grep -Fq '`typed_select.au`' examples/README.md
@@ -726,7 +754,7 @@ grep -Fq '`select`' docs/manual/index.md
 grep -Fq '`select(...)` provides a typed heterogeneous Queue/Task/deadline wait' docs/manual/status-and-compatibility.md
 grep -Fq '`select(source, ...)` evaluates its Queue, Task, and relative-Duration sources' docs/manual/execution-model.md
 grep -Fq '`select` | `select(source, ...) -> SelectOutcome[Q, T]`' docs/manual/api-index.md
-grep -Fq 'Provisional ADR-0034 typed heterogeneous `select`' docs/manual/conformance.md
+grep -Fq 'Accepted ADR-0034 typed heterogeneous `select`' docs/manual/conformance.md
 grep -Fq 'Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative' tutorials/13-concurrency.md
 grep -Fq 'explicit-stack start methods, typed `select(...)` over Queue, Task, and' tutorials/README.md
 grep -Fq 'typed `select(queue_or_task_or_duration, ...)`' tutorials/14-current-language-surface.md
@@ -750,13 +778,13 @@ if rg -n 'language-level `select`|instead of the removed `select` statement|type
   exit 1
 fi
 
-# Phase 5.9: Provisional ADR-0035 configures the generic blocking-I/O pool
+# Phase 5.9: Accepted ADR-0035 configures the generic blocking-I/O pool
 # without changing the independent protocol-step or JSON services. Pin the
 # operational controls, pending-only capacity accounting, admission boundary,
 # backend preflight, and the retained stuck-worker limitation.
 test -s architecture_docs/decisions/0035-configurable-blocking-io-pool.md
-grep -Fq -- '- Status: Provisional' architecture_docs/decisions/0035-configurable-blocking-io-pool.md
-grep -Fq '0035-configurable-blocking-io-pool.md) — implemented provisionally in Phase 5.9, pending checkpoint ratification' architecture_docs/decisions/README.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0035-configurable-blocking-io-pool.md
+grep -Fq '0035-configurable-blocking-io-pool.md) — Accepted after the Batch 5 default-parallel watchdog closure' architecture_docs/decisions/README.md
 grep -Fq '`AURORA_BLOCKING_WORKERS=<positive integer>`' architecture_docs/07-mir-runtime.md
 grep -Fq 'selects its exact worker count without clamping.' architecture_docs/07-mir-runtime.md
 grep -Fq 'resulting configuration is immutable for the process lifetime.' architecture_docs/07-mir-runtime.md
@@ -770,7 +798,7 @@ grep -Fq 'a non-Unicode' docs/manual/cli-and-tooling.md
 grep -Fq 'value is displayed lossily.' docs/manual/cli-and-tooling.md
 grep -Fq 'timeout or cancellation prevents submission; after insertion' docs/manual/current-limits.md
 grep -Fq 'Full-queue admission is FIFO and scheduler-aware' docs/manual/status-and-compatibility.md
-grep -Fq 'Provisional ADR-0035 blocking-I/O worker configuration' docs/manual/conformance.md
+grep -Fq 'Accepted ADR-0035 blocking-I/O worker configuration' docs/manual/conformance.md
 grep -Fq '`AU4006` reports invalid process runtime configuration' docs/manual/diagnostics.md
 grep -Fq 'limits accepted pending backlog, not' docs/learn/io-process-networking.md
 grep -Fq 'cannot guarantee unrelated blocking-I/O progress while' docs/learn/io-process-networking.md

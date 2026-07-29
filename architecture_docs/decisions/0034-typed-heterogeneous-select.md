@@ -1,7 +1,8 @@
 # ADR-0034: Typed heterogeneous `select`
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-28
+- Accepted: 2026-07-29
 - Roadmap decision: Batch 4, Phase 5.8
 - Related: ADR-0008, ADR-0019, and ADR-0033
 
@@ -28,7 +29,7 @@ The Phase 5.8 implementation therefore cannot land until atomic registration,
 one-winner arbitration, and loser cleanup are proved on the pinned-worker
 scheduler.
 
-## Provisional decision
+## Decision
 
 ### Source and result surface
 
@@ -271,9 +272,11 @@ enum records selection-level deadline and cancellation.
 | Loser cleanup | Every result and failure exit unregisters all losers; repeated cleanup and late callbacks are harmless and do not consume, retain, enqueue, or access freed state. |
 | Scheduler architecture | Cross-worker Queue/Task wakeups use direct worker inboxes; idle selection blocks without scanning, helper tasks, periodic ticks, or migration. |
 | Backend parity | MIR typed-source lowering and the direct tuple ABI produce byte-identical observable output and diagnostics across the full outcome/race matrix. |
-| Language tooling | Compiler-service diagnostics, completion, hover, builtin-redefinition checks, builtin enum display, and LSP behavior expose the exact provisional surface. |
+| Language tooling | Compiler-service diagnostics, completion, hover, builtin-redefinition checks, builtin enum display, and LSP behavior expose the exact accepted surface. |
 | Compatibility and reference | Parser fixtures keep statement `select` rejected; existing wait APIs remain unchanged; maintained examples, tutorials, manual/API/conformance pages, ADR links, and verified reference blocks agree with the implemented builtin. |
 
-The ADR moves from Provisional only after the focused semantic, fixture,
-runtime race/stress, compiler-service, LSP, both-backend parity, full-CI,
-benchmark, and frozen-coverage gates pass.
+The Batch 4 implementation and its focused semantic, fixture, runtime
+race/stress, compiler-service, LSP, both-backend parity, full-CI, benchmark,
+and frozen-coverage gates passed. Batch 5 then closed the remaining nested
+generic payload-typing defect with arithmetic, comparison, f-string, and
+reassignment coverage on both backends, completing this matrix.

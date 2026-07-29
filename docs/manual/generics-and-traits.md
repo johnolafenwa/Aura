@@ -79,7 +79,7 @@ discharges those obligations after substitution. A type is safe for this
 purpose when duplicating it cannot duplicate `random.Rng` state through an
 ordinary class, enum, or collection path; `Task[T]` and `Queue[T]` handles stop
 that clone-safety traversal because an allowed handle copy does not observe or
-copy `T`. Provisional ADR-0033 separately requires Queue payloads and task
+copy `T`. Accepted ADR-0033 separately requires Queue payloads and task
 results to be `Transfer` and makes `Task[T]` non-copy when `T` is not
 repeatable. A clone barrier is therefore not an escape from the task-boundary
 rule.

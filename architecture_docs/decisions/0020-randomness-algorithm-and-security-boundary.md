@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-22
 - Amended: 2026-07-26 (B3.0-d secure-byte resource ceiling clarification)
-- Amended: 2026-07-28 by Provisional ADR-0033 for task/Queue boundary availability
+- Amended: 2026-07-28 by Accepted ADR-0033 for task/Queue boundary availability
 - Roadmap decision: Phase 3 Randomness gap-fill policy
 
 > **Phase 5.6 boundary amendment.** The clone-safety barrier remains true: an
@@ -57,7 +57,7 @@ also create a serious API-category error.
   substitution. Task and Queue handles stop structural traversal because
   copying them does not observe their payload.
 - Task and Queue handles are clone-safety barriers: an allowed handle copy
-  does not observe or duplicate its payload. Under Provisional ADR-0033,
+  does not observe or duplicate its payload. Under Accepted ADR-0033,
   `random.Rng` is not available as a task result or Queue payload, and a Task
   holding a non-repeatable result is not copyable. Moving or removing an `Rng`
   and shuffling owned generator elements in one owning task remain permitted

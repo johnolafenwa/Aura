@@ -1,7 +1,8 @@
 # ADR-0036: Native structured runtime frames
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-28
+- Accepted: 2026-07-29 (Batch 4 checkpoint)
 - Roadmap decision: Batch 4, Phase 5.10
 - Related: ADR-0011, ADR-0032, and ADR-0033
 
@@ -40,7 +41,7 @@ Phase 5.10 establishes one compiler-owned frame model for MIR, direct-native,
 standalone, CLI JSON, and editor-tooling surfaces. It does not expose host Rust,
 Cranelift, scheduler, or service-thread backtraces.
 
-## Provisional decision
+## Decision
 
 ### Structured frame records
 
@@ -385,6 +386,6 @@ standalone-binary JSON switch. Those require separate decisions.
 | Compatibility and reference | Compile diagnostics retain empty arrays, existing JSON progress/fallback forms stay valid, schema-1 unknown-member tolerance is normative, maintained Manual/Learn/tutorial/README/architecture text describes the implemented contract, and stale deferred-frame claims are rejected by the reference gate. |
 | Full gates | Focused compiler/native/CLI/LSP/extension tests, forced backend parity, standalone tests, reference integrity, docs build, audits, Clippy, full CI, and frozen Batch-4 coverage floors pass without synthetic-coverage tests. |
 
-The ADR moves from Provisional only after the complete focused matrix, removal
-of every parity/oracle carve-out, reference update, full-CI gate, and frozen
-coverage check pass.
+The complete focused matrix, removal of every parity/oracle carve-out,
+reference update, full-CI gate, and frozen-coverage check passed at the
+Batch 4 checkpoint.

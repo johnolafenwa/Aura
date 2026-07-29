@@ -310,7 +310,7 @@ storage for the child call; `own` parameters
 consume it. Generic targets also enforce their inferred clone-safety
 obligations after specialization. `mut` target parameters are rejected.
 
-Under the Provisional ADR-0033 Phase 5.6 contract, each value captured by
+Under the Accepted ADR-0033 Phase 5.6 contract, each value captured by
 these four start methods and the specialized target return type must be
 `Transfer`. This is a compiler-derived structural obligation, not a builtin
 user trait. A same-named ordinary user trait cannot confer the property.

@@ -79,7 +79,7 @@ algorithm, seed-42 vectors, ownership, secure-source boundary, and diagnostics.
 `random.Rng` has no public clone route. `AU3007` rejects the clone-producing
 collection and task APIs indexed below when their produced value contains, or
 may contain, an `Rng`, including through a user-defined wrapper. Cloning
-an allowed Task or Queue handle copies only the handle. Provisional ADR-0033
+an allowed Task or Queue handle copies only the handle. Accepted ADR-0033
 nevertheless rejects `random.Rng` as a task result or Queue payload with
 `AU3008`, and makes a Task with a non-repeatable result non-copyable. Moves,
 collection removals, and in-place shuffle within one owning task transfer or
@@ -173,9 +173,9 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied; Provisional ADR-0033 requires `T: Transfer`. |
-| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error; Provisional ADR-0033 requires `T: Transfer`. |
-| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting; Provisional ADR-0033 requires `T: Transfer`. |
+| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied; Accepted ADR-0033 requires `T: Transfer`. |
+| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error; Accepted ADR-0033 requires `T: Transfer`. |
+| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting; Accepted ADR-0033 requires `T: Transfer`. |
 | `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome; does not itself recheck payload Transfer. |
 | `Queue.get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for closed, timeout, cancellation, or immediate absence. |
 | `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
