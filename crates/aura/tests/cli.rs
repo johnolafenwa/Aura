@@ -12,6 +12,20 @@ use rcgen::generate_simple_self_signed;
 const FILESYSTEM_READ_CAP_BYTES: usize = 256 * 1024 * 1024;
 const RETIRED_FILESYSTEM_READ_CAP_BYTES: usize = 64 * 1024 * 1024;
 
+#[cfg(unix)]
+fn serialize_bounded_blocking_pool_watchdog() -> std::sync::MutexGuard<'static, ()> {
+    static WATCHDOG_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    // Both tests deliberately saturate a single-runtime-worker blocking pool
+    // across MIR, direct, and standalone processes. Running the two stress
+    // harnesses together makes their watchdogs measure mutual host contention
+    // instead of the admission/cancellation behavior under test.
+    WATCHDOG_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
@@ -1877,6 +1891,8 @@ fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::mpsc;
 
+    let _watchdog_guard = serialize_bounded_blocking_pool_watchdog();
+
     struct FifoWriterGate {
         opened: mpsc::Receiver<Result<(), String>>,
         release: mpsc::Sender<()>,
@@ -2300,6 +2316,8 @@ fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_p
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
+
+    let _watchdog_guard = serialize_bounded_blocking_pool_watchdog();
 
     struct WriterGate {
         opened: mpsc::Receiver<Result<(), String>>,
