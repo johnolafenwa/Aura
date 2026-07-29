@@ -12691,6 +12691,37 @@ fn native_runtime_frame_metadata_rejects_invalid_utf8_before_mutating_call_state
 }
 
 #[test]
+fn native_runtime_frame_metadata_rejects_a_null_required_name_before_call_activation() {
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                unsafe {
+                    super::aurora_direct_enter_call_with_frame(
+                        2,
+                        1,
+                        b"/workspace/main.au".as_ptr(),
+                        b"/workspace/main.au".len(),
+                        std::ptr::null(),
+                        0,
+                    );
+                }
+                #[allow(unreachable_code)]
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("a missing required function name should fail at the scheduler boundary");
+    assert_eq!(
+        diagnostic.message,
+        "aurora direct runtime received invalid UTF-8 bytes"
+    );
+    assert!(
+        diagnostic.call_frames.is_empty(),
+        "missing required metadata must be rejected before the attempted frame becomes active"
+    );
+}
+
+#[test]
 fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
     let diagnostic = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
