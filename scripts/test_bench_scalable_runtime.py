@@ -25,7 +25,7 @@ SPEC.loader.exec_module(bench)
 
 class ProtocolTests(unittest.TestCase):
     def test_multicore_protocol_is_exact_and_checksum_is_mathematical(self) -> None:
-        self.assertEqual(bench.REPORT_SCHEMA_VERSION, 3)
+        self.assertEqual(bench.REPORT_SCHEMA_VERSION, 4)
         expected = bench.park_miller_checksum(
             tasks=4,
             iterations=7,
@@ -384,6 +384,36 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(summary["p95_s"], 10.0)
         self.assertEqual(summary["best_s"], 1.0)
 
+    def test_v6_startup_split_reports_whole_process_and_loop_estimates(self) -> None:
+        split = bench.v6_startup_loop_summary(
+            [0.005, 0.006, 0.004],
+            {
+                "int32": [0.037, 0.038, 0.036],
+                "int64": [0.015, 0.016, 0.014],
+            },
+        )
+        self.assertEqual(split["startup"]["median_s"], 0.005)
+        self.assertAlmostEqual(split["loop_estimate"]["int32"]["median_s"], 0.032)
+        self.assertAlmostEqual(split["loop_estimate"]["int64"]["median_s"], 0.010)
+        self.assertEqual(
+            split["method"],
+            "paired whole-process duration minus the same repetition's startup duration",
+        )
+
+    def test_v6_startup_split_rejects_impossible_negative_noise_pairs(self) -> None:
+        split = bench.v6_startup_loop_summary(
+            [0.005, 0.020, 0.004],
+            {
+                "int32": [0.037, 0.038, 0.036],
+                "int64": [0.015, 0.016, 0.014],
+            },
+        )
+        int64 = split["loop_estimate"]["int64"]
+        self.assertEqual(int64["invalid_negative_pair_repetitions"], [1])
+        self.assertEqual(int64["valid_repetitions"], [0, 2])
+        self.assertEqual(len(int64["samples_s"]), 2)
+        self.assertGreaterEqual(int64["best_s"], 0.0)
+
     def test_timer_gate_uses_worst_valid_run_and_reports_invalid_runs(self) -> None:
         runs = [
             {
@@ -693,6 +723,86 @@ class ValidationAndExecutionTests(unittest.TestCase):
             self.assertGreaterEqual(result["elapsed_s"], 0.0)
             with self.assertRaisesRegex(bench.BenchmarkError, "stdout"):
                 bench.run_v6_once(invalid)
+
+    def test_v6_startup_probe_requires_silent_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = self.make_executable(root, "valid-startup", "exit 0\n")
+            noisy = self.make_executable(
+                root, "noisy-startup", 'printf "unexpected\\n"\n'
+            )
+            result = bench.run_v6_startup_once(valid)
+            self.assertEqual(result["stdout"], "")
+            self.assertGreaterEqual(result["elapsed_s"], 0.0)
+            with self.assertRaisesRegex(bench.BenchmarkError, "stdout"):
+                bench.run_v6_startup_once(noisy)
+
+    def test_v6_benchmark_rotates_paired_startup_and_loop_order(self) -> None:
+        startup = Path("/bench/startup")
+        int32 = Path("/bench/int32")
+        int64 = Path("/bench/int64")
+        observed = []
+
+        def startup_probe(binary: Path) -> dict:
+            observed.append(binary.name)
+            return {
+                "command": [str(binary)],
+                "elapsed_s": 0.001,
+                "stdout": "",
+                "returncode": 0,
+            }
+
+        def loop_probe(binary: Path) -> dict:
+            observed.append(binary.name)
+            return {
+                "command": [str(binary)],
+                "elapsed_s": 0.010 if binary.name == "int32" else 0.006,
+                "stdout": "10000000\n",
+                "returncode": 0,
+            }
+
+        with mock.patch.object(
+            bench, "run_v6_startup_once", side_effect=startup_probe
+        ):
+            with mock.patch.object(bench, "run_v6_once", side_effect=loop_probe):
+                result = bench.run_v6_benchmark(startup, int32, int64, 3)
+        self.assertEqual(
+            observed,
+            [
+                "startup",
+                "int32",
+                "int64",
+                "startup",
+                "int32",
+                "int64",
+                "int32",
+                "int64",
+                "startup",
+                "int64",
+                "startup",
+                "int32",
+            ],
+        )
+        self.assertEqual(
+            [
+                run["order"]
+                for run in result["runs"]
+                if run["workload"] == "startup"
+            ],
+            [
+                ["startup", "int32", "int64"],
+                ["int32", "int64", "startup"],
+                ["int64", "startup", "int32"],
+            ],
+        )
+        self.assertEqual(len(result["runs"]), 9)
+        self.assertTrue(
+            all(
+                "workload" in run and "width" not in run
+                for run in result["runs"]
+            )
+        )
+        self.assertIn("startup_vs_loop", result)
 
     def test_multicore_run_uses_four_workers_and_exact_go_ack_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

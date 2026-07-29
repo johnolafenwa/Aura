@@ -846,3 +846,101 @@ prebuilt implementation, but Aurora withdraws the Phase 5.9 bounded
 claim on this runtime. The accepted maintained claim is 10,000 suspended tasks
 within 512 MiB, with stable timers, idle behavior, starvation latency, and
 four-worker scaling as measured above.
+
+## B5.0-d: V6 startup-versus-loop reconciliation
+
+Batch 2 recorded whole-process medians of `32.734250 ms` for the ten-million
+iteration `int32` loop and `10.248625 ms` for `int64`. The clean final
+Phase-5.10 run above recorded `37.436334 ms` and `15.005584 ms`, regressions of
+`14.36%` and `46.42%`. They therefore miss the attempted restoration target of
+at most 10% above Batch 2.
+
+The maintained runner now builds
+`benchmarks/direct_integer_loops/startup.au`, a silent empty program using the
+same direct runtime entry, and rotates it with the two V6 binaries on every
+repetition. The JSON retains each whole-process observation and adds paired
+startup and `whole process - startup` summaries at
+`benchmarks.v6.startup_vs_loop`. Python unit tests pin silent startup output,
+pair cardinality, and the split calculation.
+
+This changes the report contract to schema version 4. Version 3 used `width`
+for the two V6 run kinds; version 4 uses `workload` and adds the startup run
+kind and split summary.
+
+A 21-repetition run through the new `run_v6_benchmark` path on the Mac14,9
+host measured:
+
+| Component | `int32` | `int64` |
+| --- | ---: | ---: |
+| Whole-process median | 49.391916 ms | 18.875542 ms |
+| Paired loop-estimate median | 41.746208 ms | 11.123916 ms |
+| Startup median shared by the pair | 7.679583 ms | 7.679583 ms |
+
+All 21 paired deltas were nonnegative. The cyclic orders were
+startup/int32/int64, int32/int64/startup, and int64/startup/int32, repeated
+seven times. A separate run of the same binaries with `AURORA_WORKERS=1`
+measured a `7.851334 ms` startup median. This gives no evidence that selecting
+one worker reduces the measured startup component. These runs were made while
+Batch-5 work left the repository dirty and are diagnostic rather than
+contractual; their purpose is to prove the split and distinguish a measured
+fixed entry component from loop work, not to establish the complete cause of
+the regression or replace the clean Phase-5.10 timing record. In particular,
+the dirty run's `41.746208 ms` `int32` loop estimate does not reproduce the
+Batch-2 whole-process median, so it cannot support a per-iteration or full
+causal conclusion.
+
+The diagnostic artifacts were built by release `aura` SHA-256
+`758a49f5c5be3b12bb8666d190a7a1e0006ffbcd0f0ecb450314e29a831d6fe4`
+against runtime archive
+`ff4a3255c699ea38c9d35f48faef523500806219e64ec652af5ad2607892c9f1`.
+The startup, int32, and int64 binary SHA-256 values were respectively
+`940864dd612937949eb19bcd6faa94cf3a8b454d58ebbb24019e8515e4d45e4d`,
+`8c8319053efa5bbdfaf7aeaf35f5f6784492a33cf17681ce9ae0acebb2058f35`,
+and
+`118bc0b3878ac05af06d05b3386671dd2672912efbf892e472c64b0a3c783cbb`.
+
+The measurements establish a roughly `7.68 ms` fixed startup component, but
+they do not identify the complete cause of the historical gap. The
+`AURORA_WORKERS=1` result gives no evidence that lazy initialization of
+additional workers would reduce that component. Bypassing the direct root
+scheduler would remove the boundary responsible for task cleanup, traps,
+cancellation, and cooperative scheduling, and the evidence does not identify
+a safe initialization change.
+
+No runtime initialization change is made. Under the alternate disposition
+permitted by B5.0-d, the clean Phase-5.10 whole-process pair is explicitly
+accepted as the reactor-era baseline: `37.436334 ms` for `int32` and
+`15.005584 ms` for `int64`. That acceptance records the maintained baseline;
+it is not a claim that startup explains the entire regression. Future V6
+reports must retain both those whole-process values and the
+startup-versus-loop split so a fixed process-entry change remains visible
+alongside per-loop estimates.
+
+## B5.0-f: small runtime follow-through
+
+The CLI direct-build path now passes the existing native-runtime lock wait
+callback through `aura build`, not only native `run`. A Unix integration test
+holds an isolated real runtime lock and proves that human output flushes
+`aura: waiting for a concurrent build...` before blocking. It deliberately
+uses an unavailable Cargo executable after releasing the lock, so the test
+pins the wait behavior without rebuilding the runtime or contending with other
+CLI tests. A second real-lock regression pins JSON failure behavior: standard
+error remains exactly one JSON document, and its diagnostic notes contain the
+exact wait notice exactly once.
+
+The runtime limits now record the measured MIR multicore contention:
+four tasks take about `2.1x` the one-task wall time because interpreter work
+and synchronization inflate per-task cost. MIR remains the checked
+development path; direct native execution remains the performance path.
+Secondary diagnostic labels generated at the two retained-access sites now say
+`shared access ... begins here`, removing the last descriptive use of the
+retired `shared borrow` spelling from that surface while preserving the
+diagnostic code and primary message.
+
+Least-loaded admission was considered and not adopted. Inbox depth does not
+measure the cost of a task already running on a pinned worker or identify
+whether that worker is on a performance or efficiency core. Replacing
+round-robin admission with that signal would therefore add synchronization and
+change scheduling without evidence that it improves the reported asymmetric
+core tail. The assignment policy stays unchanged until a representative
+benchmark and a better load signal can justify a change.

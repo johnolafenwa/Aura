@@ -32,7 +32,7 @@ from typing import BinaryIO, Dict, Iterable, List, NamedTuple, Optional, Sequenc
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 READY_LINE_BYTES = 256
 READY_TIMEOUT_SECONDS = 20.0
@@ -56,6 +56,7 @@ TIMER_ARM_SPAN_LIMIT_MS = 10.0
 STARVATION_SLEEP_MS = 10
 STARVATION_LATENCY_LIMIT_MS = 50
 EXPECTED_V6_STDOUT = b"10000000\n"
+EXPECTED_V6_STARTUP_STDOUT = b""
 MULTICORE_WORKERS = 4
 MULTICORE_TASK_COUNTS = (1, 4)
 MULTICORE_ITERATIONS = 80_000_000
@@ -77,6 +78,7 @@ WORKLOADS = {
     "idle": ROOT / "benchmarks/scalable_runtime/idle_10_tasks.au",
     "starvation": ROOT / "benchmarks/scalable_runtime/sleeper_vs_hot_loop.au",
     "multicore": ROOT / "benchmarks/scalable_runtime/cpu_scaling.au",
+    "startup": ROOT / "benchmarks/direct_integer_loops/startup.au",
     "int32": ROOT / "benchmarks/direct_integer_loops/int32_loop.au",
     "int64": ROOT / "benchmarks/direct_integer_loops/int64_loop.au",
 }
@@ -1422,7 +1424,9 @@ def run_massive(binary: pathlib.Path) -> Dict[str, object]:
     }
 
 
-def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
+def run_v6_probe_once(
+    binary: pathlib.Path, expected_stdout: bytes
+) -> Dict[str, object]:
     started = time.perf_counter()
     result = subprocess.run(
         [str(binary)],
@@ -1441,11 +1445,11 @@ def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
         )
     if result.stderr:
         raise BenchmarkError(binary.name + " wrote unexpected stderr")
-    if result.stdout != EXPECTED_V6_STDOUT:
+    if result.stdout != expected_stdout:
         raise BenchmarkError(
             binary.name
             + " stdout did not exactly match "
-            + repr(EXPECTED_V6_STDOUT)
+            + repr(expected_stdout)
         )
     return {
         "command": [str(binary)],
@@ -1453,6 +1457,14 @@ def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
         "stdout": result.stdout.decode("ascii"),
         "returncode": result.returncode,
     }
+
+
+def run_v6_once(binary: pathlib.Path) -> Dict[str, object]:
+    return run_v6_probe_once(binary, EXPECTED_V6_STDOUT)
+
+
+def run_v6_startup_once(binary: pathlib.Path) -> Dict[str, object]:
+    return run_v6_probe_once(binary, EXPECTED_V6_STARTUP_STDOUT)
 
 
 def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
@@ -2075,25 +2087,93 @@ def compiler_runtime_inputs(aura: pathlib.Path) -> Dict[str, object]:
     }
 
 
+def v6_startup_loop_summary(
+    startup_durations: Sequence[float],
+    whole_process_durations: Dict[str, Sequence[float]],
+) -> Dict[str, object]:
+    if not startup_durations:
+        raise BenchmarkError("V6 startup split requires at least one repetition")
+    loop_estimates: Dict[str, Dict[str, object]] = {}
+    for width, durations in whole_process_durations.items():
+        if len(durations) != len(startup_durations):
+            raise BenchmarkError(
+                "V6 startup and " + width + " samples must be paired"
+            )
+        raw_estimates = [
+            float(whole) - float(startup)
+            for startup, whole in zip(startup_durations, durations)
+        ]
+        invalid = [
+            repeat
+            for repeat, estimate in enumerate(raw_estimates)
+            if estimate < 0.0
+        ]
+        valid_repetitions = [
+            repeat
+            for repeat, estimate in enumerate(raw_estimates)
+            if estimate >= 0.0
+        ]
+        valid_estimates = [
+            raw_estimates[repeat] for repeat in valid_repetitions
+        ]
+        if not valid_estimates:
+            raise BenchmarkError(
+                "all paired V6 " + width + " loop estimates were negative"
+            )
+        loop_estimates[width] = {
+            **duration_summary(valid_estimates),
+            "samples_s": valid_estimates,
+            "valid_repetitions": valid_repetitions,
+            "invalid_negative_pair_repetitions": invalid,
+        }
+    return {
+        "method": (
+            "paired whole-process duration minus the same repetition's "
+            "startup duration"
+        ),
+        "startup": duration_summary(startup_durations),
+        "loop_estimate": loop_estimates,
+    }
+
+
 def run_v6_benchmark(
-    int32_binary: pathlib.Path, int64_binary: pathlib.Path, repeats: int
+    startup_binary: pathlib.Path,
+    int32_binary: pathlib.Path,
+    int64_binary: pathlib.Path,
+    repeats: int,
 ) -> Dict[str, object]:
     warmups = {
+        "startup": run_v6_startup_once(startup_binary),
         "int32": run_v6_once(int32_binary),
         "int64": run_v6_once(int64_binary),
     }
-    binaries = {"int32": int32_binary, "int64": int64_binary}
+    binaries = {
+        "startup": startup_binary,
+        "int32": int32_binary,
+        "int64": int64_binary,
+    }
     runs: List[Dict[str, object]] = []
+    startup_durations: List[float] = []
     durations: Dict[str, List[float]] = {"int32": [], "int64": []}
     for repeat in range(repeats):
-        order = ("int32", "int64") if repeat % 2 == 0 else ("int64", "int32")
-        for width in order:
-            observation = run_v6_once(binaries[width])
-            durations[width].append(float(observation["elapsed_s"]))
+        probes = ("startup", "int32", "int64")
+        offset = repeat % len(probes)
+        order = probes[offset:] + probes[:offset]
+        for workload in order:
+            observation = (
+                run_v6_startup_once(binaries[workload])
+                if workload == "startup"
+                else run_v6_once(binaries[workload])
+            )
+            elapsed = float(observation["elapsed_s"])
+            if workload == "startup":
+                startup_durations.append(elapsed)
+            else:
+                durations[workload].append(elapsed)
             runs.append(
                 {
                     "repeat": repeat,
-                    "width": width,
+                    "workload": workload,
                     "order": list(order),
                     **observation,
                 }
@@ -2104,6 +2184,9 @@ def run_v6_benchmark(
         "summary": {
             width: duration_summary(values) for width, values in durations.items()
         },
+        "startup_vs_loop": v6_startup_loop_summary(
+            startup_durations, durations
+        ),
     }
 
 
@@ -2267,7 +2350,10 @@ def execute(options: Options) -> Dict[str, object]:
             run_starvation(binaries["starvation"]) for _ in range(options.repeats)
         ]
         v6 = run_v6_benchmark(
-            binaries["int32"], binaries["int64"], options.v6_repeats
+            binaries["startup"],
+            binaries["int32"],
+            binaries["int64"],
+            options.v6_repeats,
         )
         multicore = run_multicore_benchmark(
             binaries["multicore"],
