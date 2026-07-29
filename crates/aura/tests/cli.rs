@@ -11377,6 +11377,23 @@ fn typed_select_queue_priority_and_loser_preservation_match_with_four_workers() 
 }
 
 #[test]
+fn typed_select_nested_queue_payload_types_match_on_both_backends() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/select_nested_payload_typing.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/select_nested_payload_typing.stdout"
+    );
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-typed-select-nested-payload-typing",
+        source,
+        std::time::Duration::from_secs(30),
+        expected,
+        4,
+    );
+}
+
+#[test]
 fn typed_select_nonrepeatable_task_delivery_matches_with_four_workers() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.au"

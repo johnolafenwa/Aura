@@ -6871,6 +6871,21 @@ impl<'a> Lowerer<'a> {
                         _ => return None,
                     });
                 }
+                Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => {
+                    return Some(match variant_name {
+                        "Queue" => vec![
+                            Type::named("int32"),
+                            Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
+                        ],
+                        "Task" => vec![
+                            Type::named("int32"),
+                            Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
+                        ],
+                        "Deadline" => vec![Type::named("int32")],
+                        "Cancelled" => Vec::new(),
+                        _ => return None,
+                    });
+                }
                 Type::Named(name, args) if name == enum_name => {
                     let enum_info = self.resolve_enum_info(name)?;
                     let variant = enum_info.variants.get(variant_name)?;

@@ -1,0 +1,22 @@
+def main():
+    values = Queue[int64]()
+    values.put(41)
+    mut total: int64 = 1
+
+    match select(values):
+        case SelectOutcome.Queue(index, QueueReceive.Item(value)):
+            total = total + value
+            print(total)
+            print(value > 40)
+            print(f"selected[{index}]={value}")
+            mut rebound: int64 = value
+            rebound = rebound + 1
+            print(rebound)
+        case SelectOutcome.Queue(_, _):
+            print("unexpected empty queue")
+        case SelectOutcome.Task(_, _):
+            print("unexpected task")
+        case SelectOutcome.Deadline(_):
+            print("unexpected deadline")
+        case SelectOutcome.Cancelled:
+            print("unexpected cancellation")
