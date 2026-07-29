@@ -12666,6 +12666,36 @@ fn native_runtime_task_state_map_retains_only_pointer_sized_slots() {
 }
 
 #[test]
+fn nested_native_runtime_scope_restores_outer_task_ancestry() {
+    let outer = RuntimeTaskFrame {
+        task_function: "outer_task".to_string(),
+        task_entry_span: runtime_source_span("/workspace/outer.au", 3, 1),
+        parent_function: "main".to_string(),
+        spawn_span: runtime_source_span("/workspace/main.au", 8, 5),
+    };
+    let inner = RuntimeTaskFrame {
+        task_function: "inner_task".to_string(),
+        task_entry_span: runtime_source_span("/workspace/inner.au", 4, 1),
+        parent_function: "outer_task".to_string(),
+        spawn_span: runtime_source_span("/workspace/outer.au", 12, 7),
+    };
+
+    super::with_direct_task_runtime_scope_with_ancestry(vec![outer.clone()], || {
+        assert_eq!(super::direct_runtime_task_ancestry(), vec![outer.clone()]);
+
+        super::with_direct_task_runtime_scope_with_ancestry(vec![inner.clone()], || {
+            assert_eq!(super::direct_runtime_task_ancestry(), vec![inner]);
+        });
+
+        assert_eq!(
+            super::direct_runtime_task_ancestry(),
+            vec![outer],
+            "leaving a nested native scope must restore the outer diagnostic ancestry"
+        );
+    });
+}
+
+#[test]
 fn native_runtime_deep_persistent_task_ancestry_drops_iteratively() {
     const DEPTH: usize = 100_000;
 
