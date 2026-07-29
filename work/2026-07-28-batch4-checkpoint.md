@@ -1,11 +1,9 @@
 # Batch 4 checkpoint: Phase 5 scalable runtime
 
 - Date: 2026-07-28
-- Status: checkpoint complete; final settled-tree CI pending after the
-  checkpoint-documentation commit
+- Status: complete; exact-clean settled-tree CI passed at `77c999d`
 - Entry checkpoint: `1c249ab`
-- Stop boundary: Batch 4 closes after the final settled-tree CI reruns on the
-  checkpoint-documentation commit; Phase 6 / Batch 5 has not started
+- Stop boundary: Batch 4 is closed; Phase 6 / Batch 5 has not started
 
 ## Outcome
 
@@ -24,8 +22,8 @@ instrumented measurement, and every contractual benchmark gate except the
 one-page-per-child floor, so Part 3's ratified escape hatch applies and the
 associated massive-concurrency claim has been removed from maintained
 documentation. The one-time compiler-coverage re-ratchet is 96.13% lines,
-96.90% functions, and 94.46% regions. Only the final settled-tree CI after the
-checkpoint-documentation commit remains.
+96.90% functions, and 94.46% regions. Exact-clean full CI passed on the
+checkpoint-documentation commit `77c999d`.
 
 ## B4.0 disposition
 
@@ -190,7 +188,7 @@ not silently ratify them.
 | ADR-0033 structural Transfer and task results | Accept as written, with Batch 5 callable follow-up | The current static named-callable surface is complete. Callable values must derive Transfer through owned captures and must not launder non-Transfer state. |
 | ADR-0034 typed heterogeneous select | Accept as written | Type shape, evaluation order, cancellation/lowest-index arbitration, atomic claim, loser cleanup, both backends, and evidence match. Statement sugar remains deferred. |
 | ADR-0035 configurable blocking-I/O pool | Accept as written | Configuration, initialization, FIFO admission, acceptance semantics, saturation matrix, both backends, and clean benchmark match. Accepted host work remains non-preemptive, as documented. |
-| ADR-0036 native structured runtime frames | Accept as written | The semantic and transport matrix, exact MIR/direct parity, clean CI, and all mandatory performance gates are complete. The sole raw failure is the 100,000-sleeper RSS ceiling, dispositioned through Part 3's explicit escape hatch with the associated marketing claim removed. Final settled-tree CI remains a checkpoint closeout gate, not an unresolved ADR semantic or implementation question. |
+| ADR-0036 native structured runtime frames | Accept as written | The semantic and transport matrix, exact MIR/direct parity, clean CI, and all mandatory performance gates are complete. The sole raw failure is the 100,000-sleeper RSS ceiling, dispositioned through Part 3's explicit escape hatch with the associated marketing claim removed. Exact-clean settled-tree CI passed at `77c999d`. |
 
 Two smaller provisional B4.0 gap-fills also remain before the reviewer:
 buffering native rebuild/wait notices in JSON mode, and extending AU3006 with
@@ -215,8 +213,13 @@ and hygiene. Its log is
 `/private/tmp/aurora-phase510-state-prebuilt-coverage-closure-ci.log`,
 SHA-256
 `0776403c16bd356cb46d42b1e3dcc19c0c09a0ebf29be0e0cf2e405f6fa6c910`.
-The final settled-tree CI will rerun the same gate after the checkpoint
-documentation and floor update are committed.
+Exact-clean settled-tree CI at `77c999d` reran the complete gate after the
+checkpoint documentation and floor update were committed. It passed the
+45-test benchmark harness, 300 CLI tests, 1,150 compiler library tests, the
+complete forced MIR/direct parity matrix in 685.76 seconds, 90 LSP tests,
+13 extension tests, compiler and 100% LSP coverage, reference and stale-syntax
+integrity, the documentation build, npm and cargo audits, warning-denied
+Clippy, formatting, and hygiene.
 
 No synthetic line-execution test or coverage exclusion was added during
 Phase 5.10. Defensive branches were either tested through observable
@@ -253,7 +256,6 @@ Select statement sugar is later breadth, not a Batch 5 prerequisite.
 ## Stop
 
 The Batch 4 implementation, semantic, benchmark-disposition, and coverage
-work is complete at this checkpoint. Phase 6 / Batch 5 has not started. Work
-stops here after the final settled-tree CI reruns on the
-checkpoint-documentation commit; no Phase 6 implementation or design work is
-authorized as part of Batch 4 closeout.
+work is complete at this checkpoint. Exact-clean settled-tree CI passed at
+`77c999d`. Phase 6 / Batch 5 has not started, and no Phase 6 implementation or
+design work is authorized as part of Batch 4 closeout.

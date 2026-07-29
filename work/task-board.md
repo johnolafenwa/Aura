@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-29
 
-## Batch 4 of 6 (active)
+## Batch 4 of 6 (completed)
 
 - Authorized target: close B4.0-a through B4.0-d, then implement Phase 5's
   scalable runtime in the ratified strict order: reactor, public
@@ -54,8 +54,8 @@ Last updated: 2026-07-29
   before metadata. The bounded 100,000-sleeper claim is withdrawn; all other
   contractual gates pass.
   Phase 5.10 implementation and benchmark/coverage evidence are settled.
-  Checkpoint documentation is being finalized; exact final settled-tree CI
-  remains explicitly pending. Phase 6 has not started.
+  Checkpoint documentation is committed at `77c999d`; exact-clean
+  settled-tree CI passed on that commit. Phase 6 has not started.
   Earlier B4.0 implementation and its exact repository gates are complete.
   Cross-process runtime-identity and per-content-key locks give
   concurrent cold direct runs one builder plus verified consumers without
@@ -466,8 +466,12 @@ Last updated: 2026-07-29
   coverage, and the one-time `96.13/96.90/94.46` re-ratchet are complete;
   their exact counts and hashes are recorded in the current-stage summary
   above. The massive RSS result uses the documented 16 KiB-page escape hatch,
-  and the 100,000-sleeper claim is withdrawn. Final settled-tree CI remains
-  pending while checkpoint documentation is finalized.
+  and the 100,000-sleeper claim is withdrawn. Exact-clean settled-tree CI at
+  `77c999d` passed the 45 benchmark-harness tests, 300 CLI tests, 1,150
+  compiler-library tests, forced MIR/direct parity in 685.76 seconds, 90 LSP
+  tests, 13 extension tests, compiler and 100% LSP coverage, reference and
+  stale-syntax integrity, docs, audits, warning-denied Clippy, formatting, and
+  hygiene.
 - Follow-up found during Phase 5.3: pre-existing `try` propagation inside
   mutable Vec iteration can bypass writeback on both backends; explicit
   `return`, `break`, and `continue` are correct. Track separately from the

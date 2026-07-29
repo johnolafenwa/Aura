@@ -812,6 +812,6 @@ stackless or safely copy-and-decommit architecture is required before that
 claim can be reinstated.
 
 Phase 5.10 implementation, exact-clean CI, contractual benchmark evidence,
-final coverage, and the one-time re-ratchet are complete. Checkpoint
-documentation is being finalized. Exact final settled-tree CI remains
-explicitly pending and Phase 6 has not started.
+final coverage, the one-time re-ratchet, and checkpoint documentation are
+complete. Exact-clean settled-tree CI passed at `77c999d`, and Phase 6 has not
+started.
