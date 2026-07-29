@@ -26,7 +26,7 @@ expression lambdas, manifest-gated FFI v0, and a proposal-only loan/view ADR.
 
 ## B5.0 disposition
 
-B5.0 is implementation-complete and committed as five isolated changes:
+B5.0 is complete and committed as seven isolated changes:
 
 - `e25387d` replaces elapsed-time TaskGroup join cancellation with a
   reachability search over live task waits, queue directions, dynamically
@@ -55,6 +55,14 @@ B5.0 is implementation-complete and committed as five isolated changes:
   descriptive shared-access labels. No least-loaded admission change landed
   because the available measurement did not establish a sound scheduling
   policy.
+- `90fe059` keeps the zero-producer Queue-iteration watchdog deterministic
+  under an oversubscribed host by running that inherently single-worker case
+  with one worker. It preserves the 15-second deadlock guard and leaves the
+  default-parallel runtime gate intact.
+- `14f2b8b` makes the human and JSON build-wait regressions lock both the
+  normal and coverage-specific native-runtime build locations. The two tests
+  now exercise the intended reporter path in both ordinary and instrumented
+  profiles.
 
 ADR-0032, ADR-0033, ADR-0034, ADR-0035, and ADR-0036 are Accepted. ADR-0034's
 nested-payload completion matrix and ADR-0035's default-parallel watchdog
@@ -74,11 +82,17 @@ condition are now satisfied.
 - `npm run docs:build`, `npx --yes github-actionlint`,
   `cargo fmt --all -- --check`, and warning-denied Clippy pass.
 - Human and JSON build-wait regressions pass after the final reporter lifetime
-  cleanup.
+  cleanup, including focused self-contained `cargo llvm-cov` runs.
+- The exact isolated `npm run ci` gate passes at `14f2b8b`: the 308-test CLI
+  suite, 1,157-test compiler suite, forced MIR/direct parity matrix, 90 LSP
+  tests, 13 extension tests, both coverage gates, reference integrity, docs,
+  npm and Rust audits, warning-denied Clippy, and hygiene are green.
+- Exact compiler coverage is 71,457/74,328 lines (96.137391%), 4,800/4,953
+  functions (96.910963%), and 104,919/111,056 regions (94.473959%), above the
+  frozen 96.13/96.90/94.46 floors. No synthetic coverage test or exclusion
+  was added.
 
-The exact clean-tree `npm run ci`, frozen-floor coverage check, forced-backend
-matrix, LSP/extension suites, audits, and hygiene remain the final B5.0 gate.
-Phase 6 has not started.
+B5.0 is closed. Phase 6.1 is the active stage.
 
 ## Verification policy
 

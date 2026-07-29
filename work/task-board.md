@@ -15,18 +15,21 @@ Last updated: 2026-07-29
   ADR-0035 is Accepted after B5.0-c passed repeated default-parallel runs.
   Compiler coverage floors remain frozen at
   `96.13/96.90/94.46` until the single checkpoint re-ratchet.
-- Current stage: B5.0 implementation and broad verification are complete in
-  five isolated commits. Reachability-based TaskGroup joins retain reachable
+- Current stage: B5.0 is complete and fully gated in seven isolated commits.
+  Reachability-based TaskGroup joins retain reachable
   producer/consumer work under artificial CPU load and still cancel true
   deadlocks; queue-iteration producer lifetime remains distinct from general
   handle reachability. Nested select payload typing, default-parallel
   blocking-pool watchdogs, the Linux nightly TSan scheduler job, schema-4 V6
   startup/loop reporting, `aura build` wait progress, MIR contention
-  documentation, and diagnostic wording are complete. The 308-test CLI suite,
-  1,157-test compiler suite, 49 benchmark-runner tests, reference integrity,
-  docs, workflow lint, formatting, and warning-denied Clippy are green. The
-  exact clean-tree full CI and frozen-floor coverage check are the remaining
-  B5.0 gate; no Phase 6 implementation has started.
+  documentation, and diagnostic wording are complete. The exact isolated
+  `npm run ci` gate passes at `14f2b8b`: 308 CLI tests, 1,157 compiler tests,
+  forced MIR/direct parity, 90 LSP tests, 13 extension tests, both coverage
+  gates, reference integrity, docs, audits, warning-denied Clippy, and hygiene.
+  Compiler coverage is 71,457/74,328 lines (96.137391%), 4,800/4,953
+  functions (96.910963%), and 104,919/111,056 regions (94.473959%), above the
+  frozen `96.13/96.90/94.46` floors. No synthetic coverage test or exclusion
+  was added. B5.0 is closed; Phase 6.1 is now the active stage.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the
