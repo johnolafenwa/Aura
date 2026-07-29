@@ -3,5 +3,5 @@ error[AU3002]: cannot mutably borrow `counter` while `counter` remains shared-bo
    |
 17 |     print(counter + bump(counter))
    |                          ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_copy_left_retains_borrow.au:17:11: shared borrow for the left operand begins here
+  = related crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_copy_left_retains_borrow.au:17:11: shared access for the left operand begins here
   = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

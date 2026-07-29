@@ -213,13 +213,24 @@ fn main() {
             };
             match result {
                 Ok(mir) => {
-                    match build_binary_with_backend(
-                        &input.path,
-                        &input.source,
-                        &mir,
-                        &output_path,
-                        backend,
-                    ) {
+                    let mut build_progress = Vec::new();
+                    let build = {
+                        let mut progress_reporter = NativeProgressReporter {
+                            report_human: diagnostic_format == DiagnosticFormat::Human,
+                            messages: &mut build_progress,
+                            wait_reported: false,
+                            rebuild_reported: false,
+                        };
+                        build_binary_with_backend(
+                            &input.path,
+                            &input.source,
+                            &mir,
+                            &output_path,
+                            backend,
+                            || progress_reporter.wait(),
+                        )
+                    };
+                    match build {
                         Ok(outcome) => {
                             if let Some(reason) = outcome.fallback_reason {
                                 eprintln!(
@@ -237,7 +248,12 @@ fn main() {
                             );
                         }
                         Err(message) => {
-                            let error = Diagnostic::new(message);
+                            let mut error = Diagnostic::new(message);
+                            if diagnostic_format == DiagnosticFormat::Json {
+                                for progress in build_progress {
+                                    error = error.with_note(progress);
+                                }
+                            }
                             emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                             process::exit(1);
                         }
@@ -3053,10 +3069,11 @@ fn build_binary_with_backend(
     mir: &MirModule,
     output_path: &Path,
     backend: BuildBackend,
+    mut on_wait: impl FnMut(),
 ) -> std::result::Result<BuildOutcome, String> {
     select_build_backend(
         backend,
-        || build_direct_native_binary(path, source, mir, output_path),
+        || build_direct_native_binary(path, source, mir, output_path, Some(&mut on_wait)),
         || build_mir_runtime_binary(path, source, mir, output_path),
     )
 }
@@ -3094,8 +3111,9 @@ fn build_direct_native_binary(
     source: &str,
     mir: &MirModule,
     output_path: &Path,
+    on_wait: Option<&mut dyn FnMut()>,
 ) -> std::result::Result<(), String> {
-    let runtime_lock = acquire_native_runtime_build_lock(None)?;
+    let runtime_lock = acquire_native_runtime_build_lock(on_wait)?;
     build_direct_native_binary_with_identity(path, source, mir, output_path, runtime_lock)
         .map(|_| ())
 }

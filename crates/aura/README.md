@@ -168,6 +168,9 @@ aura deps update util
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`
   - this also accepts `--format human|json` for compile and build diagnostics
+  - in human mode, a source-checkout build flushes
+    `aura: waiting for a concurrent build...` before blocking on another
+    process that is refreshing the shared native runtime
   - `auto` is the default; it first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler

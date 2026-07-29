@@ -3,5 +3,5 @@ error[AU3002]: cannot mutably borrow `value` while `value` remains shared-borrow
   |
 7 |     print(value.starts_with(replace_and_return(value)))
   |                                                ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_borrow_rejects_nested_argument_mutation.au:7:11: shared borrow for the method receiver begins here
+  = related crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_borrow_rejects_nested_argument_mutation.au:7:11: shared access for the method receiver begins here
   = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

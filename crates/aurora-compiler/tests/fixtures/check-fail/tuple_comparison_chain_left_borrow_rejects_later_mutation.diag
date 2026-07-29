@@ -3,5 +3,5 @@ error[AU3002]: cannot mutably borrow `value` while `value` remains shared-borrow
   |
 7 |     print(value == replace_and_return(value) == ("C",))
   |                                       ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au:7:11: shared borrow for the left operand begins here
+  = related crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au:7:11: shared access for the left operand begins here
   = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

@@ -297,7 +297,21 @@ The native path is content-addressed. A successful direct build atomically publi
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
-In human mode, a process flushes the exact line `aura: waiting for a concurrent build...` before it blocks on another builder and `aura: rebuilding native runtime...` before it starts rebuild work. The reporter deduplicates each notice within one invocation. JSON mode provisionally prioritizes the one-document stderr contract over immediate progress: it buffers the same exact strings and emits them in a successful report's `progress` array or a failed diagnostic's `notes`. A successful `auto` fallback also carries `fallback: {"from":"direct","to":"mir","reason":"..."}`; a failed MIR fallback retains the direct failure and progress as diagnostic notes. Tools should therefore not expect real-time progress in JSON mode until a structured streaming contract is ratified.
+In human mode, a native `run` flushes the exact line
+`aura: waiting for a concurrent build...` before it blocks on another builder
+and `aura: rebuilding native runtime...` before it starts rebuild work. A
+source-checkout `aura build` now flushes the same exact wait line before
+blocking on another process refreshing the shared runtime. The reporter
+deduplicates each notice within one invocation. JSON `run` mode provisionally
+prioritizes the one-document stderr contract over immediate progress: it
+buffers the same exact strings and emits them in a successful report's
+`progress` array or a failed diagnostic's `notes`. A JSON build failure
+likewise retains a buffered wait notice in the diagnostic's `notes`. A
+successful `auto` run fallback also carries
+`fallback: {"from":"direct","to":"mir","reason":"..."}`; a failed MIR fallback
+retains the direct failure and progress as diagnostic notes. Tools should
+therefore not expect real-time progress in JSON mode until a structured
+streaming contract is ratified.
 
 `AURORA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aurora/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aurora rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 

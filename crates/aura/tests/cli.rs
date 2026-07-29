@@ -5492,6 +5492,245 @@ def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        c
     assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::mpsc;
+
+    let temp = TempDir::new("aurora-build-concurrent-wait");
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, "def main() -> int32:\n    return 0\n")
+        .expect("failed to write concurrent-build source");
+    let output_path = temp.path().join("out");
+
+    // Use an isolated runtime target so this real lock-path test neither waits
+    // on nor stalls unrelated direct-build tests running in parallel.
+    let target_dir = temp.path().join("native-target");
+    fs::create_dir_all(&target_dir).expect("native target directory should exist");
+    let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .expect("native runtime lock should be openable");
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+        .expect("native runtime lock should be private");
+    assert_eq!(
+        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX) },
+        0,
+        "the test should hold the real source-checkout build barrier"
+    );
+
+    let mut child = Command::new(aura_bin())
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO", temp.path().join("missing-cargo"))
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura build behind the runtime lock");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("concurrent build stderr should be captured");
+    let (sender, receiver) = mpsc::channel();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut first_line = String::new();
+        let result = reader.read_line(&mut first_line);
+        let _ = sender.send((result, first_line));
+        let mut rest = Vec::new();
+        let _ = reader.read_to_end(&mut rest);
+        rest
+    });
+
+    let observed = receiver.recv_timeout(std::time::Duration::from_secs(10));
+    drop(held_lock);
+    let barrier_error = match observed {
+        Ok((Ok(_), line)) if line == "aura: waiting for a concurrent build...\n" => None,
+        Ok((Ok(_), line)) => Some(format!(
+            "the first observable line must explain the build wait, found {line:?}"
+        )),
+        Ok((Err(error), _)) => Some(format!(
+            "concurrent build notice should be readable: {error}"
+        )),
+        Err(error) => Some(format!(
+            "aura build should flush a notice before it blocks: {error}"
+        )),
+    };
+    if let Some(error) = barrier_error {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stderr_reader.join();
+        panic!("{error}");
+    }
+
+    let status =
+        wait_with_timeout(&mut child, std::time::Duration::from_secs(30)).unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("aura build did not finish after releasing the runtime lock")
+        });
+    let rest = stderr_reader
+        .join()
+        .expect("concurrent build stderr reader should finish");
+    assert!(
+        !status.success(),
+        "the deliberately unavailable Cargo executable should fail after the lock release"
+    );
+    assert!(
+        String::from_utf8_lossy(&rest).contains("failed to build Aurora runtime artifacts"),
+        "the build should proceed beyond the released lock to the intended toolchain failure; \
+         remaining stderr was:\n{}",
+        String::from_utf8_lossy(&rest)
+    );
+    assert!(
+        !output_path.exists(),
+        "a failed build must not create output"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new("aurora-build-json-concurrent-wait");
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, "def main() -> int32:\n    return 0\n")
+        .expect("failed to write JSON concurrent-build source");
+    let output_path = temp.path().join("out");
+
+    // Hold the exact isolated runtime-build lock. JSON output is deliberately
+    // buffered, so the final structured note is the proof that the child
+    // reached this barrier before it was released.
+    let target_dir = temp.path().join("native-target");
+    fs::create_dir_all(&target_dir).expect("native target directory should exist");
+    let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
+    let held_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .expect("native runtime lock should be openable");
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+        .expect("native runtime lock should be private");
+    assert_eq!(
+        unsafe { libc::flock(held_lock.as_raw_fd(), libc::LOCK_EX) },
+        0,
+        "the test should hold the real source-checkout build barrier"
+    );
+
+    let mut child = Command::new(aura_bin())
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO", temp.path().join("missing-cargo"))
+        .arg("build")
+        .arg("--format")
+        .arg("json")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn JSON aura build behind the runtime lock");
+
+    if let Some(status) = wait_with_timeout(&mut child, std::time::Duration::from_secs(3)) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        child
+            .stdout
+            .take()
+            .expect("JSON build stdout should be captured")
+            .read_to_end(&mut stdout)
+            .expect("JSON build stdout should be readable");
+        child
+            .stderr
+            .take()
+            .expect("JSON build stderr should be captured")
+            .read_to_end(&mut stderr)
+            .expect("JSON build stderr should be readable");
+        panic!(
+            "JSON aura build completed before the held runtime lock was released \
+             (status {status}); stdout was:\n{}stderr was:\n{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    }
+
+    drop(held_lock);
+    let status =
+        wait_with_timeout(&mut child, std::time::Duration::from_secs(30)).unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("JSON aura build did not finish after releasing the runtime lock")
+        });
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("JSON build stdout should be captured")
+        .read_to_end(&mut stdout)
+        .expect("JSON build stdout should be readable");
+    child
+        .stderr
+        .take()
+        .expect("JSON build stderr should be captured")
+        .read_to_end(&mut stderr)
+        .expect("JSON build stderr should be readable");
+
+    let output = std::process::Output {
+        status,
+        stdout,
+        stderr,
+    };
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the unavailable Cargo executable should fail after lock release"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a failed JSON build should not write stdout"
+    );
+    let report = parse_single_json_stderr(&output, "JSON build concurrent wait failure");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed to build Aurora runtime artifacts")),
+        "the build should reach the intended post-lock toolchain failure: {report}"
+    );
+    let notes = report["diagnostics"][0]["notes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("JSON build failure should contain buffered notes: {report}"));
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|note| *note == "aura: waiting for a concurrent build...")
+            .count(),
+        1,
+        "the single JSON document must contain exactly one exact wait notice: {report}"
+    );
+    assert!(
+        !output_path.exists(),
+        "a failed build must not create output"
+    );
+}
+
 #[test]
 fn build_with_direct_backend_rejects_unsupported_programs() {
     let fixture = repo_root().join("examples/modules/helpers/math.au");

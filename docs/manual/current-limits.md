@@ -76,6 +76,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   context remain isolated from work executing on other workers.
 - Task scheduling, cross-worker completion, and program-output order are
   unspecified. There is no worker-index or affinity-introspection API.
+- MIR is the checked development path, not the performance path. In the
+  Batch-4 multicore control, four MIR tasks took about `2.1x` the wall time of
+  one task: interpreter work and synchronization increase the per-task cost
+  when several workers execute MIR concurrently. Use the direct native backend
+  for performance measurements.
 - Pinned task execution is maintained on the MIR and direct native backends.
   Aurora does not promise work stealing, preemption, detached tasks, a
   particular parallel speedup, or broader automatic parallelism outside task
@@ -187,7 +192,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
 - High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
-- Provisional ADR-0033 rejects non-Transfer task captures, task results, and
+- Accepted ADR-0033 rejects non-Transfer task captures, task results, and
   Queue payloads with `AU3008`. Every other non-repeatable transferable task
   result has one statically enforced observation right: direct result methods
   consume it on every outcome, and multi-task waits consume the complete task

@@ -16717,7 +16717,7 @@ impl<'a> FunctionChecker<'a> {
                 };
                 let origin_label = match prior.passing {
                     ReceiverKind::Borrow => {
-                        format!("shared borrow for the {} begins here", prior.param_name)
+                        format!("shared access for the {} begins here", prior.param_name)
                     }
                     ReceiverKind::BorrowMut => {
                         format!("mutable borrow for the {} begins here", prior.param_name)
@@ -16876,7 +16876,7 @@ impl<'a> FunctionChecker<'a> {
             let origin_label = match prior.passing {
                 ReceiverKind::Borrow => {
                     format!(
-                        "shared borrow for parameter `{}` begins here",
+                        "shared access for parameter `{}` begins here",
                         prior.param_name
                     )
                 }

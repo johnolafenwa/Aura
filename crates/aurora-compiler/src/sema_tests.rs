@@ -917,6 +917,12 @@ fn composite_and_projected_arguments_conflict_with_a_retained_shared_argument() 
             "{source}: {}",
             diagnostic.message
         );
+        assert_eq!(diagnostic.secondary_spans.len(), 1, "{source}");
+        assert_eq!(
+            diagnostic.secondary_spans[0].label,
+            "shared access for the parameter `shared` begins here",
+            "{source}",
+        );
     }
 }
 
