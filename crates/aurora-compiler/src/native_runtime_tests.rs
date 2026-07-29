@@ -12636,6 +12636,36 @@ fn native_runtime_common_frame_storage_stays_inline_until_a_trap_materializes_it
 }
 
 #[test]
+fn native_runtime_task_state_map_retains_only_pointer_sized_slots() {
+    let state = super::boxed_direct_task_runtime_state(true, super::DirectTaskAncestry::default());
+    let allocation = state.as_ref() as *const super::DirectTaskRuntimeState;
+    super::with_direct_task_runtime_scope_with_state(state, || {
+        let (stored_size, stored_allocation) = super::DIRECT_TASK_RUNTIME_STATES.with(|states| {
+            let states = states.borrow();
+            let state = states
+                .values()
+                .next()
+                .expect("the active direct task must have runtime state");
+            (
+                std::mem::size_of_val(state),
+                state.as_ref() as *const super::DirectTaskRuntimeState,
+            )
+        });
+        assert_eq!(
+            stored_size,
+            std::mem::size_of::<Box<super::DirectTaskRuntimeState>>(),
+            "the scheduler map must move only a boxed state pointer through coroutine scope setup"
+        );
+        assert_eq!(
+            stored_allocation, allocation,
+            "scope installation must preserve the prebuilt state allocation"
+        );
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("boxed direct task-state layout probe should complete");
+}
+
+#[test]
 fn native_runtime_deep_persistent_task_ancestry_drops_iteratively() {
     const DEPTH: usize = 100_000;
 

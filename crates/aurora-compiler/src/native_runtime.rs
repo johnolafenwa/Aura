@@ -408,10 +408,42 @@ impl Default for DirectTaskRuntimeState {
             cleanup_draining: false,
             primary_runtime_diagnostic: None,
             call_depth: 0,
-            call_frames: DirectCallFrameStorage::default(),
+            call_frames: DirectCallFrameStorage::Empty,
             task_ancestry: DirectTaskAncestry::default(),
             fallback_cancellation: CancellationContext::default(),
         }
+    }
+}
+
+fn boxed_direct_task_runtime_state(
+    ownership_tracking_active: bool,
+    task_ancestry: DirectTaskAncestry,
+) -> Box<DirectTaskRuntimeState> {
+    let mut state = Box::new(DirectTaskRuntimeState::default());
+    state.ownership_tracking_active = ownership_tracking_active;
+    state.task_ancestry = task_ancestry;
+    state
+}
+
+struct PreparedDirectTaskRuntimeState {
+    state: Box<DirectTaskRuntimeState>,
+}
+
+// SAFETY: the prepared state is constructed with empty cleanup and ownership
+// collections, so it contains no live raw-pointer registrations. The wrapper
+// is consumed exactly once on the selected worker before user task code can
+// populate either collection.
+unsafe impl Send for PreparedDirectTaskRuntimeState {}
+
+impl PreparedDirectTaskRuntimeState {
+    fn new(task_ancestry: DirectTaskAncestry) -> Self {
+        Self {
+            state: boxed_direct_task_runtime_state(true, task_ancestry),
+        }
+    }
+
+    fn into_state(self) -> Box<DirectTaskRuntimeState> {
+        self.state
     }
 }
 
@@ -419,7 +451,7 @@ thread_local! {
     // Each pinned worker multiplexes several stackful native tasks, so an
     // ordinary worker-local flag would leak across every yield. Keep all
     // resumable direct state behind the globally unique task identity instead.
-    static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, DirectTaskRuntimeState>> =
+    static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, Box<DirectTaskRuntimeState>>> =
         const { RefCell::new(BTreeMap::new()) };
 }
 
@@ -451,7 +483,14 @@ fn with_direct_task_runtime_state_for_key<T>(
 ) -> T {
     DIRECT_TASK_RUNTIME_STATES.with(|states| {
         let mut states = states.borrow_mut();
-        work(states.entry(key).or_default())
+        work(
+            states
+                .entry(key)
+                .or_insert_with(|| {
+                    boxed_direct_task_runtime_state(false, DirectTaskAncestry::default())
+                })
+                .as_mut(),
+        )
     })
 }
 
@@ -522,7 +561,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
             let previous = self.previous.take();
             let restored_previous = previous.is_some();
             if let Some(previous) = previous {
-                states.insert(self.key, *previous);
+                states.insert(self.key, previous);
             }
             (current, restored_previous)
         });
@@ -585,17 +624,25 @@ fn with_direct_task_runtime_scope_with_direct_ancestry<T>(
     task_ancestry: DirectTaskAncestry,
     work: impl FnOnce() -> T,
 ) -> T {
-    let key = direct_task_runtime_key();
-    let state = DirectTaskRuntimeState {
-        ownership_tracking_active: true,
-        task_ancestry,
-        ..DirectTaskRuntimeState::default()
-    };
-    let previous = DIRECT_TASK_RUNTIME_STATES
-        .with(|states| states.borrow_mut().insert(key, state))
-        .map(Box::new);
-    let _guard = DirectTaskRuntimeScopeGuard { key, previous };
+    let state = boxed_direct_task_runtime_state(true, task_ancestry);
+    with_direct_task_runtime_scope_with_state(state, work)
+}
+
+fn with_direct_task_runtime_scope_with_state<T>(
+    state: Box<DirectTaskRuntimeState>,
+    work: impl FnOnce() -> T,
+) -> T {
+    let _guard = install_direct_task_runtime_state(state);
     work()
+}
+
+#[inline(never)]
+fn install_direct_task_runtime_state(
+    state: Box<DirectTaskRuntimeState>,
+) -> DirectTaskRuntimeScopeGuard {
+    let key = direct_task_runtime_key();
+    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().insert(key, state));
+    DirectTaskRuntimeScopeGuard { key, previous }
 }
 
 fn direct_runtime_call_frames() -> Vec<RuntimeCallFrame> {
@@ -640,7 +687,7 @@ fn discard_current_direct_task_runtime_state() {
     }
 }
 
-fn release_direct_task_runtime_state(mut state: DirectTaskRuntimeState) {
+fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
     let owned_value_refs = std::mem::take(&mut state.owned_value_refs);
     drop(state);
     for (address, count) in owned_value_refs {
@@ -9411,6 +9458,10 @@ where
         stack_size,
         task_ancestry,
     } = spawn;
+    // Build the full state on the spawning task's stack. The child coroutine
+    // receives only the ready box pointer, keeping the 272-byte state
+    // construction and copy out of child scope installation.
+    let task_runtime_state = PreparedDirectTaskRuntimeState::new(task_ancestry);
     let entry = move || {
         // This guard is created on the coroutine stack rather than captured by
         // the force-reset closure. Normal return and ordinary Rust unwinding
@@ -9421,7 +9472,7 @@ where
             args_address,
             claim_flag_address,
         };
-        with_direct_task_runtime_scope_with_direct_ancestry(task_ancestry, || {
+        with_direct_task_runtime_scope_with_state(task_runtime_state.into_state(), || {
             Ok(with_task_runtime_error_capture(|| {
                 unsafe {
                     let args = &*(args_address as *const Vec<i64>);
