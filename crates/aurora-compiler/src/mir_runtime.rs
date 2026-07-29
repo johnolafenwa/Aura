@@ -3598,6 +3598,7 @@ impl MirRuntime {
             group_value.register_task(task.clone());
             for queue in &producer_queues {
                 queue.register_producer_task(task);
+                queue.register_task_handle(task);
             }
         };
         let task = match stack_size {

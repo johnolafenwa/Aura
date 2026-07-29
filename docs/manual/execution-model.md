@@ -441,7 +441,8 @@ available to another observer.
 `TaskGroup` owns children started within its scope.
 
 - normal scope exit waits for children that are making bounded progress
-- a child blocked in an unbounded group-owned wait may be cancelled so cleanup cannot deadlock forever
+- a child blocked in an unbounded group-owned wait is cancelled only when the
+  runtime's live wait graph has no reachable waker
 - explicit `cancel()` signals cancellation and wakes scheduler-aware waits
 - a task failure observed through its `Task` result does not also abort the group as unread
 - an unread child failure aborts the group scope and wakes queue iteration/waits that depend on that group
@@ -451,6 +452,14 @@ Cancellation is cooperative. Pure CPU code observes cancellation through
 cancellation. Compiler-inserted loop safepoints likewise do not inspect
 cancellation. Scheduler-aware blocking operations receive cancellation context
 directly.
+
+Queue reachability is based on live tasks known to hold `Queue` handles, not an
+elapsed-time threshold. A sender parked on a full open queue remains joinable
+while a live receiver can drain it; a receiver parked on an empty queue remains
+joinable while a live sender or another live owner of the open queue can send
+or close it. The task performing the join is not counted as its own child's
+waker, because it cannot use its queue handle until the join returns. Cycles
+made only of mutually blocked waits have no reachable waker and are cancelled.
 
 ## Host I/O And Cancellation
 
@@ -468,7 +477,7 @@ traps with `AU4001`. This host-boundary classification is accepted under
 ADR-0019.
 
 Filesystem operations and some host operations run on the generic blocking-I/O
-pool under Provisional ADR-0035. When its optional pending-queue bound is full,
+pool under Accepted ADR-0035. When its optional pending-queue bound is full,
 Aurora tasks wait for
 admission through the scheduler in FIFO order instead of blocking a pinned
 worker. Cancellation or deadline expiry before queue insertion prevents the

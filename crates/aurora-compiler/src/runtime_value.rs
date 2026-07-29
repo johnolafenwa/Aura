@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
@@ -367,7 +367,10 @@ pub struct ChannelValue {
 
 struct ChannelState {
     state: Mutex<ChannelInner>,
-    producer_tasks: Mutex<Vec<Weak<TaskState>>>,
+    producer_tasks: Mutex<WeakTaskRegistry>,
+    task_handles: Mutex<WeakTaskRegistry>,
+    sender_tasks: Mutex<WeakTaskRegistry>,
+    receiver_tasks: Mutex<WeakTaskRegistry>,
     recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
     send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
@@ -377,6 +380,20 @@ struct ChannelInner {
     queue: VecDeque<Value>,
     closed: bool,
     capacity: Option<usize>,
+}
+
+struct WeakTaskRegistry {
+    tasks: HashMap<usize, Weak<TaskState>>,
+    next_prune_at: usize,
+}
+
+impl WeakTaskRegistry {
+    fn new() -> Self {
+        Self {
+            tasks: HashMap::new(),
+            next_prune_at: 256,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -490,6 +507,8 @@ struct TaskState {
     result_is_repeatable: bool,
     result_observation_claimed: AtomicBool,
     waits_without_deadline: AtomicBool,
+    current_wait: Mutex<Option<TaskWaitReachability>>,
+    join_dependencies: Mutex<Option<Vec<Weak<TaskState>>>>,
     observed_failure: AtomicBool,
     completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
@@ -791,6 +810,16 @@ struct TaskWaitRegistration {
     fd_wait: Option<FdWaitRegistration>,
 }
 
+#[derive(Clone)]
+struct TaskWaitReachability {
+    recv_channels: Vec<Weak<ChannelState>>,
+    ignore_closed_recv_channels: bool,
+    send_channels: Vec<Weak<ChannelState>>,
+    task_waits: Vec<Weak<TaskState>>,
+    deadline: Option<Instant>,
+    cancellation: Option<CancellationContext>,
+}
+
 #[derive(Clone, Copy)]
 struct FdWaitRegistration {
     fd: libc::c_int,
@@ -804,6 +833,7 @@ struct LightweightTaskContext {
     worker_index: usize,
     yielder: Cell<*const Yielder<RuntimeSchedulerWakeReason, TaskYield>>,
     cancellation: Option<CancellationContext>,
+    task_state: Weak<TaskState>,
 }
 
 struct LightweightTaskRecord {
@@ -908,7 +938,6 @@ const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
-const TASK_GROUP_CLEANUP_SETTLE_TIMEOUT: StdDuration = StdDuration::from_millis(10);
 const READY_TURNS_PER_LOCAL_REACTOR_POLL: u32 = 64;
 const READY_TURNS_PER_IO_REACTOR_POLL: u32 = 256;
 
@@ -2544,6 +2573,22 @@ thread_local! {
     #[cfg(test)]
     static NEXT_TASK_WAIT_READY_ENQUEUE_PROBE: RefCell<Option<TaskWaitReadyEnqueueProbe>> =
         const { RefCell::new(None) };
+    #[cfg(test)]
+    static AFTER_TASK_GROUP_SEND_REACHABILITY_INITIAL_CHECK_HOOK:
+        RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn install_after_task_group_send_reachability_initial_check_hook(
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_TASK_GROUP_SEND_REACHABILITY_INITIAL_CHECK_HOOK.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "a task-group send-reachability hook is already installed"
+        );
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
 }
 
 static LIGHTWEIGHT_TASK_PANIC_HOOK: Once = Once::new();
@@ -2647,6 +2692,12 @@ fn with_current_lightweight_task_context<T>(
 ) -> Option<T> {
     let context = CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| slot.borrow().clone());
     context.as_deref().map(f)
+}
+
+fn current_lightweight_task() -> Option<TaskValue> {
+    with_current_lightweight_task_context(|context| context.task_state.upgrade())
+        .flatten()
+        .map(|inner| TaskValue { inner })
 }
 
 pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
@@ -3009,6 +3060,29 @@ pub(crate) fn cancel_current_lightweight_task_boundary() -> ! {
 }
 
 impl TaskWaitRegistration {
+    fn reachability_snapshot(&self) -> TaskWaitReachability {
+        TaskWaitReachability {
+            recv_channels: self
+                .recv_channels
+                .iter()
+                .map(|channel| Arc::downgrade(&channel.inner))
+                .collect(),
+            ignore_closed_recv_channels: self.ignore_closed_recv_channels,
+            send_channels: self
+                .send_channels
+                .iter()
+                .map(|channel| Arc::downgrade(&channel.inner))
+                .collect(),
+            task_waits: self
+                .task_waits
+                .iter()
+                .map(|task| Arc::downgrade(&task.inner))
+                .collect(),
+            deadline: self.deadline,
+            cancellation: self.cancellation.clone(),
+        }
+    }
+
     fn ready_reason(&self, fd_ready: bool) -> Option<RuntimeSchedulerWakeReason> {
         if self
             .cancellation
@@ -3091,6 +3165,8 @@ fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
         result_is_repeatable,
         result_observation_claimed: AtomicBool::new(false),
         waits_without_deadline: AtomicBool::new(false),
+        current_wait: Mutex::new(None),
+        join_dependencies: Mutex::new(None),
         observed_failure: AtomicBool::new(false),
         completion_reactor_subscribers: Mutex::new(HashMap::new()),
         group_failure_wake_flags: Mutex::new(Vec::new()),
@@ -3103,6 +3179,8 @@ fn complete_lightweight_task_state(task_state: &Arc<TaskState>, result: TaskExec
     task_state
         .waits_without_deadline
         .store(false, Ordering::SeqCst);
+    *lock_mutex(&task_state.current_wait) = None;
+    *lock_mutex(&task_state.join_dependencies) = None;
     {
         let mut state = lock_mutex(&task_state.handle);
         *state = TaskHandle::Completed(result.clone());
@@ -3463,6 +3541,7 @@ impl LightweightTaskScheduler {
             worker_index: self.worker_index,
             yielder: Cell::new(std::ptr::null()),
             cancellation: request.cancellation,
+            task_state: Arc::downgrade(&request.state),
         });
         let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
             let context_was_installed = with_current_lightweight_task_context(|context| {
@@ -3533,6 +3612,7 @@ impl LightweightTaskScheduler {
             .state
             .waits_without_deadline
             .store(false, Ordering::SeqCst);
+        *lock_mutex(&record.state.current_wait) = None;
         let _guard = enter_lightweight_task_context(&record.context);
         let outcome = record.coroutine.resume(reason);
         // A running coroutine may prepare children, but it never aliases the
@@ -3632,6 +3712,7 @@ impl LightweightTaskScheduler {
         }
 
         let waits_without_deadline = registration.deadline.is_none();
+        let current_wait = registration.reachability_snapshot();
         self.waiting.insert(
             task_id,
             LightweightTaskWait {
@@ -3645,6 +3726,7 @@ impl LightweightTaskScheduler {
                 .state
                 .waits_without_deadline
                 .store(waits_without_deadline, Ordering::SeqCst);
+            *lock_mutex(&record.state.current_wait) = Some(current_wait);
         }
     }
 
@@ -3694,6 +3776,7 @@ impl LightweightTaskScheduler {
                 .state
                 .waits_without_deadline
                 .store(false, Ordering::SeqCst);
+            *lock_mutex(&record.state.current_wait) = None;
         }
         waiting
             .registration
@@ -3842,6 +3925,8 @@ impl LightweightTaskScheduler {
             .state
             .waits_without_deadline
             .store(false, Ordering::SeqCst);
+        *lock_mutex(&record.state.current_wait) = None;
+        *lock_mutex(&record.state.join_dependencies) = None;
         let _guard = enter_lightweight_task_context(&record.context);
         record.context.yielder.set(std::ptr::null());
         if let Some(cleanup) = record.forced_exit_cleanup.take() {
@@ -4868,7 +4953,10 @@ impl ChannelValue {
                     closed: false,
                     capacity,
                 }),
-                producer_tasks: Mutex::new(Vec::new()),
+                producer_tasks: Mutex::new(WeakTaskRegistry::new()),
+                task_handles: Mutex::new(WeakTaskRegistry::new()),
+                sender_tasks: Mutex::new(WeakTaskRegistry::new()),
+                receiver_tasks: Mutex::new(WeakTaskRegistry::new()),
                 recv_reactor_subscribers: Mutex::new(HashMap::new()),
                 send_reactor_subscribers: Mutex::new(HashMap::new()),
                 runtime_type_name: Mutex::new(None),
@@ -4923,6 +5011,17 @@ pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>
     }
 }
 
+fn register_current_task_queue_handles(value: &Value) {
+    let Some(task) = current_lightweight_task() else {
+        return;
+    };
+    let mut queues = Vec::new();
+    collect_queue_values(value, &mut queues);
+    for queue in queues {
+        queue.register_task_handle(&task);
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn register_task_as_queue_producer_for_values<'a>(
     values: impl IntoIterator<Item = &'a Value>,
@@ -4934,6 +5033,7 @@ pub(crate) fn register_task_as_queue_producer_for_values<'a>(
     }
     for queue in queues {
         queue.register_producer_task(task);
+        queue.register_task_handle(task);
     }
 }
 
@@ -4986,6 +5086,43 @@ pub(crate) enum TaskWaitStatus {
 }
 
 impl ChannelValue {
+    fn register_task(tasks: &Mutex<WeakTaskRegistry>, task: &TaskValue) {
+        let mut registry = lock_mutex(tasks);
+        let identity = Arc::as_ptr(&task.inner) as usize;
+        registry.tasks.insert(identity, Arc::downgrade(&task.inner));
+        if registry.tasks.len() >= registry.next_prune_at {
+            registry.tasks.retain(|_, task| task.strong_count() > 0);
+            registry.next_prune_at = registry.tasks.len().saturating_mul(2).max(256);
+        }
+    }
+
+    fn registered_tasks(tasks: &Mutex<WeakTaskRegistry>) -> Vec<TaskValue> {
+        let mut registry = lock_mutex(tasks);
+        let mut live = Vec::new();
+        registry.tasks.retain(|_, task| {
+            if let Some(inner) = task.upgrade() {
+                live.push(TaskValue { inner });
+                true
+            } else {
+                false
+            }
+        });
+        registry.next_prune_at = registry.tasks.len().saturating_mul(2).max(256);
+        live
+    }
+
+    fn register_current_sender(&self) {
+        if let Some(task) = current_lightweight_task() {
+            Self::register_task(&self.inner.sender_tasks, &task);
+        }
+    }
+
+    fn register_current_receiver(&self) {
+        if let Some(task) = current_lightweight_task() {
+            Self::register_task(&self.inner.receiver_tasks, &task);
+        }
+    }
+
     fn subscribe_reactor_recv(&self, subscription: &ReactorSubscription, ignore_closed: bool) {
         lock_mutex(&self.inner.recv_reactor_subscribers)
             .entry(subscription.identity())
@@ -5050,26 +5187,32 @@ impl ChannelValue {
                 .is_none_or(|capacity| state.queue.len() < capacity)
     }
 
+    pub(crate) fn register_task_handle(&self, task: &TaskValue) {
+        Self::register_task(&self.inner.task_handles, task);
+    }
+
     pub(crate) fn register_producer_task(&self, task: &TaskValue) {
-        let mut tasks = lock_mutex(&self.inner.producer_tasks);
-        let weak = Arc::downgrade(&task.inner);
-        if !tasks.iter().any(|existing| existing.ptr_eq(&weak)) {
-            tasks.push(weak);
-        }
+        Self::register_task(&self.inner.producer_tasks, task);
     }
 
     fn registered_producer_tasks(&self) -> Vec<TaskValue> {
-        let mut tasks = lock_mutex(&self.inner.producer_tasks);
-        let mut live = Vec::new();
-        tasks.retain(|task| {
-            if let Some(inner) = task.upgrade() {
-                live.push(TaskValue { inner });
-                true
-            } else {
-                false
-            }
-        });
-        live
+        Self::registered_tasks(&self.inner.producer_tasks)
+    }
+
+    fn registered_task_handles(&self) -> Vec<TaskValue> {
+        Self::registered_tasks(&self.inner.task_handles)
+    }
+
+    fn registered_sender_tasks(&self) -> Vec<TaskValue> {
+        Self::registered_tasks(&self.inner.sender_tasks)
+    }
+
+    fn registered_receiver_tasks(&self) -> Vec<TaskValue> {
+        Self::registered_tasks(&self.inner.receiver_tasks)
+    }
+
+    fn is_open(&self) -> bool {
+        !lock_mutex(&self.inner.state).closed
     }
 
     fn all_registered_producer_tasks_completed(&self) -> bool {
@@ -5079,12 +5222,14 @@ impl ChannelValue {
     }
 
     pub(crate) fn try_recv(&self) -> TryRecvResult {
+        self.register_current_receiver();
         let mut state = lock_mutex(&self.inner.state);
         let was_full = state
             .capacity
             .is_some_and(|capacity| state.queue.len() >= capacity);
         if let Some(value) = state.queue.pop_front() {
             drop(state);
+            register_current_task_queue_handles(&value);
             if was_full {
                 wake_reactor_subscribers(&self.inner.send_reactor_subscribers);
             }
@@ -5098,6 +5243,7 @@ impl ChannelValue {
     }
 
     pub(crate) fn try_send(&self, value: Value) -> TrySendResult {
+        self.register_current_sender();
         let mut state = lock_mutex(&self.inner.state);
         if state.closed {
             return TrySendResult::Closed(value);
@@ -10544,6 +10690,107 @@ impl TaskGroupValue {
     }
 }
 
+#[derive(Default)]
+struct TaskReachabilitySearch {
+    task_visiting: HashSet<usize>,
+    task_memo: HashMap<usize, bool>,
+    recv_channel_visiting: HashSet<(usize, bool)>,
+    recv_channel_memo: HashMap<(usize, bool), bool>,
+    send_channel_visiting: HashSet<usize>,
+    send_channel_memo: HashMap<usize, bool>,
+    channel_expansions: usize,
+}
+
+fn reachable_channel_candidate(
+    tasks: impl IntoIterator<Item = TaskValue>,
+    search: &mut TaskReachabilitySearch,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    tasks.into_iter().any(|task| {
+        let identity = Arc::as_ptr(&task.inner) as usize;
+        seen.insert(identity)
+            && task.completed_result().is_none()
+            && task.can_make_reachable_progress(search)
+    })
+}
+
+fn recv_channel_has_reachable_waker(
+    channel: &ChannelValue,
+    ignore_closed: bool,
+    search: &mut TaskReachabilitySearch,
+) -> bool {
+    let identity = Arc::as_ptr(&channel.inner) as usize;
+    let key = (identity, ignore_closed);
+    if let Some(reachable) = search.recv_channel_memo.get(&key) {
+        return *reachable;
+    }
+    if !search.recv_channel_visiting.insert(key) {
+        return false;
+    }
+    search.channel_expansions += 1;
+
+    let mut reachable = channel.is_ready_for_scheduler_recv(ignore_closed);
+    if !reachable {
+        let mut seen = HashSet::new();
+        reachable =
+            reachable_channel_candidate(channel.registered_sender_tasks(), search, &mut seen);
+        if !reachable && channel.is_open() {
+            reachable =
+                reachable_channel_candidate(channel.registered_task_handles(), search, &mut seen);
+        }
+        if !reachable {
+            // A completing sender may have made the queue ready between the
+            // initial state read and the weak-owner traversal.
+            reachable = channel.is_ready_for_scheduler_recv(ignore_closed);
+        }
+    }
+
+    search.recv_channel_visiting.remove(&key);
+    search.recv_channel_memo.insert(key, reachable);
+    reachable
+}
+
+fn send_channel_has_reachable_waker(
+    channel: &ChannelValue,
+    search: &mut TaskReachabilitySearch,
+) -> bool {
+    let identity = Arc::as_ptr(&channel.inner) as usize;
+    if let Some(reachable) = search.send_channel_memo.get(&identity) {
+        return *reachable;
+    }
+    if !search.send_channel_visiting.insert(identity) {
+        return false;
+    }
+    search.channel_expansions += 1;
+
+    let mut reachable = channel.is_ready_for_scheduler_send();
+    if !reachable {
+        #[cfg(test)]
+        AFTER_TASK_GROUP_SEND_REACHABILITY_INITIAL_CHECK_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
+        let mut seen = HashSet::new();
+        reachable =
+            reachable_channel_candidate(channel.registered_receiver_tasks(), search, &mut seen)
+                || reachable_channel_candidate(
+                    channel.registered_task_handles(),
+                    search,
+                    &mut seen,
+                );
+        if !reachable {
+            // A completing receiver may have freed capacity between the
+            // initial state read and the weak-owner traversal.
+            reachable = channel.is_ready_for_scheduler_send();
+        }
+    }
+
+    search.send_channel_visiting.remove(&identity);
+    search.send_channel_memo.insert(identity, reachable);
+    reachable
+}
+
 impl TaskValue {
     fn subscribe_reactor_completion(&self, subscription: &ReactorSubscription) {
         subscribe_reactor_target(&self.inner.completion_reactor_subscribers, subscription);
@@ -10618,6 +10865,9 @@ impl TaskValue {
     pub(crate) fn completed_result_observed(&self) -> Option<TaskExecutionResult> {
         let result = self.completed_result()?;
         self.observe_result(&result);
+        if let TaskExecutionResult::Ready(Ok(value)) = &result {
+            register_current_task_queue_handles(value);
+        }
         Some(result)
     }
 
@@ -10640,6 +10890,8 @@ impl TaskValue {
             result_is_repeatable,
             result_observation_claimed: AtomicBool::new(false),
             waits_without_deadline: AtomicBool::new(false),
+            current_wait: Mutex::new(None),
+            join_dependencies: Mutex::new(None),
             observed_failure: AtomicBool::new(false),
             completion_reactor_subscribers: Mutex::new(HashMap::new()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
@@ -10701,6 +10953,9 @@ impl TaskValue {
         let status = self.wait_result_with_cancellation(timeout, cancellation)?;
         if let TaskWaitStatus::Ready(result) = &status {
             self.observe_result(&TaskExecutionResult::Ready(result.clone()));
+            if let Ok(value) = result {
+                register_current_task_queue_handles(value);
+            }
         }
         Ok(status)
     }
@@ -10720,6 +10975,93 @@ impl TaskValue {
             return false;
         }
         self.inner.waits_without_deadline.load(Ordering::SeqCst)
+    }
+
+    fn unbounded_wait_has_reachable_waker(&self) -> bool {
+        self.unbounded_wait_reachability().0
+    }
+
+    fn unbounded_wait_reachability(&self) -> (bool, usize) {
+        let mut search = TaskReachabilitySearch::default();
+        if let Some(task) = current_lightweight_task() {
+            search
+                .task_visiting
+                .insert(Arc::as_ptr(&task.inner) as usize);
+        }
+        let reachable = self.can_make_reachable_progress(&mut search);
+        (reachable, search.channel_expansions)
+    }
+
+    fn can_make_reachable_progress(&self, search: &mut TaskReachabilitySearch) -> bool {
+        if self.completed_result().is_some() {
+            return true;
+        }
+
+        let identity = Arc::as_ptr(&self.inner) as usize;
+        if let Some(reachable) = search.task_memo.get(&identity) {
+            return *reachable;
+        }
+        if !search.task_visiting.insert(identity) {
+            return false;
+        }
+
+        let join_dependencies = lock_mutex(&self.inner.join_dependencies).clone();
+        let reachable = if let Some(dependencies) = join_dependencies {
+            dependencies.iter().any(|task| {
+                task.upgrade()
+                    .map(|inner| TaskValue { inner })
+                    .is_some_and(|task| task.can_make_reachable_progress(search))
+            })
+        } else {
+            let wait = lock_mutex(&self.inner.current_wait).clone();
+            match wait {
+                None => {
+                    // A runnable task, including one which has not yet been
+                    // admitted, can still execute code that wakes a peer.
+                    true
+                }
+                Some(wait)
+                    if wait.deadline.is_some()
+                        || wait
+                            .cancellation
+                            .as_ref()
+                            .is_some_and(CancellationContext::is_cancelled) =>
+                {
+                    true
+                }
+                Some(wait) => {
+                    let queue_waker_is_reachable = wait.recv_channels.iter().any(|channel| {
+                        channel
+                            .upgrade()
+                            .map(|inner| ChannelValue { inner })
+                            .is_some_and(|channel| {
+                                recv_channel_has_reachable_waker(
+                                    &channel,
+                                    wait.ignore_closed_recv_channels,
+                                    search,
+                                )
+                            })
+                    }) || wait.send_channels.iter().any(|channel| {
+                        channel
+                            .upgrade()
+                            .map(|inner| ChannelValue { inner })
+                            .is_some_and(|channel| {
+                                send_channel_has_reachable_waker(&channel, search)
+                            })
+                    });
+                    let task_waker_is_reachable = wait.task_waits.iter().any(|task| {
+                        task.upgrade()
+                            .map(|inner| TaskValue { inner })
+                            .is_some_and(|task| task.can_make_reachable_progress(search))
+                    });
+                    queue_waker_is_reachable || task_waker_is_reachable
+                }
+            }
+        };
+
+        search.task_visiting.remove(&identity);
+        search.task_memo.insert(identity, reachable);
+        reachable
     }
 }
 
@@ -10818,13 +11160,42 @@ pub(crate) fn recv_for_registered_producers_iteration(
     }
 }
 
+struct TaskGroupJoinReachabilityGuard {
+    state: Option<Arc<TaskState>>,
+    previous: Option<Vec<Weak<TaskState>>>,
+}
+
+impl TaskGroupJoinReachabilityGuard {
+    fn enter(tasks: &[TaskValue]) -> Self {
+        let state = (!tasks.is_empty())
+            .then(current_lightweight_task)
+            .flatten()
+            .map(|task| task.inner);
+        let previous = state.as_ref().and_then(|state| {
+            lock_mutex(&state.join_dependencies).replace(
+                tasks
+                    .iter()
+                    .map(|task| Arc::downgrade(&task.inner))
+                    .collect(),
+            )
+        });
+        Self { state, previous }
+    }
+}
+
+impl Drop for TaskGroupJoinReachabilityGuard {
+    fn drop(&mut self) {
+        if let Some(state) = &self.state {
+            *lock_mutex(&state.join_dependencies) = self.previous.take();
+        }
+    }
+}
+
 pub(crate) fn task_group_cleanup_should_cancel(
     tasks: &[TaskValue],
     cancellation: &CancellationContext,
 ) -> bool {
-    let settle_deadline = Instant::now()
-        .checked_add(TASK_GROUP_CLEANUP_SETTLE_TIMEOUT)
-        .unwrap_or_else(Instant::now);
+    let _join_reachability = TaskGroupJoinReachabilityGuard::enter(tasks);
     loop {
         let mut saw_incomplete_task = false;
         for task in tasks {
@@ -10834,7 +11205,7 @@ pub(crate) fn task_group_cleanup_should_cancel(
             ) {
                 Ok(TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled) => {}
                 Ok(TaskWaitStatus::TimedOut) => {
-                    if task.waits_without_deadline() {
+                    if task.waits_without_deadline() && !task.unbounded_wait_has_reachable_waker() {
                         return true;
                     }
                     if task.completed_result().is_none() {
@@ -10845,7 +11216,7 @@ pub(crate) fn task_group_cleanup_should_cancel(
             }
         }
 
-        if !saw_incomplete_task || Instant::now() >= settle_deadline {
+        if !saw_incomplete_task {
             return false;
         }
     }

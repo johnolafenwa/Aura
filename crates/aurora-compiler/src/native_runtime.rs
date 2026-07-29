@@ -9740,6 +9740,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                     group.register_task(task.clone());
                     for queue in &queue_producers {
                         queue.register_producer_task(task);
+                        queue.register_task_handle(task);
                     }
                 },
             )

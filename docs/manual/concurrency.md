@@ -111,7 +111,14 @@ with group = TaskGroup():
     group.start_soon_with_stack(2 * 1024 * 1024, deep_worker, jobs)
 ```
 
-On normal scope exit, the runtime joins children that continue making bounded progress. It cancels a child left in an indefinitely blocked group-owned wait so cleanup cannot deadlock forever. A failure already observed through its `Task` result is not raised a second time; an unread child failure aborts the group scope and wakes dependent queue/task waits.
+On normal scope exit, the runtime joins children that continue making bounded
+progress. It cancels a child in an unbounded group-owned wait only when the
+live wait graph has no reachable waker. A queue wait therefore remains
+joinable while another live task can send, receive, or close the relevant
+queue; the task currently performing the join does not count as a waker for
+its own children. A failure already observed through its `Task` result is not
+raised a second time; an unread child failure aborts the group scope and wakes
+dependent queue/task waits.
 
 ## Task[T]
 
@@ -136,7 +143,7 @@ duplicate one result right.
 
 Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
 
-The completed value is stored by the task. Under Provisional ADR-0033,
+The completed value is stored by the task. Under Accepted ADR-0033,
 `Task[T]` is copyable only when `T` is copyable, `T` is a `Queue[...]` handle,
 or `T` is a recursively repeatable `Task[...]`. For every
 other transferable result, `result`, `result_or_none`, and `result_or` consume
@@ -420,8 +427,9 @@ the available parallelism reported by the host, while provisional
 stores its captures in task-owned storage and gives it a stable worker
 assignment. The child's coroutine stack remains on that worker for its entire
 lifetime; there is no migration or work stealing. Group exit observes or joins
-children, cancels an indefinitely blocked group-owned wait when required for
-cleanup, and propagates an unread child failure. Queue send and receive
+children, cancels an unbounded group-owned wait only when the live wait graph
+has no reachable waker, and propagates an unread child failure. Host elapsed
+time and machine load are not evidence that a wait is unreachable. Queue send and receive
 transfer one value by copy or move according to `T`; bounded queues suspend
 senders when full, close wakes waiters, and bare iteration repeatedly receives
 until its documented terminal condition.
@@ -613,7 +621,7 @@ deadlines, and direct Queue, task-completion, and blocking-pool wakeups; Phase
 5.3 adds the automatic loop checks. Phase 5.4 moves deep HTTP, TLS, and
 maintained Unix WebSocket library steps to a distinct bounded protocol service
 with two named 2 MiB-stack workers and a 64-job queue, then makes ordinary
-coroutine stacks guarded 512 KiB requests and adds the Provisional ADR-0032
+coroutine stacks guarded 512 KiB requests and adds the Accepted ADR-0032
 override methods. HTTP URL/request/response construction, head parsing, and
 chunk decoding; rustls construction, handshake, I/O, and close notification;
 and Unix WebSocket construction, handshake, framing, and close run there.
@@ -635,7 +643,7 @@ tasks. Phase 5.7 makes Queue and Task handle state cross-worker safe and runs
 task bodies on spawn-time pinned workers on both backends. This is a multicore
 task-execution contract, not a guarantee of work stealing, preemption,
 particular speedup, task/output order, or broader automatic parallelism.
-Phase 5.8 provisionally implements ADR-0034's typed heterogeneous
+Accepted ADR-0034 implements the typed heterogeneous
 `select(source, ...)` builtin on both backends, using the shared persistent
 wait machinery for atomic registration, deterministic one-winner arbitration,
 cross-worker wakeups, and loser cleanup. It adds no statement syntax.
@@ -664,7 +672,7 @@ The Queue capacity boundary is pinned by
 `crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
 both backends.
 
-Provisional ADR-0033 specifies the implemented Phase 5.6 contract: structural
+Accepted ADR-0033 specifies the implemented Phase 5.6 contract: structural
 Transfer checks for task captures, task results, and Queue payloads, plus
 static repeatable/single-consumer task results. Phase 5.7 retains that
 share-nothing boundary while allowing Queue and Task handle identity to

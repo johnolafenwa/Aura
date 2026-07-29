@@ -1101,6 +1101,246 @@ def main() -> int32:
 }
 
 #[test]
+fn task_group_join_keeps_reachable_queue_producers_alive_under_cpu_load() {
+    let source = r#"import sys
+
+def burn_cpu() -> None:
+    started_at = sys.monotonic_time_ms()
+    mut value: int64 = 1
+    while sys.monotonic_time_ms() - started_at < 250:
+        value = (value * 1664525 + 1013904223) % 2147483647
+
+def produce(q: Queue[int32], base: int32) -> int32:
+    mut sent: int32 = 0
+    while sent < 1000:
+        match own q.put(base + sent):
+            case Result.Ok(_):
+                sent += 1
+            case Result.Err(_):
+                return sent
+    return sent
+
+def consume(q: Queue[int32], totals: Queue[int32]) -> None:
+    mut received: int32 = 0
+    while received < 1000:
+        match own q.get():
+            case QueueReceive.Item(_):
+                received += 1
+            case QueueReceive.Closed:
+                totals.put(received)
+                return
+            case QueueReceive.TimedOut:
+                pass
+            case QueueReceive.Cancelled:
+                totals.put(received)
+                return
+    totals.put(received)
+
+def main() -> int32:
+    q = Queue[int32](capacity=64)
+    totals = Queue[int32](capacity=4)
+
+    with TaskGroup() as outer:
+        mut burner: int32 = 0
+        while burner < 12:
+            outer.start_soon(burn_cpu)
+            burner += 1
+
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+
+        with TaskGroup() as producers:
+            producers.start_soon(produce, q, 0)
+            producers.start_soon(produce, q, 1000)
+            producers.start_soon(produce, q, 2000)
+            producers.start_soon(produce, q, 3000)
+
+        q.close()
+
+        mut consumed: int32 = 0
+        mut consumer: int32 = 0
+        while consumer < 4:
+            consumed += totals.get_or(-10000, timeout=10s)
+            consumer += 1
+
+        print(consumed)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-task-group-reachable-queue-join",
+        source,
+        std::time::Duration::from_secs(30),
+        "4000\n",
+        Some(4),
+    );
+}
+
+#[test]
+fn task_group_join_still_cancels_a_queue_wait_without_a_reachable_waker() {
+    let source = r#"def wait_on_private_queue() -> None:
+    private = Queue[int32]()
+    match private.get():
+        case QueueReceive.Item(_):
+            print("unexpected item")
+        case QueueReceive.Closed:
+            print("unexpected close")
+        case QueueReceive.TimedOut:
+            print("unexpected timeout")
+        case QueueReceive.Cancelled:
+            print("cancelled")
+
+def main() -> int32:
+    with TaskGroup() as group:
+        group.start_soon(wait_on_private_queue)
+    print("done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-task-group-unreachable-queue-join",
+        source,
+        std::time::Duration::from_secs(15),
+        "cancelled\ndone\n",
+        Some(4),
+    );
+}
+
+#[test]
+fn task_group_join_does_not_treat_the_joining_parent_as_a_queue_waker() {
+    let source = r#"def fill_without_consumer(q: Queue[int32]) -> None:
+    q.put(1)
+    match own q.put(2):
+        case Result.Ok(_):
+            print("unexpected send")
+        case Result.Err(_):
+            print("cancelled")
+
+def nested_parent(q: Queue[int32]) -> None:
+    with TaskGroup() as inner:
+        inner.start_soon(fill_without_consumer, q)
+    print("nested done")
+
+def main() -> int32:
+    q = Queue[int32](capacity=1)
+    with TaskGroup() as outer:
+        outer.start_soon(nested_parent, q)
+    print("done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-task-group-joining-parent-is-not-waker",
+        source,
+        std::time::Duration::from_secs(15),
+        "cancelled\nnested done\ndone\n",
+        Some(4),
+    );
+}
+
+#[test]
+fn task_group_join_tracks_queue_handles_received_after_task_start() {
+    let source = r#"def delayed_consumer(
+    handoff: Queue[Queue[int32]],
+    ready: Queue[int32],
+    totals: Queue[int32]
+) -> None:
+    match own handoff.get():
+        case QueueReceive.Item(q):
+            ready.put(1)
+            sleep(100ms)
+            mut received: int32 = 0
+            while received < 2:
+                match own q.get():
+                    case QueueReceive.Item(_):
+                        received += 1
+                    case QueueReceive.Closed:
+                        totals.put(received)
+                        return
+                    case QueueReceive.TimedOut:
+                        pass
+                    case QueueReceive.Cancelled:
+                        totals.put(received)
+                        return
+            totals.put(received)
+        case _:
+            totals.put(-10000)
+
+def send_second(q: Queue[int32]) -> None:
+    q.put(2)
+
+def main() -> int32:
+    q = Queue[int32](capacity=1)
+    q.put(1)
+    handoff = Queue[Queue[int32]](capacity=1)
+    ready = Queue[int32](capacity=1)
+    totals = Queue[int32](capacity=1)
+
+    with TaskGroup() as outer:
+        outer.start_soon(delayed_consumer, handoff, ready, totals)
+        handoff.put(q)
+        ready.get()
+
+        with TaskGroup() as producer:
+            producer.start_soon(send_second, q)
+
+        q.close()
+        print(totals.get_or(-10000, timeout=5s))
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-task-group-dynamic-queue-waker",
+        source,
+        std::time::Duration::from_secs(20),
+        "2\n",
+        Some(4),
+    );
+}
+
+#[test]
+fn task_group_join_detects_cross_join_cycles_after_multiple_cleanup_probes() {
+    let source = r#"def producer(q: Queue[int32], signal: Queue[int32]) -> None:
+    sleep(20ms)
+    q.put(1)
+    signal.put(1)
+
+def consumer(signal: Queue[int32]) -> None:
+    sleep(20ms)
+    signal.get()
+
+def parent_a(q: Queue[int32], signal: Queue[int32]) -> None:
+    with TaskGroup() as inner:
+        inner.start_soon(producer, q, signal)
+
+def parent_b(q: Queue[int32], signal: Queue[int32]) -> None:
+    with TaskGroup() as inner:
+        inner.start_soon(consumer, signal)
+    q.get()
+
+def main() -> int32:
+    q = Queue[int32](capacity=1)
+    q.put(0)
+    signal = Queue[int32]()
+    with TaskGroup() as outer:
+        outer.start_soon(parent_a, q, signal)
+        outer.start_soon(parent_b, q, signal)
+    print("done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-task-group-cross-join-cycle",
+        source,
+        std::time::Duration::from_secs(15),
+        "done\n",
+        Some(4),
+    );
+}
+
+#[test]
 fn queue_consumers_share_work_fairly_on_one_worker() {
     let source = r#"def consumer(q: Queue[int32]) -> int32:
     mut got: int32 = 0

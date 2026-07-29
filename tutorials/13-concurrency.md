@@ -130,7 +130,11 @@ with TaskGroup() as group:
     print(second.result_or(-1, timeout=50ms))
 ```
 
-When the `with` block ends, Aurora waits for child tasks to finish. If a child is still parked in a cancellation-aware wait with no deadline, Aurora cancels the group first so the scope can shut down cleanly instead of hanging forever. This keeps child work scoped to the parent block.
+When the `with` block ends, Aurora waits for child tasks to finish. A
+no-deadline wait is cancelled only when no live task can wake it; elapsed time
+and host load do not make a reachable queue wait deadlocked. This lets the
+scope shut down cleanly when the remaining waits form a true deadlock while
+keeping ordinary producer/consumer backpressure scoped to the parent block.
 
 ### Starting Tasks
 

@@ -3393,18 +3393,22 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
     let producer_channel = ChannelValue::new();
     let producer = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
     producer_channel.register_producer_task(&producer);
+    producer_channel.register_task_handle(&producer);
     assert_eq!(
         wait_task_ready(&producer).expect("producer task should complete"),
         Value::Unit
     );
     drop(producer);
     for _ in 0..100 {
-        if producer_channel.registered_producer_tasks().is_empty() {
+        if producer_channel.registered_producer_tasks().is_empty()
+            && producer_channel.registered_task_handles().is_empty()
+        {
             break;
         }
         thread::sleep(StdDuration::from_millis(1));
     }
     assert!(producer_channel.registered_producer_tasks().is_empty());
+    assert!(producer_channel.registered_task_handles().is_empty());
     assert!(producer_channel.all_registered_producer_tasks_completed());
 
     assert_eq!(
@@ -5696,7 +5700,7 @@ fn task_group_and_queue_registration_precede_remote_task_submission() {
                 },
                 move |task| {
                     registration_group.register_task(task.clone());
-                    registration_queue.register_producer_task(task);
+                    registration_queue.register_task_handle(task);
                     registration_flag.store(true, Ordering::SeqCst);
                 },
             )?;
@@ -5706,7 +5710,7 @@ fn task_group_and_queue_registration_precede_remote_task_submission() {
                 "the spawn API must return only after registration"
             );
             assert_eq!(group.drain_tasks(), vec![task.clone()]);
-            assert_eq!(queue.registered_producer_tasks(), vec![task.clone()]);
+            assert_eq!(queue.registered_task_handles(), vec![task.clone()]);
             wait_task_ready(&task)
         }
     });
@@ -7095,6 +7099,215 @@ fn task_group_cleanup_probe_detects_unbounded_waits_after_fresh_spawns() {
 }
 
 #[test]
+fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
+    let channel = ChannelValue::new();
+    let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    assert_eq!(
+        wait_task_ready(&task).expect("snapshot dependency task should complete"),
+        Value::Unit
+    );
+
+    let task_weak = Arc::downgrade(&task.inner);
+    let channel_weak = Arc::downgrade(&channel.inner);
+    let registration = super::TaskWaitRegistration {
+        recv_channels: vec![channel.clone()],
+        ignore_closed_recv_channels: false,
+        send_channels: vec![channel.clone()],
+        task_waits: vec![task.clone()],
+        deadline: None,
+        cancellation: None,
+        fd_wait: None,
+    };
+    let snapshot = registration.reachability_snapshot();
+    assert_eq!(snapshot.recv_channels.len(), 1);
+    assert_eq!(snapshot.send_channels.len(), 1);
+    assert_eq!(snapshot.task_waits.len(), 1);
+
+    drop(registration);
+    drop(task);
+    drop(channel);
+    for _ in 0..100 {
+        if task_weak.upgrade().is_none() {
+            break;
+        }
+        thread::yield_now();
+    }
+    assert!(task_weak.upgrade().is_none());
+    assert!(channel_weak.upgrade().is_none());
+}
+
+#[test]
+fn unobserved_task_cleanup_does_not_register_discarded_queue_results() {
+    let returned_queue = ChannelValue::new();
+    let root_result = run_lightweight_root_task({
+        let returned_queue = returned_queue.clone();
+        move || {
+            let child_queue = returned_queue.clone();
+            let child = spawn_lightweight_task(move || Ok(Value::Channel(child_queue)))?;
+
+            let unobserved = child
+                .wait_result_with_cancellation(None, None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            assert!(matches!(
+                unobserved,
+                TaskWaitStatus::Ready(Ok(Value::Channel(_)))
+            ));
+            assert!(
+                returned_queue.registered_task_handles().is_empty(),
+                "an unobserved cleanup wait must not deliver the discarded Queue result"
+            );
+
+            let observed = child
+                .wait_result_with_cancellation_observed(None, None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            assert!(matches!(
+                observed,
+                TaskWaitStatus::Ready(Ok(Value::Channel(_)))
+            ));
+            assert_eq!(returned_queue.registered_task_handles().len(), 1);
+            Ok(Value::Unit)
+        }
+    });
+
+    assert_eq!(root_result.unwrap(), Value::Unit);
+}
+
+#[test]
+fn queue_task_role_registries_are_keyed_and_prune_task_churn() {
+    let channel = ChannelValue::new();
+    let persistent = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+
+    for _ in 0..8 {
+        let transients = (0..512)
+            .map(|_| TaskValue {
+                inner: super::new_lightweight_task_state(true),
+            })
+            .collect::<Vec<_>>();
+        for transient in &transients {
+            channel.register_producer_task(transient);
+            channel.register_task_handle(transient);
+            ChannelValue::register_task(&channel.inner.sender_tasks, transient);
+            ChannelValue::register_task(&channel.inner.receiver_tasks, transient);
+        }
+    }
+    for _ in 0..512 {
+        channel.register_producer_task(&persistent);
+        channel.register_task_handle(&persistent);
+        ChannelValue::register_task(&channel.inner.sender_tasks, &persistent);
+        ChannelValue::register_task(&channel.inner.receiver_tasks, &persistent);
+    }
+
+    assert!(lock_mutex(&channel.inner.producer_tasks).tasks.len() <= 1024);
+    assert!(lock_mutex(&channel.inner.task_handles).tasks.len() <= 1024);
+    assert!(lock_mutex(&channel.inner.sender_tasks).tasks.len() <= 1024);
+    assert!(lock_mutex(&channel.inner.receiver_tasks).tasks.len() <= 1024);
+
+    assert_eq!(
+        channel.registered_producer_tasks(),
+        vec![persistent.clone()]
+    );
+    assert_eq!(channel.registered_task_handles(), vec![persistent.clone()]);
+    assert_eq!(channel.registered_sender_tasks(), vec![persistent.clone()]);
+    assert_eq!(channel.registered_receiver_tasks(), vec![persistent]);
+    assert_eq!(lock_mutex(&channel.inner.producer_tasks).tasks.len(), 1);
+    assert_eq!(lock_mutex(&channel.inner.task_handles).tasks.len(), 1);
+    assert_eq!(lock_mutex(&channel.inner.sender_tasks).tasks.len(), 1);
+    assert_eq!(lock_mutex(&channel.inner.receiver_tasks).tasks.len(), 1);
+}
+
+#[test]
+fn queue_iteration_ignores_nonproducer_reachability_handles() {
+    let channel = ChannelValue::new();
+    let nonproducer = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+
+    channel.register_task_handle(&nonproducer);
+
+    assert!(
+        channel.all_registered_producer_tasks_completed(),
+        "a live task that only holds a Queue handle must not keep Queue iteration open"
+    );
+
+    channel.register_producer_task(&nonproducer);
+    assert!(
+        !channel.all_registered_producer_tasks_completed(),
+        "the same live task must keep iteration open once it is explicitly registered as a producer"
+    );
+
+    super::complete_lightweight_task_state(&nonproducer.inner, TaskExecutionResult::Cancelled);
+    assert!(channel.all_registered_producer_tasks_completed());
+}
+
+#[test]
+fn task_group_reachability_rechecks_queue_after_a_waker_completes() {
+    let channel = ChannelValue::with_capacity(1);
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    let waiting = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    *lock_mutex(&waiting.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: vec![Arc::downgrade(&channel.inner)],
+        task_waits: Vec::new(),
+        deadline: None,
+        cancellation: None,
+    });
+
+    let drained = channel.clone();
+    super::install_after_task_group_send_reachability_initial_check_hook(move || {
+        assert_eq!(drained.try_recv(), TryRecvResult::Value(Value::Unit));
+    });
+    assert!(
+        waiting.unbounded_wait_has_reachable_waker(),
+        "capacity made available during the graph walk must prevent cancellation"
+    );
+}
+
+#[test]
+fn dense_queue_wait_cycle_has_bounded_reachability_traversal() {
+    let channel = ChannelValue::with_capacity(1);
+    assert_eq!(channel.try_send(Value::Unit), super::TrySendResult::Sent);
+    let tasks = (0..128)
+        .map(|_| TaskValue {
+            inner: super::new_lightweight_task_state(true),
+        })
+        .collect::<Vec<_>>();
+    for task in &tasks {
+        channel.register_task_handle(task);
+        *lock_mutex(&task.inner.current_wait) = Some(super::TaskWaitReachability {
+            recv_channels: Vec::new(),
+            ignore_closed_recv_channels: false,
+            send_channels: vec![Arc::downgrade(&channel.inner)],
+            task_waits: Vec::new(),
+            deadline: None,
+            cancellation: None,
+        });
+    }
+
+    let (reachable, channel_expansions) = tasks[0].unbounded_wait_reachability();
+    assert!(!reachable);
+    assert_eq!(
+        channel_expansions, 1,
+        "one shared send channel should be expanded once per graph walk"
+    );
+}
+
+#[test]
+fn task_completion_clears_abandoned_join_dependencies() {
+    let task_state = super::new_lightweight_task_state(true);
+    let dependency = super::new_lightweight_task_state(true);
+    *lock_mutex(&task_state.join_dependencies) = Some(vec![Arc::downgrade(&dependency)]);
+
+    super::complete_lightweight_task_state(&task_state, TaskExecutionResult::Cancelled);
+
+    assert!(lock_mutex(&task_state.join_dependencies).is_none());
+}
+
+#[test]
 fn value_equality_and_render_cover_collection_shapes() {
     let vec_value = Value::Vec(VecValue {
         element_type: Type::named("int32"),
@@ -7275,7 +7488,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
     ];
 
     super::register_task_as_queue_producer_for_values(nested_values.iter(), &task);
-    queue_in_vec.register_producer_task(&task);
+    queue_in_vec.register_task_handle(&task);
 
     for queue in [
         queue_in_tuple,
@@ -7286,7 +7499,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
         queue_in_instance,
         queue_in_variant,
     ] {
-        assert_eq!(queue.registered_producer_tasks(), vec![task.clone()]);
+        assert_eq!(queue.registered_task_handles(), vec![task.clone()]);
     }
 
     wait_task_ready(&task).expect("registered producer task should complete");
