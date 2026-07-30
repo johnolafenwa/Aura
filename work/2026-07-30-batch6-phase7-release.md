@@ -42,17 +42,23 @@ B6.0 is active in strict-order entry closure:
   streams, and turns silent cleanup failure into a failed benchmark. The
   54-test Python harness covers success, validation failure, timeout,
   interruption, TERM-resistant descendants, and ineffective kill detection.
-- B6.0-a requires a real reboot of the baseline Mac before the schema-4 V6
-  harness can establish release provenance. At Batch 6 entry the host reported
-  boot time `2026-07-27 06:44:44 +0100`, an uptime of 3 days 12 hours, and no
-  surviving `yes` burner process. No pre-reboot measurement will be reported
-  as a maintained or release baseline.
+- B6.0-a is complete. The baseline Mac rebooted at
+  `2026-07-30 23:02:25 +0100`; a clean detached schema-4 run at
+  `18654158d22b2227149369e7911af04aafcbeecb` measured whole-process V6
+  medians of `36.691666 ms` (`int32`) and `14.837417 ms` (`int64`), within
+  `1.99%` / `1.12%` of and slightly faster than the accepted reactor-era pair.
+  The slower dirty pair therefore does not reproduce after reboot and is
+  attributed to dirty/load/thermal host state rather than a HEAD regression.
+  All maintained runtime gates pass; only the already-withdrawn 100,000-task
+  RSS claim remains red. The contractual raw report SHA-256 is
+  `134efcc894742ed73b16e07f1e31845c83d19930d5894b4dc39f01533a9be2fd`,
+  and no benchmark workload survived the process-group cleanup.
 - Integrated verification passes the 54-test benchmark harness, Python
   compilation, shell parsing, Rust formatting, the focused B6.0-b
   semantic/fixture/registry/forced-parity tests, the complete executable
   reference gate (9 integrity tests, 59 migration tests, and all 683
   manifests), the VitePress build, and scoped whitespace checks. The full
-  repository CI gate remains pending with B6.0-a.
+  repository CI gate is now the only remaining B6.0 checkpoint requirement.
 - Phase 7 must not start until B6.0-a and the combined gate are complete.
 
 ## Authorized sequence

@@ -14,20 +14,22 @@ Last updated: 2026-07-30
   and is not authorized in the 0.2 cycle; all ten ratification questions are
   answered yes as recommended. Compiler coverage floors are frozen at
   `96.18/96.97/94.62` until the one-time final downward-truncated re-ratchet.
-- Current stage: B6.0-b/c/d are implemented. Dedicated `AU2008` rejects
+- Current stage: B6.0-a/b/c/d are implemented. Dedicated `AU2008` rejects
   equality and inequality over named functions and both closure kinds before
   backend selection; exact semantic, fixture, registry, and forced-backend
   parity checks pass. ADR-0037 is recorded as Accepted, ADR-0038 has its exact
   design-only 0.3 status plus ten yes answers, and the retry, Vec callback, and
   nested-lambda documentation is synchronized. Every benchmark workload now
   uses a verified owned process-group cleanup guard; all 54 harness tests pass
-  across success and abnormal exits. The baseline Mac last booted at
-  `2026-07-27 06:44:44 +0100`, so B6.0-a's required post-issue reboot and
-  schema-4 V6 replay are still pending; no current measurement will be
-  represented as post-reboot evidence. Integrated focused Rust tests,
-  reference integrity, docs, formatting, the 54-test benchmark harness, and
-  whitespace checks pass; full CI waits for the baseline replay. Phase 7 has
-  not started.
+  across success and abnormal exits. The baseline Mac rebooted at
+  `2026-07-30 23:02:25 +0100`; the clean contractual schema-4 replay measured
+  V6 whole-process medians of `36.691666 ms` / `14.837417 ms`, reproducing the
+  accepted reactor-era baseline within `1.99%` / `1.12%`. The slower dirty
+  pair is not a HEAD regression. All maintained runtime gates pass; only the
+  already-withdrawn massive-concurrency RSS claim remains red. Integrated
+  focused Rust tests, reference integrity, docs, formatting, the 54-test
+  benchmark harness, and whitespace checks pass. Full repository CI is the
+  remaining B6.0 gate; Phase 7 has not started.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

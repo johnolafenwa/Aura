@@ -83,3 +83,14 @@ reactor-era baseline. This is a baseline decision, not a claim that startup
 explains the entire regression. The startup split remains in the maintained
 runner so future loop work can compare loop estimates separately from process
 entry cost.
+
+Batch 6 repeated schema 4 after a real reboot of the baseline host. The clean,
+contractual five-repetition replay measured `36.691666 ms` for `int32`,
+`14.837417 ms` for `int64`, and `6.574667 ms` for direct startup, with paired
+loop-estimate medians of `30.292500 ms` and `8.255709 ms`. The whole-process
+pair is within `1.99%` / `1.12%` of, and slightly faster than, the accepted
+Phase-5.10 pair. It did not reproduce the dirty
+`49.391916 ms` / `18.875542 ms` diagnostic. The accepted reactor-era pair
+therefore remains the maintained baseline; the cold-boot result and full
+provenance are recorded in
+`work/2026-07-27-phase5-runtime-benchmarks.md`.

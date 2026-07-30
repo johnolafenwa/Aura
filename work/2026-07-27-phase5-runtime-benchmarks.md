@@ -944,3 +944,57 @@ round-robin admission with that signal would therefore add synchronization and
 change scheduling without evidence that it improves the reported asymmetric
 core tail. The assignment policy stays unchanged until a representative
 benchmark and a better load signal can justify a change.
+
+## B6.0-a: cold-boot V6 baseline
+
+The baseline Mac was rebooted after the Batch 6 entry finding. The new kernel
+boot time was `2026-07-30 23:02:25 +0100`; the contractual run began about
+seven minutes after boot, after the initial login load had settled. It used a
+clean detached checkout at
+`18654158d22b2227149369e7911af04aafcbeecb`, recorded empty competing-process
+inventories both before the build and before timing, and qualified a fresh
+locked release build. The measured `aura` SHA-256 is
+`e1b90738563582b938d84e0882eed2afe2bec098bdc4ae2d6a786e200246d90b`.
+
+```bash
+python3 scripts/bench-scalable-runtime.py \
+  --label batch6-post-reboot-b60 \
+  --aura /private/tmp/aurora-b6-post-reboot/target/release/aura \
+  --repeats 3 \
+  --timer-repeats 3 \
+  --v6-repeats 5 \
+  --multicore-repeats 7 \
+  --idle-seconds 30 \
+  --json /private/tmp/aurora-b60-post-reboot-schema4.json
+```
+
+The schema-4 report is contractual, with no non-contractual reasons. Its
+SHA-256 is
+`134efcc894742ed73b16e07f1e31845c83d19930d5894b4dc39f01533a9be2fd`.
+The process-group guard left no benchmark, `aura`, Cargo, Rust compiler, or
+synthetic-load process running after completion.
+
+| Workload | Repetitions | Post-reboot result | Gate |
+| --- | ---: | --- | --- |
+| 10,000 sleepers | 3 | 216,023,040 bytes worst whole-process peak RSS; 207,863,808 bytes incremental | PASS, at most 512 MiB |
+| 1,000 timers | 3 | 5 ms worst arm span; 2 ms worst p99 overshoot | PASS |
+| 10 idle tasks | 3 | 0.000821842% worst CPU | PASS, less than 2% |
+| 10 ms sleeper beside hot loop | 3 | 13 ms worst | PASS, at most 50 ms |
+| Four-worker scaling | 7 paired repetitions | 1.042714x paired median; every pair passed; 395.81% median four-task CPU | PASS |
+| 100,000 sleepers plus 1,000 timers | 3 | 2,073,526,272 bytes worst whole-process peak RSS; 4 ms arm span; 2 ms p99 | RSS claim remains withdrawn; timer checks pass |
+| V6 `int32` whole process | 5 plus warmup | median 36.691666 ms; MAD 0.431376 ms; p95 44.627083 ms; best 35.836417 ms | maintained baseline evidence |
+| V6 `int64` whole process | 5 plus warmup | median 14.837417 ms; MAD 0.443750 ms; p95 16.717333 ms; best 14.393667 ms | maintained baseline evidence |
+| Empty direct startup | 5 plus warmup | median 6.574667 ms; MAD 0.295250 ms; p95 7.952958 ms; best 6.225500 ms | split evidence |
+| Paired `int32` loop estimate | 5 | median 30.292500 ms; MAD 0.551125 ms | split evidence |
+| Paired `int64` loop estimate | 5 | median 8.255709 ms; MAD 0.436709 ms | split evidence |
+
+The cold-boot whole-process medians are `1.99%` and `1.12%` faster than the
+accepted Phase-5.10 `37.436334 ms` / `15.005584 ms` pair, while they are
+`25.71%` and `21.39%` faster than the later dirty
+`49.391916 ms` / `18.875542 ms` diagnostic. The accepted reactor-era pair
+therefore reproduces within ordinary host variation. The slower observation
+was a dirty/load/thermal-state artifact, not evidence of a HEAD regression;
+no runtime change is warranted. For continuity, the maintained rounded
+reactor-era baseline remains `37.436334 ms` / `15.005584 ms`, with this
+post-reboot replay as its release-provenance confirmation. All subsequent
+Batch 6 release-performance measurements must use the rebooted host.
