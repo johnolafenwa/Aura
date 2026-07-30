@@ -1,0 +1,4 @@
+def main():
+    left: def(int64) -> int64 = lambda value: value
+    right: def(int64) -> int64 = lambda value: value
+    print(left != right)

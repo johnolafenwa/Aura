@@ -1,0 +1,5 @@
+def main():
+    offset: int64 = 1
+    left: def(int64) -> int64 = lambda value: value + offset
+    right: def(int64) -> int64 = lambda value: value + offset
+    print(left == right)

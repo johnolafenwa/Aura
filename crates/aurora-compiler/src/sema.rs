@@ -11917,6 +11917,16 @@ impl<'a> FunctionChecker<'a> {
         left_ty: Type,
         right_ty: Type,
     ) -> Result<Type> {
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            && (matches!(left_ty, Type::Function { .. } | Type::Closure { .. })
+                || matches!(right_ty, Type::Function { .. } | Type::Closure { .. }))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                "callable equality is not supported; compare results or use an explicit discriminant",
+            ));
+        }
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
         }

@@ -23835,6 +23835,83 @@ def invalid(
 }
 
 #[test]
+fn callable_equality_is_rejected_uniformly_for_function_values_and_closures() {
+    const MESSAGE: &str =
+        "callable equality is not supported; compare results or use an explicit discriminant";
+    let cases = [
+        (
+            "named function value ==",
+            r#"
+def identity(value: int64) -> int64:
+    return value
+
+def main():
+    left = identity
+    right = identity
+    print(left == right)
+"#,
+        ),
+        (
+            "named function value !=",
+            r#"
+def identity(value: int64) -> int64:
+    return value
+
+def main():
+    left = identity
+    right = identity
+    print(left != right)
+"#,
+        ),
+        (
+            "capture-free closure ==",
+            r#"
+def main():
+    left: def(int64) -> int64 = lambda value: value
+    right: def(int64) -> int64 = lambda value: value
+    print(left == right)
+"#,
+        ),
+        (
+            "capture-free closure !=",
+            r#"
+def main():
+    left: def(int64) -> int64 = lambda value: value
+    right: def(int64) -> int64 = lambda value: value
+    print(left != right)
+"#,
+        ),
+        (
+            "capturing closure ==",
+            r#"
+def main():
+    offset: int64 = 1
+    left: def(int64) -> int64 = lambda value: value + offset
+    right: def(int64) -> int64 = lambda value: value + offset
+    print(left == right)
+"#,
+        ),
+        (
+            "capturing closure !=",
+            r#"
+def main():
+    offset: int64 = 1
+    left: def(int64) -> int64 = lambda value: value + offset
+    right: def(int64) -> int64 = lambda value: value + offset
+    print(left != right)
+"#,
+        ),
+    ];
+
+    for (case, source) in cases {
+        let diagnostic =
+            crate::check_source(source).expect_err("callable equality must be rejected");
+        assert_eq!(diagnostic.code, "AU2008", "{case}: {diagnostic:?}");
+        assert_eq!(diagnostic.message, MESSAGE, "{case}: {diagnostic:?}");
+    }
+}
+
+#[test]
 fn task_closure_targets_forward_owned_arguments_and_reject_mut_writeback() {
     let program = crate::check_source(
         r#"

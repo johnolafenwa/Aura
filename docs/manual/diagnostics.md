@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` callable equality; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, borrows, and transfer | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure; `AU4006` invalid runtime configuration |
 
@@ -49,6 +49,12 @@ builtin function name, such as `len`, `str`, `abs`, `print`, or `select`. The bu
 surface is closed, so the declaration must be renamed. This rejection is
 distinct from the `AU2006` method collision: it covers free functions rather
 than trait methods on a builtin target.
+
+`AU2008` rejects `==` and `!=` when either operand is a callable. Named
+function values, capture-free closures, and capturing closures all receive the
+same diagnostic: `callable equality is not supported; compare results or use
+an explicit discriminant`. Aurora does not expose backend code-pointer or
+closure-environment identity as language-level equality.
 
 `AU2002` reports an exact callback-contract mismatch for callable-powered
 builtins. Vec `map`, `filter`, and `sort_by` require the documented shared

@@ -1,0 +1,7 @@
+def identity(value: int64) -> int64:
+    return value
+
+def main():
+    left = identity
+    right = identity
+    print(left == right)

@@ -120,6 +120,14 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
         ));
         assert!(!entry.title.is_empty());
     }
+    assert!(
+        DIAGNOSTIC_CODE_REGISTRY
+            .iter()
+            .any(|entry| entry.code == "AU2008"
+                && entry.band == "names/types"
+                && entry.title == "callable equality"),
+        "the callable-equality rejection must retain its dedicated public registry entry"
+    );
 }
 
 #[test]

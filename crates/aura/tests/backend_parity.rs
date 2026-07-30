@@ -140,6 +140,45 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
 }
 
 #[test]
+fn callable_equality_rejection_is_identical_across_forced_backends() {
+    let root = repo_root();
+    let fixture = root.join(
+        "crates/aurora-compiler/tests/fixtures/check-fail/callable_equality_capturing_closure.au",
+    );
+    let expected =
+        "error[AU2008]: callable equality is not supported; compare results or use an explicit discriminant";
+    let mut diagnostics = Vec::new();
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .current_dir(&root)
+            .args(["run", "--backend", backend])
+            .arg(&fixture)
+            .output()
+            .unwrap_or_else(|error| panic!("forced {backend} command should start: {error}"));
+        assert!(
+            !output.status.success(),
+            "forced {backend} execution must reject callable equality"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "forced {backend} rejection must not execute the program"
+        );
+        let diagnostic = normalize(&output.stderr);
+        assert!(
+            diagnostic.starts_with(expected),
+            "forced {backend} diagnostic must preserve the dedicated code and exact message:\n{diagnostic}"
+        );
+        diagnostics.push(diagnostic);
+    }
+
+    assert_eq!(
+        diagnostics[0], diagnostics[1],
+        "callable equality is rejected before backend selection can change its diagnostic"
+    );
+}
+
+#[test]
 #[ignore = "full forced-backend fixture matrix; invoked by npm run test:backend-parity"]
 fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
     // Phase 4 landed the `run` backend selector, so both sides of the matrix

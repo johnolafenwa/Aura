@@ -135,6 +135,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "builtin function redefinition",
     },
     DiagnosticCodeInfo {
+        code: "AU2008",
+        band: "names/types",
+        title: "callable equality",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
