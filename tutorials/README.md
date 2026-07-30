@@ -49,6 +49,9 @@ The current tutorial set covers:
 - scripts and `main`
 - bindings, mutability, and type annotations
 - functions with explicit and omitted `None` return types
+- capture-free named function values with `def(T1, mut T2, own T3) -> R`
+  types, copy and `Transfer` semantics, indirect calls, storage, and task
+  targets
 - classes with fields, default values, receiver forms, mutating methods, and `public` field syntax
 - ownership, declaration-stable parameter defaults, explicit `own`, move
   semantics, copy types, and the exclusivity rule for mutable borrows

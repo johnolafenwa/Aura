@@ -16,14 +16,14 @@ use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, CancellationContext, ChannelValue,
-    EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
-use crate::sema::Type;
+use crate::sema::{FunctionParamContract, Type};
 #[cfg(unix)]
 use corosensei::stack::Stack;
 use rcgen::generate_simple_self_signed;
@@ -1171,6 +1171,19 @@ fn capture_runtime_diagnostic(f: impl FnOnce() + panic::UnwindSafe) -> Diagnosti
 
 fn capture_runtime_error_message(f: impl FnOnce() + panic::UnwindSafe) -> String {
     capture_runtime_diagnostic(f).message
+}
+
+fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
+    run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                work();
+                Ok(Value::Unit)
+            })
+        })
+    })
+    .expect_err("the exported direct-runtime boundary should fail")
+    .message
 }
 
 fn expect_option_none(ptr: *mut OpaqueValue) {
@@ -2803,6 +2816,104 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         release_value(task);
     }
 
+    let nested_callback = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::named("bool")),
+    };
+    let concrete_function_signature = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                name: "shared".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "mutable".to_string(),
+                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: true,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "owned".to_string(),
+                ty: nested_callback,
+                passing: ReceiverKind::Value,
+                has_default: false,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "selected".to_string(),
+        signature: Type::Function {
+            params: vec![
+                FunctionParamContract {
+                    name: "shared".to_string(),
+                    ty: Type::TypeParam("A".to_string()),
+                    passing: ReceiverKind::Borrow,
+                    has_default: false,
+                    default_erased: false,
+                },
+                FunctionParamContract {
+                    name: "mutable".to_string(),
+                    ty: Type::TypeParam("B".to_string()),
+                    passing: ReceiverKind::BorrowMut,
+                    has_default: true,
+                    default_erased: false,
+                },
+                FunctionParamContract {
+                    name: "owned".to_string(),
+                    ty: Type::TypeParam("C".to_string()),
+                    passing: ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: false,
+                },
+            ],
+            return_type: Box::new(Type::TypeParam("R".to_string())),
+        },
+        source_path: Some("/workspace/selected.au".to_string()),
+        entry_span: Span::new(7, 3),
+        direct_thunk: Some(11),
+        direct_default_binder: Some(22),
+    })));
+    let encoded = super::canonical_runtime_type_name(&concrete_function_signature);
+    super::aurora_direct_tag_value_type(function, encoded.as_ptr(), encoded.len());
+    match unsafe { value_ref(function) } {
+        Value::Function(function_value) => {
+            assert_eq!(function_value.signature, concrete_function_signature);
+            assert_eq!(function_value.name, "selected");
+            assert_eq!(
+                function_value.source_path.as_deref(),
+                Some("/workspace/selected.au")
+            );
+            assert_eq!(function_value.entry_span, Span::new(7, 3));
+            assert_eq!(function_value.direct_thunk, Some(11));
+            assert_eq!(function_value.direct_default_binder, Some(22));
+        }
+        other => panic!("expected tagged function value, found {other:?}"),
+    }
+    assert_eq!(
+        super::aurora_direct_value_type_matches(function, encoded.as_ptr(), encoded.len()),
+        1
+    );
+    let mut wrong_mode = concrete_function_signature.clone();
+    let Type::Function { params, .. } = &mut wrong_mode else {
+        unreachable!()
+    };
+    params[1].passing = ReceiverKind::Borrow;
+    let wrong_mode = super::canonical_runtime_type_name(&wrong_mode);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(function, wrong_mode.as_ptr(), wrong_mode.len(),),
+        0,
+        "canonical function tags preserve nested shared/mut/own modes"
+    );
+    unsafe {
+        release_value(function);
+    }
+
     let unit = boxed_value(Value::Unit);
     assert_eq!(super::aurora_direct_value_has_runtime_type(unit), 0);
     unsafe {
@@ -2832,6 +2943,323 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     );
     unsafe {
         release_value(untagged);
+    }
+}
+
+#[test]
+fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metadata() {
+    let signature = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                name: "shared".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "mutable".to_string(),
+                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: true,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "owned".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Value,
+                has_default: false,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let encoded_signature =
+        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let function = super::aurora_direct_function_value(
+        test_native_thunk as *const () as usize as i64,
+        0x5eed,
+        b"selected".as_ptr(),
+        "selected".len(),
+        encoded_signature.as_ptr(),
+        encoded_signature.len(),
+        b"/workspace/selected.au".as_ptr(),
+        "/workspace/selected.au".len(),
+        7,
+        3,
+    );
+
+    assert_eq!(
+        super::aurora_direct_function_thunk(function),
+        test_native_thunk as *const () as usize as i64
+    );
+    assert_eq!(
+        super::aurora_direct_function_default_binder(function),
+        0x5eed
+    );
+    match unsafe { value_ref(function) } {
+        Value::Function(function_value) => {
+            assert_eq!(function_value.name, "selected");
+            assert_eq!(function_value.signature, signature);
+            assert_eq!(
+                function_value.source_path.as_deref(),
+                Some("/workspace/selected.au")
+            );
+            assert_eq!(function_value.entry_span, Span::new(7, 3));
+        }
+        other => panic!("expected Function value, found {other:?}"),
+    }
+    let value = unsafe { value_ref(function) };
+    assert_eq!(value_type_name(&value), signature.to_string());
+    assert_eq!(inferred_collection_type(&value), signature);
+    assert_eq!(super::aurora_direct_value_has_runtime_type(function), 1);
+    let canonical = super::canonical_runtime_type_name(&signature);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(function, canonical.as_ptr(), canonical.len()),
+        1
+    );
+    let displayed = signature.to_string();
+    assert_eq!(
+        super::aurora_direct_value_type_matches(function, displayed.as_ptr(), displayed.len(),),
+        1,
+        "the compatibility matcher must recognize the complete displayed callable signature"
+    );
+
+    unsafe {
+        release_value(function);
+    }
+}
+
+#[test]
+fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
+    fn contract(name: &str, ty: Type, passing: ReceiverKind) -> FunctionParamContract {
+        FunctionParamContract {
+            name: name.to_string(),
+            ty,
+            passing,
+            has_default: false,
+            default_erased: false,
+        }
+    }
+
+    fn function_value(signature: &Type, name: &'static [u8]) -> *mut OpaqueValue {
+        let encoded = serde_json::to_vec(signature).expect("function signature should serialize");
+        super::aurora_direct_function_value(
+            test_native_thunk as *const () as usize as i64,
+            1,
+            name.as_ptr(),
+            name.len(),
+            encoded.as_ptr(),
+            encoded.len(),
+            std::ptr::null(),
+            0,
+            1,
+            1,
+        )
+    }
+
+    let wildcard = Type::named("?T");
+    let pattern = Type::Function {
+        params: vec![
+            contract("shared", wildcard.clone(), ReceiverKind::Borrow),
+            contract("owned", wildcard.clone(), ReceiverKind::Value),
+        ],
+        return_type: Box::new(wildcard),
+    };
+    let encoded_pattern = super::canonical_runtime_type_name(&pattern);
+    let decoded_pattern = runtime_type_pattern_from_name(&encoded_pattern);
+    let Type::Function {
+        params,
+        return_type,
+    } = &decoded_pattern
+    else {
+        panic!("canonical callable pattern should decode as a function")
+    };
+    assert!(params
+        .iter()
+        .all(|param| param.ty == Type::TypeParam("T".to_string())));
+    assert_eq!(**return_type, Type::TypeParam("T".to_string()));
+    let encoded_pattern = super::canonical_runtime_type_name(&decoded_pattern);
+
+    let matching_signature = Type::Function {
+        params: vec![
+            contract("shared", Type::named("int64"), ReceiverKind::Borrow),
+            contract("owned", Type::named("int64"), ReceiverKind::Value),
+        ],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let matching = function_value(&matching_signature, b"matching");
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            matching,
+            encoded_pattern.as_ptr(),
+            encoded_pattern.len(),
+        ),
+        1,
+        "one callable wildcard must bind consistently across parameters and return type"
+    );
+
+    let mut wrong_capability = decoded_pattern.clone();
+    let Type::Function { params, .. } = &mut wrong_capability else {
+        unreachable!()
+    };
+    params[0].passing = ReceiverKind::BorrowMut;
+    let wrong_capability = super::canonical_runtime_type_name(&wrong_capability);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            matching,
+            wrong_capability.as_ptr(),
+            wrong_capability.len(),
+        ),
+        0,
+        "callable pattern matching must preserve shared, mutable, and owned modes"
+    );
+
+    let shorter_pattern = Type::Function {
+        params: vec![contract(
+            "shared",
+            Type::TypeParam("T".to_string()),
+            ReceiverKind::Borrow,
+        )],
+        return_type: Box::new(Type::TypeParam("T".to_string())),
+    };
+    let shorter_pattern = super::canonical_runtime_type_name(&shorter_pattern);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            matching,
+            shorter_pattern.as_ptr(),
+            shorter_pattern.len(),
+        ),
+        0,
+        "callable patterns require the selected function's exact arity"
+    );
+
+    let inconsistent_signature = Type::Function {
+        params: vec![
+            contract("shared", Type::named("int64"), ReceiverKind::Borrow),
+            contract("owned", Type::named("String"), ReceiverKind::Value),
+        ],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let inconsistent = function_value(&inconsistent_signature, b"inconsistent");
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            inconsistent,
+            encoded_pattern.as_ptr(),
+            encoded_pattern.len(),
+        ),
+        0,
+        "repeated callable wildcards must reject inconsistent substitutions"
+    );
+
+    let ordinary = int_value(7);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            ordinary,
+            encoded_pattern.as_ptr(),
+            encoded_pattern.len(),
+        ),
+        0,
+        "a callable pattern must reject non-callable runtime values"
+    );
+
+    unsafe {
+        release_value(matching);
+        release_value(inconsistent);
+        release_value(ordinary);
+    }
+}
+
+#[test]
+fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targets() {
+    let signature = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Unit),
+    };
+    let encoded_signature =
+        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let null_signature = encoded_signature.clone();
+    let null_thunk = capture_direct_boundary_error_message(move || {
+        super::aurora_direct_function_value(
+            0,
+            1,
+            b"missing".as_ptr(),
+            "missing".len(),
+            null_signature.as_ptr(),
+            null_signature.len(),
+            std::ptr::null(),
+            0,
+            1,
+            1,
+        );
+    });
+    assert_eq!(null_thunk, "direct runtime received a null function thunk");
+
+    let invalid_signature = capture_direct_boundary_error_message(|| {
+        super::aurora_direct_function_value(
+            1,
+            2,
+            b"invalid".as_ptr(),
+            "invalid".len(),
+            b"{".as_ptr(),
+            1,
+            std::ptr::null(),
+            0,
+            1,
+            1,
+        );
+    });
+    assert!(
+        invalid_signature
+            .starts_with("direct runtime received invalid function signature metadata:"),
+        "{invalid_signature}"
+    );
+
+    let ordinary_value = int_value(7);
+    let ordinary_address = ordinary_value as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_function_thunk(ordinary_address as *mut OpaqueValue);
+        }),
+        "indirect call expected a function value, found `integer`"
+    );
+    let ordinary_address = ordinary_value as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_function_default_binder(ordinary_address as *mut OpaqueValue);
+        }),
+        "indirect call expected a function value, found `integer`"
+    );
+    unsafe {
+        release_value(ordinary_value);
+    }
+
+    let missing_targets = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "declaration-only".to_string(),
+        signature,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+    })));
+    let missing_targets_address = missing_targets as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_function_thunk(missing_targets_address as *mut OpaqueValue);
+        }),
+        "direct function value has no native thunk"
+    );
+    let missing_targets_address = missing_targets as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_function_default_binder(
+                missing_targets_address as *mut OpaqueValue,
+            );
+        }),
+        "direct function value has no native default binder"
+    );
+    unsafe {
+        release_value(missing_targets);
     }
 }
 
@@ -12931,6 +13359,302 @@ fn native_runtime_child_task_inherits_youngest_first_ancestry_and_starts_a_new_c
     );
 }
 
+#[test]
+fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() {
+    let parent_ancestry = vec![RuntimeTaskFrame {
+        task_function: "outer".to_string(),
+        task_entry_span: runtime_source_span("/workspace/outer.au", 3, 1),
+        parent_function: "main".to_string(),
+        spawn_span: runtime_source_span("/workspace/main.au", 10, 7),
+    }];
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope_with_ancestry(parent_ancestry, || {
+            unsafe {
+                super::aurora_direct_enter_call_with_frame(
+                    5,
+                    1,
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                );
+            }
+            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "runtime_selected_child".to_string(),
+                signature: Type::Function {
+                    params: Vec::new(),
+                    return_type: Box::new(Type::Unit),
+                },
+                source_path: Some("/workspace/selected_child.au".to_string()),
+                entry_span: Span::new(2, 1),
+                direct_thunk: Some(direct_task_frame_trap as *const () as usize as i64),
+                direct_default_binder: Some(1),
+            })));
+            let args = super::aurora_direct_arg_buffer_new(0);
+            let group = super::aurora_direct_task_group_new();
+            let task_ptr = unsafe {
+                super::aurora_direct_start_task_function_with_frames(
+                    function,
+                    args,
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    12,
+                    9,
+                )
+            };
+            let task = unsafe {
+                match value_ref(task_ptr) {
+                    Value::Task(task) => task.clone(),
+                    other => panic!("expected Task handle, found {other:?}"),
+                }
+            };
+            let diagnostic = match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(5)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Ready(Err(error)) => error,
+                other => panic!("expected failing selected child, got {other:?}"),
+            };
+            assert_eq!(
+                diagnostic.call_frames,
+                vec![RuntimeCallFrame {
+                    function: "child".to_string(),
+                    span: runtime_source_span("/workspace/child.au", 2, 1),
+                }]
+            );
+            assert_eq!(
+                diagnostic.task_ancestry,
+                vec![
+                    RuntimeTaskFrame {
+                        task_function: "runtime_selected_child".to_string(),
+                        task_entry_span: runtime_source_span("/workspace/selected_child.au", 2, 1,),
+                        parent_function: "parent".to_string(),
+                        spawn_span: runtime_source_span("/workspace/parent.au", 12, 9),
+                    },
+                    RuntimeTaskFrame {
+                        task_function: "outer".to_string(),
+                        task_entry_span: runtime_source_span("/workspace/outer.au", 3, 1),
+                        parent_function: "main".to_string(),
+                        spawn_span: runtime_source_span("/workspace/main.au", 10, 7),
+                    },
+                ]
+            );
+            unsafe {
+                super::aurora_direct_release_value(task_ptr);
+                super::aurora_direct_release_value(group);
+                super::aurora_direct_release_value(function);
+                super::aurora_direct_exit_call();
+            }
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("selected function-value child should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_function_value_task_handoff_preserves_absent_source_paths() {
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope(|| {
+            let signature = Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(Type::Unit),
+            };
+            let signature =
+                serde_json::to_vec(&signature).expect("function signature should serialize");
+            let function = super::aurora_direct_function_value(
+                direct_task_frame_trap as *const () as usize as i64,
+                1,
+                b"source_only_child".as_ptr(),
+                b"source_only_child".len(),
+                signature.as_ptr(),
+                signature.len(),
+                std::ptr::null(),
+                0,
+                6,
+                4,
+            );
+            let args = super::aurora_direct_arg_buffer_new(0);
+            let group = super::aurora_direct_task_group_new();
+            let task_ptr = unsafe {
+                super::aurora_direct_start_task_function_with_frames(
+                    function,
+                    args,
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    std::ptr::null(),
+                    0,
+                    13,
+                    5,
+                )
+            };
+            let task = unsafe {
+                match value_ref(task_ptr) {
+                    Value::Task(task) => task.clone(),
+                    other => panic!("expected Task handle, found {other:?}"),
+                }
+            };
+            let diagnostic = match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(5)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Ready(Err(error)) => error,
+                other => panic!("expected failing source-only child, got {other:?}"),
+            };
+            assert_eq!(
+                diagnostic.task_ancestry,
+                vec![RuntimeTaskFrame {
+                    task_function: "source_only_child".to_string(),
+                    task_entry_span: RuntimeSourceSpan::point(None, Span::new(6, 4)),
+                    parent_function: "parent".to_string(),
+                    spawn_span: RuntimeSourceSpan::point(None, Span::new(13, 5)),
+                }]
+            );
+            unsafe {
+                release_value(task_ptr);
+                release_value(group);
+                release_value(function);
+            }
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("source-only function-value child should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() {
+    let signature = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Unit),
+    };
+    let signature = serde_json::to_vec(&signature).expect("function signature should serialize");
+    let function = super::aurora_direct_function_value(
+        direct_task_frame_trap as *const () as usize as i64,
+        1,
+        b"child".as_ptr(),
+        b"child".len(),
+        signature.as_ptr(),
+        signature.len(),
+        std::ptr::null(),
+        0,
+        1,
+        1,
+    );
+    let args = super::aurora_direct_arg_buffer_new(0);
+    let group = super::aurora_direct_task_group_new();
+    let function_address = function as usize;
+    let args_address = args as usize;
+    let group_address = group as usize;
+    let message = capture_direct_boundary_error_message(move || {
+        let invalid_path = [0xff_u8];
+        unsafe {
+            super::aurora_direct_start_task_function_with_frames(
+                function_address as *mut OpaqueValue,
+                args_address as *mut i64,
+                0,
+                1,
+                group_address as *mut OpaqueValue,
+                1,
+                0,
+                0,
+                b"parent".as_ptr(),
+                b"parent".len(),
+                invalid_path.as_ptr(),
+                invalid_path.len(),
+                1,
+                1,
+            );
+        }
+    });
+    assert_eq!(
+        message,
+        "aurora direct runtime received invalid UTF-8 bytes"
+    );
+
+    unsafe {
+        free_arg_buffer(args, 0);
+        release_value(group);
+        release_value(function);
+    }
+}
+
+#[test]
+fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_thunks() {
+    let non_callable = int_value(7);
+    let missing_thunk = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "declaration-only".to_string(),
+        signature: Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::Unit),
+        },
+        source_path: Some("/workspace/declaration.au".to_string()),
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: Some(1),
+    })));
+    let group = super::aurora_direct_task_group_new();
+
+    for (function, expected) in [
+        (
+            non_callable,
+            "task starting expected a function value, found `integer`",
+        ),
+        (missing_thunk, "direct function value has no native thunk"),
+    ] {
+        let args = super::aurora_direct_arg_buffer_new(0);
+        let function_address = function as usize;
+        let args_address = args as usize;
+        let group_address = group as usize;
+        let message = capture_direct_boundary_error_message(move || unsafe {
+            super::aurora_direct_start_task_function_with_frames(
+                function_address as *mut OpaqueValue,
+                args_address as *mut i64,
+                0,
+                1,
+                group_address as *mut OpaqueValue,
+                1,
+                0,
+                0,
+                b"parent".as_ptr(),
+                b"parent".len(),
+                std::ptr::null(),
+                0,
+                1,
+                1,
+            );
+        });
+        assert_eq!(message, expected);
+        unsafe {
+            free_arg_buffer(args, 0);
+        }
+    }
+
+    unsafe {
+        release_value(non_callable);
+        release_value(missing_thunk);
+        release_value(group);
+    }
+}
+
 unsafe extern "C-unwind" fn direct_task_frame_trap(
     _args: *const i64,
     _arg_count: usize,
@@ -13742,6 +14466,88 @@ fn native_runtime_arg_buffer_store_retains_opaque_values() {
 }
 
 #[test]
+fn native_runtime_task_arg_buffer_guard_releases_pre_handoff_values() {
+    let value = string_value("captured before a trapping default");
+    super::with_direct_task_runtime_scope(|| {
+        let buffer = super::aurora_direct_arg_buffer_new(2);
+        super::aurora_direct_arg_buffer_store(buffer, 0, value as i64);
+        let guard = super::aurora_direct_task_arg_buffer_guard(buffer, 2);
+        assert!(guard > 0);
+        assert_eq!(
+            unsafe { &*value }.ref_count.load(Ordering::SeqCst),
+            2,
+            "the guarded buffer owns the supplied opaque argument"
+        );
+
+        // This is the same drain path used when a later selected default traps.
+        super::drain_direct_cleanup_stack();
+        assert_eq!(
+            unsafe { &*value }.ref_count.load(Ordering::SeqCst),
+            1,
+            "pre-handoff cleanup must release the retained argument and buffer"
+        );
+        super::with_direct_task_runtime_state(|state| {
+            assert!(state.cleanup_stack.is_empty());
+        });
+    });
+    unsafe {
+        release_value(value);
+    }
+}
+
+#[test]
+fn native_runtime_task_arg_buffer_disarm_transfers_without_releasing() {
+    let value = string_value("captured for scheduler handoff");
+    super::with_direct_task_runtime_scope(|| {
+        let buffer = super::aurora_direct_arg_buffer_new(1);
+        super::aurora_direct_arg_buffer_store(buffer, 0, value as i64);
+        let guard = super::aurora_direct_task_arg_buffer_guard(buffer, 1);
+        super::aurora_direct_task_arg_buffer_disarm(guard);
+        assert_eq!(
+            unsafe { &*value }.ref_count.load(Ordering::SeqCst),
+            2,
+            "disarming transfers the raw buffer without releasing its argument"
+        );
+        super::with_direct_task_runtime_state(|state| {
+            assert!(state.cleanup_stack.is_empty());
+        });
+        unsafe {
+            let stored = *buffer as *mut OpaqueValue;
+            release_value(stored);
+            free_arg_buffer(buffer, 1);
+        }
+    });
+    unsafe {
+        release_value(value);
+    }
+}
+
+#[test]
+fn native_runtime_task_arg_buffer_guard_reports_invalid_and_mismatched_ids() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_task_arg_buffer_guard(std::ptr::null_mut(), -1);
+        }),
+        "invalid guarded task arg buffer size"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_task_arg_buffer_disarm(i64::MAX);
+        }),
+        "unknown guarded task arg buffer"
+    );
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let ordinary_cleanup =
+                super::push_direct_cleanup_registration(1, std::ptr::null_mut(), 0);
+            super::aurora_direct_task_arg_buffer_disarm(ordinary_cleanup);
+        }),
+        "task arg buffer guard id referred to an ordinary cleanup"
+    );
+}
+
+#[test]
 fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths() {
     assert_eq!(expect_float(super::aurora_direct_box_f64(2.5)), 2.5);
     assert!(!expect_bool_boxed(super::aurora_direct_box_bool(0)));
@@ -13809,6 +14615,13 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
     );
     assert_eq!(super::aurora_direct_set_is_empty(set), 0);
     expect_option_none(super::aurora_direct_set_index_option(set, 5));
+    expect_option_none(super::aurora_direct_set_index_option(set, i64::MAX));
+    expect_option_none(super::aurora_direct_set_take_index_in_place(set, i64::MAX));
+    assert_eq!(
+        super::aurora_direct_set_len(set),
+        1,
+        "the maximum Aurora int64 position must be an ordinary missing index"
+    );
 }
 
 #[test]

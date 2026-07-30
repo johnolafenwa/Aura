@@ -92,7 +92,71 @@ condition are now satisfied.
   frozen 96.13/96.90/94.46 floors. No synthetic coverage test or exclusion
   was added.
 
-B5.0 is closed. Phase 6.1 is the active stage.
+B5.0 is closed.
+
+## Phase 6.1 implementation
+
+Capture-free function values are implemented across the maintained product
+surface:
+
+- Function types use declaration-shaped `def(...) -> R` syntax. Bare
+  parameters are shared, `mut` parameters preserve mutable writeback, and
+  `own` parameters preserve transfer. Function types nest in other function
+  types, tuples, generics, fields, and collection element types.
+- Named local and imported functions, explicitly or contextually specialized
+  generic functions, and supported builtin-module functions are first-class
+  Copy and Transfer values. They can be assigned, passed, returned, stored in
+  fields and collections, selected at runtime, called indirectly, and used as
+  `TaskGroup.start` or `start_soon` targets.
+- Concrete inferred function values preserve parameter names and dynamic
+  defaults. Written structural annotations and mutable storage boundaries
+  intentionally erase names and default availability while retaining the
+  structural parameter types and capabilities. Control-flow and generic
+  evidence retain only the callable contract shared by every possible value.
+- Method and associated-method values remain explicitly outside Phase 6.1 and
+  receive teaching diagnostics.
+- MIR execution and direct native execution share source-order argument
+  evaluation, declaration-slot binding, generic specialization, hidden
+  default suppliers, mutable writeback, owned consumption, Task handoff,
+  selected-target frames, and runtime type identity. The direct ABI uses
+  synchronous stack argument buffers and guarded heap buffers only across Task
+  handoff.
+- The semantic-interface schema is version 3. Compiler analysis, LSP
+  completion/hover, fixtures, examples, tutorials, and the normative Manual
+  all expose the same function-value surface.
+
+The first exact compiler-coverage replay passed every behavioral test but
+missed only the function floor. The gap was closed without execution-only
+tests: one public Aurora filesystem regression pins invalid UTF-8 and sorted
+directory entries; a native Set boundary pin covers `i64::MAX`; duplicated or
+unreachable closure boundaries in callable lookup, MIR inference, native
+argument binding, reactor bookkeeping, codecs, and supported-target index
+conversion were replaced with equivalent explicit control flow.
+
+The final exact compiler-coverage replay is green: 317/317 CLI tests,
+1,221/1,221 compiler-library tests, all integration targets, fixtures, and the
+coverage-only public callable ABI regression pass. Coverage is
+74,018/76,980 lines (96.15%), 4,975/5,127 functions (97.04%), and
+108,683/114,967 regions (94.53%), above the frozen 96.13/96.90/94.46 floors.
+No synthetic coverage test or exclusion was added.
+
+The full repository gate then passed formatting, the 49-test scalable-runtime
+harness, 317 CLI tests, 1,221 compiler-library tests, every remaining Rust
+target, the forced MIR/direct parity matrix, 91 LSP tests, 13 extension tests,
+both exact coverage gates, reference integrity, the documentation build, and
+both dependency audits. Its first warning-denied Clippy pass found two local
+representation/style issues: callable signatures made the MIR operand enum
+larger than the lint budget, and a default-marker construction used
+`bool::then` unnecessarily. Callable signatures are now boxed inside MIR
+operands without changing their serialized wire shape, the eager construction
+uses `then_some`, and warning-denied Clippy plus callable, serialized-MIR, and
+capture-free runtime regressions are green.
+
+The final repository hygiene command reaches only the unrelated, user-owned
+`personal/file_ops.au` whitespace diff, which remains deliberately untouched
+and outside this commit. `git diff --check` over the complete Phase 6.1 change
+set is green, and every remaining artifact, tracked-executable, scheduler
+pointer, and historical-commit hygiene rule passes independently.
 
 ## Verification policy
 

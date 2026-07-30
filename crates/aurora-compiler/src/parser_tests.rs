@@ -22,6 +22,7 @@ fn named_type_ref(ty: &TypeRef) -> Option<(&str, &[TypeRef])> {
     match &ty.kind {
         TypeRefKind::Named { name, args } => Some((name, args)),
         TypeRefKind::Tuple(_) => None,
+        TypeRefKind::Function { .. } => None,
     }
 }
 
@@ -142,6 +143,255 @@ fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
     assert!(indirect
         .message
         .contains("`indirect` applies only to named types"));
+}
+
+#[test]
+fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
+    let item = parse_item_from(
+        "def apply(callback: def(int32, mut String, own Vec[int32]) -> bool, factory: def() -> def(own String) -> int64) -> def((int32, String)) -> None:\n    pass\n",
+    )
+    .expect("function type annotations should parse without changing function declarations");
+    let Item::Function(function) = item else {
+        panic!("expected named function declaration");
+    };
+    assert_eq!(function.name, "apply");
+
+    let TypeRefKind::Function {
+        params,
+        return_type,
+    } = &function.params[0].ty.kind
+    else {
+        panic!("expected callback function type");
+    };
+    assert_eq!(params.len(), 3);
+    assert_eq!(params[0].mode, ParamMode::Default);
+    assert_eq!(params[1].mode, ParamMode::BorrowMut);
+    assert_eq!(params[2].mode, ParamMode::Own);
+    assert!(matches!(
+        named_type_ref(&params[0].ty),
+        Some(("int32", args)) if args.is_empty()
+    ));
+    assert!(matches!(
+        named_type_ref(&params[1].ty),
+        Some(("String", args)) if args.is_empty()
+    ));
+    assert!(matches!(
+        named_type_ref(&params[2].ty),
+        Some(("Vec", args))
+            if matches!(
+                args,
+                [TypeRef {
+                    kind: TypeRefKind::Named { name, args },
+                    ..
+                }] if name == "int32" && args.is_empty()
+            )
+    ));
+    assert!(matches!(
+        named_type_ref(return_type),
+        Some(("bool", args)) if args.is_empty()
+    ));
+
+    assert!(matches!(
+        &function.params[1].ty.kind,
+        TypeRefKind::Function {
+            params,
+            return_type,
+        } if params.is_empty()
+            && matches!(
+                &return_type.kind,
+                TypeRefKind::Function {
+                    params,
+                    return_type,
+                } if matches!(
+                    params.as_slice(),
+                    [FunctionTypeParam {
+                        mode: ParamMode::Own,
+                        ty: TypeRef {
+                            kind: TypeRefKind::Named { name, args },
+                            ..
+                        },
+                        ..
+                    }] if name == "String" && args.is_empty()
+                )
+                    && matches!(
+                        named_type_ref(return_type),
+                        Some(("int64", args)) if args.is_empty()
+                    )
+            )
+    ));
+
+    let TypeRefKind::Function {
+        params,
+        return_type,
+    } = &function.return_type.kind
+    else {
+        panic!("expected function return type");
+    };
+    assert!(matches!(
+        params.as_slice(),
+        [FunctionTypeParam {
+            mode: ParamMode::Default,
+            ty: TypeRef {
+                kind: TypeRefKind::Tuple(elements),
+                ..
+            },
+            ..
+        }] if elements.len() == 2
+    ));
+    assert!(matches!(
+        named_type_ref(return_type),
+        Some(("None", args)) if args.is_empty()
+    ));
+}
+
+#[test]
+fn function_type_syntax_requires_an_arrow_and_rejects_indirect() {
+    let missing_open = parse_item_from("def apply(callback: def int32 -> bool):\n    pass\n")
+        .expect_err("function types must open their parameter list");
+    assert_eq!(missing_open.code, "AU1101");
+    assert!(
+        missing_open.message.contains("expected LParen"),
+        "unexpected missing-opening-delimiter diagnostic: {missing_open}"
+    );
+
+    let missing_close = parse_item_from("def apply(callback: def(int32 -> bool):\n    pass\n")
+        .expect_err("function types must close their parameter list before the arrow");
+    assert_eq!(missing_close.code, "AU1001");
+    assert!(
+        missing_close
+            .message
+            .contains("expected `)` before end of file"),
+        "unexpected missing-closing-delimiter diagnostic: {missing_close}"
+    );
+
+    let trailing_comma = parse_item_from("def apply(callback: def(int32,) -> bool):\n    pass\n")
+        .expect_err("function type parameter lists must not accept an empty trailing slot");
+    assert_eq!(trailing_comma.message, "expected a function parameter type");
+
+    let missing_arrow = parse_item_from("def apply(callback: def(int32) bool):\n    pass\n")
+        .expect_err("function types must spell their result after an arrow");
+    assert!(missing_arrow.message.contains("expected `->`"));
+
+    let indirect = parse_item_from("def apply(callback: indirect def(int32) -> bool):\n    pass\n")
+        .expect_err("function values are already represented by code pointers");
+    assert!(indirect
+        .message
+        .contains("`indirect` is not valid on function types"));
+}
+
+#[test]
+fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
+    let retired = parse_stmt_from("callback: def(borrow String) -> None = factory\n")
+        .expect_err("retired borrow must not become a type name");
+    assert!(retired.message.contains("omit `borrow` for shared access"));
+
+    let retired_mutable =
+        parse_item_from("def apply(callback: def(borrow mut String) -> None):\n    pass\n")
+            .expect_err("retired mutable-borrow spelling must point to the current capability");
+    assert!(retired_mutable
+        .message
+        .contains("write `mut T` for mutable access"));
+
+    let doubled = parse_stmt_from("callback: def(mut own String) -> None = factory\n")
+        .expect_err("a function type parameter has exactly one capability");
+    assert!(doubled.message.contains("only one capability modifier"));
+
+    let missing_shared_type =
+        parse_item_from("def apply(callback: def(, String) -> None):\n    pass\n")
+            .expect_err("an empty function-type parameter slot must be rejected");
+    assert_eq!(
+        missing_shared_type.message,
+        "expected a function parameter type"
+    );
+
+    let missing_mutable_type =
+        parse_item_from("def apply(callback: def(mut) -> None):\n    pass\n")
+            .expect_err("a capability without a parameter type must be rejected");
+    assert_eq!(
+        missing_mutable_type.message,
+        "expected a type after the function parameter capability"
+    );
+
+    let named = parse_stmt_from("callback: def(value: String) -> None = factory\n")
+        .expect_err("function type parameters contain types, not names");
+    assert!(named.message.contains("contain types only"));
+
+    let default = parse_stmt_from("callback: def(String = \"x\") -> None = factory\n")
+        .expect_err("function type parameters cannot have defaults");
+    assert!(default.message.contains("cannot declare default values"));
+
+    let nested_default = parse_stmt_from(
+        "callback: def(String = build((1, 2), [3, 4], {5: 6}), int32) -> None = factory\n",
+    )
+    .expect_err(
+        "typed-binding lookahead should preserve the function-type default-value diagnostic",
+    );
+    assert_eq!(
+        nested_default.message,
+        "function type parameters cannot declare default values"
+    );
+
+    let return_capability = parse_stmt_from("callback: def() -> own String = factory\n")
+        .expect_err("return capability labels remain invalid");
+    assert!(return_capability
+        .message
+        .contains("`own` is not valid in a type position"));
+}
+
+#[test]
+fn typed_binding_lookahead_recognizes_function_type_annotations() {
+    let stmt = parse_stmt_from("selected: def(int32) -> int32 = increment\n")
+        .expect("function-typed local binding should be classified as an assignment");
+    let Stmt::Assign(AssignStmt {
+        target: AssignTarget::Name(name),
+        annotation:
+            Some(TypeRef {
+                kind:
+                    TypeRefKind::Function {
+                        params,
+                        return_type,
+                    },
+                ..
+            }),
+        value,
+        ..
+    }) = stmt
+    else {
+        panic!("expected a typed assignment");
+    };
+    assert_eq!(name, "selected");
+    assert!(matches!(
+        params.as_slice(),
+        [FunctionTypeParam {
+            mode: ParamMode::Default,
+            ty: TypeRef {
+                kind: TypeRefKind::Named { name, args },
+                ..
+            },
+            ..
+        }] if name == "int32" && args.is_empty()
+    ));
+    assert!(matches!(
+        return_type.kind,
+        TypeRefKind::Named { ref name, ref args } if name == "int32" && args.is_empty()
+    ));
+    assert!(matches!(value.kind, ExprKind::Name(ref name) if name == "increment"));
+
+    let nested = parse_stmt_from(
+        "mut pipeline: def(def(int32) -> int32, (String, int32)) -> def() -> bool = choose\n",
+    )
+    .expect("lookahead should skip nested function and tuple type components");
+    assert!(matches!(
+        nested,
+        Stmt::Assign(AssignStmt {
+            mutable: true,
+            annotation: Some(TypeRef {
+                kind: TypeRefKind::Function { .. },
+                ..
+            }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -1688,6 +1938,20 @@ fn offset_helpers_cover_fstring_expression_parts() {
     assert_eq!(type_ref_args[0].span, Span::new(12, 11));
     let (_, inner_args) = named_type_ref(&type_ref_args[0]).expect("named Vec type");
     assert_eq!(inner_args[0].span, Span::new(12, 15));
+
+    let mut function_type = TypeRef::function(
+        vec![TypeRef::named("String", Vec::new(), false, Span::new(1, 7))],
+        TypeRef::named("bool", Vec::new(), false, Span::new(1, 18)),
+        Span::new(1, 3),
+    );
+    offset_type_ref_span(&mut function_type, 14, 5);
+    assert_eq!(function_type.span, Span::new(14, 8));
+    let (params, return_type) = function_type
+        .function_parts()
+        .expect("function type should remain structural after span offset");
+    assert_eq!(params[0].span, Span::new(14, 12));
+    assert_eq!(params[0].ty.span, Span::new(14, 12));
+    assert_eq!(return_type.span, Span::new(14, 23));
 }
 
 #[test]

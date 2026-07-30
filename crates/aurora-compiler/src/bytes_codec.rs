@@ -156,9 +156,10 @@ pub(crate) fn hex_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
 pub(crate) fn base64_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
     let output_len = base64_encoded_len(bytes.len())?;
     let mut output = try_byte_buffer(output_len)?;
-    let written = STANDARD
-        .encode_slice(bytes, &mut output)
-        .map_err(|_| output_too_large())?;
+    let written = match STANDARD.encode_slice(bytes, &mut output) {
+        Ok(written) => written,
+        Err(_) => return Err(output_too_large().into()),
+    };
     output.truncate(written);
 
     // The standard base64 alphabet and padding are ASCII, so the engine can

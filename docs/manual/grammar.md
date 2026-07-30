@@ -180,13 +180,21 @@ type
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
-    | tuple-type ;
+    | tuple-type
+    | function-type ;
 
 type-list = type, { ",", type } ;
 
 tuple-type
     = "(", type, ",", ")"
     | "(", type, ",", type, { ",", type }, ")" ;
+
+function-type
+    = "def", "(", [ function-type-parameter,
+      { ",", function-type-parameter } ], ")", "->", type ;
+
+function-type-parameter
+    = [ "mut" | "own" ], type ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -198,6 +206,12 @@ bounded-type-parameters
 bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
+
+A function type contains parameter modes and types, but no names or default
+expressions: `def(int32, mut Counter, own String) -> bool`. A bare parameter
+is shared, `mut` requires caller-visible mutable access, and `own` transfers
+the argument. Parameter names are not accepted inside the list. `indirect` is
+invalid on a function type because the value is already a code pointer.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -635,12 +649,20 @@ form.
 specialization-suffix = "[", type-list, "]" ;
 ```
 
-Specialization and indexing use the same brackets, so parser context disambiguates them. Brackets form specialization only when their contents scan as one or more type references and either:
+Specialization and indexing use the same brackets, so parser and static
+context disambiguate them. Brackets form specialization when their contents
+scan as one or more type references and either:
 
 1. `(` follows and the base is a name or member, or
 2. `.` follows and the final target name begins with uppercase ASCII.
 
-Otherwise the brackets form an index expression. Consequently, `Box[int32](value)` and `Result[int32, String].Ok(1)` specialize, while a bare `value[index]` indexes. A specialized callable/type is not a general first-class expression when no qualifying call/member follows.
+A bare bracket suffix is initially an index expression. Static resolution
+reinterprets `function[Types]` as explicit specialization when `function`
+resolves to a generic named function and the complete expression is used as a
+function value. Otherwise the brackets remain indexing. Consequently,
+`Box[int32](value)` and `Result[int32, String].Ok(1)` specialize,
+`show[int32]` may produce one concrete function value, and `value[index]`
+indexes.
 
 ## Match Expressions
 

@@ -1,0 +1,12 @@
+class Counter:
+    value: int32
+
+def increment(counter: mut Counter) -> None:
+    counter.value += 1
+
+def main() -> int32:
+    target = increment
+    counter = Counter(value=0)
+    with group = TaskGroup():
+        group.start_soon(target, counter)
+    return 0

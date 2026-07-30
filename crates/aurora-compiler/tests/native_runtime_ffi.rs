@@ -1,6 +1,8 @@
 #![cfg(coverage)]
 
+use aurora_compiler::ast::ReceiverKind;
 use aurora_compiler::native_runtime_coverage::*;
+use aurora_compiler::sema::{FunctionParamContract, Type};
 use aurora_compiler::Value;
 use std::fs;
 use std::io::{Read, Write};
@@ -149,6 +151,62 @@ fn unique_temp_path(name: &str) -> String {
         ))
         .to_string_lossy()
         .to_string()
+}
+
+#[test]
+fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
+    let signature = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                name: "path".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "buffer".to_string(),
+                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: true,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let encoded_signature =
+        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let name = b"read_into";
+    let path = b"/workspace/io.au";
+
+    let function = aurora_direct_function_value(
+        0x1234,
+        0x5678,
+        name.as_ptr(),
+        name.len(),
+        encoded_signature.as_ptr(),
+        encoded_signature.len(),
+        path.as_ptr(),
+        path.len(),
+        9,
+        4,
+    );
+
+    assert_eq!(aurora_direct_function_thunk(function), 0x1234);
+    assert_eq!(aurora_direct_function_default_binder(function), 0x5678);
+    match unsafe { cloned_value(function) } {
+        Value::Function(value) => {
+            assert_eq!(value.name, "read_into");
+            assert_eq!(value.signature, signature);
+            assert_eq!(value.source_path.as_deref(), Some("/workspace/io.au"));
+            assert_eq!(value.entry_span.line, 9);
+            assert_eq!(value.entry_span.column, 4);
+        }
+        other => panic!("expected function value, found {other:?}"),
+    }
+    unsafe {
+        release(function);
+    }
 }
 
 #[test]

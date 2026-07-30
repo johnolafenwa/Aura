@@ -1,7 +1,82 @@
-use super::{builtin_imported_binding, builtin_module_namespace, host_builtin_metadata};
-use crate::ast::{ExprKind, ParamMode, ReceiverKind};
+use super::{
+    builtin_imported_binding, builtin_module_namespace, host_builtin_metadata, lower_type_ref,
+};
+use crate::ast::{ExprKind, FunctionTypeParam, ParamMode, ReceiverKind, TypeRef};
 use crate::diag::Span;
-use crate::sema::ImportedBinding;
+use crate::sema::{FunctionParamContract, ImportedBinding, Type};
+
+#[test]
+fn builtin_type_lowering_preserves_nested_function_signatures() {
+    let span = Span::new(1, 1);
+    let function = TypeRef::function_with_params(
+        vec![
+            FunctionTypeParam::new(
+                ParamMode::Default,
+                TypeRef::named("Duration", Vec::new(), false, span),
+                span,
+            ),
+            FunctionTypeParam::new(
+                ParamMode::BorrowMut,
+                TypeRef::named("String", Vec::new(), false, span),
+                span,
+            ),
+            FunctionTypeParam::new(
+                ParamMode::Own,
+                TypeRef::tuple(
+                    vec![TypeRef::named("int32", Vec::new(), false, span)],
+                    false,
+                    span,
+                ),
+                span,
+            ),
+        ],
+        TypeRef::function(
+            vec![TypeRef::named("Duration", Vec::new(), false, span)],
+            TypeRef::named("None", Vec::new(), false, span),
+            span,
+        ),
+        span,
+    );
+
+    assert_eq!(
+        lower_type_ref(&function),
+        Type::Function {
+            params: vec![
+                FunctionParamContract {
+                    name: String::new(),
+                    ty: Type::named("Duration"),
+                    passing: ReceiverKind::Borrow,
+                    has_default: false,
+                    default_erased: true,
+                },
+                FunctionParamContract {
+                    name: String::new(),
+                    ty: Type::named("String"),
+                    passing: ReceiverKind::BorrowMut,
+                    has_default: false,
+                    default_erased: true,
+                },
+                FunctionParamContract {
+                    name: String::new(),
+                    ty: Type::Tuple(vec![Type::named("int32")]),
+                    passing: ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: true,
+                },
+            ],
+            return_type: Box::new(Type::Function {
+                params: vec![FunctionParamContract {
+                    name: String::new(),
+                    ty: Type::named("Duration"),
+                    passing: ReceiverKind::Borrow,
+                    has_default: false,
+                    default_erased: true,
+                }],
+                return_type: Box::new(Type::Unit),
+            }),
+        }
+    );
+}
 
 #[test]
 fn builtin_imported_binding_reports_unknown_builtin_module_paths() {

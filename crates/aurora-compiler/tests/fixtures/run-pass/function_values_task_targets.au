@@ -1,0 +1,48 @@
+def compute(value: int32) -> int32:
+    return value * 2
+
+def increment(value: int32) -> int32:
+    return value + 1
+
+def choose_worker(use_compute: bool) -> def(int32) -> int32:
+    return compute if use_compute else increment
+
+def publish(values: Queue[int32], value: int32) -> None:
+    values.put(value)
+
+def empty[T]() -> Option[T]:
+    return None
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def first_default(value: int32 = mark("task-first-default", 31)) -> int32:
+    return value
+
+def second_default(value: int32 = mark("task-second-default", 42)) -> int32:
+    return value
+
+def main() -> int32:
+    worker = choose_worker(true)
+    publisher = publish
+    local_empty: def() -> Option[int32] = empty
+    selected_default = first_default if false else second_default
+    values = Queue[int32]()
+
+    with TaskGroup() as group:
+        task = group.start(worker, 21)
+        empty_task = group.start(local_empty)
+        group.start_soon(publisher, values, 9)
+        print(task.result_or(-1, timeout=1s))
+        match empty_task.result_or(Option.Some(99), timeout=1s):
+            case Option.None:
+                print("local-none")
+            case Option.Some(value):
+                print(value)
+
+    print(values.get_or(-1))
+    with default_group = TaskGroup():
+        default_task = default_group.start(selected_default)
+        print(default_task.result_or(-1, timeout=1s))
+    return 0

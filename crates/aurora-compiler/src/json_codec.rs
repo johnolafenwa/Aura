@@ -605,8 +605,10 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
         match first_key {
             JsonMapKey::ArbitraryPrecisionNumber => {
                 let lexeme = map.next_value::<FallibleString>()?;
-                classify_number(&lexeme.0)
-                    .ok_or_else(|| de::Error::custom("JSON number is outside float64 range"))
+                match classify_number(&lexeme.0) {
+                    Some(value) => Ok(value),
+                    None => Err(de::Error::custom("JSON number is outside float64 range")),
+                }
             }
             JsonMapKey::Object(first_key) => {
                 let capacity = map

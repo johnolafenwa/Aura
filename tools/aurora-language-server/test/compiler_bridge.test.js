@@ -641,7 +641,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 2);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 3);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -694,7 +694,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `1`.*expected `2`/
+    /semantic schema mismatch.*received `1`.*expected `3`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -726,7 +726,7 @@ test("persistent compiler service treats a missing semantic schema as incompatib
   assert.equal(service.closed, true);
 });
 
-test("compiler schema mismatch invalidates cached document ownership metadata", async () => {
+test("compiler schema mismatch invalidates cached function-type metadata", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-schema-mismatch-"));
   const fakeCompiler = path.join(tempRoot, "aurora-schema");
   const script = path.join(tempRoot, "compiler.js");
@@ -735,7 +735,7 @@ test("compiler schema mismatch invalidates cached document ownership metadata", 
   let invalidations = 0;
   const cache = createDocumentStateCache(async () => ({
     stamp: ++analyses,
-    ownership_mode: analyses === 1 ? "pre-migration-borrow" : "shared"
+    function_type: analyses === 1 ? "pre-function-values" : "def(int32) -> int32"
   }));
   const document = {
     uri: "file:///workspace/main.au",
@@ -744,7 +744,10 @@ test("compiler schema mismatch invalidates cached document ownership metadata", 
   };
 
   try {
-    assert.equal((await cache.get(document)).compilerAnalysis.ownership_mode, "pre-migration-borrow");
+    assert.equal(
+      (await cache.get(document)).compilerAnalysis.function_type,
+      "pre-function-values"
+    );
     setCompilerSchemaMismatchHandler(() => {
       invalidations += 1;
       cache.invalidateAll();
@@ -772,7 +775,10 @@ test("compiler schema mismatch invalidates cached document ownership metadata", 
 
     assert.equal(await analyzeWithCompiler(document.uri, document.getText()), null);
     assert.equal(invalidations, 1);
-    assert.equal((await cache.get(document)).compilerAnalysis.ownership_mode, "shared");
+    assert.equal(
+      (await cache.get(document)).compilerAnalysis.function_type,
+      "def(int32) -> int32"
+    );
     assert.equal(analyses, 2);
   } finally {
     setCompilerSchemaMismatchHandler(null);
@@ -2338,6 +2344,150 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     assert.equal(
       invalidAnalysis.diagnostics[0].message,
       "`mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result"
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes capture-free function values and rejects method values", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-function-values-"));
+  const source = [
+    "def double(value: int32) -> int32:",
+    "    return value * 2",
+    "def apply(transform: def(int32) -> int32, value: int32) -> int32:",
+    "    return transform(value)",
+    "def offset(value: int32 = 10) -> int32:",
+    "    return value + 1",
+    "def take(value: own String) -> String:",
+    "    return value",
+    "def apply_owned(callback: def(own String) -> String, value: own String) -> String:",
+    "    return callback(value)",
+    "def main() -> int32:",
+    "    selected = double",
+    "    known_offset = offset",
+    "    consume: def(own String) -> String = take",
+    "    print(apply(selected, 21))",
+    "    print(apply_owned(consume, \"owned\"))",
+    "    print(known_offset())",
+    "    print(known_offset(value=20))",
+    "    return 0",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.ok(
+      analysis.occurrences.some((occurrence) =>
+        occurrence.hover.includes("binding selected: def(int32) -> int32")
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some((occurrence) =>
+        occurrence.hover.includes("binding known_offset: def(int32) -> int32")
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some((occurrence) =>
+        occurrence.hover.includes(
+          "function apply(transform: def(int32) -> int32, value: int32) -> int32"
+        )
+      )
+    );
+    const functionReference = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 11 &&
+        occurrence.hover.includes("function double(value: int32) -> int32")
+    );
+    assert.ok(functionReference);
+    assert.equal(functionReference.definition?.line, 0);
+    assert.ok(
+      analysis.occurrences.some((occurrence) =>
+        occurrence.hover.includes(
+          "function apply_owned(callback: def(own String) -> String, value: own String) -> String"
+        )
+      )
+    );
+
+    const invalidMethodValue = [
+      "class Counter:",
+      "    value: int32",
+      "    def read(self) -> int32:",
+      "        return self.value",
+      "def main() -> int32:",
+      "    counter = Counter(value=1)",
+      "    read = counter.read",
+      "    return read()",
+      ""
+    ].join("\n");
+    const invalidAnalysis = await analyzeWithCompiler(mainUri, invalidMethodValue);
+    assert.equal(invalidAnalysis.diagnostics.length, 1);
+    assert.equal(invalidAnalysis.diagnostics[0].code, "AU2005");
+    assert.match(
+      invalidAnalysis.diagnostics[0].message,
+      /method values are not supported/
+    );
+
+    const invalidAssociatedMethodValue = [
+      "class Math:",
+      "    def double(value: int32) -> int32:",
+      "        return value * 2",
+      "def main() -> int32:",
+      "    callback = Math.double",
+      "    return callback(21)",
+      ""
+    ].join("\n");
+    const associatedAnalysis = await analyzeWithCompiler(
+      mainUri,
+      invalidAssociatedMethodValue
+    );
+    assert.equal(associatedAnalysis.diagnostics.length, 1);
+    assert.equal(associatedAnalysis.diagnostics[0].code, "AU2005");
+    assert.match(
+      associatedAnalysis.diagnostics[0].message,
+      /method values are not supported/
+    );
+
+    const invalidCapability = [
+      "def consume(value: own String) -> int64:",
+      "    return value.len()",
+      "def main() -> int32:",
+      "    shared_only: def(String) -> int64 = consume",
+      "    return 0",
+      ""
+    ].join("\n");
+    const capabilityAnalysis = await analyzeWithCompiler(mainUri, invalidCapability);
+    assert.equal(capabilityAnalysis.diagnostics.length, 1);
+    assert.equal(capabilityAnalysis.diagnostics[0].code, "AU2002");
+    assert.match(
+      capabilityAnalysis.diagnostics[0].message,
+      /has `own` capability.*requires `shared`/
+    );
+
+    const dynamicNamedArgument = [
+      "def increment(value: int32) -> int32:",
+      "    return value + 1",
+      "def double(amount: int32) -> int32:",
+      "    return amount * 2",
+      "def choose(first: bool) -> def(int32) -> int32:",
+      "    return increment if first else double",
+      "def main() -> int32:",
+      "    selected = choose(true)",
+      "    return selected(value=20)",
+      ""
+    ].join("\n");
+    const dynamicAnalysis = await analyzeWithCompiler(mainUri, dynamicNamedArgument);
+    assert.equal(dynamicAnalysis.diagnostics.length, 1);
+    assert.equal(dynamicAnalysis.diagnostics[0].code, "AU2003");
+    assert.match(
+      dynamicAnalysis.diagnostics[0].message,
+      /named argument contract was erased.*possible targets do not all agree/
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

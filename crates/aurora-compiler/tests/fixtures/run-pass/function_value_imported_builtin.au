@@ -1,0 +1,13 @@
+import process
+
+def main() -> int32:
+    factory: def() -> process.Stdio = process.pipe
+    stream = factory()
+    match own stream:
+        case process.Stdio.Pipe:
+            print("pipe")
+        case process.Stdio.Null:
+            print("null")
+        case process.Stdio.Inherit:
+            print("inherit")
+    return 0

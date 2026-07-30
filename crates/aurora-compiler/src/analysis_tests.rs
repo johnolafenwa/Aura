@@ -2510,7 +2510,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     );
     assert_eq!(
         builder.infer_expr_type(&expr(ExprKind::Name("helper".to_string())), &scope),
-        Some(Type::named("int32"))
+        Some(Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int32")),
+        })
     );
     for builtin_name in [
         "SendError",
@@ -2558,7 +2561,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             }),
             &scope,
         ),
-        Some(Type::named("int32"))
+        Some(Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int32")),
+        })
     );
     assert_eq!(Type::Unit.type_arguments(), &[]);
     assert_eq!(Type::Module("pkg".to_string()).type_arguments(), &[]);
@@ -5139,6 +5145,286 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
         result(Type::Unit, io_error.clone()),
     );
     assert_member_type("net.TlsStream", "close", Type::Unit);
+}
+
+#[test]
+fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() {
+    let source = [
+        "def decorate(prefix: String, value: String = \"world\") -> String:",
+        "    return prefix + value",
+        "",
+        "def main() -> int32:",
+        "    selected = decorate",
+        "    outcome = selected(prefix=\"hello\")",
+        "    print(outcome.len())",
+        "    return 0",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    let serialized = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(serialized["diagnostics"], serde_json::json!([]));
+    let hovers = serialized["occurrences"]
+        .as_array()
+        .expect("occurrences should serialize as an array")
+        .iter()
+        .filter_map(|occurrence| occurrence["hover"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        hovers.contains(&"```aurora\nbinding selected: def(String, String) -> String\n```"),
+        "the inferred function-value binding must expose its callable type: {hovers:?}"
+    );
+    assert!(
+        hovers.contains(&"```aurora\nbinding outcome: String\n```"),
+        "an indirect function-value call must expose its declared return type: {hovers:?}"
+    );
+
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    let function_type = builder.infer_expr_type(
+        &expr(ExprKind::Name("decorate".to_string())),
+        &BTreeMap::new(),
+    );
+    let Some(Type::Function {
+        params,
+        return_type,
+    }) = function_type
+    else {
+        panic!("a function symbol should infer to a full callable type");
+    };
+    assert_eq!(*return_type, Type::named("String"));
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].name, "prefix");
+    assert!(!params[0].has_default);
+    assert_eq!(params[1].name, "value");
+    assert!(params[1].has_default);
+    assert!(
+        params.iter().all(|param| !param.default_erased),
+        "direct function symbols must retain their named/default call contract"
+    );
+}
+
+#[test]
+fn nested_written_function_types_drive_completion_scope_and_json_schema() {
+    let source = [
+        "def passthrough(callback: def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32):",
+        "    return callback",
+        "",
+        "def main() -> int32:",
+        "    selected: def(def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32) = passthrough",
+        "    print(selected)",
+        "    return 0",
+    ]
+    .join("\n");
+    let expected_type =
+        "def(def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32)";
+
+    let analysis = analyze_source(&source);
+    let analysis_json = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(analysis_json["diagnostics"], serde_json::json!([]));
+    assert!(
+        analysis_json["occurrences"]
+            .as_array()
+            .expect("occurrences should serialize as an array")
+            .iter()
+            .any(|occurrence| {
+                occurrence["hover"]
+                    == serde_json::json!(format!(
+                        "```aurora\nbinding selected: {expected_type}\n```"
+                    ))
+            }),
+        "the semantic JSON hover must preserve the nested function/tuple signature"
+    );
+
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    let scope = builder.scope_for_line(5);
+    let selected_type = &scope
+        .get("selected")
+        .expect("the written binding should be in completion scope")
+        .ty;
+    assert_eq!(selected_type.to_string(), expected_type);
+
+    let type_json =
+        serde_json::to_value(selected_type).expect("function type schema should serialize");
+    let outer_param = &type_json["Function"]["params"][0];
+    assert_eq!(outer_param["name"], serde_json::json!(""));
+    assert_eq!(outer_param["passing"], serde_json::json!("Borrow"));
+    assert_eq!(outer_param["has_default"], serde_json::json!(false));
+    assert_eq!(outer_param["default_erased"], serde_json::json!(true));
+    let nested_params = &outer_param["ty"]["Function"]["params"];
+    assert_eq!(nested_params[0]["passing"], serde_json::json!("BorrowMut"));
+    assert_eq!(nested_params[1]["passing"], serde_json::json!("Value"));
+    assert_eq!(
+        outer_param["ty"]["Function"]["return_type"]["Tuple"][0],
+        serde_json::json!({"Named": ["String", []]})
+    );
+    assert_eq!(
+        type_json["Function"]["return_type"]["Function"]["return_type"]["Tuple"][1],
+        serde_json::json!({"Named": ["int32", []]})
+    );
+}
+
+#[test]
+fn written_function_type_aliases_are_canonical_in_completion_scope() {
+    let source = [
+        "def report(label: str, count: int) -> None:",
+        "    pass",
+        "",
+        "def main() -> int32:",
+        "    selected: def(str, int) -> None = report",
+        "    print(selected)",
+        "    return 0",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    let analysis_json = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(analysis_json["diagnostics"], serde_json::json!([]));
+    assert!(
+        analysis_json["occurrences"]
+            .as_array()
+            .expect("occurrences should serialize as an array")
+            .iter()
+            .any(|occurrence| {
+                occurrence["hover"]
+                    == serde_json::json!(
+                        "```aurora\nbinding selected: def(String, int64) -> None\n```"
+                    )
+            }),
+        "written callable aliases must be canonicalized in semantic JSON"
+    );
+
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    let scope = builder.scope_for_line(5);
+    assert_eq!(
+        scope
+            .get("selected")
+            .expect("the written function binding should enter completion scope")
+            .ty
+            .to_string(),
+        "def(String, int64) -> None"
+    );
+}
+
+#[test]
+fn path_analysis_infers_imported_function_values_and_member_call_results() {
+    let temp = TempDir::new("analysis-imported-function-values");
+    let helper_path = temp.path().join("helpers.au");
+    let main_path = temp.path().join("main.au");
+    fs::write(
+        &helper_path,
+        [
+            "public def decorate(prefix: String, value: String = \"world\") -> String:",
+            "    return prefix + value",
+        ]
+        .join("\n"),
+    )
+    .expect("should write helper module");
+    let source = [
+        "import helpers",
+        "",
+        "def main() -> int32:",
+        "    direct = helpers.decorate(prefix=\"hello\")",
+        "    selected = helpers.decorate",
+        "    outcome = selected(prefix=\"hello\")",
+        "    print(direct.len())",
+        "    print(outcome.len())",
+        "    return 0",
+    ]
+    .join("\n");
+    fs::write(&main_path, &source).expect("should write main module");
+
+    let analysis = analyze_path_source(&main_path, &source);
+    let serialized = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(serialized["diagnostics"], serde_json::json!([]));
+    let hovers = serialized["occurrences"]
+        .as_array()
+        .expect("occurrences should serialize as an array")
+        .iter()
+        .filter_map(|occurrence| occurrence["hover"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        hovers.contains(&"```aurora\nbinding selected: def(String, String) -> String\n```"),
+        "an imported function member must retain its full callable type: {hovers:?}"
+    );
+    for expected in [
+        "```aurora\nbinding direct: String\n```",
+        "```aurora\nbinding outcome: String\n```",
+    ] {
+        assert!(
+            hovers.contains(&expected),
+            "direct and indirect imported calls must infer String: {hovers:?}"
+        );
+    }
+}
+
+#[test]
+fn conditional_function_type_inference_prefers_concrete_nested_contracts() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let function_type = |param_ty: Type, return_type: Type| Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: param_ty,
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(return_type),
+    };
+    let concrete = function_type(
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::named("String"),
+    );
+    let unknown_param = function_type(
+        Type::Named("Vec".to_string(), vec![Type::named("Unknown")]),
+        Type::named("String"),
+    );
+    let unknown_return = function_type(Type::named("int32"), Type::named("Unknown"));
+    let binding = |ty: Type| super::BindingInfo {
+        ty,
+        trait_bounds: Vec::new(),
+        definition: super::AnalysisRange {
+            file_path: None,
+            line: 0,
+            start_character: 0,
+            end_character: 1,
+        },
+        hover: String::new(),
+    };
+    let scope = BTreeMap::from([
+        ("concrete".to_string(), binding(concrete.clone())),
+        ("unknown_param".to_string(), binding(unknown_param)),
+        ("unknown_return".to_string(), binding(unknown_return)),
+    ]);
+    let conditional = |then_name: &str, else_name: &str| {
+        expr(ExprKind::Conditional {
+            then_expr: Box::new(expr(ExprKind::Name(then_name.to_string()))),
+            condition: Box::new(expr(ExprKind::Bool(true))),
+            else_expr: Box::new(expr(ExprKind::Name(else_name.to_string()))),
+        })
+    };
+
+    assert_eq!(
+        builder.infer_expr_type(&conditional("unknown_param", "concrete"), &scope),
+        Some(concrete.clone()),
+        "Unknown nested in a function parameter must not mask a concrete callable contract"
+    );
+    assert_eq!(
+        builder.infer_expr_type(&conditional("concrete", "unknown_return"), &scope),
+        Some(concrete.clone()),
+        "Unknown nested in a function return must not mask a concrete callable contract"
+    );
+    assert!(
+        concrete.type_arguments().is_empty(),
+        "function parameters and returns are schema fields, not generic type arguments"
+    );
+    assert!(
+        builder.member_completions(&concrete).is_empty(),
+        "a function value must not inherit member completions from its parameter or return types"
+    );
 }
 
 #[test]

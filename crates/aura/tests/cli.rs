@@ -11605,3 +11605,383 @@ fn typed_select_negative_deadline_is_au4001_on_both_backends_with_four_workers()
         Some("error[AU4001]: select deadline must be non-negative")
     );
 }
+
+#[test]
+fn capture_free_function_values_cover_storage_copy_calls_and_task_targets_on_both_backends() {
+    let source = r#"
+class Pipeline:
+    transform: def(int32) -> int32
+
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def offset(value: int32 = 10) -> int32:
+    return value + 1
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def first_default(value: int32 = mark("first-default", 11)) -> int32:
+    return value
+
+def second_default(value: int32 = mark("second-default", 22)) -> int32:
+    return value
+
+def first_task_default(value: int32 = mark("task-first-default", 31)) -> int32:
+    return value
+
+def second_task_default(value: int32 = mark("task-second-default", 42)) -> int32:
+    return value
+
+def combine(first: int32, second: int32) -> int32:
+    return first * 10 + second
+
+def apply(transform: def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+def apply_owned(transform: own def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+def choose_transform(use_increment: bool) -> def(int32) -> int32:
+    return increment if use_increment else double
+
+def publish(values: Queue[int32], value: int32) -> None:
+    values.put(value)
+
+def empty[T]() -> Option[T]:
+    return None
+
+def main() -> int32:
+    selected: def(int32) -> int32 = increment
+    copied = selected
+    known_offset = offset
+    selected_default = first_default if false else second_default
+    known_combine = combine
+    pipeline = Pipeline(transform=copied)
+    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+
+    print(selected(1))
+    print(apply(pipeline.transform, 2))
+    print(transforms[0](3))
+    print(transforms[1](4))
+    print(apply_owned(copied, 5))
+    print(copied(6))
+    runtime_selected = choose_transform(false)
+    print(runtime_selected(7))
+    print(known_offset())
+    print(known_offset(30))
+    print(known_offset(value=40))
+    print(selected_default())
+    print(known_combine(second=mark("named-second", 2), first=mark("named-first", 1)))
+
+    values = Queue[int32]()
+    publisher = publish
+    task_target = choose_transform(true)
+    local_empty: def() -> Option[int32] = empty
+    selected_task_default = first_task_default if false else second_task_default
+    with TaskGroup() as group:
+        task = group.start(task_target, 20)
+        empty_task = group.start(local_empty)
+        group.start_soon(publisher, values, 9)
+        print(task.result_or(-1, timeout=1s))
+        match empty_task.result_or(Option.Some(99), timeout=1s):
+            case Option.None:
+                print("local-none")
+            case Option.Some(value):
+                print(value)
+    print(values.get_or(-1))
+    with default_group = TaskGroup():
+        default_task = default_group.start(selected_task_default)
+        print(default_task.result_or(-1, timeout=1s))
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-capture-free-function-values",
+        source,
+        "2\n3\n4\n8\n6\n7\n14\n11\n31\n41\nsecond-default\n22\nnamed-second\nnamed-first\n12\n21\nlocal-none\n9\ntask-second-default\n42\n",
+    );
+}
+
+#[test]
+fn imported_module_function_values_store_pass_and_call_on_both_backends() {
+    assert_default_backend_example_runs(
+        "examples/modules/function_values.au",
+        "module-function-values-auto",
+        "10\n12\nnone\n",
+    );
+    assert_direct_backend_example_runs(
+        "examples/modules/function_values.au",
+        "module-function-values-direct",
+        "10\n12\nnone\n",
+    );
+}
+
+#[test]
+fn imported_builtin_function_values_use_normal_dispatch_on_both_backends() {
+    let source = r#"
+import process
+
+def main() -> int32:
+    factory: def() -> process.Stdio = process.pipe
+    stream = factory()
+    match own stream:
+        case process.Stdio.Pipe:
+            print("pipe")
+        case process.Stdio.Null:
+            print("null")
+        case process.Stdio.Inherit:
+            print("inherit")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-imported-builtin-function-value", source, "pipe\n");
+}
+
+#[test]
+fn imported_builtin_function_values_retain_process_run_defaults_on_both_backends() {
+    let fixture =
+        "crates/aurora-compiler/tests/fixtures/run-pass/function_value_imported_builtin_defaults.au";
+    let expected = "true\nbuiltin-defaults\n";
+
+    assert_default_backend_example_runs(fixture, "builtin-function-defaults-auto", expected);
+    assert_direct_backend_example_runs(fixture, "builtin-function-defaults-direct", expected);
+}
+
+#[test]
+fn generic_default_can_supply_a_function_value_for_calls_and_tasks_on_both_backends() {
+    let source = r#"
+def empty[T]() -> Option[T]:
+    return None
+
+def supplier[T](callback: def() -> Option[T] = empty) -> def() -> Option[T]:
+    return callback
+
+def main() -> int32:
+    supplied = supplier[String]()
+    match supplied():
+        case Option.None:
+            print("ordinary-none")
+        case Option.Some(value):
+            print(value)
+
+    with group = TaskGroup():
+        task = group.start(supplied)
+        match task.result_or(Option.Some("fallback"), timeout=1s):
+            case Option.None:
+                print("task-none")
+            case Option.Some(value):
+                print(value)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-function-value-generic-default-supplier",
+        source,
+        "ordinary-none\ntask-none\n",
+    );
+}
+
+#[test]
+fn inferred_function_values_preserve_mut_writeback_and_own_consumption_on_both_backends() {
+    let source = r#"
+class Counter:
+    value: int32
+
+def increment(counter: mut Counter) -> None:
+    counter.value += 1
+
+def take(value: own String) -> String:
+    return value
+
+class Holder:
+    mutate: def(mut Counter) -> None
+    consume: def(own String) -> String
+
+def apply_mut(callback: def(mut Counter) -> None, counter: mut Counter) -> None:
+    callback(counter)
+
+def apply_own(callback: def(own String) -> String, value: own String) -> String:
+    return callback(value)
+
+def main() -> int32:
+    mutate: def(mut Counter) -> None = increment
+    consume: def(own String) -> String = take
+    mutators: Vec[def(mut Counter) -> None] = [mutate]
+    consumers: Vec[def(own String) -> String] = [consume]
+    holder = Holder(mutate=mutate, consume=consume)
+    mut counter = Counter(value=41)
+    text = "owned"
+
+    apply_mut(mutate, counter)
+    mutators[0](counter)
+    holder.mutate(counter)
+    parameter = apply_own(consume, "parameter-owned")
+    first = consumers[0]("vector-owned")
+    result = holder.consume(text)
+    print(counter.value)
+    print(parameter)
+    print(first)
+    print(result)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-function-value-capabilities",
+        source,
+        "44\nparameter-owned\nvector-owned\nowned\n",
+    );
+}
+
+#[test]
+fn runtime_selected_function_value_traps_keep_the_dynamic_target_frame_on_both_backends() {
+    let source = r#"
+def explode(value: int32) -> int32:
+    return 1 // value
+
+def safe(value: int32) -> int32:
+    return value
+
+def choose(should_explode: bool) -> def(int32) -> int32:
+    return explode if should_explode else safe
+
+def main() -> int32:
+    selected = choose(true)
+    return selected(0)
+"#;
+
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-dynamic-function-value-frame",
+        source,
+        std::time::Duration::from_secs(20),
+        "",
+        "Aurora call chain (innermost first): explode at 2:1 -> main at 11:1",
+    );
+}
+
+#[test]
+fn trapping_function_value_defaults_report_the_public_target_on_both_backends() {
+    let source = r#"
+def default_trap(value: int32 = 1 // 0) -> int32:
+    return value
+
+def main() -> int32:
+    selected = default_trap
+    return selected()
+"#;
+    let timeout = std::time::Duration::from_secs(20);
+    let (_temp, _source_path, mut mir_child) =
+        run_aura_source_with_timeout("aurora-function-value-default-trap", source, timeout);
+    let mir_status = wait_with_timeout(&mut mir_child, timeout).unwrap_or_else(|| {
+        mir_child.kill().expect("failed to kill timed out aura run");
+        panic!("aura run timed out after {:?}", timeout);
+    });
+    let mir = mir_child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+    assert!(!mir_status.success());
+
+    let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout(
+        "aurora-function-value-default-trap-direct",
+        source,
+        timeout,
+    );
+    let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
+        direct_child
+            .kill()
+            .expect("failed to kill timed out direct run");
+        panic!("direct run timed out after {:?}", timeout);
+    });
+    let direct = direct_child
+        .wait_with_output()
+        .expect("failed to collect direct run output");
+    assert!(!direct_status.success());
+
+    for stderr in [&mir.stderr, &direct.stderr] {
+        let stderr = String::from_utf8_lossy(stderr);
+        assert!(
+            stderr.contains("error[AU4004]: division by zero"),
+            "default trap should preserve the public diagnostic, stderr was:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "Aurora call chain (innermost first): default_trap at 2:33 -> main at 5:1"
+            ),
+            "default trap should preserve the public function frame, stderr was:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("::__default_"),
+            "implementation-only default thunk leaked into stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn runtime_selected_task_target_traps_name_the_chosen_target_and_spawn_ancestry() {
+    let source = r#"
+def explode(value: int32) -> int32:
+    return 1 // value
+
+def safe(value: int32) -> int32:
+    return value
+
+def choose(should_explode: bool) -> def(int32) -> int32:
+    return explode if should_explode else safe
+
+def main() -> int32:
+    selected = choose(true)
+    with group = TaskGroup():
+        task = group.start(selected, 0)
+    return 0
+"#;
+    let timeout = std::time::Duration::from_secs(20);
+    let (_temp, _source_path, mut mir_child) =
+        run_aura_source_with_timeout("aurora-function-value-task-trap", source, timeout);
+    let mir_status = wait_with_timeout(&mut mir_child, timeout).unwrap_or_else(|| {
+        mir_child.kill().expect("failed to kill timed out aura run");
+        panic!("aura run timed out after {:?}", timeout);
+    });
+    let mir = mir_child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+    assert!(!mir_status.success());
+
+    let (_temp, _source_path, mut direct_child) =
+        build_direct_source_with_timeout("aurora-function-value-task-trap-direct", source, timeout);
+    let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
+        direct_child
+            .kill()
+            .expect("failed to kill timed out direct run");
+        panic!("direct run timed out after {:?}", timeout);
+    });
+    let direct = direct_child
+        .wait_with_output()
+        .expect("failed to collect direct run output");
+    assert!(!direct_status.success());
+
+    for stderr in [&mir.stderr, &direct.stderr] {
+        let stderr = String::from_utf8_lossy(stderr);
+        assert!(
+            stderr.contains("error[AU4004]: division by zero"),
+            "chosen task target should preserve its trap, stderr was:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Aurora task entry: explode at 2:1"),
+            "task entry should name the runtime-selected target, stderr was:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "Aurora task ancestry (youngest first): explode spawned from main at 14:"
+            ),
+            "task ancestry should name the runtime-selected target and spawn site, stderr was:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("safe at ") && !stderr.contains("function value"),
+            "task diagnostic leaked a static alternate or placeholder target:\n{stderr}"
+        );
+    }
+}

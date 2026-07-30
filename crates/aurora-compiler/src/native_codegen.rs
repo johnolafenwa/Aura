@@ -4,7 +4,8 @@ use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::TrapCode;
 use cranelift_codegen::ir::{
-    types, AbiParam, FuncRef, InstBuilder, MemFlags, Signature, UserFuncName, Value,
+    types, AbiParam, FuncRef, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
+    UserFuncName, Value,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings::{self, Configurable};
@@ -12,7 +13,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
-use crate::ast::{BinaryOp, UnaryOp};
+use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::Span;
@@ -21,7 +22,7 @@ use crate::mir::{
     MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
     NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
-use crate::sema::{substitute_type, Type};
+use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 const DIRECT_TO_FLOAT_ARITY_ERROR: &str =
     "direct backend expected `to_float()` to take no arguments";
@@ -210,10 +211,72 @@ struct TaskStart<'a> {
     mode: TaskStartMode,
     stack_size: Option<&'a Operand>,
     task_group: &'a Operand,
-    function: &'a str,
+    function: &'a Operand,
     args: &'a [MirArg],
     spawn_span: Span,
     target: &'a DirectType,
+}
+
+struct BoundFunctionValueArgs<'a> {
+    slots: Vec<Option<&'a MirArg>>,
+    source_slots: Vec<usize>,
+}
+
+fn bind_function_value_args<'a>(
+    params: &[FunctionParamContract],
+    args: &'a [MirArg],
+    unknown_named_prefix: &str,
+    duplicate_error: &str,
+) -> std::result::Result<BoundFunctionValueArgs<'a>, String> {
+    let mut slots = vec![None; params.len()];
+    let mut source_slots = Vec::with_capacity(args.len());
+    let mut next_positional = 0usize;
+    for argument in args {
+        let slot = if let Some(name) = argument.name.as_deref() {
+            let mut named_slot = None;
+            for (index, param) in params.iter().enumerate() {
+                if param.name == name {
+                    named_slot = Some(index);
+                    break;
+                }
+            }
+            let Some(named_slot) = named_slot else {
+                return Err(format!("{unknown_named_prefix} `{name}`"));
+            };
+            named_slot
+        } else {
+            while next_positional < slots.len() && slots[next_positional].is_some() {
+                next_positional += 1;
+            }
+            let slot = next_positional;
+            next_positional += 1;
+            slot
+        };
+        if slot >= slots.len() || slots[slot].replace(argument).is_some() {
+            return Err(duplicate_error.to_string());
+        }
+        source_slots.push(slot);
+    }
+    Ok(BoundFunctionValueArgs {
+        slots,
+        source_slots,
+    })
+}
+
+fn function_value_param_types(
+    params: &[FunctionParamContract],
+    classes: &HashMap<String, MirClass>,
+    context: &str,
+) -> std::result::Result<Vec<DirectType>, String> {
+    let mut direct_types = Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        direct_types.push(ensure_direct_type(
+            &param.ty,
+            classes,
+            &format!("{context} {}", index + 1),
+        )?);
+    }
+    Ok(direct_types)
 }
 
 struct NativeCodegen<'a> {
@@ -224,6 +287,7 @@ struct NativeCodegen<'a> {
     object: ObjectModule,
     functions: HashMap<String, FuncId>,
     function_thunks: HashMap<String, FuncId>,
+    function_default_binders: HashMap<String, FuncId>,
     cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
@@ -257,6 +321,9 @@ struct NativeCodegen<'a> {
     box_uint_literal: FuncId,
     box_f64: FuncId,
     box_bool: FuncId,
+    function_value: FuncId,
+    function_thunk: FuncId,
+    function_default_binder: FuncId,
     box_unit: FuncId,
     string_literal: FuncId,
     string_len: FuncId,
@@ -366,6 +433,8 @@ struct NativeCodegen<'a> {
     arg_buffer_new: FuncId,
     arg_buffer_store: FuncId,
     arg_buffer_store_owned: FuncId,
+    task_arg_buffer_guard: FuncId,
+    task_arg_buffer_disarm: FuncId,
     host_builtin: FuncId,
     monotonic_time_ms: FuncId,
     channel_new: FuncId,
@@ -738,6 +807,9 @@ impl<'a> NativeCodegen<'a> {
             box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
             box_f64 => ("aurora_direct_box_f64", [types::F64], Some(types::I64)),
             box_bool => ("aurora_direct_box_bool", [types::I64], Some(types::I64)),
+            function_value => ("aurora_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            function_thunk => ("aurora_direct_function_thunk", [types::I64], Some(types::I64)),
+            function_default_binder => ("aurora_direct_function_default_binder", [types::I64], Some(types::I64)),
             box_unit => ("aurora_direct_box_unit", [], Some(types::I64)),
             string_literal => ("aurora_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
             string_len => ("aurora_direct_string_len", [types::I64], Some(types::I64)),
@@ -847,6 +919,8 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
             arg_buffer_store_owned => ("aurora_direct_arg_buffer_store_owned", [types::I64, types::I64, types::I64], None),
+            task_arg_buffer_guard => ("aurora_direct_task_arg_buffer_guard", [types::I64, types::I64], Some(types::I64)),
+            task_arg_buffer_disarm => ("aurora_direct_task_arg_buffer_disarm", [types::I64], None),
             host_builtin => ("aurora_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             monotonic_time_ms => ("aurora_direct_monotonic_time_ms", [], Some(types::I64)),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
@@ -1015,11 +1089,12 @@ impl<'a> NativeCodegen<'a> {
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
             yield_now => ("aurora_direct_yield_now", [], None),
             sleep_value_void => ("aurora_direct_sleep_value_void", [types::I64], None),
-            start_task_call => ("aurora_direct_start_task_call_with_frames", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            start_task_call => ("aurora_direct_start_task_function_with_frames", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
+        let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
         let mut function_param_types = HashMap::new();
@@ -1043,6 +1118,17 @@ impl<'a> NativeCodegen<'a> {
                 function.name
             );
             function_thunks.insert(function.name.clone(), thunk_id);
+            let binder_signature = default_binder_signature(call_conv);
+            let binder_id = try_or_string_error!(
+                object.declare_function(
+                    &mangle_default_binder_symbol(&function.name),
+                    Linkage::Local,
+                    &binder_signature,
+                ),
+                "failed to declare function default binder `{}`: {}",
+                function.name
+            );
+            function_default_binders.insert(function.name.clone(), binder_id);
             for (cleanup_index, place) in collect_cleanup_places(function).into_iter().enumerate() {
                 let cleanup_id = try_or_string_error!(
                     object.declare_function(
@@ -1098,6 +1184,7 @@ impl<'a> NativeCodegen<'a> {
             object,
             functions,
             function_thunks,
+            function_default_binders,
             cleanup_thunks,
             classes,
             trait_impls,
@@ -1131,6 +1218,9 @@ impl<'a> NativeCodegen<'a> {
             box_uint_literal,
             box_f64,
             box_bool,
+            function_value,
+            function_thunk,
+            function_default_binder,
             box_unit,
             string_literal,
             string_len,
@@ -1240,6 +1330,8 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_new,
             arg_buffer_store,
             arg_buffer_store_owned,
+            task_arg_buffer_guard,
+            task_arg_buffer_disarm,
             host_builtin,
             monotonic_time_ms,
             channel_new,
@@ -1414,14 +1506,6 @@ impl<'a> NativeCodegen<'a> {
     }
 
     fn emit(mut self) -> std::result::Result<Vec<u8>, String> {
-        let entry_name = if self.functions.contains_key("main") {
-            Some("main")
-        } else if self.functions.contains_key("__script") {
-            Some("__script")
-        } else {
-            None
-        };
-        let task_start_targets = collect_task_start_targets(self.module);
         for function in self
             .module
             .functions
@@ -1429,10 +1513,9 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
-            if task_start_targets.contains(&function.name)
-                || entry_name == Some(function.name.as_str())
-            {
+            if function.receiver.is_none() {
                 self.define_function_thunk(function)?;
+                self.define_function_default_binder(function)?;
             }
         }
         for function in self
@@ -1486,11 +1569,12 @@ impl<'a> NativeCodegen<'a> {
         let column = builder
             .ins()
             .iconst(types::I64, function.span.column as i64);
+        let public_function_name = public_direct_function_name(&function.name);
         let (function_ptr, function_len) = declare_string_constant(
             &mut self.object,
             &mut self.string_data,
             &mut builder,
-            function.name.as_bytes(),
+            public_function_name.as_bytes(),
         )?;
         let function_path = function
             .source_path
@@ -1703,6 +1787,11 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
+        let mut function_default_binder_refs = HashMap::new();
+        for (name, func_id) in &self.function_default_binders {
+            let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
+            function_default_binder_refs.insert(name.clone(), func_ref);
+        }
         let mut cleanup_thunk_refs = HashMap::new();
         for place in &cleanup_places {
             if let Some(func_id) = self
@@ -1769,6 +1858,15 @@ impl<'a> NativeCodegen<'a> {
         let box_bool = self
             .object
             .declare_func_in_func(self.box_bool, builder.func);
+        let function_value = self
+            .object
+            .declare_func_in_func(self.function_value, builder.func);
+        let function_thunk = self
+            .object
+            .declare_func_in_func(self.function_thunk, builder.func);
+        let function_default_binder = self
+            .object
+            .declare_func_in_func(self.function_default_binder, builder.func);
         let box_unit = self
             .object
             .declare_func_in_func(self.box_unit, builder.func);
@@ -2084,6 +2182,12 @@ impl<'a> NativeCodegen<'a> {
         let arg_buffer_store_owned = self
             .object
             .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
+        let task_arg_buffer_guard = self
+            .object
+            .declare_func_in_func(self.task_arg_buffer_guard, builder.func);
+        let task_arg_buffer_disarm = self
+            .object
+            .declare_func_in_func(self.task_arg_buffer_disarm, builder.func);
         let host_builtin = self
             .object
             .declare_func_in_func(self.host_builtin, builder.func);
@@ -2605,7 +2709,7 @@ impl<'a> NativeCodegen<'a> {
                 )
             })
             .collect();
-        let current_function_name = function.name.clone();
+        let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
             .clone()
@@ -2619,6 +2723,7 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             function_thunk_refs,
+            function_default_binder_refs,
             cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
@@ -2659,6 +2764,9 @@ impl<'a> NativeCodegen<'a> {
             box_uint_literal,
             box_f64,
             box_bool,
+            function_value,
+            function_thunk,
+            function_default_binder,
             box_unit,
             string_literal,
             string_len,
@@ -2768,6 +2876,8 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_new,
             arg_buffer_store,
             arg_buffer_store_owned,
+            task_arg_buffer_guard,
+            task_arg_buffer_disarm,
             host_builtin,
             monotonic_time_ms,
             channel_new,
@@ -3007,15 +3117,20 @@ impl<'a> NativeCodegen<'a> {
             .declare_func_in_func(self.release_value, builder.func);
 
         let mut lowered_args = Vec::new();
-        let param_types = self
-            .function_param_types
-            .get(&function.name)
-            .cloned()
-            .unwrap_or_default();
+        let param_types = self.function_param_types[&function.name].clone();
         for (index, param_ty) in param_types.iter().enumerate() {
             let raw = builder
                 .ins()
                 .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
+            // The uniform function-value buffer is an in/out ownership
+            // channel. Clear each incoming slot before transferring its
+            // retained handle into the concrete function ABI; mutable
+            // parameter writebacks are installed into their original slots
+            // after the call.
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder
+                .ins()
+                .store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
             match param_ty {
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
@@ -3066,13 +3181,136 @@ impl<'a> NativeCodegen<'a> {
                 ));
             }
         };
-        let boxed = box_thunk_value(self, &mut builder, &results, &return_ty)?;
+        // `target_ref` uses `signature_for(function)`: its results are the
+        // declared return ABI followed by mutable-parameter writebacks. The
+        // cached direct types above are built from that same `MirFunction`.
+        let return_count = return_ty.value_count();
+        let mut cursor = return_count;
+        for (index, param) in function.params.iter().enumerate() {
+            if param.passing != MirReceiverKind::BorrowMut {
+                continue;
+            }
+            let writeback_ty = &param_types[index];
+            let writeback_count = writeback_ty.value_count();
+            let boxed_writeback = box_thunk_value(
+                self,
+                &mut builder,
+                &results[cursor..cursor + writeback_count],
+                writeback_ty,
+            )?;
+            builder.ins().store(
+                MemFlags::new(),
+                boxed_writeback,
+                args_ptr,
+                (index as i32) * 8,
+            );
+            cursor += writeback_count;
+        }
+        let boxed = box_thunk_value(self, &mut builder, &results[..return_count], &return_ty)?;
         builder.ins().return_(&[boxed]);
         builder.finalize();
 
         try_or_string_error!(
             self.object.define_function(thunk_id, &mut ctx),
             "failed to define direct function thunk `{}`: {}",
+            function.name
+        );
+        Ok(())
+    }
+
+    fn define_function_default_binder(
+        &mut self,
+        function: &MirFunction,
+    ) -> std::result::Result<(), String> {
+        if function.receiver.is_some() {
+            return Err(format!(
+                "direct backend cannot build a function-value default binder for method `{}`",
+                function.name
+            ));
+        }
+        let binder_id = self.function_default_binders[&function.name];
+        let mut ctx = self.object.make_context();
+        ctx.func.signature = default_binder_signature(self.call_conv);
+        ctx.func.name = UserFuncName::user(0, binder_id.as_u32());
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let args_ptr = builder.block_params(entry)[0];
+        let transfer_defaults = builder.block_params(entry)[2];
+        let store_owned = self
+            .object
+            .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
+        let param_types = self
+            .function_param_types
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_default();
+
+        for (index, param) in function.params.iter().enumerate() {
+            let Some(default_name) = param.default_function.as_ref() else {
+                continue;
+            };
+            let raw = builder
+                .ins()
+                .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
+            let missing = builder.ins().icmp_imm(IntCC::Equal, raw, 0);
+            let default_block = builder.create_block();
+            let next_block = builder.create_block();
+            builder
+                .ins()
+                .brif(missing, default_block, &[], next_block, &[]);
+            builder.switch_to_block(default_block);
+            let default_id = *self.functions.get(default_name).ok_or_else(|| {
+                format!(
+                    "direct backend is missing default function `{default_name}` for `{}`",
+                    function.name
+                )
+            })?;
+            let default_ref = self.object.declare_func_in_func(default_id, builder.func);
+            let call = builder.ins().call(default_ref, &[]);
+            let results = builder.inst_results(call).to_vec();
+            let param_ty = param_types.get(index).ok_or_else(|| {
+                format!(
+                    "direct backend is missing parameter {} metadata for `{}`",
+                    index + 1,
+                    function.name
+                )
+            })?;
+            let boxed = box_thunk_value(self, &mut builder, &results, param_ty)?;
+            let transfer = builder
+                .ins()
+                .icmp_imm(IntCC::NotEqual, transfer_defaults, 0);
+            let transfer_block = builder.create_block();
+            let retain_block = builder.create_block();
+            builder
+                .ins()
+                .brif(transfer, transfer_block, &[], retain_block, &[]);
+            builder.switch_to_block(transfer_block);
+            let index_value = builder.ins().iconst(types::I64, index as i64);
+            builder
+                .ins()
+                .call(store_owned, &[args_ptr, index_value, boxed]);
+            builder.ins().jump(next_block, &[]);
+            builder.seal_block(transfer_block);
+            builder.switch_to_block(retain_block);
+            builder
+                .ins()
+                .store(MemFlags::new(), boxed, args_ptr, (index as i32) * 8);
+            builder.ins().jump(next_block, &[]);
+            builder.seal_block(retain_block);
+            builder.seal_block(default_block);
+            builder.switch_to_block(next_block);
+            builder.seal_block(next_block);
+        }
+        builder.ins().return_(&[]);
+        builder.finalize();
+        try_or_string_error!(
+            self.object.define_function(binder_id, &mut ctx),
+            "failed to define direct default binder `{}`: {}",
             function.name
         );
         Ok(())
@@ -3294,6 +3532,7 @@ struct FunctionCompiler<'a> {
     next_variable_index: usize,
     function_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
+    function_default_binder_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
@@ -3334,6 +3573,9 @@ struct FunctionCompiler<'a> {
     box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
+    function_value: cranelift_codegen::ir::FuncRef,
+    function_thunk: cranelift_codegen::ir::FuncRef,
+    function_default_binder: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
     string_len: cranelift_codegen::ir::FuncRef,
@@ -3443,6 +3685,8 @@ struct FunctionCompiler<'a> {
     arg_buffer_new: cranelift_codegen::ir::FuncRef,
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
     arg_buffer_store_owned: cranelift_codegen::ir::FuncRef,
+    task_arg_buffer_guard: cranelift_codegen::ir::FuncRef,
+    task_arg_buffer_disarm: cranelift_codegen::ir::FuncRef,
     host_builtin: cranelift_codegen::ir::FuncRef,
     monotonic_time_ms: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
@@ -4884,11 +5128,158 @@ impl<'a> FunctionCompiler<'a> {
         match callee {
             CallTarget::Name(name) if name == "print" => self.compile_print(args),
             CallTarget::Name(name) => self.compile_named_call(name, args, target),
+            CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
             CallTarget::Member {
                 object,
                 field,
                 receiver_place,
             } => self.compile_member_call(object, field, receiver_place.as_deref(), args),
+        }
+    }
+
+    fn compile_function_value_call(
+        &mut self,
+        function: &Operand,
+        args: &[MirArg],
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
+        let function_type = infer_operand_type(function, &self.variable_types, &self.classes)
+            .ok_or("direct backend could not infer the indirect callee type".to_string())?;
+        let DirectType::Opaque(Type::Function {
+            params,
+            return_type,
+        }) = function_type
+        else {
+            return Err("direct backend expected an indirect function value".to_string());
+        };
+        if args.len() > params.len() {
+            return Err(format!(
+                "direct backend expected at most {} indirect-call arguments, found {}",
+                params.len(),
+                args.len()
+            ));
+        }
+        let binding = bind_function_value_args(
+            &params,
+            args,
+            "direct backend function value has no parameter named",
+            "direct backend received duplicate indirect-call arguments",
+        )?;
+        let param_types =
+            function_value_param_types(&params, &self.classes, "indirect-call parameter")?;
+        let return_direct =
+            ensure_direct_type(&return_type, &self.classes, "indirect-call return type")?;
+
+        let loaded_function = self.load_operand(function)?;
+        let function = self.ensure_opaque(loaded_function)?;
+        let count = self.builder.ins().iconst(types::I64, params.len() as i64);
+        let buffer_size = u32::try_from(params.len().max(1).saturating_mul(8))
+            .ok()
+            .ok_or("direct backend indirect-call buffer is too large".to_string())?;
+        let buffer_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            buffer_size,
+            3,
+        ));
+        let buffer = self.builder.ins().stack_addr(types::I64, buffer_slot, 0);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        for index in 0..params.len() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), zero, buffer, (index as i32) * 8);
+        }
+        let mut writebacks = Vec::new();
+        // Evaluate supplied expressions in source order while writing each
+        // captured value to its declaration slot.
+        for (argument, index) in args.iter().zip(&binding.source_slots) {
+            let index = *index;
+            let expected = &param_types[index];
+            let passing = params[index].passing;
+            let loaded_value = self.load_operand_for_target(&argument.value, expected)?;
+            let value = self.coerce_value(loaded_value, expected)?;
+            let value = self.ensure_opaque(value)?;
+            let transferred = self.transfer_opaque_arg(&value);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), transferred, buffer, (index as i32) * 8);
+            match (passing, argument.writeback_place.as_ref()) {
+                (ReceiverKind::BorrowMut, Some(place)) => {
+                    writebacks.push((index, place.clone(), expected.clone()));
+                }
+                (ReceiverKind::BorrowMut, None) => {
+                    return Err(format!(
+                        "direct backend indirect mutable argument {} has no writeback place",
+                        index + 1
+                    ));
+                }
+                (_, Some(_)) => {
+                    return Err(format!(
+                        "direct backend indirect argument {} unexpectedly requests writeback",
+                        index + 1
+                    ));
+                }
+                (_, None) => {}
+            }
+        }
+        let thunk_call = self
+            .builder
+            .ins()
+            .call(self.function_thunk, &[function.values[0]]);
+        let thunk_ptr = self.builder.inst_results(thunk_call)[0];
+        let binder_call = self
+            .builder
+            .ins()
+            .call(self.function_default_binder, &[function.values[0]]);
+        let binder_ptr = self.builder.inst_results(binder_call)[0];
+        let binder_signature = default_binder_signature(self.builder.func.signature.call_conv);
+        let binder_signature_ref = self.builder.import_signature(binder_signature);
+        let keep_defaults_owned = self.builder.ins().iconst(types::I64, 0);
+        self.builder.ins().call_indirect(
+            binder_signature_ref,
+            binder_ptr,
+            &[buffer, count, keep_defaults_owned],
+        );
+        for (index, supplied) in binding.slots.iter().enumerate() {
+            if supplied.is_some() {
+                continue;
+            }
+            let raw =
+                self.builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
+            self.tag_raw_opaque_runtime_type(raw, &param_types[index])?;
+        }
+        let thunk_signature = thunk_signature(self.builder.func.signature.call_conv);
+        let signature_ref = self.builder.import_signature(thunk_signature);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(signature_ref, thunk_ptr, &[buffer, count]);
+        let raw_result = self.builder.inst_results(call)[0];
+
+        for (index, place, writeback_ty) in writebacks {
+            let raw =
+                self.builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), zero, buffer, (index as i32) * 8);
+            let boxed = ValueRef {
+                values: vec![raw],
+                ty: DirectType::Opaque(direct_type_to_type(&writeback_ty)),
+            };
+            self.mark_temporary_opaque_owned(&boxed);
+            let writeback = self.coerce_value(boxed, &writeback_ty)?;
+            self.store_place(&place, writeback)?;
+        }
+        let boxed_result =
+            self.owned_opaque_result(vec![raw_result], direct_type_to_type(&return_direct));
+        let result = self.coerce_value(boxed_result, &return_direct)?;
+        match target {
+            Some(target) => self.coerce_value(result, target),
+            None => Ok(result),
         }
     }
 
@@ -5154,9 +5545,9 @@ impl<'a> FunctionCompiler<'a> {
             for argument in args {
                 let direct =
                     infer_operand_type(&argument.value, &self.variable_types, &self.classes)
-                        .ok_or_else(|| {
-                            "direct backend could not infer a `select` source type".to_string()
-                        })?;
+                        .ok_or(
+                            "direct backend could not infer a `select` source type".to_string(),
+                        )?;
                 let ty = direct_type_to_type(&direct);
                 match &ty {
                     Type::Named(name, type_args) if name == "Queue" => {
@@ -6294,6 +6685,52 @@ impl<'a> FunctionCompiler<'a> {
         match operand {
             Operand::Place(place) => self.load_place(place),
             Operand::MovePlace(place) => self.take_place(place),
+            Operand::Function { name, signature } => {
+                let thunk_ref = *self.function_thunk_refs.get(name).ok_or_else(|| {
+                    format!("direct backend does not know function thunk for `{name}`")
+                })?;
+                let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
+                let binder_ref = *self.function_default_binder_refs.get(name).ok_or_else(|| {
+                    format!("direct backend does not know function default binder for `{name}`")
+                })?;
+                let binder_ptr = self.builder.ins().func_addr(types::I64, binder_ref);
+                let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+                let signature_json = serde_json::to_vec(signature).map_err(|error| {
+                    format!("failed to serialize function signature for `{name}`: {error}")
+                })?;
+                let (signature_ptr, signature_len) = self.string_constant(&signature_json)?;
+                let (path, span) =
+                    self.function_frame_metadata
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                            "direct backend is missing source-frame metadata for function `{name}`"
+                        )
+                        })?;
+                let (path_ptr, path_len) = self.string_constant(path.as_bytes())?;
+                let line = self.builder.ins().iconst(types::I64, span.line as i64);
+                let column = self.builder.ins().iconst(types::I64, span.column as i64);
+                let call = self.builder.ins().call(
+                    self.function_value,
+                    &[
+                        thunk_ptr,
+                        binder_ptr,
+                        name_ptr,
+                        name_len,
+                        signature_ptr,
+                        signature_len,
+                        path_ptr,
+                        path_len,
+                        line,
+                        column,
+                    ],
+                );
+                Ok(self.owned_opaque_result(
+                    self.builder.inst_results(call).to_vec(),
+                    signature.as_ref().clone(),
+                ))
+            }
             Operand::Int(value) => {
                 if let Ok(narrowed) = i64::try_from(*value) {
                     return Ok(ValueRef {
@@ -6346,6 +6783,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.type_of_place(place).ok()?.scalar_kind()?
             }
             Operand::Int(_)
+            | Operand::Function { .. }
             | Operand::Float(_)
             | Operand::String(_)
             | Operand::Duration(_)
@@ -6731,10 +7169,30 @@ impl<'a> FunctionCompiler<'a> {
                 "direct backend expected opaque `{ty}` to use one runtime value"
             ));
         };
-        let (type_ptr, type_len) = self.string_constant(ty.to_string().as_bytes())?;
+        let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
         self.builder
             .ins()
             .call(self.tag_value_type, &[*raw, type_ptr, type_len]);
+        Ok(())
+    }
+
+    fn tag_raw_opaque_runtime_type(
+        &mut self,
+        raw: Value,
+        ty: &DirectType,
+    ) -> std::result::Result<(), String> {
+        let DirectType::Opaque(ty) = ty else {
+            return Ok(());
+        };
+        if runtime_type_is_wildcard(ty) {
+            return Ok(());
+        }
+        let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        self.builder
+            .ins()
+            .call(self.tag_value_type, &[raw, type_ptr, type_len]);
         Ok(())
     }
 
@@ -11587,35 +12045,48 @@ impl<'a> FunctionCompiler<'a> {
             spawn_span,
             target,
         } = task;
-        let thunk_ref = *self.function_thunk_refs.get(function).ok_or({
-            format!(
-                "direct backend does not know task-start thunk for `{}`",
-                function
-            )
-        })?;
-        let arg_count_value = self.builder.ins().iconst(types::I64, args.len() as i64);
+        let function_value = self.load_operand(function)?;
+        let function_value = self.ensure_opaque(function_value)?;
+        let function_params =
+            match infer_operand_type(function, &self.variable_types, &self.classes) {
+                Some(DirectType::Opaque(Type::Function { params, .. })) => params,
+                _ => Vec::new(),
+            };
+        let arg_count_value = self
+            .builder
+            .ins()
+            .iconst(types::I64, function_params.len() as i64);
         let buffer_call = self
             .builder
             .ins()
             .call(self.arg_buffer_new, &[arg_count_value]);
         let buffer = self.builder.inst_results(buffer_call)[0];
-        let expected = self
-            .function_param_types
-            .get(function)
-            .cloned()
-            .unwrap_or_default();
-        for (index, arg) in args.iter().enumerate() {
+        let guard_call = self
+            .builder
+            .ins()
+            .call(self.task_arg_buffer_guard, &[buffer, arg_count_value]);
+        let buffer_guard = self.builder.inst_results(guard_call)[0];
+        let expected = function_value_param_types(
+            &function_params,
+            &self.classes,
+            "task function-value parameter",
+        )?;
+        let binding = bind_function_value_args(
+            &function_params,
+            args,
+            "task function value has no parameter named",
+            "duplicate task function-value argument",
+        )?;
+        for (arg, index) in args.iter().zip(&binding.source_slots) {
+            let index = *index;
             if arg.writeback_place.is_some() {
                 return Err(
                     "direct backend does not yet support borrowed task-start arguments".to_string(),
                 );
             }
-            let value = if let Some(expected_ty) = expected.get(index) {
-                let loaded = self.load_operand_for_target(&arg.value, expected_ty)?;
-                self.coerce_value(loaded, expected_ty)?
-            } else {
-                self.load_operand(&arg.value)?
-            };
+            let expected_ty = &expected[index];
+            let loaded = self.load_operand_for_target(&arg.value, expected_ty)?;
+            let value = self.coerce_value(loaded, expected_ty)?;
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.ins().iconst(types::I64, index as i64);
             self.builder.ins().call(
@@ -11623,7 +12094,29 @@ impl<'a> FunctionCompiler<'a> {
                 &[buffer, index_value, value.values[0]],
             );
         }
-        let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
+        let binder_call = self
+            .builder
+            .ins()
+            .call(self.function_default_binder, &[function_value.values[0]]);
+        let binder_ptr = self.builder.inst_results(binder_call)[0];
+        let binder_signature = default_binder_signature(self.builder.func.signature.call_conv);
+        let binder_signature_ref = self.builder.import_signature(binder_signature);
+        let transfer_defaults = self.builder.ins().iconst(types::I64, 1);
+        self.builder.ins().call_indirect(
+            binder_signature_ref,
+            binder_ptr,
+            &[buffer, arg_count_value, transfer_defaults],
+        );
+        for (index, supplied) in binding.slots.iter().enumerate() {
+            if supplied.is_some() {
+                continue;
+            }
+            let raw =
+                self.builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
+            self.tag_raw_opaque_runtime_type(raw, &expected[index])?;
+        }
         let returns_handle_value = self
             .builder
             .ins()
@@ -11649,23 +12142,6 @@ impl<'a> FunctionCompiler<'a> {
         let group = self.load_operand(task_group)?;
         let group = self.ensure_opaque(group)?;
         let task_group_value = group.values[0];
-        let (task_path, task_entry_span) =
-            self.function_frame_metadata.get(function).cloned().ok_or({
-                format!(
-                    "direct backend does not know task-frame metadata for `{}`",
-                    function
-                )
-            })?;
-        let (task_function_ptr, task_function_len) = self.string_constant(function.as_bytes())?;
-        let (task_path_ptr, task_path_len) = self.string_constant(task_path.as_bytes())?;
-        let task_line = self
-            .builder
-            .ins()
-            .iconst(types::I64, task_entry_span.line as i64);
-        let task_column = self
-            .builder
-            .ins()
-            .iconst(types::I64, task_entry_span.column as i64);
         let current_function_name = self.current_function_name.clone();
         let current_function_path = self.current_function_path.clone();
         let (parent_function_ptr, parent_function_len) =
@@ -11680,10 +12156,16 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .iconst(types::I64, spawn_span.column as i64);
+        // Every operation that can trap after raw allocation has completed.
+        // Transfer the buffer from the direct cleanup stack to the task runtime
+        // only across this allocation-free call boundary.
+        self.builder
+            .ins()
+            .call(self.task_arg_buffer_disarm, &[buffer_guard]);
         let call = self.builder.ins().call(
             self.start_task_call,
             &[
-                thunk_ptr,
+                function_value.values[0],
                 buffer,
                 arg_count_value,
                 returns_handle_value,
@@ -11691,12 +12173,6 @@ impl<'a> FunctionCompiler<'a> {
                 result_is_copy_value,
                 stack_size_present_value,
                 stack_size_value,
-                task_function_ptr,
-                task_function_len,
-                task_path_ptr,
-                task_path_len,
-                task_line,
-                task_column,
                 parent_function_ptr,
                 parent_function_len,
                 spawn_path_ptr,
@@ -11748,11 +12224,11 @@ impl<'a> FunctionCompiler<'a> {
             Type::Unit => self.value_matches_type(value, "None"),
             Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
             Type::Tuple(_) => {
-                let pattern = if runtime_type_is_wildcard(ty) {
-                    render_runtime_type_pattern(ty)
-                } else {
-                    ty.to_string()
-                };
+                let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
+                self.value_matches_type(value, &pattern)
+            }
+            Type::Function { .. } => {
+                let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
             Type::Named(name, args) => {
@@ -11760,11 +12236,8 @@ impl<'a> FunctionCompiler<'a> {
                     return self.value_matches_type(value, name);
                 }
 
-                let exact = if runtime_type_is_wildcard(ty) {
-                    self.value_matches_type(value, &render_runtime_type_pattern(ty))?
-                } else {
-                    self.value_matches_type(value, &ty.to_string())?
-                };
+                let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
+                let exact = self.value_matches_type(value, &pattern)?;
                 let base_matches = self.value_matches_type(value, name)?;
 
                 let Some(class) = self.classes.get(name).cloned() else {
@@ -12204,6 +12677,14 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
         match ty {
             Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
             Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|param| type_contains_unknown(&param.ty))
+                    || type_contains_unknown(return_type.as_ref())
+            }
             Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
         }
     }
@@ -12353,6 +12834,9 @@ fn validate_rvalue(
         Rvalue::Call { callee, args } => {
             match callee {
                 CallTarget::Name(_) => {}
+                CallTarget::Value(function) => {
+                    validate_non_consuming_operand(function, "an indirect-call target")?
+                }
                 CallTarget::Member { object, .. } => validate_operand(object)?,
             }
             for argument in args {
@@ -12451,6 +12935,7 @@ fn validate_rvalue(
         Rvalue::StartTask {
             stack_size,
             task_group,
+            function,
             args,
             ..
         } => {
@@ -12458,6 +12943,7 @@ fn validate_rvalue(
                 validate_non_consuming_operand(stack_size, "a task stack size")?;
             }
             validate_non_consuming_operand(task_group, "a task-group receiver")?;
+            validate_non_consuming_operand(function, "a task function value")?;
             for argument in args {
                 validate_operand(&argument.value)?;
             }
@@ -12470,6 +12956,7 @@ fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {
     match operand {
         Operand::Place(_)
         | Operand::MovePlace(_)
+        | Operand::Function { .. }
         | Operand::Int(_)
         | Operand::Bool(_)
         | Operand::Unit
@@ -12542,6 +13029,7 @@ fn direct_type_inner(
             }
             Some(DirectType::Opaque(Type::Tuple(elements.clone())))
         }
+        Type::Function { .. } => Some(DirectType::Opaque(ty.clone())),
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
         }
@@ -12611,6 +13099,16 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             for element in elements {
                 collect_type_params_from_type(element, collected);
             }
+        }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
         }
         Type::Unit | Type::Module(_) => {}
     }
@@ -12686,6 +13184,14 @@ fn infer_rvalue_type(
             | BinaryOp::Mod => infer_operand_type(left, variable_types, classes),
         },
         Rvalue::Call { callee, args } => match callee {
+            CallTarget::Value(function) => {
+                let DirectType::Opaque(Type::Function { return_type, .. }) =
+                    infer_operand_type(function, variable_types, classes)?
+                else {
+                    return None;
+                };
+                direct_type(&return_type, classes)
+            }
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) if name == "random::Rng" => {
                 Some(DirectType::Opaque(Type::named("random.Rng")))
@@ -13109,11 +13615,11 @@ fn infer_rvalue_type(
             ..
         } => {
             if *returns_handle {
-                function_return_types.get(function).map(|ty| {
-                    DirectType::Opaque(Type::Named(
-                        "Task".to_string(),
-                        vec![direct_type_to_type(ty)],
-                    ))
+                infer_operand_type(function, variable_types, classes).and_then(|ty| match ty {
+                    DirectType::Opaque(Type::Function { return_type, .. }) => Some(
+                        DirectType::Opaque(Type::Named("Task".to_string(), vec![*return_type])),
+                    ),
+                    _ => None,
                 })
             } else {
                 Some(DirectType::Scalar(ScalarKind::Unit))
@@ -14023,6 +14529,7 @@ fn infer_operand_type(
         Operand::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Operand::String(_) => Some(DirectType::Opaque(Type::named("String"))),
         Operand::Duration(_) => Some(DirectType::Opaque(Type::named("Duration"))),
+        Operand::Function { signature, .. } => Some(DirectType::Opaque(signature.as_ref().clone())),
     }
 }
 
@@ -14325,6 +14832,14 @@ fn thunk_signature(call_conv: CallConv) -> Signature {
     signature
 }
 
+fn default_binder_signature(call_conv: CallConv) -> Signature {
+    let mut signature = Signature::new(call_conv);
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature
+}
+
 fn mangle_symbol(name: &str) -> String {
     let mut mangled = String::from("aurora_fn_");
     for ch in name.chars() {
@@ -14337,8 +14852,25 @@ fn mangle_symbol(name: &str) -> String {
     mangled
 }
 
+fn public_direct_function_name(name: &str) -> String {
+    name.split_once("::__default_")
+        .map_or_else(|| name.to_string(), |(public, _)| public.to_string())
+}
+
 fn mangle_thunk_symbol(name: &str) -> String {
     let mut mangled = String::from("aurora_thunk_");
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            mangled.push(ch);
+        } else {
+            mangled.push('_');
+        }
+    }
+    mangled
+}
+
+fn mangle_default_binder_symbol(name: &str) -> String {
+    let mut mangled = String::from("aurora_default_binder_");
     for ch in name.chars() {
         if ch.is_ascii_alphanumeric() {
             mangled.push(ch);
@@ -14418,6 +14950,32 @@ fn collect_direct_runtime_type_substitutions(
                 );
             }
         }
+        Type::Function {
+            params: pattern_params,
+            return_type: pattern_return,
+        } => {
+            let Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+            } = actual
+            else {
+                return;
+            };
+            if pattern_params.len() != actual_params.len() {
+                return;
+            }
+            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
+                if pattern_param.passing != actual_param.passing {
+                    return;
+                }
+                collect_direct_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -14440,35 +14998,17 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
         Type::Named(name, _) if name == "Unknown" => true,
         Type::Named(_, args) => args.iter().any(runtime_type_is_wildcard),
         Type::Tuple(elements) => elements.iter().any(runtime_type_is_wildcard),
-        Type::Unit | Type::Module(_) => false,
-    }
-}
-
-fn render_runtime_type_pattern(ty: &Type) -> String {
-    match ty {
-        Type::TypeParam(name) => format!("?{name}"),
-        Type::Named(name, args) if args.is_empty() => name.clone(),
-        Type::Named(name, args) => format!(
-            "{}[{}]",
-            name,
-            args.iter()
-                .map(render_runtime_type_pattern)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Type::Tuple(elements) => {
-            let rendered = elements
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            params
                 .iter()
-                .map(render_runtime_type_pattern)
-                .collect::<Vec<_>>();
-            match rendered.as_slice() {
-                [] => "()".to_string(),
-                [element] => format!("({},)", element),
-                _ => format!("({})", rendered.join(", ")),
-            }
+                .any(|param| runtime_type_is_wildcard(&param.ty))
+                || runtime_type_is_wildcard(return_type)
         }
-        Type::Unit => "None".to_string(),
-        Type::Module(path) => format!("module {path}"),
+        Type::Unit | Type::Module(_) => false,
     }
 }
 
@@ -14482,7 +15022,10 @@ fn collect_task_start_targets(module: &MirModule) -> BTreeSet<String> {
                     ..
                 } = instruction
                 {
-                    targets.insert(function.clone());
+                    targets.insert(match function {
+                        Operand::Function { name, .. } => name.clone(),
+                        _ => "<dynamic-function-value>".to_string(),
+                    });
                 }
             }
         }

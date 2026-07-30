@@ -1,0 +1,11 @@
+class Counter:
+    value: int32
+
+def increment(counter: mut Counter) -> None:
+    counter.value += 1
+
+def main() -> int32:
+    call = increment
+    counter = Counter(value=0)
+    call(counter)
+    return 0

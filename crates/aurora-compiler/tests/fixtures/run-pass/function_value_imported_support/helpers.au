@@ -1,0 +1,5 @@
+public def triple(value: int32) -> int32:
+    return value * 3
+
+public def empty[T]() -> Option[T]:
+    return None

@@ -96,6 +96,13 @@ Builtin generic or runtime-facing types currently accepted:
 Structural tuple types such as `(String, int64)` and singleton `(bool,)` are
 also accepted. A tuple is copyable exactly when every element is copyable.
 
+Capture-free named function values use `def(T1, mut T2, own T3) -> R`. They are copy
+values, satisfy `Transfer`, and may be stored in bindings, parameters, fields,
+and collections or used as `TaskGroup` targets. Bare function-type parameters
+are shared; written or inferred `mut`/`own` modes are part of the contract.
+Instance, associated, and trait method values remain
+outside the implemented surface.
+
 These built-in type names are reserved and cannot be reused for user-defined classes, enums, or traits.
 
 ## Packages And Workspaces
@@ -858,6 +865,7 @@ Not yet implemented:
 - direct recursive fields without `indirect`
 - first-class loan or view values; the current return syntax reserves no future
   aliasing contract
+- method values, lambdas, and capturing closures
 
 Current module/import limitations:
 
@@ -877,11 +885,10 @@ Current expression/ergonomics limitations:
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
 - `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, and their explicit-stack
-  variants support named functions plus associated methods without `self`,
-  using task-owned captures; every capture and target result must be
-  structurally `Transfer` after specialization, and explicit generic targets
-  may use `function[Types]` or `Type.associated_method[Types]` in the callable
-  slot
+  variants support capture-free named function values plus the existing direct
+  named-function and associated-method-without-`self` targets, using task-owned
+  captures; every capture and target result must be structurally `Transfer`
+  after specialization
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,

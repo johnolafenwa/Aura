@@ -1271,6 +1271,58 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         qualified_imported,
         crate::sema::Type::named("pkg.named.Remote")
     );
+    let qualified_function = qualify_export_type(
+        &program,
+        &crate::sema::Type::Function {
+            params: vec![
+                crate::sema::FunctionParamContract {
+                    name: "local".to_string(),
+                    ty: crate::sema::Type::named("Box"),
+                    passing: crate::ast::ReceiverKind::BorrowMut,
+                    has_default: true,
+                    default_erased: false,
+                },
+                crate::sema::FunctionParamContract {
+                    name: "remote".to_string(),
+                    ty: crate::sema::Type::Tuple(vec![crate::sema::Type::named("Remote")]),
+                    passing: crate::ast::ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: true,
+                },
+            ],
+            return_type: Box::new(crate::sema::Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(crate::sema::Type::named("Box")),
+            }),
+        },
+    );
+    assert_eq!(
+        qualified_function,
+        crate::sema::Type::Function {
+            params: vec![
+                crate::sema::FunctionParamContract {
+                    name: "local".to_string(),
+                    ty: crate::sema::Type::named("pkg.user.Box"),
+                    passing: crate::ast::ReceiverKind::BorrowMut,
+                    has_default: true,
+                    default_erased: false,
+                },
+                crate::sema::FunctionParamContract {
+                    name: "remote".to_string(),
+                    ty: crate::sema::Type::Tuple(vec![crate::sema::Type::named(
+                        "pkg.named.Remote"
+                    )]),
+                    passing: crate::ast::ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: true,
+                },
+            ],
+            return_type: Box::new(crate::sema::Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(crate::sema::Type::named("pkg.user.Box")),
+            }),
+        }
+    );
 
     let mut ambiguous_modules = BTreeMap::new();
     let mut first = remote_namespace.clone();
@@ -1299,6 +1351,35 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         named_ref_name(&qualified_ref.named_parts().expect("named ref").1[0]),
         "int32"
     );
+    let qualified_function_ref = qualify_export_type_ref(
+        &program,
+        &TypeRef::function(
+            vec![
+                type_ref("Box"),
+                TypeRef::tuple(vec![type_ref("Remote")], false, Span::new(1, 1)),
+            ],
+            TypeRef::function(Vec::new(), type_ref("Box"), Span::new(1, 1)),
+            Span::new(1, 1),
+        ),
+    );
+    let (params, nested_return) = qualified_function_ref
+        .function_parts()
+        .expect("qualified function type should remain structural");
+    assert_eq!(named_ref_name(&params[0].ty), "pkg.user.Box");
+    assert_eq!(
+        named_ref_name(
+            &params[1]
+                .ty
+                .elements()
+                .expect("tuple parameter should remain structural")[0]
+        ),
+        "pkg.named.Remote"
+    );
+    let (nested_params, return_type) = nested_return
+        .function_parts()
+        .expect("nested function return should remain structural");
+    assert!(nested_params.is_empty());
+    assert_eq!(named_ref_name(return_type), "pkg.user.Box");
     assert_eq!(
         named_ref_name(&qualify_export_type_ref(&program, &type_ref("str"))),
         "str"
@@ -1428,6 +1509,75 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     )
     .expect_err("non-module root bindings should reject namespace imports");
     assert!(duplicate.message.contains("duplicate import binding `pkg`"));
+}
+
+#[test]
+fn exported_callable_types_are_qualified_in_imported_analysis_hovers() {
+    let temp = TempDir::new("aurora-lib-exported-callable-analysis");
+    let pkg_dir = temp.path().join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("failed to create pkg dir");
+    let api_path = pkg_dir.join("api.au");
+    let main_path = temp.path().join("main.au");
+    fs::write(
+        &api_path,
+        [
+            "public class Token:",
+            "    public value: int32",
+            "",
+            "public def identity(value: own Token) -> Token:",
+            "    return value",
+            "",
+            "public def choose(transform: def(own Token) -> Token) -> def(own Token) -> Token:",
+            "    return transform",
+        ]
+        .join("\n"),
+    )
+    .expect("write exported callable API");
+    let source = [
+        "import pkg.api",
+        "",
+        "def main() -> int32:",
+        "    selected = pkg.api.choose",
+        "    transform = selected(pkg.api.identity)",
+        "    token = pkg.api.Token(value=1)",
+        "    result = transform(token)",
+        "    print(result.value)",
+        "    return 0",
+    ]
+    .join("\n");
+    fs::write(&main_path, &source).expect("write callable API consumer");
+
+    let analysis = analyze_path_source(&main_path, &source);
+    let serialized = serde_json::to_value(&analysis).expect("analysis should serialize");
+    assert_eq!(serialized["diagnostics"], serde_json::json!([]));
+    let hovers = serialized["occurrences"]
+        .as_array()
+        .expect("occurrences should serialize as an array")
+        .iter()
+        .filter_map(|occurrence| occurrence["hover"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        hovers.contains(
+            &"```aurora\nbinding selected: def(def(own pkg.api.Token) -> pkg.api.Token) -> def(own pkg.api.Token) -> pkg.api.Token\n```"
+        ),
+        "the imported higher-order function value must expose qualified parameter and return types: {hovers:?}"
+    );
+    assert!(
+        hovers.contains(
+            &"```aurora\nbinding transform: def(own pkg.api.Token) -> pkg.api.Token\n```"
+        ),
+        "the indirect call must preserve the qualified callable return type: {hovers:?}"
+    );
+    assert!(
+        hovers.contains(&"```aurora\nbinding result: pkg.api.Token\n```"),
+        "calling the imported function value must preserve its qualified result type: {hovers:?}"
+    );
+    assert!(
+        hovers
+            .iter()
+            .any(|hover| hover.contains("field value: int32")),
+        "the qualified result must still resolve the exported Token field"
+    );
 }
 
 #[test]

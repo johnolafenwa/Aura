@@ -1,0 +1,11 @@
+class Counter:
+    value: int32
+
+    def read(self) -> int32:
+        return self.value
+
+def main() -> int32:
+    counter = Counter(value=1)
+    read = counter.read
+    print(read())
+    return 0

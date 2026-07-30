@@ -1,0 +1,5 @@
+error[AU2005]: method values are not supported in this language version; call `.read(...)` directly or wrap it in a named function
+ --> crates/aurora-compiler/tests/fixtures/check-fail/method_values_are_not_first_class.au:9:20
+  |
+9 |     read = counter.read
+  |                    ^

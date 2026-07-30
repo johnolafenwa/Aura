@@ -267,10 +267,10 @@ impl RuntimeReactor {
             return Ok(());
         }
         let sequence = self.next_timer_sequence;
-        self.next_timer_sequence = self
-            .next_timer_sequence
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("runtime reactor timer sequence exhausted"))?;
+        let Some(next_timer_sequence) = self.next_timer_sequence.checked_add(1) else {
+            return Err(io::Error::other("runtime reactor timer sequence exhausted"));
+        };
+        self.next_timer_sequence = next_timer_sequence;
         self.timer_versions.insert(key, sequence);
         self.deadlines.push(Reverse(TimerEntry {
             deadline,
@@ -684,10 +684,12 @@ impl RuntimeReactor {
     #[cfg(unix)]
     fn allocate_fd_token(&mut self) -> io::Result<Token> {
         let token = Token(self.next_fd_token);
-        self.next_fd_token = self
-            .next_fd_token
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("runtime reactor descriptor token exhausted"))?;
+        let Some(next_fd_token) = self.next_fd_token.checked_add(1) else {
+            return Err(io::Error::other(
+                "runtime reactor descriptor token exhausted",
+            ));
+        };
+        self.next_fd_token = next_fd_token;
         Ok(token)
     }
 
@@ -738,9 +740,10 @@ fn retry_on_interrupt<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Re
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 #[cfg(test)]

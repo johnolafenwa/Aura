@@ -1,0 +1,9 @@
+def consume(value: own String) -> int64:
+    return value.len()
+
+def main() -> int32:
+    call = consume
+    text = "Aurora"
+    print(call(text))
+    print(text)
+    return 0

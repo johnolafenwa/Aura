@@ -18,21 +18,22 @@ use super::{
     validate_requested_read_size, wait_all_cancelled, wait_all_error, wait_all_ready,
     wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, BlockingIoPool,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy,
-    ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, FunctionValue,
+    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
+    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
+    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
     TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
     WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+use crate::ast::ReceiverKind;
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_config::BlockingIoPoolConfig;
 use crate::runtime_reactor::{RuntimeReactor, WaitKey};
-use crate::sema::Type;
+use crate::sema::{FunctionParamContract, Type};
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -106,6 +107,175 @@ fn assert_cast_source_type(value: Value, expected_source: &str) {
 
 fn assert_value_equals_clone(value: Value) {
     assert_eq!(value, value.clone());
+}
+
+fn function_signature(parameter_name: &str, has_default: bool, default_erased: bool) -> Type {
+    Type::Function {
+        params: vec![
+            FunctionParamContract {
+                name: parameter_name.to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Borrow,
+                has_default,
+                default_erased,
+            },
+            FunctionParamContract {
+                name: "items".to_string(),
+                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "predicate".to_string(),
+                ty: Type::Function {
+                    params: vec![FunctionParamContract {
+                        name: String::new(),
+                        ty: Type::named("bool"),
+                        passing: ReceiverKind::Value,
+                        has_default: false,
+                        default_erased: false,
+                    }],
+                    return_type: Box::new(Type::Unit),
+                },
+                passing: ReceiverKind::Value,
+                has_default: false,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::Tuple(vec![Type::named("int64")])),
+    }
+}
+
+#[test]
+fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnostics() {
+    let signature = function_signature("label", true, false);
+    assert_eq!(
+        signature.to_string(),
+        "def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)"
+    );
+
+    let function = Value::Function(Box::new(FunctionValue {
+        name: "support::transform".to_string(),
+        signature: signature.clone(),
+        source_path: Some("/workspace/support.au".to_string()),
+        entry_span: Span::new(7, 3),
+        direct_thunk: Some(11),
+        direct_default_binder: Some(12),
+    }));
+    assert_eq!(function.render(), "<function support::transform>");
+
+    let cloned = function.clone();
+    let Value::Function(cloned_function) = &cloned else {
+        panic!("cloning a function value must retain its runtime variant");
+    };
+    assert_eq!(
+        (
+            cloned_function.source_path.as_deref(),
+            cloned_function.entry_span,
+            cloned_function.direct_thunk,
+            cloned_function.direct_default_binder,
+        ),
+        (
+            Some("/workspace/support.au"),
+            Span::new(7, 3),
+            Some(11),
+            Some(12),
+        )
+    );
+    assert_eq!(function, cloned);
+
+    let same_callable_contract_with_different_execution_metadata =
+        Value::Function(Box::new(FunctionValue {
+            name: "support::transform".to_string(),
+            signature: function_signature("renamed", false, true),
+            source_path: Some("/installed/support.au".to_string()),
+            entry_span: Span::new(70, 30),
+            direct_thunk: Some(101),
+            direct_default_binder: None,
+        }));
+    assert_eq!(
+        function, same_callable_contract_with_different_execution_metadata,
+        "function identity ignores declaration-only parameter metadata and backend addresses"
+    );
+
+    let different_name = Value::Function(Box::new(FunctionValue {
+        name: "support::other".to_string(),
+        signature: signature.clone(),
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+    }));
+    assert_ne!(function, different_name);
+
+    let different_signature = Value::Function(Box::new(FunctionValue {
+        name: "support::transform".to_string(),
+        signature: Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        },
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+    }));
+    assert_ne!(function, different_signature);
+    assert_ne!(function, Value::Unit);
+
+    let cast_error = cast_numeric_value(function, &Type::named("int32"), Some(Span::new(19, 8)))
+        .expect_err("function values are not numeric cast sources");
+    assert_eq!(
+        cast_error.message,
+        "casts are only supported between numeric types, found `def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
+    );
+    assert_eq!(cast_error.span, Some(Span::new(19, 8)));
+}
+
+#[test]
+fn function_values_remain_observable_inside_structural_runtime_aggregates() {
+    let signature = function_signature("value", false, false);
+    let callbacks = Value::Vec(VecValue {
+        element_type: signature.clone(),
+        elements: ["first", "second"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                Value::Function(Box::new(FunctionValue {
+                    name: format!("support::{name}"),
+                    signature: signature.clone(),
+                    source_path: Some("/workspace/support.au".to_string()),
+                    entry_span: Span::new(index + 2, 5),
+                    direct_thunk: Some(20 + index as i64),
+                    direct_default_binder: None,
+                }))
+            })
+            .collect(),
+    });
+
+    assert_eq!(
+        callbacks.render(),
+        "[<function support::first>, <function support::second>]"
+    );
+    let cloned = callbacks.clone();
+    assert_eq!(callbacks, cloned);
+    let Value::Vec(cloned_callbacks) = cloned else {
+        panic!("function collection should retain its Vec runtime shape");
+    };
+    assert_eq!(cloned_callbacks.element_type, signature);
+    let [Value::Function(first), Value::Function(second)] = cloned_callbacks.elements.as_slice()
+    else {
+        panic!("function collection should retain both callable values");
+    };
+    assert_eq!(
+        (
+            first.entry_span,
+            first.direct_thunk,
+            second.entry_span,
+            second.direct_thunk,
+        ),
+        (Span::new(2, 5), Some(20), Span::new(3, 5), Some(21))
+    );
 }
 
 #[test]

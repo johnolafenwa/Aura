@@ -592,13 +592,36 @@ The variant must exist and receive exactly its declared payload shape. Generic e
 
 Bare builtin variants such as `Ok`, `Err`, `Some`, or `None` are accepted only where the expected enum identity is unambiguous. Qualified construction is the preferred reference and book style.
 
+## Function Values And Indirect Calls
+
+A named module-level function may appear as an expression. Its value is a copy
+code pointer with type such as `def(T1, mut T2, own T3) -> R`, where bare
+parameters are shared. Calling that expression uses the ordinary call
+production and preserves the named function's parameter capabilities.
+Explicit generic specialization such as `show[int32]` fixes one concrete
+function value before storage or invocation.
+
+Function-valued variables, parameters, fields, and collection elements are
+ordinary primary/postfix expressions. A value with one statically known source
+declaration keeps that declaration's parameter names and defaults for indirect
+calls. A control-flow selection also keeps these extras when all candidates
+agree on their names and default availability; each omitted argument evaluates
+the selected target's own default expression. Conflicting reassignment,
+structural function returns, class-field loads, and mutable-collection loads
+have only the structural function type and therefore require the complete
+positional argument list. Storage preserves each parameter's bare shared,
+`mut`, or `own` ABI capability. Instance and
+associated method values, trait-object interactions, lambdas, and capturing
+closures are not part of this stage.
+
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include comprehensions, lambdas, assignment
-expressions, call-site borrow annotations, non-numeric casts, or ordinary
-trailing commas. The required singleton-tuple comma is the one tuple-specific
-exception. If a form is absent from [Grammar](/manual/grammar), it is not part
-of the implemented expression language.
+Aurora 0.1 expressions do not include comprehensions, lambdas, capturing
+closures, method values, assignment expressions, call-site borrow
+annotations, non-numeric casts, or ordinary trailing commas. The required
+singleton-tuple comma is the one tuple-specific exception. If a form is absent
+from [Grammar](/manual/grammar), it is not part of the implemented expression
+language.
 
 ## Grammar
 
@@ -698,7 +721,8 @@ Delimiter continuation is accepted under ADR-0025 and does not add a new
 expression AST form. Conditional expressions are accepted under ADR-0027, and
 membership operators plus comparison chains are accepted under ADR-0028. The
 minimal tuple surface and its Batch 3 B3.0-c equality amendment are Accepted
-under ADR-0026. Lambdas,
-comprehensions, assignment expressions, general callables, nonnumeric casts,
-and call-site ownership modifiers are unavailable. Parser migration hints for
-unavailable spellings do not make them language features.
+under ADR-0026. Capture-free named function values and indirect calls are
+implemented. Lambdas, closures, method values, comprehensions, assignment
+expressions, nonnumeric casts, and call-site ownership modifiers are
+unavailable. Parser migration hints for unavailable spellings do not make them
+language features.

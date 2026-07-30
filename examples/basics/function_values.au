@@ -1,0 +1,65 @@
+class Pipeline:
+    transform: def(int32) -> int32
+
+class Counter:
+    value: int32
+
+class CapabilityPipeline:
+    mutate: def(mut Counter) -> None
+    consume: def(own String) -> String
+
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def bump(counter: mut Counter) -> None:
+    counter.value += 1
+
+def take(value: own String) -> String:
+    return value
+
+def offset(value: int32 = 10) -> int32:
+    return value + 1
+
+def apply(transform: def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+def show[T](value: T) -> None:
+    print(value)
+
+def invoke_show(callback: def(int32) -> None, value: int32) -> None:
+    callback(value)
+
+def choose_transform(use_increment: bool) -> def(int32) -> int32:
+    return increment if use_increment else double
+
+def main() -> int32:
+    selected: def(int32) -> int32 = increment
+    copied = selected
+    known_offset = offset
+    specialized = show[int32]
+    pipeline = Pipeline(transform=copied)
+    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+
+    print(apply(selected, 1))
+    print(apply(pipeline.transform, 2))
+    print(transforms[1](3))
+    print(copied(4))
+    invoke_show(specialized, 5)
+    runtime_selected = choose_transform(false)
+    print(runtime_selected(6))
+    print(known_offset())
+    print(known_offset(value=20))
+
+    mutate: def(mut Counter) -> None = bump
+    consume: def(own String) -> String = take
+    mutators: Vec[def(mut Counter) -> None] = [mutate]
+    capability_pipeline = CapabilityPipeline(mutate=mutate, consume=consume)
+    mut counter = Counter(value=0)
+    mutators[0](counter)
+    capability_pipeline.mutate(counter)
+    print(counter.value)
+    print(capability_pipeline.consume("owned"))
+    return 0

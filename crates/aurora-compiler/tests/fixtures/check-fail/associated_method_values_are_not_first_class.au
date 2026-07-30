@@ -1,0 +1,7 @@
+class Math:
+    def double(value: int32) -> int32:
+        return value * 2
+
+def main() -> int32:
+    callback = Math.double
+    return callback(21)

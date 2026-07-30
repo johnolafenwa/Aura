@@ -8,7 +8,7 @@ use crate::ast::{
 use crate::diag::{Diagnostic, Result, Span};
 use crate::sema::{
     resolve_param_passing, ClassInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
-    FunctionInfo, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
+    FunctionInfo, FunctionParamContract, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
 };
 
 fn builtin_span() -> Span {
@@ -28,6 +28,22 @@ fn lower_type_ref(type_ref: &TypeRef) -> Type {
         crate::ast::TypeRefKind::Named { name, args } => {
             Type::Named(name.clone(), args.iter().map(lower_type_ref).collect())
         }
+        crate::ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: String::new(),
+                    ty: lower_type_ref(&param.ty),
+                    passing: resolve_param_passing(param.mode),
+                    has_default: false,
+                    default_erased: true,
+                })
+                .collect(),
+            return_type: Box::new(lower_type_ref(return_type)),
+        },
     }
 }
 

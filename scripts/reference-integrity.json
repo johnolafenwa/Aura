@@ -677,7 +677,7 @@
       "reason": "Specialized-call fragment: identity is declared in the preceding generic-function block."
     },
     "docs/manual/functions.md#aurora-17": {
-      "sha256": "a8ab2aeafde2d775a107f7f83727076e1d603abd74fc9e8e693a1f0051e1aaeb",
+      "sha256": "a61d05136f63a839ff21f11a00d99c2eb113dc82487db0b346b75a4535bb2e25",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -936,7 +936,7 @@
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-4": {
-      "sha256": "852a4dee80b0fb45ac9b493c0393891aecaf67fd871cc0fb4241344504ace6b5",
+      "sha256": "0fbe230a3be3eb6dd17a0bc2898c819c80d3fc91573a05b9f1ac5f65c9c4c7e8",
       "mode": "illustrative",
       "reason": "Normative type-and-type-parameter EBNF fragment interpreted by the grammar prose, not Aurora source."
     },

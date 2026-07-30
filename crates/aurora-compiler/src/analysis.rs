@@ -14,8 +14,8 @@ use crate::call::{
 use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
-    builtin_duration_binary_result, substitute_trait_bound, ClassInfo, EnumInfo, FunctionInfo,
-    MethodInfo, Program, TraitBound, Type,
+    builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, ClassInfo,
+    EnumInfo, FunctionInfo, FunctionParamContract, MethodInfo, Program, TraitBound, Type,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1661,7 +1661,23 @@ impl<'a> AnalysisBuilder<'a> {
                 return Some(ResolvedMember {
                     hover: format_function_hover(&function.decl),
                     definition: Some(self.function_definition(function)),
-                    ty: Some(function.signature.return_type.clone()),
+                    ty: Some(Type::Function {
+                        params: function
+                            .decl
+                            .params
+                            .iter()
+                            .zip(&function.signature.params)
+                            .zip(&function.signature.param_passings)
+                            .map(|((decl, ty), passing)| FunctionParamContract {
+                                name: decl.name.clone(),
+                                ty: ty.clone(),
+                                passing: *passing,
+                                has_default: decl.default.is_some(),
+                                default_erased: false,
+                            })
+                            .collect(),
+                        return_type: Box::new(function.signature.return_type.clone()),
+                    }),
                 });
             }
             if let Some(class_info) = namespace.classes.get(field) {
@@ -2486,41 +2502,58 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
-        let crate::ast::TypeRefKind::Named { name, args } = &ty.kind else {
-            return Type::Tuple(
-                ty.elements()
-                    .unwrap_or_default()
+        match &ty.kind {
+            crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
+                elements
                     .iter()
                     .map(|element| self.lower_analysis_type_ref(element))
                     .collect(),
-            );
-        };
-        if name == "None" {
-            return Type::Unit;
+            ),
+            crate::ast::TypeRefKind::Function {
+                params,
+                return_type,
+            } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|param| FunctionParamContract {
+                        name: String::new(),
+                        ty: self.lower_analysis_type_ref(&param.ty),
+                        passing: resolve_param_passing(param.mode),
+                        has_default: false,
+                        default_erased: true,
+                    })
+                    .collect(),
+                return_type: Box::new(self.lower_analysis_type_ref(return_type)),
+            },
+            crate::ast::TypeRefKind::Named { name, args } => {
+                if name == "None" {
+                    return Type::Unit;
+                }
+                let name = match name.as_str() {
+                    "str" => "String",
+                    "int" => "int64",
+                    name => name,
+                };
+                let args = args
+                    .iter()
+                    .map(|arg| self.lower_analysis_type_ref(arg))
+                    .collect::<Vec<_>>();
+                self.program
+                    .classes
+                    .get(name)
+                    .map(|class_info| self.analysis_class_type(name, class_info, args.clone()))
+                    .unwrap_or_else(|| {
+                        Type::Named(
+                            self.program
+                                .canonical_type_names
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_else(|| name.to_string()),
+                            args,
+                        )
+                    })
+            }
         }
-        let name = match name.as_str() {
-            "str" => "String",
-            "int" => "int64",
-            name => name,
-        };
-        let args = args
-            .iter()
-            .map(|arg| self.lower_analysis_type_ref(arg))
-            .collect::<Vec<_>>();
-        self.program
-            .classes
-            .get(name)
-            .map(|class_info| self.analysis_class_type(name, class_info, args.clone()))
-            .unwrap_or_else(|| {
-                Type::Named(
-                    self.program
-                        .canonical_type_names
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| name.to_string()),
-                    args,
-                )
-            })
     }
 
     fn analysis_class_type(
@@ -2686,7 +2719,23 @@ impl<'a> AnalysisBuilder<'a> {
                     ));
                 }
                 if let Some(function) = self.program.functions.get(name) {
-                    return Some(function.signature.return_type.clone());
+                    return Some(Type::Function {
+                        params: function
+                            .decl
+                            .params
+                            .iter()
+                            .zip(&function.signature.params)
+                            .zip(&function.signature.param_passings)
+                            .map(|((decl, ty), passing)| FunctionParamContract {
+                                name: decl.name.clone(),
+                                ty: ty.clone(),
+                                passing: *passing,
+                                has_default: decl.default.is_some(),
+                                default_erased: false,
+                            })
+                            .collect(),
+                        return_type: Box::new(function.signature.return_type.clone()),
+                    });
                 }
                 builtin_function_return_type(name)
             }
@@ -2806,6 +2855,11 @@ impl<'a> AnalysisBuilder<'a> {
     ) -> Option<Type> {
         match &callee.kind {
             ExprKind::Name(name) => {
+                if let Some(Type::Function { return_type, .. }) =
+                    scope.get(name).map(|binding| &binding.ty)
+                {
+                    return Some((**return_type).clone());
+                }
                 if let Some(function) = self.program.functions.get(name) {
                     return Some(function.signature.return_type.clone());
                 }
@@ -2945,6 +2999,10 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 self.resolve_member_expr(object, field, scope)
                     .and_then(|member| member.ty)
+                    .map(|ty| match ty {
+                        Type::Function { return_type, .. } => *return_type,
+                        ty => ty,
+                    })
             }
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
@@ -3433,6 +3491,22 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
         crate::ast::TypeRefKind::Tuple(elements) => {
             Type::Tuple(elements.iter().map(lower_type_ref).collect())
         }
+        crate::ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: String::new(),
+                    ty: lower_type_ref(&param.ty),
+                    passing: resolve_param_passing(param.mode),
+                    has_default: false,
+                    default_erased: true,
+                })
+                .collect(),
+            return_type: Box::new(lower_type_ref(return_type)),
+        },
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args } => {
             let name = match name.as_str() {
@@ -3451,6 +3525,7 @@ fn base_type_name(ty: &Type) -> &str {
         Type::Module(name) => name.as_str(),
         Type::TypeParam(name) => name.as_str(),
         Type::Tuple(_) => "tuple",
+        Type::Function { .. } => "function",
         Type::Named(name, _) => name.as_str(),
     }
 }
@@ -3479,6 +3554,17 @@ fn analysis_type_contains_unknown(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, _) if name == "Unknown")
         || matches!(ty, Type::Named(_, args) if args.iter().any(analysis_type_contains_unknown))
         || matches!(ty, Type::Tuple(elements) if elements.iter().any(analysis_type_contains_unknown))
+        || matches!(
+            ty,
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } if params
+                .iter()
+                .any(|param| analysis_type_contains_unknown(&param.ty))
+                || analysis_type_contains_unknown(return_type)
+        )
 }
 
 fn analysis_is_numeric_type(ty: &Type) -> bool {
@@ -3525,6 +3611,7 @@ impl TypeExt for Type {
             Type::Module(_) => &[],
             Type::TypeParam(_) => &[],
             Type::Tuple(elements) => elements.as_slice(),
+            Type::Function { .. } => &[],
             Type::Named(_, args) => args.as_slice(),
         }
     }

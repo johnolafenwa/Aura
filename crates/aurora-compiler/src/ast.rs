@@ -129,7 +129,7 @@ pub struct ImplDecl {
     pub span: Span,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ReceiverKind {
     Value,
     Borrow,
@@ -138,10 +138,9 @@ pub enum ReceiverKind {
 
 /// Source-level ownership spelling for an ordinary parameter.
 ///
-/// `Default` is resolved exactly once from the declared type: copy types use
-/// value passing, while non-copy and unresolved generic types use a shared
-/// borrow. Keeping this source intent separate prevents generic
-/// specialization from changing the function ABI.
+/// `Default` always means shared access, including for copy types. Keeping
+/// this source intent separate from the eventual ABI representation prevents
+/// generic specialization from changing a function's source-level contract.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum ParamMode {
     /// Bare `name: T`. ADR-0022 makes this shared access everywhere, including
@@ -545,10 +544,34 @@ pub enum FormatPart {
     Expr(Expr),
 }
 
+/// One parameter contract inside a structural `def(...) -> ...` type.
+///
+/// Function types retain the source capability and type, but deliberately do
+/// not carry declaration-only parameter names or default expressions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct FunctionTypeParam {
+    pub mode: ParamMode,
+    pub ty: TypeRef,
+    pub span: Span,
+}
+
+impl FunctionTypeParam {
+    pub fn new(mode: ParamMode, ty: TypeRef, span: Span) -> Self {
+        Self { mode, ty, span }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum TypeRefKind {
-    Named { name: String, args: Vec<TypeRef> },
+    Named {
+        name: String,
+        args: Vec<TypeRef>,
+    },
     Tuple(Vec<TypeRef>),
+    Function {
+        params: Vec<FunctionTypeParam>,
+        return_type: Box<TypeRef>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -579,6 +602,17 @@ impl Serialize for TypeRef {
                 state.serialize_field("span", &self.span)?;
                 state.end()
             }
+            TypeRefKind::Function {
+                params,
+                return_type,
+            } => {
+                let mut state = serializer.serialize_struct("FunctionTypeRef", 4)?;
+                state.serialize_field("params", params)?;
+                state.serialize_field("return_type", return_type)?;
+                state.serialize_field("indirect", &self.indirect)?;
+                state.serialize_field("span", &self.span)?;
+                state.end()
+            }
         }
     }
 }
@@ -603,17 +637,53 @@ impl TypeRef {
         }
     }
 
+    pub fn function(params: Vec<TypeRef>, return_type: TypeRef, span: Span) -> Self {
+        let params = params
+            .into_iter()
+            .map(|ty| {
+                let span = ty.span;
+                FunctionTypeParam::new(ParamMode::Default, ty, span)
+            })
+            .collect();
+        Self::function_with_params(params, return_type, span)
+    }
+
+    pub fn function_with_params(
+        params: Vec<FunctionTypeParam>,
+        return_type: TypeRef,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: TypeRefKind::Function {
+                params,
+                return_type: Box::new(return_type),
+            },
+            indirect: false,
+            span,
+        }
+    }
+
     pub fn named_parts(&self) -> Option<(&str, &[TypeRef])> {
         match &self.kind {
             TypeRefKind::Named { name, args } => Some((name, args)),
-            TypeRefKind::Tuple(_) => None,
+            TypeRefKind::Tuple(_) | TypeRefKind::Function { .. } => None,
         }
     }
 
     pub fn elements(&self) -> Option<&[TypeRef]> {
         match &self.kind {
             TypeRefKind::Tuple(elements) => Some(elements),
-            TypeRefKind::Named { .. } => None,
+            TypeRefKind::Named { .. } | TypeRefKind::Function { .. } => None,
+        }
+    }
+
+    pub fn function_parts(&self) -> Option<(&[FunctionTypeParam], &TypeRef)> {
+        match &self.kind {
+            TypeRefKind::Function {
+                params,
+                return_type,
+            } => Some((params, return_type)),
+            TypeRefKind::Named { .. } | TypeRefKind::Tuple(_) => None,
         }
     }
 }

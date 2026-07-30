@@ -25,12 +25,22 @@ Use `process.run(...)` for "start, wait, collect" workflows. Use `process.start(
 | `process.Stdio.Pipe` | Create a pipe. |
 
 Prefer the functions (`process.pipe()`, `process.null()`, `process.inherit()`) in normal code.
+They are also capture-free function values; for example,
+`factory: def() -> process.Stdio = process.pipe` followed by `factory()` has
+the same result as the qualified direct call.
 
 ## process.run
 
 Signature: `process.run(command: Vec[String], cwd: Option[String] = None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
 
 `process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured. Omitting `timeout` uses an internal absence marker and supplies no caller deadline. No Duration value is that marker: an explicit negative timeout is invalid rather than unlimited.
+
+As with other builtin module functions, `process.run` is a capture-free
+first-class function value. A direct alias such as `runner = process.run`
+retains its parameter names and defaults, so `try runner(command)` still uses
+null stdin, captured stdout/stderr, and no caller deadline. Storing the value
+behind a structural function annotation, class field, or mutable collection
+erases those call-site extras and requires every positional argument.
 
 The `env` map augments the inherited host environment and replaces inherited values with matching names. Aurora never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
 

@@ -216,6 +216,7 @@ pub enum Value {
     Rng(RngValue),
     Range(RangeValue),
     ModuleNamespace(ModuleNamespaceValue),
+    Function(Box<FunctionValue>),
     Unit,
     Instance(InstanceValue),
     EnumVariant(EnumVariantValue),
@@ -240,6 +241,28 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+}
+
+/// A capture-free Aurora function value.
+///
+/// MIR execution resolves `name` through its function table. Native execution
+/// additionally carries the uniform boxed-argument thunk address used for
+/// indirect calls and task starts. The source metadata keeps task ancestry
+/// diagnostics as precise for calls through stored values as for direct names.
+#[derive(Clone, Debug)]
+pub struct FunctionValue {
+    pub name: String,
+    pub signature: Type,
+    pub source_path: Option<String>,
+    pub entry_span: Span,
+    pub direct_thunk: Option<i64>,
+    pub direct_default_binder: Option<i64>,
+}
+
+impl PartialEq for FunctionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.signature == other.signature
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1101,6 +1124,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::Rng(_) => "random.Rng".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
+            Value::Function(function) => function.signature.to_string(),
             Value::Unit => "None".to_string(),
             Value::Instance(instance) => {
                 nominal_runtime_base_name(&instance.class_name).to_string()
@@ -4680,6 +4704,7 @@ impl Clone for Value {
             Self::Rng(value) => Self::Rng(value.clone()),
             Self::Range(value) => Self::Range(value.clone()),
             Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
+            Self::Function(value) => Self::Function(value.clone()),
             Self::Unit => Self::Unit,
             Self::Instance(value) => Self::Instance(value.clone()),
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
@@ -4723,6 +4748,7 @@ impl PartialEq for Value {
             (Value::Rng(left), Value::Rng(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
+            (Value::Function(left), Value::Function(right)) => left == right,
             (Value::Unit, Value::Unit) => true,
             (Value::Instance(left), Value::Instance(right)) => left == right,
             (Value::EnumVariant(left), Value::EnumVariant(right)) => left == right,
@@ -4824,6 +4850,9 @@ impl Value {
                     }
                     Value::ModuleNamespace(namespace) => {
                         rendered.push_str(&format!("<module {}>", namespace.path));
+                    }
+                    Value::Function(function) => {
+                        rendered.push_str(&format!("<function {}>", function.name));
                     }
                     Value::Unit => {}
                     Value::Channel(_) => rendered.push_str("<queue>"),

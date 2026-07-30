@@ -1,0 +1,5 @@
+error[AU2003]: this function value has an erased default contract and requires the complete positional list of 1 argument
+ --> crates/aurora-compiler/tests/fixtures/check-fail/function_value_reassignment_erases_default.au:10:12
+   |
+10 |     return selected()
+   |            ^

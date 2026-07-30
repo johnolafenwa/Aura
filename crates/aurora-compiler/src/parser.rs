@@ -2,10 +2,10 @@ use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, CompareLink, CompareOp, ContinueStmt, DestructureStmt, EnumDecl,
     EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt,
-    FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item,
-    LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module,
-    Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef,
-    TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
+    ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
+    TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -1218,7 +1218,84 @@ impl Parser {
         }
 
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
-        let mut ty = if self.eat_simple(&TokenKind::LParen).is_some() {
+        let mut ty = if self.eat_simple(&TokenKind::KwDef).is_some() {
+            if indirect {
+                return Err(parse_error(
+                    span,
+                    "`indirect` is not valid on function types; function values already use pointer-like representation",
+                ));
+            }
+            self.expect_simple(TokenKind::LParen)?;
+            let mut params = Vec::new();
+            if self.eat_simple(&TokenKind::RParen).is_none() {
+                loop {
+                    let param_span = self.current_span();
+                    let mode = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                        ParamMode::BorrowMut
+                    } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
+                        ParamMode::Own
+                    } else if self.at_simple(&TokenKind::KwBorrow) {
+                        let replacement = if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) {
+                            "write `mut T` for mutable access"
+                        } else {
+                            "omit `borrow` for shared access"
+                        };
+                        return Err(parse_error(
+                            param_span,
+                            format!("`borrow` was removed from function types; {replacement}"),
+                        ));
+                    } else {
+                        ParamMode::Default
+                    };
+                    if matches!(
+                        self.current_kind(),
+                        TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow
+                    ) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "function type parameters accept only one capability modifier",
+                        ));
+                    }
+                    if matches!(
+                        self.current_kind(),
+                        TokenKind::Comma | TokenKind::RParen | TokenKind::Arrow
+                    ) {
+                        let message = if mode == ParamMode::Default {
+                            "expected a function parameter type"
+                        } else {
+                            "expected a type after the function parameter capability"
+                        };
+                        return Err(parse_error(self.current_span(), message));
+                    }
+                    let ty = self.parse_type()?;
+                    if self.at_simple(&TokenKind::Colon) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "function type parameters contain types only; remove the parameter name",
+                        ));
+                    }
+                    if self.at_simple(&TokenKind::Equal) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "function type parameters cannot declare default values",
+                        ));
+                    }
+                    params.push(FunctionTypeParam::new(mode, ty, param_span));
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                self.expect_simple(TokenKind::RParen)?;
+            }
+            if self.eat_simple(&TokenKind::Arrow).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "expected `->` and a return type after function type parameters",
+                ));
+            }
+            let return_type = self.parse_type()?;
+            TypeRef::function_with_params(params, return_type, span)
+        } else if self.eat_simple(&TokenKind::LParen).is_some() {
             if indirect {
                 return Err(parse_error(
                     span,
@@ -2241,8 +2318,72 @@ impl Parser {
     }
 
     fn skip_type_tokens(&self, mut idx: usize) -> usize {
+        while matches!(
+            self.peek_kind_at(idx),
+            Some(TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow)
+        ) {
+            idx += 1;
+        }
+
         if matches!(self.peek_kind_at(idx), Some(TokenKind::KwIndirect)) {
             idx += 1;
+        }
+
+        if matches!(self.peek_kind_at(idx), Some(TokenKind::KwDef)) {
+            idx += 1;
+            if !matches!(self.peek_kind_at(idx), Some(TokenKind::LParen)) {
+                return idx;
+            }
+            idx += 1;
+            if !matches!(self.peek_kind_at(idx), Some(TokenKind::RParen)) {
+                loop {
+                    let next = self.skip_type_tokens(idx);
+                    if next == idx {
+                        return idx;
+                    }
+                    idx = next;
+                    if matches!(self.peek_kind_at(idx), Some(TokenKind::Colon)) {
+                        let named_type_start = idx + 1;
+                        let next = self.skip_type_tokens(named_type_start);
+                        if next == named_type_start {
+                            return idx;
+                        }
+                        idx = next;
+                    }
+                    if matches!(self.peek_kind_at(idx), Some(TokenKind::Equal)) {
+                        idx += 1;
+                        let mut delimiter_depth = 0usize;
+                        loop {
+                            match self.peek_kind_at(idx) {
+                                Some(
+                                    TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace,
+                                ) => delimiter_depth += 1,
+                                Some(TokenKind::RParen) if delimiter_depth == 0 => break,
+                                Some(
+                                    TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace,
+                                ) => delimiter_depth = delimiter_depth.saturating_sub(1),
+                                Some(TokenKind::Comma) if delimiter_depth == 0 => break,
+                                Some(TokenKind::Newline | TokenKind::Eof) | None => return idx,
+                                Some(_) => {}
+                            }
+                            idx += 1;
+                        }
+                    }
+                    if matches!(self.peek_kind_at(idx), Some(TokenKind::Comma)) {
+                        idx += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            if !matches!(self.peek_kind_at(idx), Some(TokenKind::RParen)) {
+                return idx;
+            }
+            idx += 1;
+            if !matches!(self.peek_kind_at(idx), Some(TokenKind::Arrow)) {
+                return idx;
+            }
+            return self.skip_type_tokens(idx + 1);
         }
 
         if matches!(self.peek_kind_at(idx), Some(TokenKind::LParen)) {
@@ -2833,6 +2974,17 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
             for arg in args {
                 offset_type_ref_span(arg, line, column_offset);
             }
+        }
+        TypeRefKind::Function {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                param.span.line = line;
+                param.span.column += column_offset;
+                offset_type_ref_span(&mut param.ty, line, column_offset);
+            }
+            offset_type_ref_span(return_type, line, column_offset);
         }
     }
 }

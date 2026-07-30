@@ -268,19 +268,71 @@ contract. The requirement also applies when the callable is imported or used
 as a maintained task target. See [Generics And
 Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 
-## Callable Targets And Task Starts
+## Function Values
 
-Aurora 0.1 does not provide general first-class function variables, lambdas,
-or closures. The task API has a specific callable-target form: the ordinary
-and explicit-stack `TaskGroup` start methods accept a named function or an
-associated method without `self`.
+A module-level named function is a value. Its type uses declaration-shaped
+syntax: `def(T1, mut T2, own T3) -> R`. The parameter list contains modes and
+types rather than parameter names, and `def() -> R` is the zero-parameter
+form. Bare parameters are shared. Function types may appear anywhere another
+complete type may appear, including variable and parameter annotations, class
+fields, return types, and collection element types.
+
+This includes public user-module functions and maintained builtin-module
+functions such as `process.pipe`. Calling an imported builtin through a value
+uses the same builtin dispatch and result type as calling its qualified name.
+
+An inferred local binding retains the named function's exact declared
+parameter modes. An indirect call through a `mut` parameter requires a mutable
+place, and an `own` parameter moves a non-copy argument. Assignment and
+argument passing compare these modes as part of the function type:
+`def(mut Counter) -> None` does not match `def(Counter) -> None`.
+
+Function values are code pointers. They are copy values, cloning is
+unnecessary, and copying or passing one as an `own def(...) -> R` parameter
+does not invalidate the source binding. They also satisfy `Transfer`.
+Ordinary indirect calls evaluate and bind arguments under the selected
+function's unchanged capability contract. A binding whose target declaration
+is statically known retains that declaration's call contract: named arguments
+are accepted and omitted arguments use its defaults. The structural
+`def(...) -> ...` type itself does not contain names or default expressions.
+A control-flow selection can retain names and default availability when every
+candidate agrees; an omitted argument then evaluates the runtime-selected
+target's own default expression. Reassignment between conflicting contracts,
+return through a structural function annotation, class-field storage, and
+mutable-collection storage erase those extras. Storage still retains the
+complete ABI type, including `mut` and `own`; a loaded value takes every
+argument positionally.
+
+If an indirect-call default traps, diagnostics use the public target name and
+the precise default-expression span. Compiler-generated default helpers never
+appear in the call chain.
+
+A generic named function must receive explicit type arguments, for example
+`show_int = show[int32]`, or a concrete expected function type. Expected types
+can specialize a variable annotation, argument, field, collection element, or
+parameter default such as a generic `empty` used where
+`def() -> Option[String]` is required. A generic name with neither source of
+type arguments does not have one concrete function-value type.
+
+This stage is deliberately capture-free. Instance-method, associated-method,
+and trait-method values are not first-class; an associated method without
+`self` remains accepted only in the existing direct `TaskGroup` target form.
+Lambdas and closure capture are specified separately.
+
+## Function Values And Task Starts
+
+The ordinary and explicit-stack `TaskGroup` start methods accept a named
+function value as their target. Existing direct named-function and
+associated-method-without-`self` target forms remain accepted.
 
 ```python
 def work(value: int32) -> int32:
     return value * 2
 
+worker = work
+
 with group = TaskGroup():
-    task = group.start(work, 21)
+    task = group.start(worker, 21)
 ```
 
 Task capture ownership is independent of the target function's call ABI. Each
@@ -348,10 +400,11 @@ owned captures and then invokes the target under its declared ABI.
 
 `AU1101` means malformed function, method, parameter, return, or call syntax.
 `AU2001` means the call target or referenced declaration could not be resolved.
-`AU2002` means a signature, parameter, default, return, bound, or entrypoint type
-mismatch. `AU2004` means positional or named argument binding failed. `AU2005`
-means focused migration guidance for an unavailable callable spelling.
-`AU2999` means a callable rejection without a narrower compile-time code.
+`AU2002` means a signature, function-value capability, parameter, default,
+return, bound, or entrypoint type mismatch. `AU2004` means positional or named
+argument binding failed. `AU2005` means focused guidance for an unavailable
+callable spelling, including out-of-scope method values. `AU2999` means another
+callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
 parameter, receiver, return, or task-capture ownership mode. `AU3007` means a
@@ -364,29 +417,33 @@ Aurora call frames and task ancestry on MIR and direct-native execution.
 
 ## Backend Support
 
-Ordinary, generic, imported, associated, trait-dispatched, and maintained task
-target calls are implemented for MIR execution and direct native builds.
+Ordinary, indirect function-value, generic, imported, associated,
+trait-dispatched, and maintained task-target calls are implemented for MIR
+execution and direct native builds.
 Shared semantic checking and the forced parity matrix require identical call
 results and primary failures. Compiler analysis and the LSP use the same
 resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora has no first-class function values, closures, lambdas, variadics,
-overloads, nested functions, or mutable-borrow task targets. Runtime calls are
-limited to 256 nested Aurora frames. Host process exit representation may narrow
-the requested `int32` after it leaves Aurora; function binding and evaluation
-order are otherwise not implementation-defined.
+Aurora has no method values, trait-object function interactions, closures,
+lambdas, variadics, overloads, nested functions, or mutable-parameter task
+targets. Written function types express bare shared, `mut`, and `own`
+parameter contracts. Runtime calls are limited to 256 nested Aurora frames. Host
+process exit representation may narrow the requested `int32` after it leaves
+Aurora; function binding and evaluation order are otherwise not
+implementation-defined.
 
 ## Status
 
-The function, method, generic, default-argument, named-argument, owned-return,
-inferred clone-safety, task-target, and entrypoint contracts described above are
-implemented. Supplied/default evaluation and argument capture follow
+The function, method, generic, capture-free function-value, default-argument,
+named-argument, owned-return, inferred clone-safety, task-target, and
+entrypoint contracts described above are implemented. Supplied/default
+evaluation and argument capture follow
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
 which is **Accepted**. The rules are pinned
 by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends. Return values are owned; no return-source or label contract
-is reserved. First-class loan/view values, callables, closures, and FFI call
-signatures are unavailable and are not part of the frozen Batch 1 surface.
+is reserved. First-class loan/view values, closures, and FFI call signatures
+are unavailable and are not part of the frozen Batch 1 surface.

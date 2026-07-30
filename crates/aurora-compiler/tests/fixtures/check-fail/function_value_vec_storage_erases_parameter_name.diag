@@ -1,0 +1,6 @@
+error[AU2003]: this function value's named argument contract was erased at a written-type or mutable-storage boundary, or because its possible targets do not all agree
+ --> crates/aurora-compiler/tests/fixtures/check-fail/function_value_vec_storage_erases_parameter_name.au:6:12
+  |
+6 |     return callbacks[0](value=20)
+  |            ^
+  = help: call it with the complete positional argument list, or keep one concrete named function value

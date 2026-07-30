@@ -1,6 +1,7 @@
 use super::{
     BinaryOp, BindingTarget, ClassDecl, CompareLink, CompareOp, EnumDecl, Expr, ExprKind,
-    FieldDecl, ForStmt, FunctionDecl, ImplDecl, Item, ReceiverKind, TraitDecl, TypeRef,
+    FieldDecl, ForStmt, FunctionDecl, FunctionTypeParam, ImplDecl, Item, ParamMode, ReceiverKind,
+    TraitDecl, TypeRef,
 };
 use crate::diag::Span;
 use serde_json::json;
@@ -147,7 +148,7 @@ fn tuple_ast_nodes_are_structural_and_keep_binding_spans() {
 }
 
 #[test]
-fn type_ref_json_preserves_named_shape_and_exposes_tuple_elements() {
+fn type_ref_json_preserves_named_tuple_and_function_shapes() {
     let span = Span::new(3, 5);
     let named = TypeRef::named(
         "Option",
@@ -186,6 +187,161 @@ fn type_ref_json_preserves_named_shape_and_exposes_tuple_elements() {
             }],
             "indirect": false,
             "span": {"line": 3, "column": 5}
+        })
+    );
+
+    let function = TypeRef::function_with_params(
+        vec![
+            FunctionTypeParam::new(
+                ParamMode::BorrowMut,
+                TypeRef::named("String", vec![], false, span),
+                span,
+            ),
+            FunctionTypeParam::new(
+                ParamMode::Own,
+                TypeRef::named("int32", vec![], false, span),
+                span,
+            ),
+        ],
+        TypeRef::named("bool", vec![], false, span),
+        span,
+    );
+    let (params, return_type) = function
+        .function_parts()
+        .expect("function type should expose its signature");
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].mode, ParamMode::BorrowMut);
+    assert_eq!(params[0].ty.named_parts(), Some(("String", &[][..])));
+    assert_eq!(params[1].mode, ParamMode::Own);
+    assert_eq!(params[1].ty.named_parts(), Some(("int32", &[][..])));
+    assert_eq!(return_type.named_parts(), Some(("bool", &[][..])));
+    assert!(function.named_parts().is_none());
+    assert!(function.elements().is_none());
+    assert_eq!(
+        serde_json::to_value(&function).expect("function type reference should serialize"),
+        serde_json::json!({
+            "params": [{
+                "mode": "BorrowMut",
+                "ty": {
+                    "name": "String",
+                    "args": [],
+                    "indirect": false,
+                    "span": {"line": 3, "column": 5}
+                },
+                "span": {"line": 3, "column": 5}
+            }, {
+                "mode": "Own",
+                "ty": {
+                    "name": "int32",
+                    "args": [],
+                    "indirect": false,
+                    "span": {"line": 3, "column": 5}
+                },
+                "span": {"line": 3, "column": 5}
+            }],
+            "return_type": {
+                "name": "bool",
+                "args": [],
+                "indirect": false,
+                "span": {"line": 3, "column": 5}
+            },
+            "indirect": false,
+            "span": {"line": 3, "column": 5}
+        })
+    );
+}
+
+#[test]
+fn function_type_convenience_constructor_preserves_parameter_spans_and_default_capability() {
+    let signature_span = Span::new(4, 9);
+    let first_span = Span::new(4, 13);
+    let second_span = Span::new(4, 21);
+    let return_span = Span::new(4, 32);
+    let function = TypeRef::function(
+        vec![
+            TypeRef::named("String", vec![], false, first_span),
+            TypeRef::tuple(
+                vec![TypeRef::named("int32", vec![], false, second_span)],
+                false,
+                second_span,
+            ),
+        ],
+        TypeRef::named("bool", vec![], false, return_span),
+        signature_span,
+    );
+
+    let (params, return_type) = function
+        .function_parts()
+        .expect("the convenience constructor should create a structural function type");
+    assert_eq!(
+        params
+            .iter()
+            .map(|param| (param.mode, param.span, param.ty.span))
+            .collect::<Vec<_>>(),
+        vec![
+            (ParamMode::Default, first_span, first_span),
+            (ParamMode::Default, second_span, second_span),
+        ]
+    );
+    assert_eq!(return_type.span, return_span);
+    assert_eq!(function.span, signature_span);
+    assert!(!function.indirect);
+
+    let named = TypeRef::named("String", vec![], false, first_span);
+    let tuple = TypeRef::tuple(vec![named.clone()], false, second_span);
+    assert!(named.function_parts().is_none());
+    assert!(tuple.function_parts().is_none());
+}
+
+#[test]
+fn function_type_pretty_json_preserves_the_public_wire_shape() {
+    let span = Span::new(8, 4);
+    let function = TypeRef::function_with_params(
+        vec![FunctionTypeParam::new(
+            ParamMode::Own,
+            TypeRef::tuple(
+                vec![TypeRef::named("String", vec![], false, Span::new(8, 12))],
+                false,
+                Span::new(8, 11),
+            ),
+            Span::new(8, 7),
+        )],
+        TypeRef::named("None", vec![], false, Span::new(8, 25)),
+        span,
+    );
+
+    let encoded =
+        serde_json::to_string_pretty(&function).expect("function type should serialize as JSON");
+    assert!(
+        encoded.contains("\n  \"params\": ["),
+        "pretty serialization should retain a human-readable parameter list: {encoded}"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&encoded)
+            .expect("the public function-type JSON should round trip as a JSON value"),
+        serde_json::json!({
+            "params": [{
+                "mode": "Own",
+                "ty": {
+                    "elements": [{
+                        "name": "String",
+                        "args": [],
+                        "indirect": false,
+                        "span": {"line": 8, "column": 12}
+                    }],
+                    "indirect": false,
+                    "span": {"line": 8, "column": 11}
+                },
+                "span": {"line": 8, "column": 7}
+            }],
+            "return_type": {
+                "name": "None",
+                "args": [],
+                "indirect": false,
+                "span": {"line": 8, "column": 25}
+            },
+            "indirect": false,
+            "span": {"line": 8, "column": 4}
         })
     );
 }

@@ -30,6 +30,13 @@ fn member_expr(object: Expr, field: &str) -> Expr {
     })
 }
 
+fn operand_function_name(operand: &Operand) -> Option<&str> {
+    match operand {
+        Operand::Function { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
 fn type_ref(name: &str) -> TypeRef {
     TypeRef::named(name, Vec::new(), false, Span::new(1, 1))
 }
@@ -1795,7 +1802,7 @@ def main():
                         ..
                     },
                 ..
-            } => Some((function.as_str(), *result_is_copy)),
+            } => Some((operand_function_name(function)?, *result_is_copy)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1866,7 +1873,7 @@ def main():
                     },
             } => Some((
                 target.as_str(),
-                function.as_str(),
+                operand_function_name(function)?,
                 *returns_handle,
                 *result_is_copy,
                 stack_size.is_some(),
@@ -2036,7 +2043,7 @@ def main():
                         ..
                     },
                 ..
-            } => Some((function.as_str(), *result_is_copy, args)),
+            } => Some((operand_function_name(function)?, *result_is_copy, args)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2336,13 +2343,13 @@ def main() -> int32:
         start
             .1
             .iter()
-            .map(|argument| &argument.value)
+            .map(|argument| (argument.name.as_deref(), &argument.value))
             .collect::<Vec<_>>(),
         vec![
-            &Operand::Place("%t4".to_string()),
-            &Operand::Place("%t3".to_string()),
+            (Some("right"), &Operand::Place("%t3".to_string())),
+            (Some("left"), &Operand::Place("%t4".to_string())),
         ],
-        "source-order temporaries should be reordered only when binding target parameters"
+        "function-value task arguments should retain source order and names until runtime binding"
     );
 }
 
@@ -3405,14 +3412,20 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     let local_static_target = lowerer
         .resolve_task_start_target(&member_expr(name_expr("Thing"), "zero"))
         .expect("unqualified imported class static methods should resolve");
-    assert_eq!(local_static_target.function, "pkg.helpers::Thing.zero");
+    assert_eq!(
+        local_static_target.function_name.as_deref(),
+        Some("pkg.helpers::Thing.zero")
+    );
     let module_static_target = lowerer
         .resolve_task_start_target(&member_expr(
             member_expr(member_expr(name_expr("pkg"), "helpers"), "Thing"),
             "zero",
         ))
         .expect("module-qualified imported class static methods should resolve");
-    assert_eq!(module_static_target.function, "pkg.helpers::Thing.zero");
+    assert_eq!(
+        module_static_target.function_name.as_deref(),
+        Some("pkg.helpers::Thing.zero")
+    );
     assert!(
         lowerer
             .resolve_task_start_target(&member_expr(
@@ -3428,14 +3441,20 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             "helper",
         ))
         .expect("module-qualified imported functions should resolve");
-    assert_eq!(module_function_target.function, "pkg.helpers::helper");
+    assert_eq!(
+        module_function_target.function_name.as_deref(),
+        Some("pkg.helpers::helper")
+    );
     let reexport_function_target = lowerer
         .resolve_task_start_target(&member_expr(
             member_expr(name_expr("pkg"), "reexport"),
             "helper",
         ))
         .expect("all-functions-only imported functions should resolve");
-    assert_eq!(reexport_function_target.function, "pkg.reexport::helper");
+    assert_eq!(
+        reexport_function_target.function_name.as_deref(),
+        Some("pkg.reexport::helper")
+    );
     let specialized_local_function = expr(ExprKind::Specialize {
         expr: Box::new(name_expr("local_helper")),
         type_args: Vec::new(),
@@ -3444,8 +3463,9 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&specialized_local_function)
             .expect("specialized local functions should resolve as task targets")
-            .function,
-        "local_helper"
+            .function_name
+            .as_deref(),
+        Some("local_helper")
     );
     let specialized_static_target = expr(ExprKind::Specialize {
         expr: Box::new(member_expr(name_expr("Thing"), "zero")),
@@ -3455,8 +3475,9 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&specialized_static_target)
             .expect("specialized static methods should resolve as task targets")
-            .function,
-        "pkg.helpers::Thing.zero"
+            .function_name
+            .as_deref(),
+        Some("pkg.helpers::Thing.zero")
     );
     let specialized_class_object = expr(ExprKind::Specialize {
         expr: Box::new(name_expr("Thing")),
@@ -3466,8 +3487,9 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         lowerer
             .resolve_task_start_target(&member_expr(specialized_class_object, "zero"))
             .expect("static methods on specialized class objects should resolve")
-            .function,
-        "pkg.helpers::Thing.zero"
+            .function_name
+            .as_deref(),
+        Some("pkg.helpers::Thing.zero")
     );
 
     let static_call = expr(ExprKind::Call {
@@ -3643,7 +3665,10 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
         &[arg(expr(ExprKind::Int(1)))],
         Span::new(1, 1),
     );
-    assert_eq!(target.function, "pkg.helpers::generic_helper");
+    assert_eq!(
+        target.function_name.as_deref(),
+        Some("pkg.helpers::generic_helper")
+    );
     assert_eq!(target.param_types, vec![Type::named("int32")]);
     assert_eq!(target.return_type, Type::named("int32"));
 
@@ -3661,7 +3686,10 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
         &[arg(expr(ExprKind::String("value".to_string())))],
         Span::new(1, 1),
     );
-    assert_eq!(target.function, "pkg.helpers::GenericThing.relay");
+    assert_eq!(
+        target.function_name.as_deref(),
+        Some("pkg.helpers::GenericThing.relay")
+    );
     assert_eq!(target.param_types, vec![Type::named("String")]);
     assert_eq!(target.return_type, Type::named("String"));
 
@@ -3686,7 +3714,10 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
         &[arg(expr(ExprKind::Int(7)))],
         Span::new(1, 1),
     );
-    assert_eq!(target.function, "pkg.helpers::GenericThing.choose");
+    assert_eq!(
+        target.function_name.as_deref(),
+        Some("pkg.helpers::GenericThing.choose")
+    );
     assert_eq!(target.param_types, vec![Type::named("int32")]);
     assert_eq!(target.return_type, Type::named("int32"));
 }
@@ -4467,7 +4498,10 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert_eq!(lowerer.infer_operand_type(&Operand::Unit), Some(Type::Unit));
     assert_eq!(
         lowerer.infer_expr_type(&name_expr("make_flag")),
-        Some(Type::named("bool"))
+        Some(Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("bool")),
+        })
     );
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "push"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("label".to_string()), "len"));
@@ -5585,4 +5619,284 @@ def choose(flag: bool, exact: float32):
             "{name} should keep the concrete conditional result type"
         );
     }
+}
+
+#[test]
+fn mir_function_value_lowering_preserves_defaults_and_capabilities() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Counter:
+    value: int32
+
+def increment(counter: mut Counter) -> None:
+    counter.value += 1
+
+def consume(value: own String) -> String:
+    return value
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def with_default(value: int32 = mark("fresh-default", 40)) -> int32:
+    return value + 2
+
+def choose(use_default: bool) -> def(int32) -> int32:
+    return with_default if use_default else with_default
+
+def main():
+    mut counter = Counter(value=0)
+    text = "owned"
+    mutator = increment
+    consumer = consume
+    selected = with_default
+    dynamic = choose(true)
+    mutator(counter)
+    print(consumer(text))
+    print(selected())
+    print(dynamic(1))
+"#,
+    )
+    .expect("function-value capabilities and defaults should lower");
+
+    let with_default = module
+        .functions
+        .iter()
+        .find(|function| function.name == "with_default")
+        .expect("the selected function should lower");
+    assert_eq!(
+        with_default.params[0].default_function.as_deref(),
+        Some("with_default::__default_0_value"),
+        "the declaration must retain the helper that evaluates its default freshly"
+    );
+    let default = module
+        .functions
+        .iter()
+        .find(|function| function.name == "with_default::__default_0_value")
+        .expect("a default expression should become a callable MIR helper");
+    assert!(
+        default.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            ..
+                        },
+                        ..
+                    } if name == "mark"
+                )
+            })
+        }),
+        "the helper must preserve the default expression rather than embedding one shared value"
+    );
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    let literal_contract = |target: &str| {
+        instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Use(Operand::Function {
+                            name, signature, ..
+                        }),
+                    ..
+                } if name == target => Some(signature.as_ref()),
+                _ => None,
+            })
+    };
+    let Type::Function {
+        params,
+        return_type,
+    } = literal_contract("increment").expect("increment should materialize as a function value")
+    else {
+        panic!("increment should carry a function signature");
+    };
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].name, "counter");
+    assert_eq!(params[0].passing, ReceiverKind::BorrowMut);
+    assert_eq!(params[0].ty, Type::named("Counter"));
+    assert_eq!(return_type.as_ref(), &Type::Unit);
+
+    let Type::Function { params, .. } =
+        literal_contract("with_default").expect("with_default should materialize as a value")
+    else {
+        panic!("with_default should carry a function signature");
+    };
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].name, "value");
+    assert!(params[0].has_default);
+    assert!(!params[0].default_erased);
+
+    let indirect_args = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        args,
+                    },
+                ..
+            } => Some(args),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        indirect_args.iter().any(|args| {
+            args.len() == 1
+                && args[0].value == Operand::Place("counter".to_string())
+                && args[0].writeback_place.as_deref() == Some("counter")
+        }),
+        "a mut function value must borrow the source and retain its writeback place"
+    );
+    assert!(
+        indirect_args.iter().any(|args| {
+            args.len() == 1
+                && args[0].value == Operand::MovePlace("text".to_string())
+                && args[0].writeback_place.is_none()
+        }),
+        "an own function value must consume its source without inventing a writeback"
+    );
+    assert!(
+        indirect_args.iter().any(|args| args.is_empty()),
+        "an omitted dynamic argument must remain omitted for target-owned default binding"
+    );
+    let dynamic_capture = instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::Place(place)),
+            } if place == "dynamic" => Some(target.as_str()),
+            _ => None,
+        })
+        .expect("the runtime-selected local should be captured at a sequence point");
+    assert!(
+        instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(Operand::Place(place)),
+                        args,
+                    },
+                    ..
+                } if place == dynamic_capture
+                    && args.len() == 1
+                    && args[0].writeback_place.is_none()
+            )
+        }),
+        "the captured runtime-selected local must become the indirect callee"
+    );
+}
+
+#[test]
+fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization() {
+    let contract = |ty: Type, passing: ReceiverKind| crate::sema::FunctionParamContract {
+        name: String::new(),
+        ty,
+        passing,
+        has_default: false,
+        default_erased: true,
+    };
+    let nested = Type::Function {
+        params: vec![contract(
+            Type::TypeParam("T".to_string()),
+            ReceiverKind::BorrowMut,
+        )],
+        return_type: Box::new(Type::Function {
+            params: vec![contract(Type::named("String"), ReceiverKind::Borrow)],
+            return_type: Box::new(Type::TypeParam("U".to_string())),
+        }),
+    };
+    let mut type_params = BTreeSet::new();
+    collect_type_params_from_type(&nested, &mut type_params);
+    assert_eq!(
+        type_params,
+        BTreeSet::from(["T".to_string(), "U".to_string()]),
+        "type-parameter discovery must descend through function parameters and returns"
+    );
+
+    assert!(!type_contains_unknown(&nested));
+    assert!(type_contains_unknown(&Type::Function {
+        params: vec![contract(Type::named("Unknown"), ReceiverKind::Borrow)],
+        return_type: Box::new(Type::named("bool")),
+    }));
+    assert!(type_contains_unknown(&Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::named("Unknown")),
+    }));
+
+    let source_type = TypeRef::function_with_params(
+        vec![
+            crate::ast::FunctionTypeParam::new(
+                crate::ast::ParamMode::BorrowMut,
+                type_ref("int32"),
+                Span::new(1, 1),
+            ),
+            crate::ast::FunctionTypeParam::new(
+                crate::ast::ParamMode::Own,
+                type_ref("String"),
+                Span::new(1, 1),
+            ),
+        ],
+        type_ref("bool"),
+        Span::new(1, 1),
+    );
+    assert_eq!(
+        lower_type_ref(&source_type),
+        Type::Function {
+            params: vec![
+                contract(Type::named("int32"), ReceiverKind::BorrowMut),
+                contract(Type::named("String"), ReceiverKind::Value),
+            ],
+            return_type: Box::new(Type::named("bool")),
+        },
+        "written function types must retain parameter capabilities while erasing names/defaults"
+    );
+
+    let lowerer = lowerer_with_imported_modules();
+    let specialized = expr(ExprKind::Specialize {
+        expr: Box::new(expr(ExprKind::Group(Box::new(name_expr("generic_helper"))))),
+        type_args: vec![type_ref("String")],
+    });
+    let operand = lowerer
+        .lower_function_value(&specialized)
+        .expect("an imported generic function should specialize as a value");
+    let expected = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("String"),
+            passing: ReceiverKind::Value,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::named("String")),
+    };
+    assert_eq!(
+        operand,
+        Operand::Function {
+            name: "pkg.helpers::generic_helper".to_string(),
+            signature: Box::new(expected.clone()),
+        },
+        "a bare imported sibling must keep its defining-module runtime identity"
+    );
+    assert_eq!(
+        lowerer.infer_operand_type(&operand),
+        Some(expected),
+        "function operands must expose their concrete specialized signature"
+    );
 }

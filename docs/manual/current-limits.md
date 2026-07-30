@@ -37,7 +37,11 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - `for` loop bindings cannot shadow names already visible in the same scope.
 - Duration literals have only the integral `ms`, `s`, and `m` suffixes; there is no `ns` or fractional Duration literal and no unary `-Duration`. Associated constructors and checked Duration arithmetic provide signed and sub-millisecond results instead.
-- Task starting currently supports named functions and associated methods without `self`.
+- Capture-free named functions are copy, `Transfer` values. They may be stored
+  and called through `def(T1, mut T2, own T3) -> R` types and used as task
+  targets; bare function-type parameters are shared.
+  Instance, associated, and trait method values remain unavailable; the task
+  API retains its direct associated-method-without-`self` target carve-out.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.

@@ -1,0 +1,16 @@
+import process
+
+def run_echo() -> Result[None, process.Error]:
+    runner = process.run
+    completed = try runner(["/bin/echo", "builtin-defaults"])
+    print(completed.success())
+    print(completed.stdout().trim())
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run_echo():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

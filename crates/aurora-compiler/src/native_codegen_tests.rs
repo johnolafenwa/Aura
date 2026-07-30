@@ -13,8 +13,8 @@ use super::{
     collect_type_params_from_type, direct_field_type, direct_type, direct_type_to_type,
     emit_host_object, emit_host_object_with_metadata, ensure_direct_type,
     enum_variant_payload_types_for_target, infer_operand_type, infer_rvalue_type, infer_try_type,
-    infer_variant_payload_type, is_numeric_type_name, main_signature, mangle_symbol,
-    mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
+    infer_variant_payload_type, is_numeric_type_name, main_signature, mangle_default_binder_symbol,
+    mangle_symbol, mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
     release_direct_call_results, release_direct_values, render_direct_type,
     runtime_type_is_wildcard, signature_for, thunk_signature, thunk_string_constant,
     unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
@@ -30,6 +30,25 @@ use crate::mir::{
 };
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
+
+fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Operand {
+    Operand::Function {
+        name: name.to_string(),
+        signature: Box::new(Type::Function {
+            params: params
+                .into_iter()
+                .map(|ty| crate::sema::FunctionParamContract {
+                    name: String::new(),
+                    ty,
+                    passing: crate::ast::ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: false,
+                })
+                .collect(),
+            return_type: Box::new(return_type),
+        }),
+    }
+}
 
 fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
     direct_type(ty, &HashMap::new()).and_then(|ty| ty.scalar_kind())
@@ -116,14 +135,17 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     assert!(runtime_type_is_wildcard(&Type::Tuple(vec![
         Type::TypeParam("Element".to_string())
     ])));
-    assert_eq!(
-        super::render_runtime_type_pattern(&Type::Tuple(vec![Type::named("int64")])),
-        "(int64,)"
-    );
-    assert_eq!(
-        super::render_runtime_type_pattern(&tuple_type),
-        "(int64, String)"
-    );
+    for ty in [Type::Tuple(vec![Type::named("int64")]), tuple_type.clone()] {
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&ty);
+        let payload = encoded
+            .strip_prefix("__aurora_type_json_v1__:")
+            .expect("runtime structural types use the canonical tagged encoding");
+        assert_eq!(
+            serde_json::from_str::<Type>(payload)
+                .expect("canonical runtime type payload should decode"),
+            ty
+        );
+    }
 }
 
 fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
@@ -132,6 +154,47 @@ fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
     object
         .sections()
         .flat_map(|section| section.relocations())
+        .filter_map(|(_, relocation)| match relocation.target() {
+            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
+            _ => None,
+        })
+        .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+        .collect()
+}
+
+fn object_function_referenced_symbols(bytes: &[u8], function: &str) -> BTreeSet<String> {
+    let object = cranelift_object::object::File::parse(bytes)
+        .expect("direct backend output should be a readable host object");
+    let symbol = object
+        .symbols()
+        .find(|symbol| {
+            symbol
+                .name()
+                .is_ok_and(|name| name.trim_start_matches('_') == function)
+        })
+        .unwrap_or_else(|| panic!("direct object should define `{function}`"));
+    let section_index = symbol
+        .section_index()
+        .unwrap_or_else(|| panic!("`{function}` should belong to an object section"));
+    let start = symbol.address();
+    let section = object
+        .section_by_index(section_index)
+        .expect("function section should exist");
+    let start = start.saturating_sub(section.address());
+    let end = if symbol.size() > 0 {
+        start.saturating_add(symbol.size())
+    } else {
+        object
+            .symbols()
+            .filter(|candidate| candidate.section_index() == Some(section_index))
+            .map(|candidate| candidate.address().saturating_sub(section.address()))
+            .filter(|address| *address > start)
+            .min()
+            .unwrap_or(section.size())
+    };
+    section
+        .relocations()
+        .filter(|(offset, _)| *offset >= start && *offset < end)
         .filter_map(|(_, relocation)| match relocation.target() {
             RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
             _ => None,
@@ -364,12 +427,20 @@ def main():
             })
             .sum::<usize>()
     };
+    let tuple_payload = |elements| {
+        crate::native_runtime::canonical_runtime_type_name(&Type::Tuple(elements))
+            .strip_prefix("__aurora_type_json_v1__:")
+            .expect("canonical structural runtime type tag")
+            .to_string()
+    };
+    let int_then_string = tuple_payload(vec![Type::named("int32"), Type::named("String")]);
+    let string_then_int = tuple_payload(vec![Type::named("String"), Type::named("int32")]);
     assert!(
-        data_occurrences(b"(int32, String)") >= 2,
+        data_occurrences(int_then_string.as_bytes()) >= 2,
         "direct dispatch must encode a tuple matcher in addition to the enclosing class pattern"
     );
     assert!(
-        data_occurrences(b"(String, int32)") >= 2,
+        data_occurrences(string_then_int.as_bytes()) >= 2,
         "direct dispatch must encode a second tuple matcher in addition to its enclosing class pattern"
     );
 }
@@ -683,7 +754,7 @@ def main() -> int32:
 "#;
     let mir = lower_source_to_mir(source).expect("monotonic clock source should lower to MIR");
     let object = emit_host_object(&mir).expect("monotonic clock source should compile directly");
-    let referenced = object_referenced_symbols(&object);
+    let referenced = object_function_referenced_symbols(&object, "aurora_fn_main");
 
     assert!(
         referenced
@@ -992,15 +1063,18 @@ def main() -> int32:
     assert!(
         referenced
             .iter()
-            .any(|symbol| symbol.contains("aurora_direct_start_task_call_with_frames")),
-        "generated task start must use the ancestry-carrying ABI: {referenced:?}"
+            .any(|symbol| symbol.contains("aurora_direct_start_task_function_with_frames")),
+        "generated task start must use the function-value ancestry-carrying ABI: {referenced:?}"
     );
-    assert!(
-        !referenced
-            .iter()
-            .any(|symbol| symbol.ends_with("aurora_direct_start_task_call")),
-        "generated code must not silently fall back to the metadata-free task ABI"
-    );
+    for legacy_abi in [
+        "aurora_direct_start_task_call_with_frames",
+        "aurora_direct_start_task_call",
+    ] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.ends_with(legacy_abi)),
+            "generated code must not silently fall back to legacy task ABI `{legacy_abi}`"
+        );
+    }
 
     let parsed = cranelift_object::object::File::parse(object.as_slice())
         .expect("frame-aware output should be a readable host object");
@@ -1371,7 +1445,15 @@ def main() -> int32:
 
     let mir = lower_source_to_mir(source).expect("expected uint64 operands should lower");
     let object = emit_host_object(&mir).expect("expected uint64 operands should emit directly");
-    let referenced = object_referenced_symbols(&object);
+    let referenced = [
+        "aurora_fn_Holder_echo",
+        "aurora_fn_take",
+        "aurora_fn_maximum",
+        "aurora_fn_main",
+    ]
+    .into_iter()
+    .flat_map(|function| object_function_referenced_symbols(&object, function))
+    .collect::<BTreeSet<_>>();
 
     for forbidden in [
         "aurora_direct_box_uint_literal",
@@ -5233,6 +5315,7 @@ fn direct_backend_entry_thunk_handles_unit_parameters() {
                 name: "marker".to_string(),
                 passing: MirReceiverKind::Value,
                 ty: Type::Unit,
+                default_function: None,
             }],
             local_types: vec![MirLocalType {
                 name: "marker".to_string(),
@@ -5438,6 +5521,389 @@ def main() -> int32:
         .define_function_thunk(&helper)
         .expect_err("missing thunk return types should fail");
     assert!(return_error.contains("does not know return type for `helper`"));
+}
+
+#[test]
+fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_abis() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+
+    let defaults_path = fixtures.join("function_values_storage_and_calls.au");
+    let defaults_mir =
+        lower_path_to_mir(&defaults_path).expect("function-value defaults should lower");
+    let offset = defaults_mir
+        .functions
+        .iter()
+        .find(|function| function.name == "offset")
+        .expect("offset function should exist");
+    let default_function = offset.params[0]
+        .default_function
+        .as_deref()
+        .expect("offset should retain its default-expression thunk");
+    let defaults_object =
+        emit_host_object(&defaults_mir).expect("function-value defaults should emit directly");
+    let binder_references = object_function_referenced_symbols(
+        &defaults_object,
+        &mangle_default_binder_symbol("offset"),
+    );
+    assert!(
+        binder_references
+            .iter()
+            .any(|symbol| symbol.contains(&mangle_symbol(default_function))),
+        "the public function-value binder must call the selected function's concrete default thunk: {binder_references:?}"
+    );
+    assert!(
+        binder_references
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_arg_buffer_store_owned")),
+        "task-bound defaults must transfer their opaque handles into the scheduler-owned buffer: {binder_references:?}"
+    );
+    let default_main_references =
+        object_function_referenced_symbols(&defaults_object, "aurora_fn_main");
+    for runtime_symbol in [
+        "aurora_direct_function_value",
+        "aurora_direct_function_thunk",
+        "aurora_direct_function_default_binder",
+    ] {
+        assert!(
+            default_main_references
+                .iter()
+                .any(|symbol| symbol.contains(runtime_symbol)),
+            "indirect calls must use `{runtime_symbol}`: {default_main_references:?}"
+        );
+    }
+
+    let capabilities_path = fixtures.join("function_value_inferred_capabilities.au");
+    let capabilities_mir =
+        lower_path_to_mir(&capabilities_path).expect("capability function values should lower");
+    let capabilities_object = emit_host_object(&capabilities_mir)
+        .expect("shared, mutable, and owned function values should emit directly");
+    let mutable_thunk_references =
+        object_function_referenced_symbols(&capabilities_object, &mangle_thunk_symbol("increment"));
+    assert!(
+        mutable_thunk_references
+            .iter()
+            .any(|symbol| symbol.contains(&mangle_symbol("increment"))),
+        "the mutable-capability thunk must call its concrete function: {mutable_thunk_references:?}"
+    );
+    for runtime_symbol in [
+        "aurora_direct_instance_get_field",
+        "aurora_direct_instance_empty",
+        "aurora_direct_instance_set_field_owned",
+    ] {
+        assert!(
+            mutable_thunk_references
+                .iter()
+                .any(|symbol| symbol.contains(runtime_symbol)),
+            "the mutable plain-class parameter must round-trip through `{runtime_symbol}` for writeback: {mutable_thunk_references:?}"
+        );
+    }
+    let owned_thunk_references =
+        object_function_referenced_symbols(&capabilities_object, &mangle_thunk_symbol("take"));
+    assert!(
+        owned_thunk_references
+            .iter()
+            .any(|symbol| symbol.contains(&mangle_symbol("take"))),
+        "the owned-capability thunk must call its concrete consuming function: {owned_thunk_references:?}"
+    );
+
+    let task_path = fixtures.join("function_values_task_targets.au");
+    let task_mir = lower_path_to_mir(&task_path).expect("function-value task targets should lower");
+    let task_object =
+        emit_host_object(&task_mir).expect("function-value task targets should emit directly");
+    let task_main_references = object_function_referenced_symbols(&task_object, "aurora_fn_main");
+    for runtime_symbol in [
+        "aurora_direct_task_arg_buffer_guard",
+        "aurora_direct_function_default_binder",
+        "aurora_direct_task_arg_buffer_disarm",
+        "aurora_direct_start_task_function_with_frames",
+    ] {
+        assert!(
+            task_main_references
+                .iter()
+                .any(|symbol| symbol.contains(runtime_symbol)),
+            "callable Task lowering must use `{runtime_symbol}`: {task_main_references:?}"
+        );
+    }
+    for legacy_symbol in [
+        "aurora_direct_start_task_call_with_frames",
+        "aurora_direct_start_task_call",
+    ] {
+        assert!(
+            !task_main_references
+                .iter()
+                .any(|symbol| symbol.ends_with(legacy_symbol)),
+            "function-value task lowering must not fall back to `{legacy_symbol}`"
+        );
+    }
+}
+
+#[test]
+fn native_codegen_function_value_signature_errors_are_precise() {
+    fn contract(
+        name: &str,
+        passing: crate::ast::ReceiverKind,
+    ) -> crate::sema::FunctionParamContract {
+        crate::sema::FunctionParamContract {
+            name: name.to_string(),
+            ty: Type::named("int32"),
+            passing,
+            has_default: false,
+            default_erased: false,
+        }
+    }
+
+    fn signature(param: crate::sema::FunctionParamContract) -> Type {
+        Type::Function {
+            params: vec![param],
+            return_type: Box::new(Type::named("int32")),
+        }
+    }
+
+    fn module(signature: Type, args: Vec<MirArg>) -> crate::mir::MirModule {
+        crate::mir::MirModule {
+            functions: vec![
+                MirFunction {
+                    name: "worker".to_string(),
+                    module_name: "<test>".to_string(),
+                    source_path: None,
+                    span: Span::new(1, 1),
+                    receiver: None,
+                    params: vec![MirParam {
+                        name: "value".to_string(),
+                        passing: MirReceiverKind::Value,
+                        ty: Type::named("int32"),
+                        default_function: None,
+                    }],
+                    local_types: vec![MirLocalType {
+                        name: "value".to_string(),
+                        ty: Type::named("int32"),
+                    }],
+                    return_type: Type::named("int32"),
+                    entry: "entry".to_string(),
+                    blocks: vec![BasicBlock {
+                        label: "entry".to_string(),
+                        instructions: Vec::new(),
+                        terminator: Terminator::Return(Operand::Place("value".to_string())),
+                    }],
+                },
+                MirFunction {
+                    name: "main".to_string(),
+                    module_name: "<test>".to_string(),
+                    source_path: None,
+                    span: Span::new(4, 1),
+                    receiver: None,
+                    params: Vec::new(),
+                    local_types: vec![MirLocalType {
+                        name: "%result".to_string(),
+                        ty: Type::named("int32"),
+                    }],
+                    return_type: Type::named("int32"),
+                    entry: "entry".to_string(),
+                    blocks: vec![BasicBlock {
+                        label: "entry".to_string(),
+                        instructions: vec![Instruction::Assign {
+                            target: "%result".to_string(),
+                            value: Rvalue::Call {
+                                callee: CallTarget::Value(Operand::Function {
+                                    name: "worker".to_string(),
+                                    signature: Box::new(signature),
+                                }),
+                                args,
+                            },
+                        }],
+                        terminator: Terminator::Return(Operand::Int(0)),
+                    }],
+                },
+            ],
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        }
+    }
+
+    let argument = |name: Option<&str>, writeback_place: Option<&str>| MirArg {
+        name: name.map(str::to_string),
+        value: Operand::Int(1),
+        writeback_place: writeback_place.map(str::to_string),
+    };
+    let value_signature = || signature(contract("value", crate::ast::ReceiverKind::Value));
+    let mutable_signature = || signature(contract("value", crate::ast::ReceiverKind::BorrowMut));
+    let cases = vec![
+        (
+            "non-function signature",
+            Type::named("int32"),
+            vec![argument(None, None)],
+            "direct backend expected an indirect function value",
+        ),
+        (
+            "too many arguments",
+            value_signature(),
+            vec![argument(None, None), argument(None, None)],
+            "direct backend expected at most 1 indirect-call arguments, found 2",
+        ),
+        (
+            "unknown named argument",
+            value_signature(),
+            vec![argument(Some("missing"), None)],
+            "direct backend function value has no parameter named `missing`",
+        ),
+        (
+            "duplicate named argument",
+            Type::Function {
+                params: vec![
+                    contract("value", crate::ast::ReceiverKind::Value),
+                    contract("other", crate::ast::ReceiverKind::Value),
+                ],
+                return_type: Box::new(Type::named("int32")),
+            },
+            vec![argument(Some("value"), None), argument(Some("value"), None)],
+            "direct backend received duplicate indirect-call arguments",
+        ),
+        (
+            "mutable argument without writeback",
+            mutable_signature(),
+            vec![argument(None, None)],
+            "direct backend indirect mutable argument 1 has no writeback place",
+        ),
+        (
+            "writeback on a value argument",
+            value_signature(),
+            vec![argument(None, Some("value"))],
+            "direct backend indirect argument 1 unexpectedly requests writeback",
+        ),
+    ];
+
+    for (label, signature, args, expected) in cases {
+        let error = match emit_host_object(&module(signature, args)) {
+            Ok(_) => panic!("{label} should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains(expected),
+            "{label} should report `{expected}`, found `{error}`"
+        );
+    }
+}
+
+#[test]
+fn native_codegen_function_value_binding_skips_named_slots_for_later_positionals() {
+    let source = r#"
+def combine(first: int32, second: int32) -> int32:
+    return first + second
+
+def main() -> int32:
+    callback = combine
+    return callback(1, 2)
+"#;
+    let mut mir = lower_source_to_mir(source).expect("mixed binding source should lower");
+    let main = mir
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let indirect_args = main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        args,
+                    },
+                ..
+            } => Some(args),
+            _ => None,
+        })
+        .expect("main should contain the indirect callback call");
+    assert_eq!(indirect_args.len(), 2);
+    indirect_args[0].name = Some("first".to_string());
+
+    let object = emit_host_object(&mir)
+        .expect("a positional argument after a named slot should bind the next free parameter");
+    let main_references = object_function_referenced_symbols(&object, "aurora_fn_main");
+    for runtime_symbol in [
+        "aurora_direct_function_thunk",
+        "aurora_direct_function_default_binder",
+    ] {
+        assert!(
+            main_references
+                .iter()
+                .any(|symbol| symbol.contains(runtime_symbol)),
+            "mixed binding must retain the indirect callable ABI through `{runtime_symbol}`: {main_references:?}"
+        );
+    }
+}
+
+#[test]
+fn native_codegen_default_binder_reports_method_and_metadata_failures() {
+    let source = r#"
+class Counter:
+    value: int32
+
+    def current(self) -> int32:
+        return self.value
+
+def target(value: int32 = 7) -> int32:
+    return value
+
+def main() -> int32:
+    callback = target
+    return callback()
+"#;
+    let mir = lower_source_to_mir(source).expect("defaulted function value should lower");
+    let method = mir
+        .functions
+        .iter()
+        .find(|function| function.receiver.is_some())
+        .cloned()
+        .expect("class method should lower");
+    let target = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "target")
+        .cloned()
+        .expect("defaulted target should lower");
+    let default_function = target.params[0]
+        .default_function
+        .as_deref()
+        .expect("target should have a generated default thunk")
+        .to_string();
+
+    let mut method_codegen = NativeCodegen::new(&mir, "/tmp/function_default_binder.au", source)
+        .expect("codegen should initialize");
+    let method_error = method_codegen
+        .define_function_default_binder(&method)
+        .expect_err("methods are not first-class callable values");
+    assert_eq!(
+        method_error,
+        "direct backend cannot build a function-value default binder for method `Counter.current`"
+    );
+
+    let mut missing_default_codegen =
+        NativeCodegen::new(&mir, "/tmp/function_default_binder.au", source)
+            .expect("codegen should initialize");
+    missing_default_codegen.functions.remove(&default_function);
+    let missing_default_error = missing_default_codegen
+        .define_function_default_binder(&target)
+        .expect_err("missing generated defaults should be diagnosed");
+    assert_eq!(
+        missing_default_error,
+        format!("direct backend is missing default function `{default_function}` for `target`")
+    );
+
+    let mut missing_param_codegen =
+        NativeCodegen::new(&mir, "/tmp/function_default_binder.au", source)
+            .expect("codegen should initialize");
+    missing_param_codegen.function_param_types.remove("target");
+    let missing_param_error = missing_param_codegen
+        .define_function_default_binder(&target)
+        .expect_err("missing parameter ABI metadata should be diagnosed");
+    assert_eq!(
+        missing_param_error,
+        "direct backend is missing parameter 1 metadata for `target`"
+    );
 }
 
 #[test]
@@ -6135,7 +6601,11 @@ def main() -> int32:
                     result_is_copy: true,
                     stack_size: None,
                     task_group: Operand::Place("%group".to_string()),
-                    function: "worker".to_string(),
+                    function: test_function_operand(
+                        "worker",
+                        vec![Type::named("int32")],
+                        Type::named("int32"),
+                    ),
                     args: vec![MirArg {
                         name: None,
                         value: Operand::Int(1),
@@ -6169,7 +6639,24 @@ def main() -> int32:
     let missing_thunk_error = missing_thunk_codegen
         .define_function(&main)
         .expect_err("task start should reject missing thunks");
-    assert!(missing_thunk_error.contains("does not know task-start thunk for `worker`"));
+    assert!(missing_thunk_error.contains("does not know function thunk for `worker`"));
+
+    let mut missing_binder_codegen = NativeCodegen::new(
+        &task_start_mir,
+        "/tmp/direct_task_start_missing_binder.au",
+        task_start_source,
+    )
+    .expect("codegen should initialize");
+    missing_binder_codegen
+        .function_default_binders
+        .remove("worker");
+    let missing_binder_error = missing_binder_codegen
+        .define_function(&main)
+        .expect_err("task start should reject missing default binders");
+    assert!(
+        missing_binder_error.contains("does not know function default binder for `worker`"),
+        "{missing_binder_error}"
+    );
 
     let mut missing_return_codegen = NativeCodegen::new(
         &task_start_mir,
@@ -6197,7 +6684,11 @@ def main() -> int32:
             result_is_copy: true,
             stack_size: None,
             task_group: Operand::Place("%group".to_string()),
-            function: "worker".to_string(),
+            function: test_function_operand(
+                "worker",
+                vec![Type::named("int32")],
+                Type::named("int32"),
+            ),
             args: vec![MirArg {
                 name: None,
                 value: Operand::Int(1),
@@ -6222,6 +6713,79 @@ def main() -> int32:
         .define_function(&borrowed_main)
         .expect_err("task start should reject borrowed arguments");
     assert!(borrowed_error.contains("does not yet support borrowed task-start arguments"));
+
+    let named_worker = Operand::Function {
+        name: "worker".to_string(),
+        signature: Box::new(Type::Function {
+            params: vec![crate::sema::FunctionParamContract {
+                name: "value".to_string(),
+                ty: Type::named("int32"),
+                passing: crate::ast::ReceiverKind::Value,
+                has_default: false,
+                default_erased: false,
+            }],
+            return_type: Box::new(Type::named("int32")),
+        }),
+    };
+    let invalid_bindings = [
+        (
+            vec![MirArg {
+                name: Some("missing".to_string()),
+                value: Operand::Int(1),
+                writeback_place: None,
+            }],
+            "task function value has no parameter named `missing`",
+        ),
+        (
+            vec![
+                MirArg {
+                    name: Some("value".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                },
+                MirArg {
+                    name: None,
+                    value: Operand::Int(2),
+                    writeback_place: None,
+                },
+            ],
+            "duplicate task function-value argument",
+        ),
+    ];
+    for (args, expected) in invalid_bindings {
+        let mut invalid_mir = task_start_mir.clone();
+        let invalid_main = invalid_mir
+            .functions
+            .iter_mut()
+            .find(|function| function.name == "main")
+            .expect("main function should exist");
+        invalid_main.blocks[0].instructions[1] = Instruction::Assign {
+            target: "%task".to_string(),
+            value: Rvalue::StartTask {
+                returns_handle: true,
+                result_is_copy: true,
+                stack_size: None,
+                task_group: Operand::Place("%group".to_string()),
+                function: named_worker.clone(),
+                args,
+                span: Span::new(1, 1),
+            },
+        };
+        let invalid_main = invalid_main.clone();
+        let mut codegen = NativeCodegen::new(
+            &invalid_mir,
+            "/tmp/direct_task_start_invalid_binding.au",
+            task_start_source,
+        )
+        .expect("codegen should initialize");
+        let error = codegen
+            .define_function(&invalid_main)
+            .expect_err("invalid task callable bindings should fail");
+        assert!(
+            error.contains(expected),
+            "expected `{expected}`, got `{error}`"
+        );
+    }
 }
 
 #[test]
@@ -8770,7 +9334,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 result_is_copy: true,
                 stack_size: None,
                 task_group: Operand::Unit,
-                function: "helper".to_string(),
+                function: test_function_operand("helper", Vec::new(), Type::named("float64"),),
                 args: Vec::new(),
                 span: Span::new(1, 1),
             },
@@ -8790,7 +9354,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 result_is_copy: true,
                 stack_size: None,
                 task_group: Operand::Unit,
-                function: "helper".to_string(),
+                function: test_function_operand("helper", Vec::new(), Type::named("float64"),),
                 args: Vec::new(),
                 span: Span::new(1, 1),
             },
@@ -8807,7 +9371,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 result_is_copy: true,
                 stack_size: None,
                 task_group: Operand::Unit,
-                function: "missing".to_string(),
+                function: Operand::Place("missing".to_string()),
                 args: Vec::new(),
                 span: Span::new(1, 1),
             },
@@ -8871,7 +9435,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         result_is_copy: true,
         stack_size: Some(Operand::MovePlace("stack_bytes".to_string())),
         task_group: Operand::Place("group".to_string()),
-        function: "worker".to_string(),
+        function: test_function_operand("worker", Vec::new(), Type::Unit),
         args: Vec::new(),
         span: Span::new(1, 1),
     };
@@ -8887,7 +9451,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
         task_group: Operand::MovePlace("group".to_string()),
-        function: "worker".to_string(),
+        function: test_function_operand("worker", Vec::new(), Type::Unit),
         args: Vec::new(),
         span: Span::new(1, 1),
     };
@@ -8903,7 +9467,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
         task_group: Operand::Place("group".to_string()),
-        function: "worker".to_string(),
+        function: test_function_operand("worker", Vec::new(), Type::Unit),
         args: Vec::new(),
         span: Span::new(1, 1),
     };
@@ -8977,6 +9541,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
             name: "other".to_string(),
             passing: MirReceiverKind::Value,
             ty: Type::named("Point"),
+            default_function: None,
         }],
         local_types: vec![crate::mir::MirLocalType {
             name: "self".to_string(),
@@ -9073,6 +9638,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
             name: "input".to_string(),
             passing: MirReceiverKind::Borrow,
             ty: Type::named("Holder"),
+            default_function: None,
         }],
         local_types: vec![
             MirLocalType {
@@ -11125,6 +11691,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
             name: "value".to_string(),
             passing: MirReceiverKind::Value,
             ty: Type::named("int32"),
+            default_function: None,
         }],
         local_types: vec![MirLocalType {
             name: "value".to_string(),

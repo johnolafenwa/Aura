@@ -49,12 +49,12 @@ use crate::runtime_value::{
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    ChannelValue, EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
+    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -118,7 +118,6 @@ impl DirectStaticFrameText {
 #[derive(Clone)]
 enum DirectFrameText {
     Static(DirectStaticFrameText),
-    #[cfg(test)]
     Shared(Arc<str>),
 }
 
@@ -127,7 +126,6 @@ impl DirectFrameText {
         unsafe { DirectStaticFrameText::validate(ptr, len) }.map(Self::Static)
     }
 
-    #[cfg(test)]
     fn shared(value: String) -> Self {
         Self::Shared(Arc::from(value))
     }
@@ -135,7 +133,6 @@ impl DirectFrameText {
     fn as_str(&self) -> &str {
         match self {
             Self::Static(value) => value.as_str(),
-            #[cfg(test)]
             Self::Shared(value) => value,
         }
     }
@@ -1183,23 +1180,38 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
     }
 }
 
+const CANONICAL_RUNTIME_TYPE_PREFIX: &str = "__aurora_type_json_v1__:";
+
+pub(crate) fn canonical_runtime_type_name(ty: &Type) -> String {
+    format!(
+        "{CANONICAL_RUNTIME_TYPE_PREFIX}{}",
+        serde_json::to_string(ty).expect("Aurora semantic types must serialize")
+    )
+}
+
+fn canonical_runtime_type_from_name(name: &str) -> Option<Type> {
+    name.strip_prefix(CANONICAL_RUNTIME_TYPE_PREFIX)
+        .and_then(|json| serde_json::from_str(json).ok())
+}
+
 fn embedded_runtime_type_name(value: &Value) -> Option<String> {
     match value {
         Value::Int(value) => value.runtime_type_name().map(str::to_string),
-        Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone()).to_string()),
-        Value::Vec(vector) => {
-            Some(Type::Named("Vec".to_string(), vec![vector.element_type.clone()]).to_string())
-        }
-        Value::Set(set) => {
-            Some(Type::Named("Set".to_string(), vec![set.element_type.clone()]).to_string())
-        }
-        Value::Map(map) => Some(
-            Type::Named(
-                "Map".to_string(),
-                vec![map.key_type.clone(), map.value_type.clone()],
-            )
-            .to_string(),
-        ),
+        Value::Tuple(tuple) => Some(canonical_runtime_type_name(&Type::Tuple(
+            tuple.element_types.clone(),
+        ))),
+        Value::Vec(vector) => Some(canonical_runtime_type_name(&Type::Named(
+            "Vec".to_string(),
+            vec![vector.element_type.clone()],
+        ))),
+        Value::Set(set) => Some(canonical_runtime_type_name(&Type::Named(
+            "Set".to_string(),
+            vec![set.element_type.clone()],
+        ))),
+        Value::Map(map) => Some(canonical_runtime_type_name(&Type::Named(
+            "Map".to_string(),
+            vec![map.key_type.clone(), map.value_type.clone()],
+        ))),
         Value::Instance(instance) => {
             instance
                 .fields
@@ -1214,6 +1226,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         }
         Value::Channel(channel) => channel.runtime_type_name(),
         Value::Task(task) => task.runtime_type_name(),
+        Value::Function(function) => Some(canonical_runtime_type_name(&function.signature)),
         _ => None,
     }
 }
@@ -1251,6 +1264,9 @@ fn runtime_type_from_name(name: &str) -> Type {
         values
     }
 
+    if let Some(ty) = canonical_runtime_type_from_name(name) {
+        return ty;
+    }
     if name == "None" {
         return Type::Unit;
     }
@@ -1284,6 +1300,19 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
             Type::Tuple(elements) => {
                 Type::Tuple(elements.into_iter().map(decode_pattern).collect())
             }
+            Type::Function {
+                params,
+                return_type,
+            } => Type::Function {
+                params: params
+                    .into_iter()
+                    .map(|mut param| {
+                        param.ty = decode_pattern(param.ty);
+                        param
+                    })
+                    .collect(),
+                return_type: Box::new(decode_pattern(*return_type)),
+            },
             Type::Unit | Type::Module(_) | Type::TypeParam(_) => ty,
         }
     }
@@ -1327,6 +1356,31 @@ fn runtime_type_pattern_matches(
                         runtime_type_pattern_matches(pattern_element, actual_element, substitutions)
                     },
                 )
+        }
+        Type::Function {
+            params: pattern_params,
+            return_type: pattern_return,
+        } => {
+            let Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+            } = actual
+            else {
+                return false;
+            };
+            pattern_params.len() == actual_params.len()
+                && pattern_params
+                    .iter()
+                    .zip(actual_params)
+                    .all(|(pattern_param, actual_param)| {
+                        pattern_param.passing == actual_param.passing
+                            && runtime_type_pattern_matches(
+                                &pattern_param.ty,
+                                &actual_param.ty,
+                                substitutions,
+                            )
+                    })
+                && runtime_type_pattern_matches(pattern_return, actual_return, substitutions)
         }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if path == actual_path),
         Type::Unit => *actual == Type::Unit,
@@ -1380,19 +1434,26 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
                     }
                 }
             }
-            Value::Instance(instance) if runtime_type_name.contains('[') => {
+            Value::Instance(instance) if matches!(&parsed, Type::Named(_, args) if !args.is_empty()) =>
+            {
                 instance.fields.insert(
                     DIRECT_RUNTIME_TYPE_FIELD.to_string(),
                     Value::String(runtime_type_name.clone()),
                 );
             }
-            Value::EnumVariant(variant) if runtime_type_name.contains('[') => {
+            Value::EnumVariant(variant) if matches!(&parsed, Type::Named(_, args) if !args.is_empty()) =>
+            {
                 let base = nominal_runtime_base_name(&variant.enum_name);
                 variant.enum_name =
                     format!("{base}{DIRECT_RUNTIME_TYPE_SEPARATOR}{runtime_type_name}");
             }
             Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.clone()),
             Value::Task(task) => task.set_runtime_type_name(runtime_type_name.clone()),
+            Value::Function(function) => {
+                if matches!(parsed, Type::Function { .. }) {
+                    function.signature = parsed.clone();
+                }
+            }
             _ => {}
         });
     }
@@ -2440,6 +2501,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Rng(_) => "random.Rng".to_string(),
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
+        Value::Function(function) => function.signature.to_string(),
         Value::Unit => "None".to_string(),
         Value::Instance(instance) => nominal_runtime_base_name(&instance.class_name).to_string(),
         Value::EnumVariant(variant) => nominal_runtime_base_name(&variant.enum_name).to_string(),
@@ -2468,6 +2530,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
 }
 
 fn inferred_collection_type(value: &Value) -> Type {
+    if let Value::Function(function) = value {
+        return function.signature.clone();
+    }
     if let Some(runtime_type_name) = embedded_runtime_type_name(value) {
         return runtime_type_from_name(&runtime_type_name);
     }
@@ -2485,6 +2550,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::Duration(_) => Type::named("Duration"),
         Value::Rng(_) => Type::named("random.Rng"),
         Value::Range(_) => Type::named("Range"),
+        Value::Function(function) => function.signature.clone(),
         Value::Instance(instance) => Type::named(nominal_runtime_base_name(&instance.class_name)),
         Value::EnumVariant(variant) => Type::named(nominal_runtime_base_name(&variant.enum_name)),
         Value::Channel(_) => Type::named("Queue"),
@@ -3027,6 +3093,69 @@ pub extern "C-unwind" fn aurora_direct_box_f64(value: f64) -> *mut OpaqueValue {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_bool(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Bool(value != 0)))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_function_value(
+    thunk_ptr: i64,
+    default_binder_ptr: i64,
+    name_ptr: *const u8,
+    name_len: usize,
+    signature_ptr: *const u8,
+    signature_len: usize,
+    path_ptr: *const u8,
+    path_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if thunk_ptr == 0 {
+            runtime_error("direct runtime received a null function thunk");
+        }
+        let signature = serde_json::from_str::<Type>(&decode_bytes(signature_ptr, signature_len))
+            .unwrap_or_else(|error| {
+                runtime_error(format!(
+                    "direct runtime received invalid function signature metadata: {error}"
+                ))
+            });
+        boxed_value(Value::Function(Box::new(FunctionValue {
+            name: decode_bytes(name_ptr, name_len),
+            signature,
+            source_path: (path_len > 0).then(|| decode_bytes(path_ptr, path_len)),
+            entry_span: Span::new(
+                usize::try_from(line).unwrap_or_default(),
+                usize::try_from(column).unwrap_or_default(),
+            ),
+            direct_thunk: Some(thunk_ptr),
+            direct_default_binder: Some(default_binder_ptr),
+        })))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_function_default_binder(function: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(function) } {
+        Value::Function(function) => function
+            .direct_default_binder
+            .unwrap_or_else(|| runtime_error("direct function value has no native default binder")),
+        other => runtime_error(format!(
+            "indirect call expected a function value, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_function_thunk(function: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(function) } {
+        Value::Function(function) => function
+            .direct_thunk
+            .unwrap_or_else(|| runtime_error("direct function value has no native thunk")),
+        other => runtime_error(format!(
+            "indirect call expected a function value, found `{}`",
+            value_type_name(other)
+        )),
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -4475,9 +4604,9 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
         if index < 0 {
             runtime_error(format!("vector index `{}` cannot be negative", index));
         }
-        let index = usize::try_from(index).unwrap_or_else(|_| {
-            runtime_error("vector index does not fit in the runtime address space")
-        });
+        // Every supported Aurora release target is 64-bit, so a validated
+        // non-negative int64 index always fits usize.
+        let index = index as usize;
         let value = with_set(set, |set| set.elements.get(index).cloned());
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
@@ -4492,9 +4621,9 @@ pub extern "C-unwind" fn aurora_direct_set_take_index_in_place(
         if index < 0 {
             runtime_error(format!("set index `{}` cannot be negative", index));
         }
-        let index = usize::try_from(index).unwrap_or_else(|_| {
-            runtime_error("set index does not fit in the runtime address space")
-        });
+        // Every supported Aurora release target is 64-bit, so a validated
+        // non-negative int64 index always fits usize.
+        let index = index as usize;
         let value = with_set_mut(set, |set| {
             (index < set.elements.len()).then(|| set.elements.remove(index))
         });
@@ -4887,6 +5016,17 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
         let expected = decode_bytes(type_ptr, type_len);
         let explicit_type = unsafe { effective_runtime_type_name(value) };
         let actual = unsafe { value_ref(value) };
+        if let Some(pattern) = canonical_runtime_type_from_name(&expected) {
+            let actual_type = explicit_type
+                .as_deref()
+                .map(runtime_type_from_name)
+                .unwrap_or_else(|| inferred_collection_type(&actual));
+            return i64::from(runtime_type_pattern_matches(
+                &pattern,
+                &actual_type,
+                &mut BTreeMap::new(),
+            ));
+        }
         if expected.contains('?') {
             let pattern = runtime_type_pattern_from_name(&expected);
             if let Some(actual_type) = explicit_type.as_deref() {
@@ -4909,7 +5049,7 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
                     ),
                     _ => false,
                 },
-                Type::Unit | Type::Module(_) | Type::TypeParam(_) => false,
+                Type::Function { .. } | Type::Unit | Type::Module(_) | Type::TypeParam(_) => false,
             };
             return i64::from(untagged_outer_wildcard);
         }
@@ -4932,6 +5072,7 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
             Value::Channel(_) => expected == "Queue",
             Value::Task(_) => expected == "Task",
             Value::TaskGroup(_) => expected == "TaskGroup",
+            Value::Function(function) => function.signature.to_string() == expected,
             Value::File(_) => expected == "fs.File",
             Value::TcpListener(_) => expected == "net.TcpListener",
             Value::TcpStream(_) => expected == "net.TcpStream",
@@ -5396,6 +5537,36 @@ pub extern "C-unwind" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
         let ptr = values.as_mut_ptr();
         Box::leak(values);
         ptr
+    })
+}
+
+/// Registers a newly allocated task-argument buffer with the current direct
+/// runtime cleanup stack until ownership is handed to the scheduler.
+///
+/// Defaults and later task-start operands can trap after the raw buffer has
+/// been allocated. Keeping this zero-thunk registration live makes those
+/// exits release both the allocation and every retained opaque argument.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_task_arg_buffer_guard(buffer: *mut i64, count: i64) -> i64 {
+    task_runtime_boundary(|| {
+        let count = usize::try_from(count)
+            .unwrap_or_else(|_| runtime_error("invalid guarded task arg buffer size"));
+        push_direct_cleanup_registration(0, buffer, count)
+    })
+}
+
+/// Detaches a guarded task-argument buffer immediately before the task runtime
+/// reconstructs it as external scheduler-owned state.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_task_arg_buffer_disarm(id: i64) {
+    task_runtime_boundary(|| {
+        let mut registration = take_direct_cleanup_registration(id)
+            .unwrap_or_else(|| runtime_error("unknown guarded task arg buffer"));
+        if registration.thunk_ptr != 0 {
+            runtime_error("task arg buffer guard id referred to an ordinary cleanup");
+        }
+        registration.args = std::ptr::null_mut();
+        registration.arg_count = 0;
     })
 }
 
@@ -9604,6 +9775,92 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call_with_frames(
                 usize::try_from(task_column).unwrap_or_default(),
             ),
         ),
+        parent_function,
+        spawn_span: DirectRuntimeSourceSpan::point(
+            spawn_path,
+            Span::new(
+                usize::try_from(spawn_line).unwrap_or_default(),
+                usize::try_from(spawn_column).unwrap_or_default(),
+            ),
+        ),
+    });
+    unsafe {
+        start_direct_task_call(DirectTaskCall {
+            thunk_ptr,
+            args_ptr,
+            arg_count,
+            returns_handle,
+            task_group,
+            result_is_copy,
+            stack_size_present,
+            stack_size,
+            task_ancestry,
+        })
+    }
+}
+
+/// Starts a generated Aurora task through a first-class function value.
+///
+/// Unlike the legacy thunk-only entry point, this ABI obtains the selected
+/// function's name, source path, entry span, and native thunk from the value
+/// itself. That keeps task ancestry accurate when the function is selected at
+/// runtime rather than appearing as a static MIR function operand.
+///
+/// # Safety
+///
+/// `function` and `task_group` must be live Aurora opaque values. `args_ptr`
+/// must be the allocation returned by `aurora_direct_arg_buffer_new` for
+/// `arg_count` entries. Parent/spawn metadata byte ranges must remain readable
+/// and unchanged until the spawned task completes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aurora_direct_start_task_function_with_frames(
+    function: *mut OpaqueValue,
+    args_ptr: *const i64,
+    arg_count: i64,
+    returns_handle: i64,
+    task_group: *mut OpaqueValue,
+    result_is_copy: i64,
+    stack_size_present: i64,
+    stack_size: i64,
+    parent_function_ptr: *const u8,
+    parent_function_len: usize,
+    spawn_path_ptr: *const u8,
+    spawn_path_len: usize,
+    spawn_line: i64,
+    spawn_column: i64,
+) -> *mut OpaqueValue {
+    let (thunk_ptr, task_function, task_path, task_entry_span) =
+        match unsafe { value_ref(function) } {
+            Value::Function(function) => (
+                function
+                    .direct_thunk
+                    .unwrap_or_else(|| runtime_error("direct function value has no native thunk")),
+                DirectFrameText::shared(function.name.clone()),
+                function.source_path.clone().map(DirectFrameText::shared),
+                function.entry_span,
+            ),
+            other => runtime_error(format!(
+                "task starting expected a function value, found `{}`",
+                value_type_name(other)
+            )),
+        };
+    let parent_function =
+        match unsafe { DirectFrameText::validate_static(parent_function_ptr, parent_function_len) }
+        {
+            Ok(parent_function) => parent_function,
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        };
+    let spawn_path = if spawn_path_ptr.is_null() || spawn_path_len == 0 {
+        None
+    } else {
+        match unsafe { DirectFrameText::validate_static(spawn_path_ptr, spawn_path_len) } {
+            Ok(spawn_path) => Some(spawn_path),
+            Err(()) => reject_invalid_direct_frame_utf8(),
+        }
+    };
+    let task_ancestry = direct_runtime_compact_task_ancestry().prepend(DirectRuntimeTaskFrame {
+        task_function,
+        task_entry_span: DirectRuntimeSourceSpan::point(task_path, task_entry_span),
         parent_function,
         spawn_span: DirectRuntimeSourceSpan::point(
             spawn_path,

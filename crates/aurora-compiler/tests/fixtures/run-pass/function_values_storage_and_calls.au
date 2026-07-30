@@ -1,0 +1,66 @@
+class Pipeline:
+    transform: def(int32) -> int32
+
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def offset(value: int32 = 10) -> int32:
+    return value + 1
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def first_default(value: int32 = mark("first-default", 11)) -> int32:
+    return value
+
+def second_default(value: int32 = mark("second-default", 22)) -> int32:
+    return value
+
+def combine(first: int32, second: int32) -> int32:
+    return first * 10 + second
+
+def apply(transform: def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+def apply_owned(transform: own def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+def show[T](value: T) -> None:
+    print(value)
+
+def invoke_show(callback: def(int32) -> None, value: int32) -> None:
+    callback(value)
+
+def choose_transform(use_increment: bool) -> def(int32) -> int32:
+    return increment if use_increment else double
+
+def main() -> int32:
+    selected: def(int32) -> int32 = increment
+    copied = selected
+    specialized = show[int32]
+    known_offset = offset
+    selected_default = first_default if false else second_default
+    known_combine = combine
+    pipeline = Pipeline(transform=copied)
+    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+
+    print(selected(1))
+    print(copied(2))
+    print(apply(pipeline.transform, 3))
+    print(transforms[0](4))
+    print(transforms[1](5))
+    print(apply_owned(selected, 6))
+    print(selected(7))
+    invoke_show(specialized, 9)
+    runtime_selected = choose_transform(false)
+    print(runtime_selected(8))
+    print(known_offset())
+    print(known_offset(20))
+    print(known_offset(value=30))
+    print(selected_default())
+    print(known_combine(second=mark("named-second", 2), first=mark("named-first", 1)))
+    return 0

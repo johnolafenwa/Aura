@@ -5,14 +5,14 @@ use crate::ast::{
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
-    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention,
+    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention, CallableParam,
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::sema::{
-    binary_operator_trait, substitute_trait_bound, substitute_type,
+    binary_operator_trait, resolve_param_passing, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
-    ModuleNamespace, Program, TraitBound, Type,
+    FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +39,71 @@ const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
 const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = "__get_in_task_group";
 const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str = "__get_with_registered_producers";
+
+pub(crate) fn has_runtime_named_function(name: &str) -> bool {
+    BuiltinFunction::from_name(name).is_some()
+        || crate::builtin_modules::host_builtin_metadata(name).is_some()
+        || matches!(
+            name,
+            "random::secure_int"
+                | "random::secure_bytes"
+                | "io::write"
+                | "io::flush"
+                | "io::read_line"
+                | "fs::exists"
+                | "fs::read_to_string"
+                | "fs::read_bytes"
+                | "fs::write_string"
+                | "fs::write_bytes"
+                | "fs::append_string"
+                | "fs::append_bytes"
+                | "fs::create_dir"
+                | "fs::read_dir"
+                | "fs::remove_file"
+                | "fs::open"
+                | "fs::create"
+                | "fs::append"
+                | "net::connect"
+                | "net::connect_timeout"
+                | "net::listen"
+                | "net::udp_bind"
+                | "net::unix_listen"
+                | "net::unix_connect"
+                | "net::unix_connect_timeout"
+                | "net::tls_listen"
+                | "net::tls_connect"
+                | "net::tls_connect_timeout"
+                | "net::http_listen"
+                | "net::http_request_text"
+                | "net::http_request_text_timeout"
+                | "net::http_request_bytes"
+                | "net::http_request_bytes_timeout"
+                | "net::websocket_listen"
+                | "net::websocket_connect"
+                | "net::websocket_connect_timeout"
+                | "process::inherit"
+                | "process::null"
+                | "process::pipe"
+                | "process::supervisor"
+                | "process::start"
+                | "process::run"
+                | "bytes::hex_encode"
+                | "bytes::base64_encode"
+                | "bytes::sha256"
+                | "bytes::hex_decode"
+                | "bytes::base64_decode"
+                | "bytes::sha256_string"
+                | "json::parse"
+                | "json::dumps"
+                | "json::is_null"
+                | "json::as_bool"
+                | "json::as_int"
+                | "json::as_float"
+                | "json::into_string"
+                | "json::into_array"
+                | "json::into_object"
+        )
+}
 
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
     match op {
@@ -119,6 +184,14 @@ fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
         Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().any(|param| type_contains_unknown(&param.ty))
+                || type_contains_unknown(return_type.as_ref())
+        }
         Type::TypeParam(_) | Type::Unit | Type::Module(_) => false,
     }
 }
@@ -156,6 +229,16 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             for element in elements {
                 collect_type_params_from_type(element, collected);
             }
+        }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
         }
         Type::Unit | Type::Module(_) => {}
     }
@@ -308,6 +391,10 @@ pub struct MirParam {
     pub name: String,
     pub passing: MirReceiverKind,
     pub ty: Type,
+    /// Hidden zero-argument MIR function that freshly evaluates this
+    /// parameter's declared default for runtime-selected function calls.
+    #[serde(default)]
+    pub default_function: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -370,7 +457,7 @@ pub enum Rvalue {
         result_is_copy: bool,
         stack_size: Option<Operand>,
         task_group: Operand,
-        function: String,
+        function: Operand,
         args: Vec<MirArg>,
         span: crate::diag::Span,
     },
@@ -434,6 +521,7 @@ pub enum Rvalue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CallTarget {
     Name(String),
+    Value(Operand),
     Member {
         object: Operand,
         field: String,
@@ -478,6 +566,7 @@ pub struct MirMatchArm {
 pub enum Operand {
     Place(String),
     MovePlace(String),
+    Function { name: String, signature: Box<Type> },
     Int(u128),
     Duration(i128),
     Float(f64),
@@ -518,7 +607,7 @@ pub fn lower(program: &Program) -> MirModule {
         .functions
         .values()
         .filter(|function| function.module_name == program.module_name)
-        .map(|function| {
+        .flat_map(|function| {
             lower_function(
                 program,
                 &function.decl.name,
@@ -560,7 +649,7 @@ pub fn lower(program: &Program) -> MirModule {
         let mut methods = Vec::new();
         for method in class.methods.values() {
             let qualified_name = mir_class_method_name(program, class, &method.decl.name);
-            functions.push(lower_function(
+            functions.extend(lower_function(
                 program,
                 &qualified_name,
                 &class.module_name,
@@ -708,7 +797,7 @@ fn push_imported_module_classes_from_namespace(
                 namespace.path, class.decl.name, method.decl.name
             );
             if seen_function_names.insert(qualified_name.clone()) {
-                functions.push(lower_function(
+                functions.extend(lower_function(
                     program,
                     &qualified_name,
                     &class.module_name,
@@ -801,7 +890,7 @@ fn lower_trait_impl(
             method.decl.name
         );
         if seen_function_names.insert(qualified_name.clone()) {
-            functions.push(lower_function(
+            functions.extend(lower_function(
                 program,
                 &qualified_name,
                 module_name,
@@ -854,7 +943,7 @@ fn push_imported_module_functions_from_namespace(
     for (name, function) in &namespace.functions {
         let qualified_name = imported_module_function_name(&namespace.path, name);
         if seen.insert(qualified_name.clone()) {
-            functions.push(lower_function(
+            functions.extend(lower_function(
                 program,
                 &qualified_name,
                 &function.module_name,
@@ -897,16 +986,40 @@ fn lower_function(
     param_passings: &[ReceiverKind],
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
-) -> MirFunction {
+) -> Vec<MirFunction> {
     let params = function
         .params
         .iter()
         .zip(param_types.iter())
         .zip(param_passings.iter().copied())
-        .map(|((param, ty), passing)| MirParam {
+        .enumerate()
+        .map(|(index, ((param, ty), passing))| MirParam {
             name: param.name.clone(),
             passing: lower_receiver_kind(passing),
             ty: ty.clone(),
+            default_function: param
+                .default
+                .as_ref()
+                .map(|_| format!("{name}::__default_{index}_{}", param.name)),
+        })
+        .collect::<Vec<_>>();
+
+    let default_functions = function
+        .params
+        .iter()
+        .zip(param_types.iter())
+        .enumerate()
+        .filter_map(|(index, (param, ty))| {
+            param.default.as_ref().map(|default| {
+                lower_default_function(
+                    program,
+                    &format!("{name}::__default_{index}_{}", param.name),
+                    module_name,
+                    default,
+                    ty,
+                    type_param_bounds.clone(),
+                )
+            })
         })
         .collect::<Vec<_>>();
 
@@ -936,12 +1049,69 @@ fn lower_function(
             lowerer.non_owning_roots.insert(param.name.clone());
         }
     }
-    lowerer.lower_stmts(&function.body);
-    lowerer.finish(MirFunctionSpec {
+    if function.body.is_empty() && has_runtime_named_function(name) {
+        // Builtin declarations have signatures but no Aurora body. Materialize
+        // a tiny ordinary MIR wrapper so their first-class thunk follows the
+        // same named-call implementation as a direct source call instead of
+        // returning the empty body's fallback value.
+        let result = lowerer.new_typed_temp(return_type.clone());
+        let args = params
+            .iter()
+            .map(|param| MirArg {
+                name: Some(param.name.clone()),
+                value: if param.passing == MirReceiverKind::Value {
+                    Operand::MovePlace(param.name.clone())
+                } else {
+                    Operand::Place(param.name.clone())
+                },
+                writeback_place: (param.passing == MirReceiverKind::BorrowMut)
+                    .then(|| param.name.clone()),
+            })
+            .collect();
+        lowerer.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name(name.to_string()),
+                args,
+            },
+        });
+        lowerer.terminate(Terminator::Return(Operand::Place(result)));
+    } else {
+        lowerer.lower_stmts(&function.body);
+    }
+    let function = lowerer.finish(MirFunctionSpec {
         name: name.to_string(),
         span: function.span,
         receiver: receiver.map(lower_receiver_kind),
         params,
+        return_type: return_type.clone(),
+        default_return: default_return_operand(return_type),
+    });
+    std::iter::once(function).chain(default_functions).collect()
+}
+
+fn lower_default_function(
+    program: &Program,
+    name: &str,
+    module_name: &str,
+    default: &Expr,
+    return_type: &Type,
+    type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
+) -> MirFunction {
+    let mut lowerer = Lowerer::new(
+        program,
+        name,
+        module_name,
+        return_type.clone(),
+        type_param_bounds,
+    );
+    let value = lowerer.lower_expr_for_owned_value(default, Some(return_type));
+    lowerer.terminate(Terminator::Return(value));
+    lowerer.finish(MirFunctionSpec {
+        name: name.to_string(),
+        span: default.span,
+        receiver: None,
+        params: Vec::new(),
         return_type: return_type.clone(),
         default_return: default_return_operand(return_type),
     })
@@ -1012,13 +1182,55 @@ struct PatternLoweringOptions {
 }
 
 struct TaskStartTarget {
-    function: String,
+    function_name: Option<String>,
     params: Vec<Param>,
     param_types: Vec<Type>,
+    param_passings: Vec<ReceiverKind>,
+    /// The callable contract carried by a first-class function value.
+    ///
+    /// Unlike `params`, this is also populated for dynamically selected
+    /// targets, where parameter names and the default mask remain observable
+    /// to argument binding even though no declaration is statically known.
+    param_contracts: Vec<FunctionParamContract>,
     return_type: Type,
     type_params: Vec<String>,
     substitutions: std::collections::HashMap<String, Type>,
     display_name: String,
+}
+
+impl TaskStartTarget {
+    fn function_type(&self) -> Type {
+        Type::Function {
+            params: self.param_contracts.clone(),
+            return_type: Box::new(self.return_type.clone()),
+        }
+    }
+}
+
+fn task_param_contracts(
+    params: &[Param],
+    param_types: &[Type],
+    param_passings: &[ReceiverKind],
+) -> Vec<FunctionParamContract> {
+    param_types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| FunctionParamContract {
+            name: params
+                .get(index)
+                .map(|param| param.name.clone())
+                .unwrap_or_default(),
+            ty: ty.clone(),
+            passing: param_passings
+                .get(index)
+                .copied()
+                .unwrap_or(ReceiverKind::Borrow),
+            has_default: params
+                .get(index)
+                .is_some_and(|param| param.default.is_some()),
+            default_erased: false,
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -1132,6 +1344,132 @@ impl<'a> Lowerer<'a> {
             .or_else(|| self.program.functions.get(name))
     }
 
+    fn function_type(
+        &self,
+        function: &crate::sema::FunctionInfo,
+        substitutions: &std::collections::HashMap<String, Type>,
+    ) -> Type {
+        Type::Function {
+            params: function
+                .signature
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, param)| FunctionParamContract {
+                    name: function
+                        .decl
+                        .params
+                        .get(index)
+                        .map(|param| param.name.clone())
+                        .unwrap_or_default(),
+                    ty: substitute_type(param, substitutions),
+                    passing: function
+                        .signature
+                        .param_passings
+                        .get(index)
+                        .copied()
+                        .unwrap_or(ReceiverKind::Borrow),
+                    has_default: function
+                        .decl
+                        .params
+                        .get(index)
+                        .is_some_and(|param| param.default.is_some()),
+                    default_erased: false,
+                })
+                .collect(),
+            return_type: Box::new(substitute_type(
+                &function.signature.return_type,
+                substitutions,
+            )),
+        }
+    }
+
+    fn function_runtime_name(
+        &self,
+        source_name: &str,
+        function: &crate::sema::FunctionInfo,
+    ) -> String {
+        if function.module_name == self.program.module_name {
+            source_name.to_string()
+        } else {
+            imported_module_function_name(&function.module_name, &function.decl.name)
+        }
+    }
+
+    fn resolve_function_value_target(
+        &self,
+        expr: &Expr,
+    ) -> Option<(String, &crate::sema::FunctionInfo)> {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.resolve_function_value_target(inner),
+            ExprKind::Name(name) => {
+                if self.local_types.contains_key(&self.render_local_name(name)) {
+                    return None;
+                }
+                let function = self.resolve_function_info(name)?;
+                Some((self.function_runtime_name(name, function), function))
+            }
+            ExprKind::Member { object, field } => {
+                let module_path = self.infer_module_path(object)?;
+                let namespace = self.module_namespace(&module_path)?;
+                let function = namespace
+                    .functions
+                    .get(field)
+                    .or_else(|| namespace.all_functions.get(field))?;
+                Some((
+                    imported_module_function_name(&function.module_name, &function.decl.name),
+                    function,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn lower_function_value(&self, expr: &Expr) -> Option<Operand> {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.lower_function_value(inner),
+            ExprKind::Specialize { expr, type_args } => {
+                let (runtime_name, function) = self.resolve_function_value_target(expr)?;
+                let substitutions = substitutions_from_decl_type_args(
+                    &function.decl.type_params,
+                    &type_args
+                        .iter()
+                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                        .collect::<Vec<_>>(),
+                );
+                Some(Operand::Function {
+                    name: runtime_name,
+                    signature: Box::new(self.function_type(function, &substitutions)),
+                })
+            }
+            ExprKind::Index { object, index } => {
+                let (runtime_name, function) = self.resolve_function_value_target(object)?;
+                let type_args = self.task_type_args_from_index_expr(index)?;
+                if function.decl.type_params.is_empty()
+                    || function.decl.type_params.len() != type_args.len()
+                {
+                    return None;
+                }
+                let substitutions =
+                    substitutions_from_decl_type_args(&function.decl.type_params, &type_args);
+                Some(Operand::Function {
+                    name: runtime_name,
+                    signature: Box::new(self.function_type(function, &substitutions)),
+                })
+            }
+            ExprKind::Name(_) | ExprKind::Member { .. } => {
+                let (runtime_name, function) = self.resolve_function_value_target(expr)?;
+                Some(Operand::Function {
+                    name: runtime_name,
+                    signature: Box::new(
+                        self.function_type(function, &std::collections::HashMap::new()),
+                    ),
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
         if let Some((module_path, item_name)) = name.rsplit_once('.') {
             if let Some(namespace) = self.module_namespace(module_path) {
@@ -1176,6 +1514,22 @@ impl<'a> Lowerer<'a> {
                     .map(|element| self.lower_type_ref_with_provenance(element))
                     .collect(),
             ),
+            TypeRefKind::Function {
+                params,
+                return_type,
+            } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|param| FunctionParamContract {
+                        name: String::new(),
+                        ty: self.lower_type_ref_with_provenance(&param.ty),
+                        passing: resolve_param_passing(param.mode),
+                        has_default: false,
+                        default_erased: true,
+                    })
+                    .collect(),
+                return_type: Box::new(self.lower_type_ref_with_provenance(return_type)),
+            },
             TypeRefKind::Named {
                 name: source_name,
                 args,
@@ -1277,7 +1631,17 @@ impl<'a> Lowerer<'a> {
                 .current_module_namespace()
                 .and_then(|namespace| namespace.imported_modules.get(name))
                 .or_else(|| self.program.imported_modules.get(name))
-                .map(|namespace| namespace.path.clone()),
+                .map(|namespace| namespace.path.clone())
+                .or_else(|| {
+                    // Builtin declarations retain their public qualified
+                    // spelling in default expressions (for example,
+                    // `process.pipe()`). A hidden default function is lowered
+                    // in that builtin's own namespace, where the module is not
+                    // also present as an import of itself.
+                    self.current_module_namespace()
+                        .filter(|namespace| namespace.path == *name)
+                        .map(|namespace| namespace.path.clone())
+                }),
             ExprKind::Specialize { expr, .. } => self.infer_module_path(expr),
             ExprKind::Group(inner) => self.infer_module_path(inner),
             ExprKind::Member { object, field } => {
@@ -3231,6 +3595,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
+        if let Some(function) = self.lower_function_value(expr) {
+            return function;
+        }
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
@@ -3824,6 +4191,19 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let Some(expected @ Type::Function { .. }) = expected {
+            if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
+                // Contextual typing is what gives a generic named function
+                // value its concrete callable type (for example, assigning
+                // `empty` to `def() -> Option[String]`). Preserve that exact
+                // type in MIR rather than leaving unresolved declaration type
+                // parameters on the runtime value.
+                return Operand::Function {
+                    name,
+                    signature: Box::new(expected.clone()),
+                };
+            }
+        }
         if Self::is_contextual_none_expr(expr)
             && matches!(expected, Some(Type::Named(name, args)) if name == "Option" && args.len() == 1)
         {
@@ -3950,10 +4330,13 @@ impl<'a> Lowerer<'a> {
             else_expr,
         } = &expr.kind
         {
-            let value_type = expected
-                .cloned()
-                .or_else(|| self.infer_conditional_result_type(then_expr, else_expr))
-                .unwrap_or_else(|| Type::named("Unknown"));
+            let value_type = match expected {
+                Some(expected) => expected.clone(),
+                None => match self.infer_conditional_result_type(then_expr, else_expr) {
+                    Some(inferred) => inferred,
+                    None => Type::named("Unknown"),
+                },
+            };
             let value = self.lower_conditional_expr(
                 then_expr,
                 condition,
@@ -4244,21 +4627,56 @@ impl<'a> Lowerer<'a> {
     fn resolve_task_start_target(&self, callee: &Expr) -> Option<TaskStartTarget> {
         let (base_callee, callable_type_args) = self.task_callable_specialization(callee);
         match &base_callee.kind {
-            ExprKind::Name(function) => self.program.functions.get(function).map(|function_info| {
-                let substitutions = self.task_explicit_type_substitutions(
-                    &function_info.decl.type_params,
-                    callable_type_args.as_deref(),
-                );
-                TaskStartTarget {
-                    function: function.clone(),
-                    params: function_info.decl.params.clone(),
-                    param_types: function_info.signature.params.clone(),
-                    return_type: function_info.signature.return_type.clone(),
-                    type_params: function_info.decl.type_params.clone(),
-                    substitutions,
-                    display_name: format!("function `{}`", function),
-                }
-            }),
+            ExprKind::Name(function) => self
+                .program
+                .functions
+                .get(function)
+                .filter(|_| {
+                    !self
+                        .local_types
+                        .contains_key(&self.render_local_name(function))
+                })
+                .map(|function_info| {
+                    let substitutions = self.task_explicit_type_substitutions(
+                        &function_info.decl.type_params,
+                        callable_type_args.as_deref(),
+                    );
+                    let param_contracts = task_param_contracts(
+                        &function_info.decl.params,
+                        &function_info.signature.params,
+                        &function_info.signature.param_passings,
+                    );
+                    TaskStartTarget {
+                        function_name: Some(function.clone()),
+                        params: function_info.decl.params.clone(),
+                        param_types: function_info.signature.params.clone(),
+                        param_passings: function_info.signature.param_passings.clone(),
+                        param_contracts,
+                        return_type: function_info.signature.return_type.clone(),
+                        type_params: function_info.decl.type_params.clone(),
+                        substitutions,
+                        display_name: format!("function `{}`", function),
+                    }
+                })
+                .or_else(|| {
+                    self.infer_expr_type(callee).and_then(|ty| match ty {
+                        Type::Function {
+                            params,
+                            return_type,
+                        } => Some(TaskStartTarget {
+                            function_name: None,
+                            params: Vec::new(),
+                            param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                            param_passings: params.iter().map(|param| param.passing).collect(),
+                            param_contracts: params,
+                            return_type: *return_type,
+                            type_params: Vec::new(),
+                            substitutions: std::collections::HashMap::new(),
+                            display_name: "function value".to_string(),
+                        }),
+                        _ => None,
+                    })
+                }),
             ExprKind::Member { object, field } => {
                 let (base_object, object_type_args) = self.task_callable_specialization(object);
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
@@ -4276,13 +4694,20 @@ impl<'a> Lowerer<'a> {
                                     ));
                                     let mut type_params = class_info.decl.type_params.clone();
                                     type_params.extend(method.decl.type_params.iter().cloned());
+                                    let param_contracts = task_param_contracts(
+                                        &method.decl.params,
+                                        &method.signature.params,
+                                        &method.signature.param_passings,
+                                    );
                                     return Some(TaskStartTarget {
-                                        function: format!(
+                                        function_name: Some(format!(
                                             "{}::{}.{}",
                                             module_path, item_name, field
-                                        ),
+                                        )),
                                         params: method.decl.params.clone(),
                                         param_types: method.signature.params.clone(),
+                                        param_passings: method.signature.param_passings.clone(),
+                                        param_contracts,
                                         return_type: method.signature.return_type.clone(),
                                         type_params,
                                         substitutions,
@@ -4305,13 +4730,20 @@ impl<'a> Lowerer<'a> {
                                 &function.decl.type_params,
                                 callable_type_args.as_deref(),
                             );
+                            let param_contracts = task_param_contracts(
+                                &function.decl.params,
+                                &function.signature.params,
+                                &function.signature.param_passings,
+                            );
                             return Some(TaskStartTarget {
-                                function: imported_module_function_name(
+                                function_name: Some(imported_module_function_name(
                                     &module_path,
                                     &function_name,
-                                ),
+                                )),
                                 params: function.decl.params.clone(),
                                 param_types: function.signature.params.clone(),
+                                param_passings: function.signature.param_passings.clone(),
+                                param_contracts,
                                 return_type: function.signature.return_type.clone(),
                                 type_params: function.decl.type_params.clone(),
                                 substitutions,
@@ -4337,14 +4769,21 @@ impl<'a> Lowerer<'a> {
                                 ));
                                 let mut type_params = class_info.decl.type_params.clone();
                                 type_params.extend(method.decl.type_params.iter().cloned());
+                                let param_contracts = task_param_contracts(
+                                    &method.decl.params,
+                                    &method.signature.params,
+                                    &method.signature.param_passings,
+                                );
                                 return Some(TaskStartTarget {
-                                    function: mir_class_method_name(
+                                    function_name: Some(mir_class_method_name(
                                         self.program,
                                         class_info,
                                         field,
-                                    ),
+                                    )),
                                     params: method.decl.params.clone(),
                                     param_types: method.signature.params.clone(),
+                                    param_passings: method.signature.param_passings.clone(),
+                                    param_contracts,
                                     return_type: method.signature.return_type.clone(),
                                     type_params,
                                     substitutions,
@@ -4354,9 +4793,41 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                None
+                self.infer_expr_type(callee).and_then(|ty| match ty {
+                    Type::Function {
+                        params,
+                        return_type,
+                    } => Some(TaskStartTarget {
+                        function_name: None,
+                        params: Vec::new(),
+                        param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                        param_passings: params.iter().map(|param| param.passing).collect(),
+                        param_contracts: params,
+                        return_type: *return_type,
+                        type_params: Vec::new(),
+                        substitutions: std::collections::HashMap::new(),
+                        display_name: "function value".to_string(),
+                    }),
+                    _ => None,
+                })
             }
-            _ => None,
+            _ => self.infer_expr_type(callee).and_then(|ty| match ty {
+                Type::Function {
+                    params,
+                    return_type,
+                } => Some(TaskStartTarget {
+                    function_name: None,
+                    params: Vec::new(),
+                    param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                    param_passings: params.iter().map(|param| param.passing).collect(),
+                    param_contracts: params,
+                    return_type: *return_type,
+                    type_params: Vec::new(),
+                    substitutions: std::collections::HashMap::new(),
+                    display_name: "function value".to_string(),
+                }),
+                _ => None,
+            }),
         }
     }
 
@@ -4444,6 +4915,9 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         span: Span,
     ) -> TaskStartTarget {
+        if target.function_name.is_none() {
+            return target;
+        }
         let ordered_args = bind_call_arguments(
             &target.display_name,
             &callable_params_from_decl(&target.params),
@@ -4500,6 +4974,8 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|param| substitute_type(param, &target.substitutions))
             .collect();
+        target.param_contracts =
+            task_param_contracts(&target.params, &target.param_types, &target.param_passings);
         target.return_type = substitute_type(&target.return_type, &target.substitutions);
         target
     }
@@ -4519,6 +4995,35 @@ impl<'a> Lowerer<'a> {
             ExprKind::Specialize { expr, type_args } => (&**expr, Some(type_args.as_slice())),
             _ => (callee, None),
         };
+
+        let direct_decl_callee = match &base_callee.kind {
+            ExprKind::Name(name) => {
+                !self.local_types.contains_key(&self.render_local_name(name))
+                    && self.resolve_function_info(name).is_some()
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module_path| self.module_namespace(&module_path))
+                .is_some_and(|namespace| {
+                    namespace.functions.contains_key(field)
+                        || namespace.all_functions.contains_key(field)
+                }),
+            _ => false,
+        };
+        if !direct_decl_callee {
+            if let Some(Type::Function { params, .. }) = self.infer_expr_type(callee) {
+                let function = self.lower_expr_at_sequence_point(callee, None);
+                let args = self.lower_function_value_args(args, &params, callee.span);
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(function),
+                        args,
+                    },
+                });
+                return Operand::Place(temp);
+            }
+        }
 
         match &base_callee.kind {
             // `len` and `str` are spelled as free calls but defined by
@@ -5087,6 +5592,17 @@ impl<'a> Lowerer<'a> {
                         &args[first_target_arg..],
                         callee.span,
                     );
+                    let function_type = target.function_type();
+                    let function = match target.function_name.as_ref() {
+                        Some(name) => Operand::Function {
+                            name: name.clone(),
+                            signature: Box::new(function_type.clone()),
+                        },
+                        None => self.lower_expr_at_sequence_point(
+                            &args[target_index].value,
+                            Some(&function_type),
+                        ),
+                    };
                     let group = self.lower_expr_at_sequence_point(object, None);
                     let stack_size = has_stack_override.then(|| {
                         self.lower_expr_at_sequence_point(
@@ -5098,14 +5614,19 @@ impl<'a> Lowerer<'a> {
                     // snapshotted and non-copy values are transferred into the task,
                     // regardless of whether the eventual target parameter is a shared
                     // borrow or an owning parameter.
-                    let capture_passings = vec![ReceiverKind::Value; target.params.len()];
-                    let lowered_args = self.lower_user_args_with_types(
-                        &target.display_name,
-                        &target.params,
+                    let capture_contracts = target
+                        .param_contracts
+                        .iter()
+                        .cloned()
+                        .map(|mut param| {
+                            param.passing = ReceiverKind::Value;
+                            param
+                        })
+                        .collect::<Vec<_>>();
+                    let lowered_args = self.lower_function_value_args(
                         &args[first_target_arg..],
+                        &capture_contracts,
                         callee.span,
-                        Some(&target.param_types),
-                        Some(&capture_passings),
                     );
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
@@ -5117,7 +5638,7 @@ impl<'a> Lowerer<'a> {
                             ),
                             stack_size,
                             task_group: group,
-                            function: target.function,
+                            function,
                             args: lowered_args,
                             span: expr.span,
                         },
@@ -5808,6 +6329,51 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    fn lower_function_value_args(
+        &mut self,
+        args: &[Argument],
+        params: &[FunctionParamContract],
+        span: Span,
+    ) -> Vec<MirArg> {
+        let callable_params = params
+            .iter()
+            .map(|param| CallableParam {
+                name: &param.name,
+                required: !param.has_default,
+            })
+            .collect::<Vec<_>>();
+        let ordered = bind_call_arguments(
+            "function value",
+            &callable_params,
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )
+        .expect("checked indirect-call arguments should bind during MIR lowering");
+        args.iter()
+            .map(|argument| {
+                let index = ordered
+                    .iter()
+                    .position(
+                        |bound| matches!(bound, Some(bound) if std::ptr::eq(*bound, argument)),
+                    )
+                    .expect("bound indirect argument should retain its declaration slot");
+                let param = &params[index];
+                MirArg {
+                    name: argument.name.clone(),
+                    value: self.lower_expr_for_passing(
+                        &argument.value,
+                        Some(&param.ty),
+                        param.passing,
+                    ),
+                    writeback_place: (param.passing == ReceiverKind::BorrowMut)
+                        .then(|| self.render_place_expr_option(&argument.value))
+                        .flatten(),
+                }
+            })
+            .collect()
+    }
+
     fn retarget_operand_place(&mut self, operand: &Operand, ty: &Type) {
         if let Operand::Place(place) | Operand::MovePlace(place) = operand {
             self.local_types.insert(place.clone(), ty.clone());
@@ -5869,8 +6435,9 @@ impl<'a> Lowerer<'a> {
                         })
                     })
                     .or_else(|| {
-                        self.resolve_function_info(name)
-                            .map(|function| function.signature.return_type.clone())
+                        self.resolve_function_info(name).map(|function| {
+                            self.function_type(function, &std::collections::HashMap::new())
+                        })
                     })
             }
             ExprKind::Group(inner) => self.infer_expr_type(inner),
@@ -5916,23 +6483,35 @@ impl<'a> Lowerer<'a> {
                 ],
             )),
             ExprKind::FString(_) => Some(Type::named("String")),
-            ExprKind::Specialize { expr, type_args } => match &expr.kind {
-                ExprKind::Name(name)
-                    if matches!(
-                        name.as_str(),
-                        "Option" | "Result" | "SendError" | "Queue" | "Vec" | "Set" | "Map"
-                    ) =>
-                {
-                    Some(Type::Named(
-                        name.clone(),
-                        type_args
+            ExprKind::Specialize { expr, type_args } => {
+                if let Some((_runtime_name, function)) = self.resolve_function_value_target(expr) {
+                    let substitutions = substitutions_from_decl_type_args(
+                        &function.decl.type_params,
+                        &type_args
                             .iter()
                             .map(|ty| self.lower_type_ref_with_provenance(ty))
-                            .collect(),
-                    ))
+                            .collect::<Vec<_>>(),
+                    );
+                    return Some(self.function_type(function, &substitutions));
                 }
-                _ => self.infer_expr_type(expr),
-            },
+                match &expr.kind {
+                    ExprKind::Name(name)
+                        if matches!(
+                            name.as_str(),
+                            "Option" | "Result" | "SendError" | "Queue" | "Vec" | "Set" | "Map"
+                        ) =>
+                    {
+                        Some(Type::Named(
+                            name.clone(),
+                            type_args
+                                .iter()
+                                .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                .collect(),
+                        ))
+                    }
+                    _ => self.infer_expr_type(expr),
+                }
+            }
             ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
             ExprKind::BuiltinOmitted => None,
             ExprKind::Unary { op, expr } => match op {
@@ -5962,6 +6541,25 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => (&**callee, None),
                 };
+                let direct_decl_callee = match &base_callee.kind {
+                    ExprKind::Name(name) => {
+                        !self.local_types.contains_key(&self.render_local_name(name))
+                            && self.resolve_function_info(name).is_some()
+                    }
+                    ExprKind::Member { object, field } => self
+                        .infer_module_path(object)
+                        .and_then(|module_path| self.module_namespace(&module_path))
+                        .is_some_and(|namespace| {
+                            namespace.functions.contains_key(field)
+                                || namespace.all_functions.contains_key(field)
+                        }),
+                    _ => false,
+                };
+                if !direct_decl_callee {
+                    if let Some(Type::Function { return_type, .. }) = self.infer_expr_type(callee) {
+                        return Some(*return_type);
+                    }
+                }
                 match &base_callee.kind {
                     ExprKind::Name(name) => {
                         if name == "range" {
@@ -6328,6 +6926,20 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Member { object, field } => {
+                if let Some(module_path) = self.infer_module_path(object) {
+                    if let Some(function) =
+                        self.module_namespace(&module_path).and_then(|namespace| {
+                            namespace
+                                .functions
+                                .get(field)
+                                .or_else(|| namespace.all_functions.get(field))
+                        })
+                    {
+                        return Some(
+                            self.function_type(function, &std::collections::HashMap::new()),
+                        );
+                    }
+                }
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(enum_info) = namespace.enums.get(&item_name) {
@@ -6380,16 +6992,32 @@ impl<'a> Lowerer<'a> {
                     .get(field)
                     .map(|field| substitute_type(&field.ty, &substitutions))
             }
-            ExprKind::Index { object, index } => match self.infer_expr_type(object)? {
-                Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
-                Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
-                    Some(args[0].clone())
+            ExprKind::Index { object, index } => {
+                if let Some((_runtime_name, function)) = self.resolve_function_value_target(object)
+                {
+                    if let Some(type_args) = self.task_type_args_from_index_expr(index) {
+                        if !function.decl.type_params.is_empty()
+                            && function.decl.type_params.len() == type_args.len()
+                        {
+                            let substitutions = substitutions_from_decl_type_args(
+                                &function.decl.type_params,
+                                &type_args,
+                            );
+                            return Some(self.function_type(function, &substitutions));
+                        }
+                    }
                 }
-                Type::Named(name, args) if name == "Map" && args.len() == 2 => {
-                    Some(args[1].clone())
+                match self.infer_expr_type(object)? {
+                    Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
+                    Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                        Some(args[1].clone())
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
             ExprKind::Binary { op, left, right } => {
                 if matches!(
                     op,
@@ -7429,6 +8057,7 @@ impl<'a> Lowerer<'a> {
             Operand::Place(place) | Operand::MovePlace(place) => {
                 self.local_types.get(place).cloned()
             }
+            Operand::Function { signature, .. } => Some(signature.as_ref().clone()),
             Operand::Int(_) => Some(Type::named("int64")),
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
@@ -7576,6 +8205,22 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
 fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     match &type_ref.kind {
         TypeRefKind::Tuple(elements) => Type::Tuple(elements.iter().map(lower_type_ref).collect()),
+        TypeRefKind::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: String::new(),
+                    ty: lower_type_ref(&param.ty),
+                    passing: resolve_param_passing(param.mode),
+                    has_default: false,
+                    default_erased: true,
+                })
+                .collect(),
+            return_type: Box::new(lower_type_ref(return_type)),
+        },
         TypeRefKind::Named { name, args } => {
             if name == "None" {
                 return Type::Unit;

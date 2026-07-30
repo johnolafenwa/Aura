@@ -1,0 +1,9 @@
+class Counter:
+    value: int32
+
+def observe(counter: Counter) -> None:
+    print(counter.value)
+
+def main() -> int32:
+    mutable_only: def(mut Counter) -> None = observe
+    return 0

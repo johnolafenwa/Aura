@@ -1,0 +1,22 @@
+def empty[T]() -> Option[T]:
+    return None
+
+def supplier[T](callback: def() -> Option[T] = empty) -> def() -> Option[T]:
+    return callback
+
+def main() -> int32:
+    supplied = supplier[String]()
+    match supplied():
+        case Option.None:
+            print("ordinary-none")
+        case Option.Some(value):
+            print(value)
+
+    with group = TaskGroup():
+        task = group.start(supplied)
+        match task.result_or(Option.Some("fallback"), timeout=1s):
+            case Option.None:
+                print("task-none")
+            case Option.Some(value):
+                print(value)
+    return 0

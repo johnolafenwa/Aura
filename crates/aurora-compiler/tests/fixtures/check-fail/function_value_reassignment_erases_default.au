@@ -1,0 +1,10 @@
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(value: int32) -> int32:
+    return value
+
+def main() -> int32:
+    mut selected = first
+    selected = second
+    return selected()

@@ -1,0 +1,6 @@
+def offset(value: int32 = 10) -> int32:
+    return value + 1
+
+def main() -> int32:
+    callbacks: Vec[def(int32) -> int32] = [offset]
+    return callbacks[0](value=20)

@@ -30,6 +30,25 @@ use std::time::Duration as StdDuration;
 #[cfg(unix)]
 use crate::runtime_value::{UnixListenerValue, UnixStreamValue};
 
+fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Operand {
+    Operand::Function {
+        name: name.to_string(),
+        signature: Box::new(Type::Function {
+            params: params
+                .into_iter()
+                .map(|ty| crate::sema::FunctionParamContract {
+                    name: String::new(),
+                    ty,
+                    passing: crate::ast::ReceiverKind::Value,
+                    has_default: false,
+                    default_erased: false,
+                })
+                .collect(),
+            return_type: Box::new(return_type),
+        }),
+    }
+}
+
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
         MirModule {
@@ -5384,11 +5403,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             name: "left".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
+            default_function: None,
         },
         MirParam {
             name: "right".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
+            default_function: None,
         },
     ];
     let rebound = bind_args(&params, bound.clone()).expect("mir params should bind");
@@ -5753,7 +5774,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
                 result_is_copy: true,
                 stack_size: None,
                 task_group: Operand::Unit,
-                function: "worker".to_string(),
+                function: test_function_operand("worker", Vec::new(), Type::Unit),
                 args: Vec::new(),
                 span: crate::diag::Span::new(1, 1),
             },
@@ -5793,6 +5814,65 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
 }
 
 #[test]
+fn mir_function_value_process_run_selects_scheduler_only_when_source_materializes_it() {
+    let synchronous = crate::lower_source_to_mir(
+        r#"
+def main():
+    print("synchronous")
+"#,
+    )
+    .expect("an ordinary program should lower");
+    assert!(
+        synchronous
+            .functions
+            .iter()
+            .any(|function| function.name == "process::run"),
+        "runtime-provided function wrappers should be present for first-class lookup"
+    );
+    assert!(
+        !super::module_uses_lightweight_tasks(&synchronous),
+        "an unused runtime wrapper must not force synchronous source onto the task scheduler"
+    );
+
+    let materialized = crate::lower_source_to_mir(
+        r#"
+import process
+
+def main():
+    runner = process.run
+"#,
+    )
+    .expect("a process.run function value should lower");
+    let main = materialized
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    assert!(
+        main.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value:
+                            Rvalue::Use(Operand::Function {
+                                name,
+                                ..
+                            }),
+                        ..
+                    } if name == "process::run"
+                )
+            })
+        }),
+        "the source assignment should explicitly materialize process.run"
+    );
+    assert!(
+        super::module_uses_lightweight_tasks(&materialized),
+        "materializing process.run must select the scheduler needed by a later dynamic call"
+    );
+}
+
+#[test]
 fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -5807,11 +5887,13 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             name: "source".to_string(),
             passing: crate::mir::MirReceiverKind::Borrow,
             ty: Type::named("int32"),
+            default_function: None,
         },
         MirParam {
             name: "target".to_string(),
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
+            default_function: None,
         },
     ];
     let writeback_places = vec![None, Some("target".to_string())];
@@ -5857,6 +5939,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 name: "text".to_string(),
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("String"),
+                default_function: None,
             }],
             &[Some("text_target".to_string())],
             vec![(0, Value::String(text))],
@@ -5885,6 +5968,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             name: "value".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
+            default_function: None,
         }],
         local_types: Vec::new(),
         return_type: Type::named("int32"),
@@ -5900,6 +5984,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 name: "value".to_string(),
                 passing: crate::mir::MirReceiverKind::Borrow,
                 ty: Type::named("String"),
+                default_function: None,
             }],
             ..by_value.clone()
         })
@@ -5910,6 +5995,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 name: "value".to_string(),
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
+                default_function: None,
             }],
             ..by_value
         })
@@ -7032,6 +7118,56 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         &[],
         &mut env,
     );
+}
+
+#[test]
+fn mir_source_filesystem_reports_invalid_utf8_and_sorted_directory_entries() {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!(
+        "aurora-mir-source-fs-{}-{timestamp}",
+        std::process::id()
+    ));
+    let entries_path = temp_root.join("entries");
+    std::fs::create_dir_all(&entries_path).expect("source filesystem directory should be created");
+    std::fs::write(temp_root.join("invalid.bin"), [0xff, 0xfe])
+        .expect("invalid UTF-8 fixture should be written");
+    std::fs::write(entries_path.join("zeta.txt"), "z").expect("zeta fixture should be written");
+    std::fs::write(entries_path.join("alpha.txt"), "a").expect("alpha fixture should be written");
+
+    let source = format!(
+        r#"import fs
+import io
+
+def main() -> int32:
+    match fs.read_to_string("{}"):
+        case Result.Err(io.Error.InvalidData):
+            print("invalid-data")
+        case Result.Err(error):
+            print(error)
+            return 1
+        case Result.Ok(_):
+            return 2
+
+    match fs.read_dir("{}"):
+        case Result.Ok(entries):
+            print(entries)
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 3
+"#,
+        temp_root.join("invalid.bin").display(),
+        entries_path.display(),
+    );
+    let output = crate::run_source(&source)
+        .unwrap_or_else(|error| panic!("filesystem source should run through MIR: {error}"));
+    assert_eq!(output.value, Value::Int(IntegerValue::zero()));
+    assert_eq!(output.stdout, "invalid-data\n[alpha.txt, zeta.txt]\n");
+
+    std::fs::remove_dir_all(&temp_root).expect("source filesystem fixtures should be removed");
 }
 
 #[test]
@@ -8877,6 +9013,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 name: "amount".to_string(),
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
+                default_function: None,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -8928,6 +9065,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 name: "flag".to_string(),
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("bool"),
+                default_function: None,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -9446,6 +9584,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
             name: "value".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
+            default_function: None,
         }],
         local_types: Vec::new(),
         return_type: Type::named("String"),
@@ -13724,6 +13863,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             name: "value".to_string(),
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
+            default_function: None,
         }],
         local_types: vec![MirLocalType {
             name: "temp".to_string(),
@@ -14782,4 +14922,575 @@ def main():
         clone_count + 1,
         "only the selected borrowed message should be snapshotted"
     );
+}
+
+#[test]
+fn mir_function_value_executes_dynamic_defaults_and_capability_handoffs() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Counter:
+    value: int32
+
+def increment(counter: mut Counter) -> None:
+    counter.value += 1
+
+def consume(value: own String) -> int64:
+    return value.len()
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def with_default(value: int32 = mark("fresh-default", 40)) -> int32:
+    return value + 2
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def choose(use_double: bool) -> def(int32) -> int32:
+    return double if use_double else with_default
+
+def main():
+    mut counter = Counter(value=0)
+    mutator = increment
+    consumer = consume
+    selected = with_default
+    dynamic = choose(true)
+    text = "owned"
+
+    mutator(counter)
+    print(counter.value)
+    print(consumer(text))
+    print(selected())
+    print(selected())
+    print(dynamic(9))
+    with group = TaskGroup():
+        dynamic_task = group.start(dynamic, 7)
+        default_task = group.start(selected)
+        print("after-start")
+        print(dynamic_task.result_or(-1, timeout=1s))
+        print(default_task.result_or(-1, timeout=1s))
+"#,
+    )
+    .expect("dynamic function values should lower");
+    let output = crate::run_mir(&module).expect("dynamic function values should execute");
+    assert_eq!(
+        output.stdout,
+        "1\n5\nfresh-default\n42\nfresh-default\n42\n18\nfresh-default\nafter-start\n14\n42\n",
+        "mut writeback, own consumption, fresh defaults, selected targets, and task capture must agree"
+    );
+}
+
+#[test]
+fn mir_function_value_member_and_index_task_targets_execute_selected_functions() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Holder:
+    callback: def(int32) -> int32
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def main():
+    holder = Holder(callback=double)
+    callbacks: Vec[def(int32) -> int32] = [double]
+    with group = TaskGroup():
+        field_task = group.start(holder.callback, 5)
+        index_task = group.start(callbacks[0], 6)
+        print(field_task.result_or(-1, timeout=1s))
+        print(index_task.result_or(-1, timeout=1s))
+"#,
+    )
+    .expect("stored function values should lower as dynamic task targets");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let starts = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::StartTask { function, args, .. },
+                ..
+            } => Some((function, args)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 2);
+    assert!(
+        starts.iter().all(|(function, args)| {
+            matches!(function, Operand::Place(_))
+                && args.len() == 1
+                && args[0].writeback_place.is_none()
+        }),
+        "field and indexed task targets must be evaluated into dynamic function-value places"
+    );
+
+    let output = crate::run_mir(&module).expect("stored function-value tasks should execute");
+    assert_eq!(output.stdout, "10\n12\n");
+}
+
+#[test]
+fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_bad_calls() {
+    let string_type = Type::named("String");
+    let consume_signature = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: string_type.clone(),
+            passing: crate::ast::ReceiverKind::Value,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(string_type.clone()),
+    };
+    let consume = MirFunction {
+        name: "consume".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: vec![MirParam {
+            name: "value".to_string(),
+            passing: crate::mir::MirReceiverKind::Value,
+            ty: string_type.clone(),
+            default_function: None,
+        }],
+        local_types: Vec::new(),
+        return_type: string_type.clone(),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::MovePlace("value".to_string())),
+        }],
+    };
+
+    let int_type = Type::named("int32");
+    let mutate_signature = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: int_type.clone(),
+            passing: crate::ast::ReceiverKind::BorrowMut,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::Unit),
+    };
+    let mutate = MirFunction {
+        name: "increment".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: vec![MirParam {
+            name: "value".to_string(),
+            passing: crate::mir::MirReceiverKind::BorrowMut,
+            ty: int_type.clone(),
+            default_function: None,
+        }],
+        local_types: vec![MirLocalType {
+            name: "next".to_string(),
+            ty: int_type.clone(),
+        }],
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![
+                Instruction::Assign {
+                    target: "next".to_string(),
+                    value: Rvalue::Binary {
+                        op: crate::ast::BinaryOp::Add,
+                        left: Operand::Place("value".to_string()),
+                        right: Operand::Int(1),
+                        span: Span::new(1, 1),
+                    },
+                },
+                Instruction::Assign {
+                    target: "value".to_string(),
+                    value: Rvalue::Use(Operand::Place("next".to_string())),
+                },
+            ],
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    };
+
+    let mut runtime = MirRuntime::new(
+        MirModule {
+            functions: vec![consume, mutate],
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "consumer",
+        consume_signature.clone(),
+        super::mir_function_value("consume", &consume_signature),
+    );
+    let text = "owned dynamic argument".to_string();
+    let allocation = text.as_ptr();
+    env.define_typed("text", string_type, Value::String(text));
+    let consumed = runtime
+        .evaluate_call(
+            &CallTarget::Value(Operand::Place("consumer".to_string())),
+            &[MirArg {
+                name: None,
+                value: Operand::MovePlace("text".to_string()),
+                writeback_place: None,
+            }],
+            &mut env,
+        )
+        .expect("an own indirect argument should reach the selected function");
+    match consumed {
+        Value::String(value) => assert_eq!(
+            value.as_ptr(),
+            allocation,
+            "the owned allocation should transfer through the dynamic call"
+        ),
+        other => panic!("expected the consumed String, found {other:?}"),
+    }
+    assert!(
+        env.place_ref("text").is_err(),
+        "an own indirect argument must leave its source consumed"
+    );
+
+    env.define_typed(
+        "mutator",
+        mutate_signature.clone(),
+        super::mir_function_value("increment", &mutate_signature),
+    );
+    env.define_typed(
+        "counter",
+        int_type,
+        Value::Int(IntegerValue::from_signed(41)),
+    );
+    assert_eq!(
+        runtime
+            .evaluate_call(
+                &CallTarget::Value(Operand::Place("mutator".to_string())),
+                &[MirArg {
+                    name: None,
+                    value: Operand::Place("counter".to_string()),
+                    writeback_place: Some("counter".to_string()),
+                }],
+                &mut env,
+            )
+            .expect("a mut indirect call should write its updated argument back"),
+        Value::Unit
+    );
+    assert_eq!(
+        env.place_ref("counter")
+            .expect("counter should remain live"),
+        &Value::Int(IntegerValue::from_signed(42))
+    );
+
+    let missing_writeback = runtime
+        .evaluate_call(
+            &CallTarget::Value(Operand::Place("mutator".to_string())),
+            &[MirArg {
+                name: None,
+                value: Operand::Place("counter".to_string()),
+                writeback_place: None,
+            }],
+            &mut env,
+        )
+        .expect_err("malformed MIR cannot discard a mutable capability writeback");
+    assert_eq!(
+        missing_writeback.message,
+        "mutable borrowed MIR parameter `value` requires a writeback place"
+    );
+    assert_eq!(
+        env.place_ref("counter")
+            .expect("a rejected writeback must preserve the caller's value"),
+        &Value::Int(IntegerValue::from_signed(42))
+    );
+
+    let not_callable = runtime
+        .evaluate_call(&CallTarget::Value(Operand::Bool(true)), &[], &mut env)
+        .expect_err("malformed MIR cannot call a non-function value");
+    assert_eq!(
+        not_callable.message,
+        "indirect MIR call expected a function value, found `true`"
+    );
+}
+
+#[test]
+fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_task_args() {
+    let int_type = Type::named("int32");
+    let param = |name: &str, default_function: Option<&str>| MirParam {
+        name: name.to_string(),
+        passing: crate::mir::MirReceiverKind::Value,
+        ty: int_type.clone(),
+        default_function: default_function.map(str::to_string),
+    };
+    let function = |name: &str, params: Vec<MirParam>| MirFunction {
+        name: name.to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params,
+        local_types: Vec::new(),
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    };
+    let required = function("required", vec![param("left", None), param("right", None)]);
+    let broken_default = function(
+        "broken_default",
+        vec![param("value", Some("missing_default"))],
+    );
+    let worker = function("worker", Vec::new());
+    let mut runtime = MirRuntime::new(
+        MirModule {
+            functions: vec![required, broken_default, worker],
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+
+    let missing_arg = runtime
+        .evaluate_call(
+            &CallTarget::Value(test_function_operand(
+                "required",
+                vec![int_type.clone(), int_type.clone()],
+                Type::Unit,
+            )),
+            &[],
+            &mut env,
+        )
+        .expect_err("a malformed indirect call cannot omit a required parameter");
+    assert_eq!(
+        missing_arg.message,
+        "missing MIR argument `left` for function `required`"
+    );
+
+    let missing_default = runtime
+        .evaluate_call(
+            &CallTarget::Value(test_function_operand(
+                "broken_default",
+                vec![int_type.clone()],
+                Type::Unit,
+            )),
+            &[],
+            &mut env,
+        )
+        .expect_err("a serialized function cannot reference an absent default helper");
+    assert_eq!(
+        missing_default.message,
+        "unknown MIR default function `missing_default` for `broken_default`"
+    );
+
+    let missing_target = runtime
+        .evaluate_call(
+            &CallTarget::Value(test_function_operand("missing", Vec::new(), Type::Unit)),
+            &[],
+            &mut env,
+        )
+        .expect_err("an indirect function value must name a function in the module");
+    assert_eq!(missing_target.message, "unknown MIR function `missing`");
+
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    env.define_typed("group", Type::named("TaskGroup"), Value::TaskGroup(group));
+    env.define_typed("not_group", Type::named("bool"), Value::Bool(false));
+    let group_operand = Operand::Place("group".to_string());
+    let invalid_group_operand = Operand::Place("not_group".to_string());
+    let worker_operand = test_function_operand("worker", Vec::new(), Type::Unit);
+    let required_operand =
+        test_function_operand("required", vec![int_type.clone(), int_type], Type::Unit);
+    fn request<'a>(
+        group: &'a Operand,
+        function: &'a Operand,
+        args: &'a [MirArg],
+    ) -> super::StartTaskRequest<'a> {
+        super::StartTaskRequest {
+            returns_handle: false,
+            result_is_repeatable: true,
+            stack_size: None,
+            task_group: group,
+            function,
+            args,
+            spawn_span: Span::new(1, 1),
+        }
+    }
+
+    let non_callable = runtime
+        .start_task(request(&group_operand, &Operand::Bool(true), &[]), &mut env)
+        .expect_err("a malformed task start cannot use a non-function target");
+    assert_eq!(
+        non_callable.message,
+        "MIR task start expected a function value, found `true`"
+    );
+
+    let missing_task_target = runtime
+        .start_task(
+            request(
+                &group_operand,
+                &test_function_operand("missing", Vec::new(), Type::Unit),
+                &[],
+            ),
+            &mut env,
+        )
+        .expect_err("a task function value must name a function in the module");
+    assert_eq!(
+        missing_task_target.message,
+        "unknown MIR function `missing`"
+    );
+
+    let invalid_group = runtime
+        .start_task(
+            request(&invalid_group_operand, &worker_operand, &[]),
+            &mut env,
+        )
+        .expect_err("a task start must receive a TaskGroup runtime value");
+    assert_eq!(
+        invalid_group.message,
+        "MIR task start requires a task-group value"
+    );
+
+    let malformed_args = [
+        (
+            vec![mir_arg(Some("other"), Operand::Int(1))],
+            "unknown MIR argument `other`",
+        ),
+        (
+            vec![
+                mir_arg(Some("left"), Operand::Int(1)),
+                mir_arg(Some("left"), Operand::Int(2)),
+            ],
+            "duplicate MIR argument `left`",
+        ),
+        (
+            vec![
+                mir_arg(Some("left"), Operand::Int(1)),
+                mir_arg(None, Operand::Int(2)),
+            ],
+            "positional MIR argument cannot follow a named argument",
+        ),
+        (
+            vec![
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(2)),
+                mir_arg(None, Operand::Int(3)),
+            ],
+            "too many MIR arguments",
+        ),
+    ];
+    for (args, expected) in malformed_args {
+        let error = runtime
+            .start_task(request(&group_operand, &required_operand, &args), &mut env)
+            .expect_err("malformed task arguments must be rejected before spawning");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn mir_function_value_runtime_type_parameter_discovery_descends_into_signatures() {
+    let contract = |ty: Type| crate::sema::FunctionParamContract {
+        name: String::new(),
+        ty,
+        passing: crate::ast::ReceiverKind::Value,
+        has_default: false,
+        default_erased: true,
+    };
+    let signature = Type::Function {
+        params: vec![contract(Type::TypeParam("CallbackInput".to_string()))],
+        return_type: Box::new(Type::Function {
+            params: vec![contract(Type::named("String"))],
+            return_type: Box::new(Type::TypeParam("CallbackOutput".to_string())),
+        }),
+    };
+
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&signature, &mut collected);
+
+    assert_eq!(
+        collected,
+        BTreeSet::from(["CallbackInput".to_string(), "CallbackOutput".to_string(),]),
+        "runtime generic discovery must include function parameters and nested returns"
+    );
+}
+
+#[test]
+fn mir_function_value_traps_report_selected_and_default_public_frames() {
+    let selected = crate::lower_source_to_mir(
+        r#"
+def crash(value: int32) -> int32:
+    return 10 // value
+
+def identity(value: int32) -> int32:
+    return value
+
+def choose(crash_now: bool) -> def(int32) -> int32:
+    return crash if crash_now else identity
+
+def invoke(callback: def(int32) -> int32, value: int32) -> int32:
+    return callback(value)
+
+def main():
+    selected = choose(true)
+    print(invoke(selected, 0))
+"#,
+    )
+    .expect("a runtime-selected failing function should lower");
+    let selected_error =
+        crate::run_mir(&selected).expect_err("the runtime-selected function should trap");
+    assert_eq!(selected_error.code, "AU4004");
+    assert_eq!(selected_error.message, "division by zero");
+    assert_eq!(
+        selected_error
+            .call_frames
+            .iter()
+            .map(|frame| frame.function.as_str())
+            .collect::<Vec<_>>(),
+        vec!["crash", "invoke", "main"],
+        "the dynamic target must appear as the active callee, not as an anonymous trampoline"
+    );
+
+    let default = crate::lower_source_to_mir(
+        r#"
+def crash_default() -> int32:
+    return 1 // 0
+
+def with_default(value: int32 = crash_default()) -> int32:
+    return value
+
+def main():
+    callback = with_default
+    print(callback())
+"#,
+    )
+    .expect("a failing function-value default should lower");
+    let default_error =
+        crate::run_mir(&default).expect_err("the selected function's default should trap");
+    assert_eq!(default_error.code, "AU4004");
+    assert_eq!(default_error.message, "division by zero");
+    assert_eq!(
+        default_error
+            .call_frames
+            .iter()
+            .map(|frame| frame.function.as_str())
+            .collect::<Vec<_>>(),
+        vec!["crash_default", "with_default", "main"],
+        "default helpers must report their public declaration frame rather than an internal name"
+    );
+    assert!(default_error
+        .call_frames
+        .iter()
+        .all(|frame| !frame.function.contains("::__default_")));
 }

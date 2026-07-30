@@ -208,8 +208,72 @@ def identity[T](value: own T) -> T:
 
 The compiler infers type arguments from the arguments you pass and, when needed, from the expected return type. See [15-generics.md](15-generics.md) for the full story.
 
+## Function Values
+
+A module-level named function can be stored and passed like any other copy
+value. Write its type in declaration-shaped form:
+
+```python
+class Pipeline:
+    transform: def(int32) -> int32
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def apply(transform: def(int32) -> int32, value: int32) -> int32:
+    return transform(value)
+
+selected = double
+pipeline = Pipeline(transform=selected)
+transforms: Vec[def(int32) -> int32] = [selected]
+
+print(apply(pipeline.transform, 3))
+print(transforms[0](4))
+```
+
+`def(T1, mut T2, own T3) -> R` contains parameter modes and types, but no
+parameter names or default expressions. Bare parameters are shared. An
+inferred binding such as `selected = consume` retains the exact contract, and
+you can also write it explicitly:
+
+```python
+mutate: def(mut Counter) -> None = increment
+consume: def(own String) -> String = take
+callbacks: Vec[def(mut Counter) -> None] = [mutate]
+```
+
+Calling `mutate` requires a mutable place; calling `consume` moves a non-copy
+argument. A function with either contract does not fit a bare shared
+`def(T) -> R` annotation.
+A function binding whose target declaration is statically known keeps that
+declaration's names and defaults, so `selected(name="Aurora")` and
+`selected()` work when the original parameter is named `name` and has a
+default. The structural function type itself retains neither, so a value
+returned through a structural annotation requires the complete positional
+argument list. A direct conditional selection keeps names and default
+availability when all candidates agree, and an omitted argument runs the
+selected function's own default. Class fields and mutable collections preserve
+the full parameter types and `mut`/`own` capabilities, but deliberately erase
+names and defaults; call a value loaded from either with the complete
+positional list.
+
+Function values are code pointers, so they are copy values and satisfy
+`Transfer`. You can use one as the target of `TaskGroup.start(...)` or
+`start_soon(...)`. Specialize a generic function explicitly
+(`show_int = show[int32]`) or give it a concrete expected function type. The
+expected type may come from an annotation, argument, field, collection
+element, or function-typed parameter default.
+
+Only module-level named functions are first-class at this stage. Bound instance
+methods, associated-method values, trait-method values, lambdas, and capturing
+closures are separate features and remain unavailable. The task API keeps its
+older direct associated-method-without-`self` target form.
+
+See [examples/basics/function_values.au](../examples/basics/function_values.au).
+
 ## Current Limits
 
 - return values are always owned; first-class loan or view return values are
   not part of Aurora 0.1
 - clone-based non-copy returns require the returned type to be clone-safe
+- method values, lambdas, and capturing closures are not part of this stage

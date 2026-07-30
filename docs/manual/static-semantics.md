@@ -222,6 +222,19 @@ An `own` parameter consumes a non-copy argument, and a `mut` parameter requires
 a mutable place. All arguments at one call boundary are checked together for
 overlapping move/shared/mutable access.
 
+An indirect call through a function value follows the same rules. When the
+value has one statically known declaration, binding uses that declaration's
+parameter names and defaults. A control-flow join retains those extras only
+when all candidate contracts agree on names and default availability; an
+omitted argument evaluates the runtime-selected target's own default
+expression. Conflicting reassignment, return through a structural function
+annotation, class-field storage, and mutable-collection storage erase the
+extras, so the call supplies every parameter positionally.
+The structural type does retain each parameter's capability: bare is shared,
+`mut` requires a mutable place and caller-visible writeback, and `own`
+transfers a non-copy argument. Function-type assignment and substitution
+require those modes, parameter types, and the return type to match.
+
 ## Class Construction
 
 Calling a class name constructs a value. Constructor fields may be supplied
@@ -302,8 +315,9 @@ The managed binding cannot be moved out in a way that would prevent required cle
 ## Tasks And Static Safety
 
 `TaskGroup.start`, `start_soon`, `start_with_stack`, and
-`start_soon_with_stack` accept named functions and associated methods without
-`self`. The explicit-stack methods first require an exact `int64` capacity.
+`start_soon_with_stack` accept capture-free named function values as well as
+the existing direct named-function and associated-method-without-`self`
+targets. The explicit-stack methods first require an exact `int64` capacity.
 Target arguments are copied or moved into task-owned capture storage
 independently of the target ABI. Bare shared target parameters borrow that
 storage for the child call; `own` parameters
@@ -335,11 +349,11 @@ rejection uses `AU3008`, identifies the task or Queue boundary, and gives the
 nested component path that caused it, such as a field that contains `fs.File`;
 it does not suggest implementing a `Transfer` trait.
 
-Task-target resolution narrowly accepts explicit callable specialization as
-`function[Types]` or `Type.associated_method[Types]`; the same syntax remains
-ordinary indexing outside the callable-target slot of a TaskGroup start. A
-bare target whose declared/default context already resolves its complete types
-is also concrete.
+Task-target resolution accepts a concrete function value. Explicit
+`function[Types]` specialization may now produce such a value before the call;
+the direct associated-method `Type.associated_method[Types]` spelling remains
+limited to the callable-target slot. A bare target whose declared/default
+context already resolves its complete types is also concrete.
 
 ADR-0008 also distinguishes repeatable and single-consumer task results.
 `Task[T]` is copyable only when `T` is copyable, `T` is `Queue[...]`, or `T`

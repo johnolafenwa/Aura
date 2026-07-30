@@ -319,14 +319,68 @@ pub struct FunctionSignature {
     pub rng_clone_safe_type_params: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FunctionParamContract {
+    /// Empty for a written `def(T) -> R` type, which has no parameter-name
+    /// contract. Inferred values retain the declaration name.
+    pub name: String,
+    pub ty: Type,
+    pub passing: ReceiverKind,
+    pub has_default: bool,
+    /// True when a default may have existed before a type join or storage
+    /// boundary erased that promise. This distinguishes an unavailable
+    /// default contract (AU2003) from an originally required parameter
+    /// omitted at an ordinary call (AU2004).
+    #[serde(default)]
+    pub default_erased: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Type {
     Named(String, Vec<Type>),
     Tuple(Vec<Type>),
+    Function {
+        params: Vec<FunctionParamContract>,
+        return_type: Box<Type>,
+    },
     TypeParam(String),
     Module(String),
     Unit,
 }
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Named(left_name, left_args), Self::Named(right_name, right_args)) => {
+                left_name == right_name && left_args == right_args
+            }
+            (Self::Tuple(left), Self::Tuple(right)) => left == right,
+            (
+                Self::Function {
+                    params: left_params,
+                    return_type: left_return,
+                },
+                Self::Function {
+                    params: right_params,
+                    return_type: right_return,
+                },
+            ) => {
+                left_params.len() == right_params.len()
+                    && left_params
+                        .iter()
+                        .zip(right_params)
+                        .all(|(left, right)| left.ty == right.ty && left.passing == right.passing)
+                    && left_return == right_return
+            }
+            (Self::TypeParam(left), Self::TypeParam(right))
+            | (Self::Module(left), Self::Module(right)) => left == right,
+            (Self::Unit, Self::Unit) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Type {}
 
 impl Type {
     pub fn named(name: impl Into<String>) -> Self {
@@ -339,6 +393,7 @@ impl Type {
             Type::Module(_) => false,
             Type::TypeParam(_) => false,
             Type::Tuple(elements) => elements.iter().all(Type::is_copy),
+            Type::Function { .. } => true,
             Type::Named(name, args) if name == "Task" && args.len() == 1 => args[0].is_copy(),
             Type::Named(name, args) => is_builtin_copy_named_type(name, args),
         }
@@ -476,7 +531,7 @@ fn rng_clone_safety_in_context_inner(
     let Type::Named(name, args) = ty else {
         return match ty {
             Type::TypeParam(_) => RngCloneSafety::Unknown,
-            Type::Unit | Type::Module(_) => RngCloneSafety::Safe,
+            Type::Unit | Type::Module(_) | Type::Function { .. } => RngCloneSafety::Safe,
             Type::Tuple(elements) => {
                 elements
                     .iter()
@@ -657,7 +712,7 @@ fn collect_rng_clone_obligation_params_in_context_inner(
         Type::TypeParam(name) => {
             params.insert(name.clone());
         }
-        Type::Unit | Type::Module(_) => {}
+        Type::Unit | Type::Module(_) | Type::Function { .. } => {}
         Type::Tuple(elements) => collect_rng_clone_obligation_params_from_args(
             elements,
             classes,
@@ -838,7 +893,7 @@ fn copy_enum_info_from_modules<'a>(
         return namespace
             .enums
             .get(item_name)
-            .or_else(|| namespace.all_enums.get(item_name));
+            .or(namespace.all_enums.get(item_name));
     }
 
     let mut found = None;
@@ -897,6 +952,7 @@ fn type_is_copy_in_context_inner(
                 visiting,
             )
         }),
+        Type::Function { .. } => true,
         Type::Named(name, args) if name == "Task" && args.len() == 1 => {
             type_is_copy_in_context_inner(
                 &args[0],
@@ -1027,6 +1083,24 @@ impl fmt::Display for Type {
                     write!(f, ",")?;
                 }
                 write!(f, ")")
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                write!(f, "def(")?;
+                for (index, param) in params.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    match param.passing {
+                        ReceiverKind::Borrow => {}
+                        ReceiverKind::BorrowMut => write!(f, "mut ")?,
+                        ReceiverKind::Value => write!(f, "own ")?,
+                    }
+                    write!(f, "{}", param.ty)?;
+                }
+                write!(f, ") -> {return_type}")
             }
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
@@ -1677,7 +1751,24 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 .clone();
             let default_ty = default_checker
                 .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
-                .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+                .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))
+                .map_err(|diagnostic| {
+                    if diagnostic.code == "AU2001"
+                        && matches!(
+                            &default.kind,
+                            ExprKind::Call { callee, .. }
+                                if matches!(callee.kind, ExprKind::Name(_))
+                        )
+                    {
+                        // Class defaults are checked before this module's
+                        // function bodies enter the callable registry. Keep
+                        // the established boundary diagnostic instead of
+                        // exposing the implementation-order "unknown name".
+                        Diagnostic::at(default.span, "unsupported call target")
+                    } else {
+                        diagnostic
+                    }
+                })?;
             if default_ty != lowered {
                 return Err(Diagnostic::at(
                     field.span,
@@ -2451,6 +2542,43 @@ fn lower_type_with_self(
                 .collect::<Result<Vec<_>>>()
                 .map(Type::Tuple);
         }
+        crate::ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => {
+            let params = params
+                .iter()
+                .map(|param| {
+                    let ty = lower_type_with_self(
+                        &param.ty,
+                        type_names,
+                        type_arities,
+                        canonical_type_names,
+                        type_params,
+                        self_type,
+                    )?;
+                    Ok(FunctionParamContract {
+                        name: String::new(),
+                        ty,
+                        passing: resolve_param_passing(param.mode),
+                        has_default: false,
+                        default_erased: true,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let return_type = lower_type_with_self(
+                return_type,
+                type_names,
+                type_arities,
+                canonical_type_names,
+                type_params,
+                self_type,
+            )?;
+            return Ok(Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            });
+        }
         crate::ast::TypeRefKind::Named { name, args } => (name, args),
     };
     let type_name = match name.as_str() {
@@ -2777,6 +2905,15 @@ fn collect_type_ref_type_params(
                 collect_type_ref_type_params(element, type_names, collected, true);
             }
         }
+        crate::ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_type_ref_type_params(&param.ty, type_names, collected, true);
+            }
+            collect_type_ref_type_params(return_type, type_names, collected, true);
+        }
         crate::ast::TypeRefKind::Named { name, args } => {
             if include_self
                 && args.is_empty()
@@ -3020,7 +3157,9 @@ fn type_contains_named(ty: &Type, target: &str) -> bool {
         Type::Named(name, args) => {
             name == target || args.iter().any(|arg| type_contains_named(arg, target))
         }
-        Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        // A function field stores only a code pointer, not values of its
+        // parameter or return types, so it cannot create recursive storage.
+        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
     }
 }
 
@@ -3074,7 +3213,7 @@ fn type_reaches_class_through_non_indirect_fields(
             visiting.remove(name);
             reaches_target
         }
-        Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
     }
 }
 
@@ -3092,12 +3231,35 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
                 .map(|element| substitute_type(element, substitutions))
                 .collect(),
         ),
-        Type::Named(name, args) => Type::Named(
-            name.clone(),
-            args.iter()
-                .map(|arg| substitute_type(arg, substitutions))
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: param.name.clone(),
+                    ty: substitute_type(&param.ty, substitutions),
+                    passing: param.passing,
+                    has_default: param.has_default,
+                    default_erased: param.default_erased,
+                })
                 .collect(),
-        ),
+            return_type: Box::new(substitute_type(return_type, substitutions)),
+        },
+        Type::Named(name, args) => {
+            let mut substituted_args = args
+                .iter()
+                .map(|arg| substitute_type(arg, substitutions))
+                .collect::<Vec<_>>();
+            if matches!(name.as_str(), "Vec" | "Map" | "Set") {
+                substituted_args = substituted_args
+                    .iter()
+                    .map(erase_type_callable_contracts)
+                    .collect();
+            }
+            Type::Named(name.clone(), substituted_args)
+        }
     }
 }
 
@@ -3148,6 +3310,16 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
                 collect_type_params_from_type(element, collected);
             }
         }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -3157,6 +3329,17 @@ pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
         Type::TypeParam(_) => 0,
         Type::Named(_, args) => 1 + args.iter().map(type_pattern_specificity).sum::<usize>(),
         Type::Tuple(elements) => 1 + elements.iter().map(type_pattern_specificity).sum::<usize>(),
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            1 + params
+                .iter()
+                .map(|param| type_pattern_specificity(&param.ty))
+                .sum::<usize>()
+                + type_pattern_specificity(return_type)
+        }
         Type::Module(_) | Type::Unit => 1,
     }
 }
@@ -3182,7 +3365,13 @@ pub(crate) fn type_pattern_matches(
     match pattern {
         Type::TypeParam(name) if type_params.contains(name) => {
             if let Some(existing) = substitutions.get(name) {
-                existing == actual
+                if existing != actual {
+                    false
+                } else {
+                    let merged = merge_type_callable_contracts(existing, actual);
+                    substitutions.insert(name.clone(), merged);
+                    true
+                }
             } else {
                 substitutions.insert(name.clone(), actual.clone());
                 true
@@ -3215,6 +3404,24 @@ pub(crate) fn type_pattern_matches(
                         type_pattern_matches(pattern, actual, type_params, substitutions)
                     })
         }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            let Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+            } = actual
+            else {
+                return false;
+            };
+            params.len() == actual_params.len()
+                && params.iter().zip(actual_params).all(|(pattern, actual)| {
+                    pattern.passing == actual.passing
+                        && type_pattern_matches(&pattern.ty, &actual.ty, type_params, substitutions)
+                })
+                && type_pattern_matches(return_type, actual_return, type_params, substitutions)
+        }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if actual_path == path),
         Type::Unit => *actual == Type::Unit,
     }
@@ -3226,6 +3433,16 @@ fn has_unresolved_type_params(ty: &Type) -> bool {
         Type::Module(_) => false,
         Type::TypeParam(_) => true,
         Type::Tuple(elements) => elements.iter().any(has_unresolved_type_params),
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            params
+                .iter()
+                .any(|param| has_unresolved_type_params(&param.ty))
+                || has_unresolved_type_params(return_type)
+        }
         Type::Named(_, args) => args.iter().any(has_unresolved_type_params),
     }
 }
@@ -3270,6 +3487,8 @@ fn unify_type_pattern(
         Type::TypeParam(name) => {
             if let Some(existing) = substitutions.get(name) {
                 if existing == actual {
+                    let merged = merge_type_callable_contracts(existing, actual);
+                    substitutions.insert(name.clone(), merged);
                     Ok(())
                 } else {
                     Err(Diagnostic::new(format!(
@@ -3318,6 +3537,166 @@ fn unify_type_pattern(
             }
             Ok(())
         }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            let Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+            } = actual
+            else {
+                return Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )));
+            };
+            if params.len() != actual_params.len()
+                || params
+                    .iter()
+                    .zip(actual_params)
+                    .any(|(expected, actual)| expected.passing != actual.passing)
+            {
+                return Err(Diagnostic::new(function_type_mismatch_message(
+                    pattern, actual,
+                )));
+            }
+            for (param, actual_param) in params.iter().zip(actual_params) {
+                unify_type_pattern(&param.ty, &actual_param.ty, substitutions)?;
+            }
+            unify_type_pattern(return_type, actual_return, substitutions)
+        }
+    }
+}
+
+fn function_type_mismatch_message(expected: &Type, actual: &Type) -> String {
+    let (
+        Type::Function {
+            params: expected_params,
+            ..
+        },
+        Type::Function {
+            params: actual_params,
+            ..
+        },
+    ) = (expected, actual)
+    else {
+        return format!("expected `{expected}`, found `{actual}`");
+    };
+    let capability_name = |passing: ReceiverKind| match passing {
+        ReceiverKind::Borrow => "shared",
+        ReceiverKind::BorrowMut => "mut",
+        ReceiverKind::Value => "own",
+    };
+    if let Some((index, (expected_param, actual_param))) = expected_params
+        .iter()
+        .zip(actual_params)
+        .enumerate()
+        .find(|(_, (expected, actual))| expected.passing != actual.passing)
+    {
+        return format!(
+            "function parameter {} has `{}` capability, but `{}` requires `{}`; update that function type parameter to use the matching bare, `mut`, or `own` prefix",
+            index + 1,
+            capability_name(actual_param.passing),
+            expected,
+            capability_name(expected_param.passing),
+        );
+    }
+    format!("expected `{expected}`, found `{actual}`")
+}
+
+/// Joins the non-structural callable contract carried alongside a type.
+///
+/// Function names and default availability are usable only when every
+/// possible runtime value agrees. Written function types carry empty names
+/// and no defaults, so joining through an erased annotation stays erased.
+fn merge_type_callable_contracts(left: &Type, right: &Type) -> Type {
+    debug_assert!(
+        left == right,
+        "callable contract joins require one structural type"
+    );
+    match (left, right) {
+        (
+            Type::Function {
+                params: left_params,
+                return_type: left_return,
+            },
+            Type::Function {
+                params: right_params,
+                return_type: right_return,
+            },
+        ) => Type::Function {
+            params: left_params
+                .iter()
+                .zip(right_params)
+                .map(|(left, right)| FunctionParamContract {
+                    name: if left.name == right.name {
+                        left.name.clone()
+                    } else {
+                        String::new()
+                    },
+                    ty: merge_type_callable_contracts(&left.ty, &right.ty),
+                    passing: left.passing,
+                    has_default: left.has_default && right.has_default,
+                    default_erased: left.default_erased
+                        || right.default_erased
+                        || left.has_default != right.has_default,
+                })
+                .collect(),
+            return_type: Box::new(merge_type_callable_contracts(left_return, right_return)),
+        },
+        (Type::Tuple(left_elements), Type::Tuple(right_elements)) => Type::Tuple(
+            left_elements
+                .iter()
+                .zip(right_elements)
+                .map(|(left, right)| merge_type_callable_contracts(left, right))
+                .collect(),
+        ),
+        (Type::Named(name, left_args), Type::Named(_, right_args)) => Type::Named(
+            name.clone(),
+            left_args
+                .iter()
+                .zip(right_args)
+                .map(|(left, right)| merge_type_callable_contracts(left, right))
+                .collect(),
+        ),
+        _ => left.clone(),
+    }
+}
+
+/// Erases non-ABI callable metadata at a mutable storage boundary.
+///
+/// A collection element or class field can be replaced through an alias that
+/// is invisible to the local flow analysis. Its structural function type
+/// remains precise, but parameter names and omitted-argument availability are
+/// not sound. Exact positional calls remain available; code that needs a
+/// named/default contract must keep a separately inferred concrete function
+/// value outside mutable storage.
+fn erase_type_callable_contracts(ty: &Type) -> Type {
+    match ty {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: String::new(),
+                    ty: erase_type_callable_contracts(&param.ty),
+                    passing: param.passing,
+                    has_default: false,
+                    default_erased: true,
+                })
+                .collect(),
+            return_type: Box::new(erase_type_callable_contracts(return_type)),
+        },
+        Type::Tuple(elements) => {
+            Type::Tuple(elements.iter().map(erase_type_callable_contracts).collect())
+        }
+        Type::Named(name, args) => Type::Named(
+            name.clone(),
+            args.iter().map(erase_type_callable_contracts).collect(),
+        ),
+        Type::TypeParam(_) | Type::Module(_) | Type::Unit => ty.clone(),
     }
 }
 
@@ -3990,7 +4369,7 @@ impl<'a> FunctionChecker<'a> {
             return TransferSummary::default();
         }
         match ty {
-            Type::Unit => TransferSummary::default(),
+            Type::Unit | Type::Function { .. } => TransferSummary::default(),
             Type::Module(name) => TransferSummary {
                 failure: Some(format!(
                     "`module {name}` is a module capability and is not Transfer"
@@ -4490,7 +4869,9 @@ impl<'a> FunctionChecker<'a> {
         summaries: &BTreeMap<String, TaskObservationSummary>,
     ) -> TaskObservationSummary {
         match ty {
-            Type::Unit | Type::Module(_) => TaskObservationSummary::default(),
+            Type::Unit | Type::Module(_) | Type::Function { .. } => {
+                TaskObservationSummary::default()
+            }
             Type::TypeParam(name) => {
                 formals
                     .get(name)
@@ -4640,7 +5021,7 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> SymbolicCopyShape {
         match ty {
-            Type::Unit => SymbolicCopyShape::default(),
+            Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
             Type::Module(_) => SymbolicCopyShape {
                 intrinsic_noncopy: true,
                 noncopy_formals: Vec::new(),
@@ -5722,12 +6103,31 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<()> {
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => Ok(()),
+            ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
+                // A named function expression is an immediate Copy code
+                // pointer, not a local binding that can be moved.
+                Ok(())
+            }
             ExprKind::Name(name) => self.consume_binding(name, expr.span, locals),
             ExprKind::Group(inner) => self.consume_value_expr_raw(inner, locals),
             ExprKind::Specialize { expr, .. } => self.consume_value_expr_raw(expr, locals),
             ExprKind::Member { object, field } => {
                 if self.is_payload_free_variant_expr(expr) {
                     return Ok(());
+                }
+                if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
+                    if self
+                        .module_namespace(&module_path)
+                        .is_some_and(|namespace| {
+                            namespace.functions.contains_key(&function_name)
+                                || namespace.all_functions.contains_key(&function_name)
+                        })
+                    {
+                        // A module-qualified function value is an immediate
+                        // Copy code pointer, not a member borrowed from a
+                        // runtime module object.
+                        return Ok(());
+                    }
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
@@ -5872,7 +6272,15 @@ impl<'a> FunctionChecker<'a> {
                     .map(|binding| binding.moved)
                     .unwrap_or(false)
             });
+            let merged_ty = branch_states
+                .iter()
+                .filter_map(|state| state.get(&name))
+                .map(|binding| binding.ty.clone())
+                .reduce(|left, right| merge_type_callable_contracts(&left, &right));
             if let Some(binding) = locals.get_mut(&name) {
+                if let Some(merged_ty) = merged_ty {
+                    binding.ty = merged_ty;
+                }
                 binding.moved = moved;
                 binding.moved_at = branch_states.iter().find_map(|state| {
                     state
@@ -6690,7 +7098,8 @@ impl<'a> FunctionChecker<'a> {
             allow_return,
         )?;
         self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-        self.merge_control_flow_moves(locals, &[&body_locals]);
+        let baseline_locals = locals.clone();
+        self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
         Ok(())
     }
 
@@ -7136,7 +7545,8 @@ impl<'a> FunctionChecker<'a> {
                         allow_return,
                     )?;
                     self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-                    self.merge_control_flow_moves(locals, &[&body_locals]);
+                    let baseline_locals = locals.clone();
+                    self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
                 }
                 Stmt::With(with_stmt) => {
                     let with_flow =
@@ -7172,7 +7582,8 @@ impl<'a> FunctionChecker<'a> {
                             "while",
                             while_stmt.span,
                         )?;
-                        self.merge_control_flow_moves(locals, &[&body_locals]);
+                        let baseline_locals = locals.clone();
+                        self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
                     }
                 }
                 Stmt::Break(break_stmt) => {
@@ -7696,6 +8107,15 @@ impl<'a> FunctionChecker<'a> {
             };
 
             if final_value_ty != existing.ty {
+                if matches!(final_value_ty, Type::Function { .. })
+                    && matches!(existing.ty, Type::Function { .. })
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        assign.span,
+                        function_type_mismatch_message(&existing.ty, &final_value_ty),
+                    ));
+                }
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -7716,6 +8136,14 @@ impl<'a> FunctionChecker<'a> {
                 )?;
             }
             if let Some(existing) = locals.get_mut(binding_name) {
+                if assign.op.is_none() {
+                    // Rebinding may widen the set of runtime call targets even
+                    // when their structural function type is unchanged. Keep
+                    // only callable metadata shared by both the old and new
+                    // values so a later indirect call cannot use a name or
+                    // default that some assigned target does not support.
+                    existing.ty = merge_type_callable_contracts(&existing.ty, &final_value_ty);
+                }
                 existing.moved = false;
                 existing.moved_at = None;
                 existing.moved_fields.clear();
@@ -7739,6 +8167,15 @@ impl<'a> FunctionChecker<'a> {
 
         let final_ty = annotation_ty.unwrap_or_else(|| value_ty.clone());
         if value_ty != final_ty {
+            if matches!(value_ty, Type::Function { .. })
+                && matches!(final_ty, Type::Function { .. })
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    assign.span,
+                    function_type_mismatch_message(&final_ty, &value_ty),
+                ));
+            }
             return Err(Diagnostic::at(
                 assign.span,
                 format!(
@@ -7923,7 +8360,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::Named(
                     "Vec".to_string(),
-                    vec![element_ty.unwrap_or(Type::Unit)],
+                    vec![erase_type_callable_contracts(
+                        &element_ty.unwrap_or(Type::Unit),
+                    )],
                 ))
             }
             ExprKind::Set(elements) => {
@@ -7935,14 +8374,19 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::Named(
                     "Set".to_string(),
-                    vec![element_ty.unwrap_or(Type::Unit)],
+                    vec![erase_type_callable_contracts(
+                        &element_ty.unwrap_or(Type::Unit),
+                    )],
                 ))
             }
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
                     if let Some(Type::Named(name, args)) = expected {
                         if name == "Set" && args.len() == 1 {
-                            return Ok(Type::Named("Set".to_string(), vec![args[0].clone()]));
+                            return Ok(Type::Named(
+                                "Set".to_string(),
+                                vec![erase_type_callable_contracts(&args[0])],
+                            ));
                         }
                     }
                 }
@@ -7962,7 +8406,10 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::Named(
                     "Map".to_string(),
-                    vec![key_ty.unwrap_or(Type::Unit), value_ty.unwrap_or(Type::Unit)],
+                    vec![
+                        erase_type_callable_contracts(&key_ty.unwrap_or(Type::Unit)),
+                        erase_type_callable_contracts(&value_ty.unwrap_or(Type::Unit)),
+                    ],
                 ))
             }
             ExprKind::Conditional {
@@ -8269,7 +8716,7 @@ impl<'a> FunctionChecker<'a> {
         };
 
         if then_ty == else_ty {
-            return Ok(then_ty);
+            return Ok(merge_type_callable_contracts(&then_ty, &else_ty));
         }
         let then_adopts_else = self
             .type_of_expr_without_move_state(then_expr, locals, Some(&else_ty))
@@ -8401,7 +8848,13 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(binding.ty.clone());
                 }
                 if let Some(function) = self.resolve_function_info(name) {
-                    return Ok(function.signature.return_type.clone());
+                    return self.function_value_type(
+                        function,
+                        expected,
+                        None,
+                        expr.span,
+                        &format!("function `{name}`"),
+                    );
                 }
                 if let Some(class_info) = self.resolve_class_info(name) {
                     return Ok(Type::named(self.canonical_class_name(name, class_info)));
@@ -8500,6 +8953,8 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        element_ty =
+                            Some(merge_type_callable_contracts(expected_element_ty, &actual));
                     } else {
                         element_ty = Some(actual);
                     }
@@ -8510,7 +8965,10 @@ impl<'a> FunctionChecker<'a> {
                         "empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler",
                     ));
                 };
-                Ok(Type::Named("Vec".to_string(), vec![element_ty]))
+                Ok(Type::Named(
+                    "Vec".to_string(),
+                    vec![erase_type_callable_contracts(&element_ty)],
+                ))
             }
             ExprKind::Set(elements) => {
                 let mut element_ty = expected.and_then(set_element_type).cloned();
@@ -8530,6 +8988,8 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        element_ty =
+                            Some(merge_type_callable_contracts(expected_element_ty, &actual));
                     } else {
                         element_ty = Some(actual);
                     }
@@ -8540,13 +9000,19 @@ impl<'a> FunctionChecker<'a> {
                         "empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler",
                     ));
                 };
-                Ok(Type::Named("Set".to_string(), vec![element_ty]))
+                Ok(Type::Named(
+                    "Set".to_string(),
+                    vec![erase_type_callable_contracts(&element_ty)],
+                ))
             }
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
                     if let Some(Type::Named(name, args)) = expected {
                         if name == "Set" && args.len() == 1 {
-                            return Ok(Type::Named("Set".to_string(), vec![args[0].clone()]));
+                            return Ok(Type::Named(
+                                "Set".to_string(),
+                                vec![erase_type_callable_contracts(&args[0])],
+                            ));
                         }
                     }
                 }
@@ -8572,6 +9038,7 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        key_ty = Some(merge_type_callable_contracts(expected_key_ty, &actual_key));
                     } else {
                         key_ty = Some(actual_key);
                     }
@@ -8591,6 +9058,10 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        value_ty = Some(merge_type_callable_contracts(
+                            expected_value_ty,
+                            &actual_value,
+                        ));
                     } else {
                         value_ty = Some(actual_value);
                     }
@@ -8601,7 +9072,13 @@ impl<'a> FunctionChecker<'a> {
                         "empty map literals require an expected `Map[K, V]` type annotation in the bootstrap compiler",
                     ));
                 };
-                Ok(Type::Named("Map".to_string(), vec![key_ty, value_ty]))
+                Ok(Type::Named(
+                    "Map".to_string(),
+                    vec![
+                        erase_type_callable_contracts(&key_ty),
+                        erase_type_callable_contracts(&value_ty),
+                    ],
+                ))
             }
             ExprKind::Conditional {
                 then_expr,
@@ -8651,7 +9128,10 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
-                Ok(result_ty)
+                Ok(merge_type_callable_contracts(
+                    &merge_type_callable_contracts(&result_ty, &then_ty),
+                    &else_ty,
+                ))
             }
             ExprKind::Match {
                 scrutinee,
@@ -8675,6 +9155,18 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 let lowered = self.lower_explicit_type_args(type_args)?;
                 match &base.kind {
+                    ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
+                        let function = self.resolve_function_info(name).expect(
+                            "function lookup is stable during explicit type argument checking",
+                        );
+                        self.function_value_type(
+                            function,
+                            expected,
+                            Some(&lowered),
+                            expr.span,
+                            &format!("function `{name}`"),
+                        )
+                    }
                     ExprKind::Name(name)
                         if matches!(
                             name.as_str(),
@@ -9172,6 +9664,32 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
+                let (base_object, _) = self.peel_specialization(object);
+                let associated_owner = match &base_object.kind {
+                    ExprKind::Name(class_name) if !locals.contains_key(class_name) => self
+                        .resolve_class_info(class_name)
+                        .and_then(|class| class.methods.get(field))
+                        .filter(|method| method.decl.receiver.is_none())
+                        .map(|_| class_name.clone()),
+                    _ => self.qualified_module_item(base_object).and_then(
+                        |(module_path, class_name)| {
+                            self.module_namespace(&module_path)
+                                .and_then(|namespace| namespace.classes.get(&class_name))
+                                .and_then(|class| class.methods.get(field))
+                                .filter(|method| method.decl.receiver.is_none())
+                                .map(|_| format!("{module_path}.{class_name}"))
+                        },
+                    ),
+                };
+                if let Some(owner) = associated_owner {
+                    return Err(Diagnostic::coded_at(
+                        "AU2005",
+                        expr.span,
+                        format!(
+                            "associated method values are not supported in this language version; call `{owner}.{field}(...)` directly or wrap it in a named function"
+                        ),
+                    ));
+                }
                 if let Some(path) = self.member_access_path(expr) {
                     if let Some(binding) = locals.get(&path.root) {
                         if Self::field_path_is_moved(binding, &path.projections) {
@@ -9193,6 +9711,24 @@ impl<'a> FunctionChecker<'a> {
                             }
                             return Err(diagnostic);
                         }
+                    }
+                }
+                if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
+                    if let Some(function) =
+                        self.module_namespace(&module_path).and_then(|namespace| {
+                            namespace
+                                .functions
+                                .get(&function_name)
+                                .or_else(|| namespace.all_functions.get(&function_name))
+                        })
+                    {
+                        return self.function_value_type(
+                            function,
+                            expected,
+                            None,
+                            expr.span,
+                            &format!("function `{module_path}.{function_name}`"),
+                        );
                     }
                 }
                 if let ExprKind::Specialize {
@@ -9357,6 +9893,53 @@ impl<'a> FunctionChecker<'a> {
                 Ok(member_ty)
             }
             ExprKind::Index { object, index } => {
+                let function_target = match &object.kind {
+                    ExprKind::Name(name) if !locals.contains_key(name) => self
+                        .resolve_function_info(name)
+                        .map(|function| (function, format!("function `{name}`"))),
+                    ExprKind::Member { .. } => self.qualified_module_item(object).and_then(
+                        |(module_path, function_name)| {
+                            self.module_namespace(&module_path)
+                                .and_then(|namespace| {
+                                    namespace
+                                        .functions
+                                        .get(&function_name)
+                                        .or(namespace.all_functions.get(&function_name))
+                                })
+                                .map(|function| {
+                                    (
+                                        function,
+                                        format!("function `{module_path}.{function_name}`"),
+                                    )
+                                })
+                        },
+                    ),
+                    _ => None,
+                };
+                if let Some((function, display_name)) = function_target {
+                    let type_arg_exprs = match &index.kind {
+                        ExprKind::Tuple(elements) => elements.as_slice(),
+                        _ => std::slice::from_ref(&**index),
+                    };
+                    let type_refs = type_arg_exprs
+                        .iter()
+                        .map(Self::spawn_type_ref_from_expr)
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            Diagnostic::at(
+                                index.span,
+                                "function specialization expects type arguments",
+                            )
+                        })?;
+                    let lowered = self.lower_explicit_type_args(&type_refs)?;
+                    return self.function_value_type(
+                        function,
+                        expected,
+                        Some(&lowered),
+                        expr.span,
+                        &display_name,
+                    );
+                }
                 let object_ty = self.type_of_expr(object, locals)?;
                 let locals_before_index = locals.clone();
                 if let Type::Tuple(element_types) = &object_ty {
@@ -11102,7 +11685,9 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             }
-            ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
+            ExprKind::Name(name)
+                if !locals.contains_key(name) && self.resolve_function_info(name).is_some() =>
+            {
                 let Some(function) = self.resolve_function_info(name) else {
                     unreachable!("function lookup is stable during call checking");
                 };
@@ -12649,8 +13234,83 @@ impl<'a> FunctionChecker<'a> {
                                         }
                                     }
                                 }
-                                let callable =
-                                    self.resolve_spawn_callable(&args[target_index].value)?;
+                                let callable = match self
+                                    .resolve_spawn_callable(&args[target_index].value)
+                                {
+                                    Ok(callable) => callable,
+                                    Err(named_target_error) => {
+                                        let target_ty =
+                                            self.type_of_expr(&args[target_index].value, locals)?;
+                                        let Type::Function {
+                                            params,
+                                            return_type,
+                                        } = target_ty
+                                        else {
+                                            return Err(named_target_error);
+                                        };
+                                        if let Some(index) = params.iter().position(|param| {
+                                            param.passing == ReceiverKind::BorrowMut
+                                        }) {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU3002",
+                                                args[target_index].span,
+                                                format!(
+                                                    "task starting does not support mutable parameter {} on a function value; child tasks cannot write back through the starting call frame",
+                                                    index + 1,
+                                                ),
+                                            ));
+                                        }
+                                        let spawn_args = &args[required_count..];
+                                        let capture_params = params
+                                            .iter()
+                                            .map(|param| FunctionParamContract {
+                                                name: param.name.clone(),
+                                                ty: param.ty.clone(),
+                                                passing: ReceiverKind::Value,
+                                                has_default: param.has_default,
+                                                default_erased: param.default_erased,
+                                            })
+                                            .collect::<Vec<_>>();
+                                        let checked_return = self.type_check_function_value_args(
+                                            &capture_params,
+                                            &return_type,
+                                            spawn_args,
+                                            span,
+                                            locals,
+                                            None,
+                                        )?;
+                                        for (index, (param, argument)) in
+                                            params.iter().zip(spawn_args).enumerate()
+                                        {
+                                            self.require_transfer(
+                                                &param.ty,
+                                                format!(
+                                                    "task argument {} for function value",
+                                                    index + 1
+                                                ),
+                                                argument.span,
+                                            )?;
+                                        }
+                                        self.require_transfer(
+                                            &checked_return,
+                                            format!("task result `{checked_return}`"),
+                                            args[target_index].span,
+                                        )?;
+                                        return Ok(
+                                            if matches!(
+                                                field.as_str(),
+                                                "start" | "start_with_stack"
+                                            ) {
+                                                Type::Named(
+                                                    "Task".to_string(),
+                                                    vec![checked_return],
+                                                )
+                                            } else {
+                                                Type::Unit
+                                            },
+                                        );
+                                    }
+                                };
                                 self.require_task_startable_function(
                                     &callable.display_name,
                                     &callable.decl.params,
@@ -14310,6 +14970,27 @@ impl<'a> FunctionChecker<'a> {
                         )
                         .map(|checked| checked.return_type);
                 }
+                if let Ok(Type::Function {
+                    params,
+                    return_type,
+                }) = self.resolve_member_type(&receiver_ty, field, span)
+                {
+                    if explicit_type_args.is_some() {
+                        return Err(Diagnostic::coded_at(
+                            "AU2005",
+                            span,
+                            "function values have a concrete signature and do not take explicit type arguments",
+                        ));
+                    }
+                    return self.type_check_function_value_args(
+                        &params,
+                        &return_type,
+                        args,
+                        span,
+                        locals,
+                        expected,
+                    );
+                }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(_name, type_args), "to_float")
                         if type_args.is_empty() && is_integer_type(&receiver_ty) =>
@@ -14345,8 +15026,261 @@ impl<'a> FunctionChecker<'a> {
                     )),
                 }
             }
-            _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
+            _ => {
+                if matches!(
+                    &base_callee.kind,
+                    ExprKind::Name(name) if !locals.contains_key(name)
+                ) {
+                    return Err(self.unsupported_call_target_diagnostic(callee, span));
+                }
+                let callee_ty = self.type_of_expr(base_callee, locals)?;
+                match callee_ty {
+                    Type::Function {
+                        params,
+                        return_type,
+                    } => self.type_check_function_value_args(
+                        &params,
+                        &return_type,
+                        args,
+                        span,
+                        locals,
+                        expected,
+                    ),
+                    _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
+                }
+            }
         }
+    }
+
+    fn function_value_type(
+        &self,
+        function: &FunctionInfo,
+        expected: Option<&Type>,
+        explicit_type_args: Option<&[Type]>,
+        span: crate::diag::Span,
+        display_name: &str,
+    ) -> Result<Type> {
+        let mut substitutions = if let Some(explicit_type_args) = explicit_type_args {
+            if explicit_type_args.len() != function.decl.type_params.len() {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "{display_name} expects {} type argument{}, found {}",
+                        function.decl.type_params.len(),
+                        if function.decl.type_params.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        explicit_type_args.len(),
+                    ),
+                ));
+            }
+            substitutions_from_decl_type_args(&function.decl.type_params, explicit_type_args)
+        } else {
+            HashMap::new()
+        };
+
+        if !function.decl.type_params.is_empty() && explicit_type_args.is_none() {
+            let Some(Type::Function {
+                params: expected_params,
+                return_type: expected_return,
+            }) = expected
+            else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "generic {display_name} requires explicit type arguments or an expected function type"
+                    ),
+                )
+                .with_help(format!(
+                    "write `{}[...]` with all type arguments, or assign it where a concrete `def(...) -> ...` type is expected",
+                    function.decl.name
+                )));
+            };
+            if function
+                .signature
+                .param_passings
+                .iter()
+                .zip(expected_params)
+                .any(|(actual, expected)| *actual != expected.passing)
+                || function.signature.params.len() != expected_params.len()
+            {
+                let actual = Type::Function {
+                    params: function
+                        .decl
+                        .params
+                        .iter()
+                        .zip(&function.signature.params)
+                        .zip(&function.signature.param_passings)
+                        .map(|((decl, ty), passing)| FunctionParamContract {
+                            name: decl.name.clone(),
+                            ty: ty.clone(),
+                            passing: *passing,
+                            has_default: decl.default.is_some(),
+                            default_erased: false,
+                        })
+                        .collect(),
+                    return_type: Box::new(function.signature.return_type.clone()),
+                };
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    function_type_mismatch_message(expected.expect("matched above"), &actual),
+                ));
+            }
+            for (pattern, actual) in function.signature.params.iter().zip(expected_params) {
+                unify_type_pattern(pattern, &actual.ty, &mut substitutions).map_err(|error| {
+                    Diagnostic::coded_at(
+                        "AU2002",
+                        span,
+                        format!("cannot specialize {display_name}: {}", error.message),
+                    )
+                })?;
+            }
+            unify_type_pattern(
+                &function.signature.return_type,
+                expected_return,
+                &mut substitutions,
+            )
+            .map_err(|error| {
+                Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!("cannot specialize {display_name}: {}", error.message),
+                )
+            })?;
+        }
+
+        for type_param in &function.decl.type_params {
+            let Some(resolved) = substitutions.get(type_param) else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("cannot infer type parameter `{type_param}` for {display_name}"),
+                ));
+            };
+            let mut bounds = function
+                .type_param_bounds
+                .get(type_param)
+                .cloned()
+                .unwrap_or_default();
+            for bound in &mut bounds {
+                *bound = substitute_trait_bound(bound, &substitutions);
+            }
+            self.assert_type_satisfies_bounds(resolved, &bounds, span)?;
+        }
+        self.enforce_rng_clone_obligations(
+            display_name,
+            &function.signature.rng_clone_safe_type_params,
+            &substitutions,
+            span,
+        )?;
+
+        Ok(Type::Function {
+            params: function
+                .decl
+                .params
+                .iter()
+                .zip(&function.signature.params)
+                .zip(&function.signature.param_passings)
+                .map(|((decl, ty), passing)| FunctionParamContract {
+                    name: decl.name.clone(),
+                    ty: substitute_type(ty, &substitutions),
+                    passing: *passing,
+                    has_default: decl.default.is_some(),
+                    default_erased: false,
+                })
+                .collect(),
+            return_type: Box::new(substitute_type(
+                &function.signature.return_type,
+                &substitutions,
+            )),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn type_check_function_value_args(
+        &self,
+        params: &[FunctionParamContract],
+        return_type: &Type,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_return: Option<&Type>,
+    ) -> Result<Type> {
+        let erased_contract = params.iter().any(|param| param.name.is_empty());
+        if erased_contract && args.iter().any(|argument| argument.name.is_some()) {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                "this function value's named argument contract was erased at a written-type or mutable-storage boundary, or because its possible targets do not all agree",
+            )
+            .with_help(
+                "call it with the complete positional argument list, or keep one concrete named function value",
+            ));
+        }
+        let positional_omission_uses_erased_default = args.len() < params.len()
+            && params
+                .iter()
+                .skip(args.len())
+                .any(|param| param.default_erased);
+        if args.iter().all(|argument| argument.name.is_none())
+            && positional_omission_uses_erased_default
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!(
+                    "this function value has an erased default contract and requires the complete positional list of {} argument{}",
+                    params.len(),
+                    if params.len() == 1 { "" } else { "s" },
+                ),
+            ));
+        }
+        let synthetic_params = params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| Param {
+                name: if param.name.is_empty() {
+                    format!("argument{}", index + 1)
+                } else {
+                    param.name.clone()
+                },
+                mode: match param.passing {
+                    ReceiverKind::Borrow => ParamMode::Default,
+                    ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                    ReceiverKind::Value => ParamMode::Own,
+                },
+                // The callable checker consumes the already-lowered
+                // `param_types`; this placeholder is never lowered.
+                ty: TypeRef::named("None", Vec::new(), false, span),
+                default: param.has_default.then_some(Expr {
+                    kind: ExprKind::BuiltinOmitted,
+                    span,
+                }),
+                span,
+            })
+            .collect::<Vec<_>>();
+        let param_types = params
+            .iter()
+            .map(|param| param.ty.clone())
+            .collect::<Vec<_>>();
+        let param_passings = params.iter().map(|param| param.passing).collect::<Vec<_>>();
+        self.type_check_callable_args(
+            "function value",
+            &[],
+            &synthetic_params,
+            &param_passings,
+            &param_types,
+            return_type,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            args,
+            span,
+            locals,
+            expected_return,
+            HashMap::new(),
+        )
     }
 
     fn unsupported_call_target_diagnostic(
@@ -15312,6 +16246,7 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                        result_ty = Some(merge_type_callable_contracts(expected_ty, &arm_ty));
                     } else {
                         result_ty = Some(arm_ty);
                     }
@@ -15468,6 +16403,7 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
+                    result_ty = Some(merge_type_callable_contracts(expected_ty, &arm_ty));
                 } else {
                     result_ty = Some(arm_ty);
                 }
@@ -15657,7 +16593,7 @@ impl<'a> FunctionChecker<'a> {
                         )
                     });
             }
-            Type::Tuple(_) | Type::Unit => {
+            Type::Function { .. } | Type::Tuple(_) | Type::Unit => {
                 return Err(Diagnostic::at(
                     span,
                     format!("cannot access field `{}` on `{}`", field, object_ty),
@@ -15711,7 +16647,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             let field_ty = substitute_type(&field_info.ty, &substitutions);
-            return Ok(field_ty);
+            return Ok(erase_type_callable_contracts(&field_ty));
         }
         if let Some(method) = class_info.methods.get(field) {
             if self.is_external_module(&class_info.module_name) && !method.decl.public {
@@ -15723,13 +16659,24 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "method values are not supported in this language version; call `.{field}(...)` directly or wrap it in a named function"
+                ),
+            ));
         }
-        if let Some((_trait_impl, method, substitutions)) =
-            self.trait_method_for_concrete_type(object_ty, field, span)?
+        if self
+            .trait_method_for_concrete_type(object_ty, field, span)?
+            .is_some()
         {
-            return Ok(substitute_type(
-                &method.signature.return_type,
-                &substitutions,
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "trait-dispatched method values are not supported in this language version; call `.{field}(...)` directly or wrap it in a named function"
+                ),
             ));
         }
         Err(Diagnostic::at(
@@ -15879,6 +16826,21 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
                 if self.is_payload_free_variant_expr(expr) {
                     return Ok(None);
+                }
+                if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
+                    if self
+                        .module_namespace(&module_path)
+                        .is_some_and(|namespace| {
+                            namespace.functions.contains_key(&function_name)
+                                || namespace.all_functions.contains_key(&function_name)
+                        })
+                    {
+                        // Module-qualified function values are immediate Copy
+                        // pointers. Avoid retyping a contextual generic value
+                        // without the expected function type merely to prove
+                        // that it cannot carry a borrow.
+                        return Ok(None);
+                    }
                 }
                 let value_ty = self.type_of_expr(expr, locals)?;
                 if self.is_copy_type(&value_ty) {
@@ -18217,6 +19179,16 @@ impl<'a> FunctionChecker<'a> {
         bounds: &[TraitBound],
         span: crate::diag::Span,
     ) -> Result<()> {
+        if matches!(ty, Type::Function { .. }) && !bounds.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                "function values do not participate in trait or trait-object dispatch in this language version",
+            )
+            .with_help(
+                "pass the concrete function type directly; callable trait objects are outside the current function-values feature",
+            ));
+        }
         for bound in bounds {
             match ty {
                 Type::TypeParam(name) => {

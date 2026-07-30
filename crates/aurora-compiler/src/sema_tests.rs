@@ -4275,6 +4275,28 @@ fn type_to_ref(ty: &Type) -> TypeRef {
             false,
             Span::new(1, 1),
         ),
+        Type::Function {
+            params,
+            return_type,
+        } => TypeRef::function_with_params(
+            params
+                .iter()
+                .map(|param| {
+                    let mode = match param.passing {
+                        ReceiverKind::Borrow => ParamMode::Default,
+                        ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                        ReceiverKind::Value => ParamMode::Own,
+                    };
+                    crate::ast::FunctionTypeParam::new(
+                        mode,
+                        type_to_ref(&param.ty),
+                        Span::new(1, 1),
+                    )
+                })
+                .collect(),
+            type_to_ref(return_type),
+            Span::new(1, 1),
+        ),
         Type::TypeParam(name) | Type::Module(name) => type_ref(name),
         Type::Unit => type_ref("None"),
     }
@@ -4315,6 +4337,18 @@ fn function_decl(name: &str) -> FunctionDecl {
         body: Vec::new(),
         span: Span::new(1, 1),
     }
+}
+
+fn unary_function_decl(name: &str) -> FunctionDecl {
+    let mut decl = function_decl(name);
+    decl.params.push(Param {
+        name: "value".to_string(),
+        mode: ParamMode::Own,
+        ty: type_ref("int32"),
+        default: None,
+        span: Span::new(1, 1),
+    });
+    decl
 }
 
 fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
@@ -5137,8 +5171,17 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
     assert_eq!(
         checker
             .type_of_expr(&expr(ExprKind::Name("work".to_string())), &mut locals)
-            .expect("functions should resolve to their return type"),
-        Type::named("int32")
+            .expect("functions should resolve to first-class callable types"),
+        Type::Function {
+            params: vec![FunctionParamContract {
+                name: "value".to_string(),
+                ty: Type::named("int32"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            }],
+            return_type: Box::new(Type::named("int32")),
+        }
     );
     assert_eq!(
         checker
@@ -5378,18 +5421,19 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .expect("generic enum specialization should lower explicit type args"),
         Type::Named("Maybe".to_string(), vec![Type::named("String")])
     );
-    assert_eq!(
-        checker
-            .type_of_expr(
-                &expr(ExprKind::Specialize {
-                    expr: Box::new(expr(ExprKind::Name("work".to_string()))),
-                    type_args: vec![type_ref("int32")],
-                }),
-                &mut locals,
-            )
-            .expect("non-type specialization should fall back to the base expression"),
-        Type::named("int32")
-    );
+    let nongeneric_function_specialization = checker
+        .type_of_expr(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("work".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &mut locals,
+        )
+        .expect_err("a nongeneric function value rejects explicit type arguments");
+    assert_eq!(nongeneric_function_specialization.code, "AU2002");
+    assert!(nongeneric_function_specialization
+        .message
+        .contains("expects 0 type arguments, found 1"));
 
     assert!(checker
         .type_of_expr(
@@ -14575,12 +14619,13 @@ def main():
             .expect("boolean operators do not resolve through traits"),
         None
     );
-    assert_eq!(
-        base_checker
-            .resolve_member_type(&Type::named("User"), "name", span)
-            .expect("trait methods should resolve through member lookup"),
-        Type::named("String")
-    );
+    let trait_method_value = base_checker
+        .resolve_member_type(&Type::named("User"), "name", span)
+        .expect_err("trait-dispatched method values are explicitly out of scope");
+    assert_eq!(trait_method_value.code, "AU2005");
+    assert!(trait_method_value
+        .message
+        .contains("trait-dispatched method values are not supported"));
     base_checker
         .assert_type_satisfies_bounds(
             &Type::named("User"),
@@ -20079,8 +20124,1336 @@ def launch():
     )
     .expect_err("a runtime call expression is not a task-target type argument");
     assert_eq!(invalid.code, "AU2002");
-    assert_eq!(invalid.span, Some(Span::new(10, 21)));
-    assert!(invalid
+    assert_eq!(invalid.span, Some(Span::new(10, 27)));
+    assert!(
+        invalid
+            .message
+            .contains("function specialization expects type arguments"),
+        "{}",
+        invalid.message
+    );
+}
+
+#[test]
+fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
+    let function = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                name: "left".to_string(),
+                ty: Type::named("int32"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "right".to_string(),
+                ty: Type::named("String"),
+                passing: ReceiverKind::Value,
+                has_default: true,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                name: "counter".to_string(),
+                ty: Type::named("int64"),
+                passing: ReceiverKind::BorrowMut,
+                has_default: false,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::named("bool")),
+    };
+    assert!(function.is_copy(), "capture-free code pointers are Copy");
+    assert_eq!(
+        function.to_string(),
+        "def(int32, own String, mut int64) -> bool",
+        "written function types preserve parameter capability contracts"
+    );
+}
+
+#[test]
+fn named_function_values_cover_variables_parameters_fields_and_collections() {
+    crate::check_source(
+        r#"
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def apply(f: def(int32) -> int32, value: int32) -> int32:
+    return f(value)
+
+class Pipeline:
+    transform: def(int32) -> int32
+
+def main():
+    inferred = increment
+    copied = inferred
+    annotated: def(int32) -> int32 = increment
+    pipeline = Pipeline(transform=annotated)
+    transforms: Vec[def(int32) -> int32] = [increment, double]
+    first: int32 = apply(copied, 1)
+    second: int32 = pipeline.transform(first)
+    third: int32 = transforms[1](second)
+    fourth: int32 = inferred(third)
+"#,
+    )
+    .expect("named function values should survive every required storage surface");
+}
+
+#[test]
+fn inferred_function_values_preserve_own_and_mut_capabilities() {
+    crate::check_source(
+        r#"
+def consume(value: own String) -> int32:
+    return 1
+
+def bump(value: mut int32):
+    value += 1
+
+def main():
+    consuming = consume
+    mutating = bump
+    text = "owned"
+    mut count: int32 = 0
+    result: int32 = consuming(text)
+    mutating(count)
+"#,
+    )
+    .expect("inferred function types retain the declared own and mut capabilities");
+
+    let immutable = crate::check_source(
+        r#"
+def bump(value: mut int32):
+    value += 1
+
+def main():
+    callback = bump
+    count: int32 = 0
+    callback(count)
+"#,
+    )
+    .expect_err("indirect mutable calls still require a mutable place");
+    assert!(immutable.message.contains("must be a mutable place"));
+}
+
+#[test]
+fn written_function_types_preserve_nonshared_capabilities_and_reject_mismatches() {
+    for source in [
+        "def transform(value: own String) -> String:\n    return value\n\ndef main():\n    callback: def(own String) -> String = transform\n    text = \"value\"\n    result: String = callback(text)\n",
+        "def transform(value: mut String):\n    value += \"!\"\n\ndef main():\n    callback: def(mut String) -> None = transform\n    mut text = \"value\"\n    callback(text)\n",
+    ] {
+        crate::check_source(source)
+            .expect("written function types should preserve explicit nonshared capabilities");
+    }
+
+    let mismatch = crate::check_source(
+        "def transform(value: own String) -> String:\n    return value\n\ndef main():\n    callback: def(mut String) -> String = transform\n",
+    )
+    .expect_err("different written capabilities remain incompatible");
+    assert_eq!(mismatch.code, "AU2002");
+    assert!(mismatch
         .message
-        .contains("task target indexing is not a callable type specialization"));
+        .contains("function parameter 1 has `own` capability"));
+    assert!(mismatch
+        .message
+        .contains("matching bare, `mut`, or `own` prefix"));
+}
+
+#[test]
+fn generic_function_values_support_explicit_and_contextual_specialization() {
+    crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def empty[T]() -> Option[T]:
+    return Option.None
+
+def main():
+    identity_string = identity[String]
+    copied = identity_string
+    value: String = copied("ready")
+    empty_string: def() -> Option[String] = empty
+    missing: Option[String] = empty_string()
+"#,
+    )
+    .expect("generic function values specialize explicitly or from an expected function type");
+
+    let ambiguous = crate::check_source(
+        r#"
+def empty[T]() -> Option[T]:
+    return Option.None
+
+def main():
+    callback = empty
+"#,
+    )
+    .expect_err("an unconstrained generic function value is not concrete");
+    assert!(ambiguous
+        .message
+        .contains("requires explicit type arguments or an expected function type"));
+}
+
+#[test]
+fn concrete_function_values_keep_named_and_default_call_rules() {
+    crate::check_source(
+        r#"
+def offset(value: int32 = 3, scale: int32 = 2) -> int32:
+    return value + scale
+
+def main():
+    callback = offset
+    first: int32 = callback()
+    second: int32 = callback(scale=4, value=10)
+    third: int32 = callback(7, scale=5)
+"#,
+    )
+    .expect("a concrete function value retains parameter names and default availability");
+}
+
+#[test]
+fn dynamic_function_contracts_retain_only_names_and_defaults_that_agree() {
+    crate::check_source(
+        r#"
+def plus_one(value: int32 = 1) -> int32:
+    return value + 1
+
+def plus_ten(value: int32 = 10) -> int32:
+    return value + 10
+
+def main():
+    selected = plus_one if true else plus_ten
+    defaulted: int32 = selected()
+    named: int32 = selected(value=4)
+"#,
+    )
+    .expect("different default values are supplied by the runtime-selected target");
+
+    let names = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected = first if true else second
+    defaulted: int32 = selected()
+    selected(value=3)
+"#,
+    )
+    .expect_err("different names erase named access without erasing shared defaults");
+    assert_eq!(names.code, "AU2003");
+    assert!(names.message.contains("contract was erased"));
+
+    let defaults = crate::check_source(
+        r#"
+def required(value: int32) -> int32:
+    return value
+
+def defaulted(value: int32 = 2) -> int32:
+    return value
+
+def main():
+    selected = required if true else defaulted
+    selected()
+"#,
+    )
+    .expect_err("a join with different default masks requires all positional arguments");
+    assert_eq!(defaults.code, "AU2003");
+    assert!(defaults.message.contains("complete positional list"));
+}
+
+#[test]
+fn function_reassignment_intersects_named_and_default_contracts() {
+    let names = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut selected = first
+    selected = second
+    selected(value=3)
+"#,
+    )
+    .expect_err("reassignment to a differently named target erases named arguments");
+    assert_eq!(names.code, "AU2003");
+    assert!(names.message.contains("contract was erased"));
+
+    let defaults = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(value: int32) -> int32:
+    return value
+
+def main():
+    mut selected = first
+    selected = second
+    selected()
+"#,
+    )
+    .expect_err("reassignment to a required target erases default availability");
+    assert_eq!(defaults.code, "AU2003");
+    assert!(defaults.message.contains("complete positional list"));
+}
+
+#[test]
+fn control_flow_reassignment_intersects_function_contracts() {
+    let error = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def choose(use_second: bool) -> int32:
+    mut selected = first
+    if use_second:
+        selected = second
+    return selected(value=3)
+"#,
+    )
+    .expect_err("post-branch function contracts include every reachable assignment");
+    assert_eq!(error.code, "AU2003");
+    assert!(error.message.contains("contract was erased"));
+}
+
+#[test]
+fn repeated_generic_evidence_intersects_callable_contract_metadata() {
+    let callback = |name: &str, has_default: bool| Type::Function {
+        params: vec![FunctionParamContract {
+            name: name.to_string(),
+            ty: Type::named("int32"),
+            passing: ReceiverKind::Borrow,
+            has_default,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::named("int32")),
+    };
+
+    let mut names = HashMap::new();
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &callback("value", true),
+        &mut names,
+    )
+    .expect("first generic observation binds the function contract");
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &callback("number", true),
+        &mut names,
+    )
+    .expect("ABI-equal function evidence remains compatible");
+    let Type::Function { params, .. } = names.get("T").expect("T is inferred") else {
+        panic!("T should remain a function type");
+    };
+    assert_eq!(params[0].name, "");
+    assert!(params[0].has_default);
+    assert!(!params[0].default_erased);
+
+    let nested = |contract| {
+        Type::Tuple(vec![Type::Named(
+            "Vec".to_string(),
+            vec![Type::Named("Holder".to_string(), vec![contract])],
+        )])
+    };
+    let mut nested_defaults = HashMap::new();
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &nested(callback("value", true)),
+        &mut nested_defaults,
+    )
+    .expect("first nested generic observation binds T");
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &nested(callback("value", false)),
+        &mut nested_defaults,
+    )
+    .expect("nested ABI-equal evidence remains compatible");
+    let nested_result = nested_defaults.get("T").expect("nested T is inferred");
+    let Type::Tuple(tuple) = nested_result else {
+        panic!("nested result should retain its tuple wrapper");
+    };
+    let Type::Named(_, vec_args) = &tuple[0] else {
+        panic!("nested result should retain its Vec wrapper");
+    };
+    let Type::Named(_, holder_args) = &vec_args[0] else {
+        panic!("nested result should retain its Holder wrapper");
+    };
+    let Type::Function { params, .. } = &holder_args[0] else {
+        panic!("nested result should retain its callback");
+    };
+    assert_eq!(params[0].name, "value");
+    assert!(!params[0].has_default);
+    assert!(params[0].default_erased);
+
+    let type_params = BTreeSet::from(["T".to_string()]);
+    let mut matcher_substitutions = HashMap::new();
+    assert!(type_pattern_matches(
+        &Type::TypeParam("T".to_string()),
+        &nested(callback("value", true)),
+        &type_params,
+        &mut matcher_substitutions,
+    ));
+    assert!(type_pattern_matches(
+        &Type::TypeParam("T".to_string()),
+        &nested(callback("number", true)),
+        &type_params,
+        &mut matcher_substitutions,
+    ));
+    let merged = matcher_substitutions
+        .get("T")
+        .expect("trait-style matching also retains the safe intersection");
+    let Type::Tuple(tuple) = merged else {
+        panic!("matcher substitution should retain its tuple wrapper");
+    };
+    let Type::Named(_, vec_args) = &tuple[0] else {
+        panic!("matcher substitution should retain its Vec wrapper");
+    };
+    let Type::Named(_, holder_args) = &vec_args[0] else {
+        panic!("matcher substitution should retain its Holder wrapper");
+    };
+    let Type::Function { params, .. } = &holder_args[0] else {
+        panic!("matcher substitution should retain its callback");
+    };
+    assert_eq!(params[0].name, "");
+    assert!(params[0].has_default);
+    assert!(!params[0].default_erased);
+}
+
+#[test]
+fn generic_choose_returns_only_the_callable_contract_common_to_all_evidence() {
+    let defaults = crate::check_source(
+        r#"
+def choose[T](first: own T, second: own T, use_second: bool) -> T:
+    return second if use_second else first
+
+def defaulted(value: int32 = 1) -> int32:
+    return value
+
+def required(value: int32) -> int32:
+    return value
+
+def main():
+    selected = choose(defaulted, required, true)
+    selected()
+"#,
+    )
+    .expect_err("generic inference must not retain a default absent from later evidence");
+    assert_eq!(defaults.code, "AU2003");
+    assert!(defaults.message.contains("complete positional list"));
+
+    let names = crate::check_source(
+        r#"
+def choose[T](first: own T, second: own T, use_second: bool) -> T:
+    return second if use_second else first
+
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected = choose(first, second, true)
+    selected(value=3)
+"#,
+    )
+    .expect_err("generic inference must not retain a name absent from later evidence");
+    assert_eq!(names.code, "AU2003");
+    assert!(names.message.contains("contract was erased"));
+
+    for (surface, main_body) in [
+        (
+            "tuple",
+            "    selected = choose((first, first), (second, second), true)[0]\n    selected(value=3)\n",
+        ),
+        (
+            "Vec",
+            "    selected = choose([first], [second], true)[0]\n    selected(value=3)\n",
+        ),
+        (
+            "generic Holder field",
+            "    selected = choose(\n        Holder(callback=first),\n        Holder(callback=second),\n        true\n    ).callback\n    selected(value=3)\n",
+        ),
+    ] {
+        let source = format!(
+            r#"
+class Holder[T]:
+    callback: T
+
+def choose[T](first: own T, second: own T, use_second: bool) -> T:
+    return second if use_second else first
+
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+{main_body}"#,
+        );
+        let nested = crate::check_source(&source)
+            .expect_err("nested generic results must recursively intersect callable contracts");
+        assert_eq!(
+            nested.code, "AU2003",
+            "{surface} generic evidence should erase incompatible callable names: {}",
+            nested.message,
+        );
+        assert!(nested.message.contains("contract was erased"));
+    }
+}
+
+#[test]
+fn inferred_own_and_mut_function_contracts_survive_generic_and_storage_paths() {
+    crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def consume(value: own String) -> int32:
+    return 1
+
+def bump(value: mut int32):
+    value += 1
+
+class Holder[T]:
+    callback: T
+
+def main():
+    consuming = identity(consume)
+    mutating = identity(bump)
+    consuming_values = [consume, consuming]
+    mutating_values = [bump, mutating]
+    consuming_holder = Holder(callback=consuming)
+    mutating_holder = Holder(callback=mutating)
+    text = "owned"
+    mut count: int32 = 0
+    first: int32 = consuming_values[0](text)
+    mutating_values[1](count)
+    other = "second"
+    second: int32 = consuming_holder.callback(other)
+    mutating_holder.callback(count)
+"#,
+    )
+    .expect("inferred generic, vector, and generic-field storage preserves own/mut capabilities");
+}
+
+#[test]
+fn mutable_function_storage_erases_names_and_defaults_but_keeps_exact_calls() {
+    crate::check_source(
+        r#"
+class Holder[T]:
+    callback: T
+
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut callbacks = [first]
+    callbacks.push(second)
+    callbacks.set(0, second)
+    from_vec: int32 = callbacks[0](3)
+
+    mut callbacks_by_name = {"first": first}
+    callbacks_by_name.set("second", second)
+    from_map: int32 = callbacks_by_name["second"](4)
+
+    mut holder = Holder(callback=first)
+    holder.callback = second
+    from_field: int32 = holder.callback(5)
+"#,
+    )
+    .expect("mutable storage preserves structural signatures for exact positional calls");
+
+    let vec_names = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut callbacks = [first]
+    callbacks.push(second)
+    callbacks.set(0, second)
+    callbacks[0](value=3)
+"#,
+    )
+    .expect_err("Vec mutation makes declaration names unavailable");
+    assert_eq!(vec_names.code, "AU2003");
+    assert!(vec_names.message.contains("contract was erased"));
+
+    let vec_defaults = crate::check_source(
+        r#"
+def defaulted(value: int32 = 1) -> int32:
+    return value
+
+def required(value: int32) -> int32:
+    return value
+
+def main():
+    mut callbacks = [defaulted]
+    callbacks.push(required)
+    callbacks.set(0, required)
+    callbacks[0]()
+"#,
+    )
+    .expect_err("Vec mutation makes omitted arguments unavailable");
+    assert_eq!(vec_defaults.code, "AU2003");
+    assert!(vec_defaults.message.contains("complete positional list"));
+
+    let map_names = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut callbacks = {"first": first}
+    callbacks.set("second", second)
+    callbacks["second"](number=3)
+"#,
+    )
+    .expect_err("Map mutation makes declaration names unavailable");
+    assert_eq!(map_names.code, "AU2003");
+    assert!(map_names.message.contains("contract was erased"));
+
+    let field_defaults = crate::check_source(
+        r#"
+class Holder[T]:
+    callback: T
+
+def defaulted(value: int32 = 1) -> int32:
+    return value
+
+def required(value: int32) -> int32:
+    return value
+
+def main():
+    mut holder = Holder(callback=defaulted)
+    holder.callback = required
+    holder.callback()
+"#,
+    )
+    .expect_err("generic field mutation makes omitted arguments unavailable");
+    assert_eq!(field_defaults.code, "AU2003");
+    assert!(field_defaults.message.contains("complete positional list"));
+}
+
+#[test]
+fn function_values_are_transfer_task_targets() {
+    crate::check_source(
+        r#"
+def worker(value: int32) -> int32:
+    return value + 1
+
+def notify(value: int32):
+    print(value)
+
+def main():
+    task_target = worker
+    soon_target = notify
+    with group = TaskGroup():
+        task: Task[int32] = group.start(task_target, 1)
+        group.start_soon(soon_target, 2)
+"#,
+    )
+    .expect("capture-free function values are Transfer and valid task targets");
+}
+
+#[test]
+fn imported_module_functions_are_first_class_values() {
+    let remote_function = FunctionInfo {
+        module_name: "pkg.tools".to_string(),
+        decl: unary_function_decl("remote_fn"),
+        signature: function_signature(vec![Type::named("int32")], Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+    };
+    let namespace = ModuleNamespace {
+        name: "tools".to_string(),
+        path: "pkg.tools".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::from([("remote_fn".to_string(), remote_function.clone())]),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::from([("remote_fn".to_string(), remote_function)]),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    };
+    let module = crate::parser::parse(
+        "def main():\n    callback = tools.remote_fn\n    result: int32 = callback(1)\n",
+    )
+    .expect("module-function value fixture should parse");
+    check_with_context(
+        module,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "tools".to_string(),
+                ImportedBinding::Module(namespace.clone()),
+            )]),
+            module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect("module-qualified named functions should be usable as values");
+}
+
+#[test]
+fn nested_imported_module_functions_are_first_class_values() {
+    let triple = FunctionInfo {
+        module_name: "function_value_imported_support.helpers".to_string(),
+        decl: unary_function_decl("triple"),
+        signature: function_signature(vec![Type::named("int32")], Type::named("int32")),
+        type_param_bounds: BTreeMap::new(),
+    };
+    let helpers = ModuleNamespace {
+        name: "helpers".to_string(),
+        path: "function_value_imported_support.helpers".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::from([("triple".to_string(), triple.clone())]),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::from([("triple".to_string(), triple)]),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    };
+    let support = ModuleNamespace {
+        name: "function_value_imported_support".to_string(),
+        path: "function_value_imported_support".to_string(),
+        source_path: None,
+        modules: BTreeMap::from([("helpers".to_string(), helpers.clone())]),
+        functions: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    };
+    let module = crate::parser::parse(
+        "def main():\n    callback = function_value_imported_support.helpers.triple\n    result: int32 = callback(4)\n",
+    )
+    .expect("nested module-function value fixture should parse");
+    check_with_context(
+        module,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "function_value_imported_support".to_string(),
+                ImportedBinding::Module(support.clone()),
+            )]),
+            // The real package loader registers the compiled leaf module;
+            // the synthetic import-root namespace lives only in bindings.
+            module_registry: BTreeMap::from([(
+                "function_value_imported_support.helpers".to_string(),
+                helpers,
+            )]),
+            is_entry_module: true,
+        },
+    )
+    .expect("functions in nested imported namespaces should be usable as values");
+}
+
+#[test]
+fn method_values_and_function_trait_dispatch_are_explicitly_out_of_scope() {
+    let method = crate::check_source(
+        r#"
+class Counter:
+    value: int32
+
+    def read(self) -> int32:
+        return self.value
+
+def main():
+    counter = Counter(value=1)
+    callback = counter.read
+"#,
+    )
+    .expect_err("instance method values remain out of scope");
+    assert_eq!(method.code, "AU2005");
+    assert!(method.message.contains("method values are not supported"));
+
+    let trait_dispatch = crate::check_source(
+        r#"
+trait Marker:
+    def mark(self) -> int32
+
+def accept[T: Marker](value: T):
+    pass
+
+def function(value: int32) -> int32:
+    return value
+
+def main():
+    accept(function)
+"#,
+    )
+    .expect_err("function values do not enter trait dispatch");
+    assert_eq!(trait_dispatch.code, "AU2005");
+    assert!(trait_dispatch
+        .message
+        .contains("function values do not participate in trait or trait-object dispatch"));
+}
+
+#[test]
+fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostics() {
+    let span = Span::new(1, 1);
+    let function_ref = TypeRef::function_with_params(
+        vec![crate::ast::FunctionTypeParam::new(
+            ParamMode::BorrowMut,
+            type_ref("T"),
+            span,
+        )],
+        nested_type_ref("Vec", vec![type_ref("U")]),
+        span,
+    );
+    let mut ref_params = BTreeSet::new();
+    collect_type_ref_type_params(&function_ref, &BTreeMap::new(), &mut ref_params, false);
+    assert_eq!(
+        ref_params,
+        BTreeSet::from(["T".to_string(), "U".to_string()]),
+        "implicit generic discovery walks function parameters and returns",
+    );
+
+    let pattern = Type::Function {
+        params: vec![FunctionParamContract {
+            name: String::new(),
+            ty: Type::TypeParam("T".to_string()),
+            passing: ReceiverKind::BorrowMut,
+            has_default: false,
+            default_erased: true,
+        }],
+        return_type: Box::new(Type::Named(
+            "Vec".to_string(),
+            vec![Type::TypeParam("U".to_string())],
+        )),
+    };
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&pattern, &mut collected);
+    assert_eq!(
+        collected,
+        BTreeSet::from(["T".to_string(), "U".to_string()])
+    );
+    assert!(has_unresolved_type_params(&pattern));
+    assert!(
+        has_unresolved_type_params(&Type::Function {
+            params: vec![FunctionParamContract {
+                name: String::new(),
+                ty: Type::named("int32"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: true,
+            }],
+            return_type: Box::new(Type::TypeParam("U".to_string())),
+        }),
+        "an otherwise concrete function type remains unresolved through its return type",
+    );
+    assert_eq!(
+        type_pattern_specificity(&pattern),
+        2,
+        "a function contributes one structural point plus its concrete Vec return",
+    );
+
+    let actual = Type::Function {
+        params: vec![FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("int32"),
+            passing: ReceiverKind::BorrowMut,
+            has_default: true,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+    };
+    let type_params = BTreeSet::from(["T".to_string(), "U".to_string()]);
+    let mut substitutions = HashMap::new();
+    assert!(type_pattern_matches(
+        &pattern,
+        &actual,
+        &type_params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&Type::named("int32")));
+    assert_eq!(substitutions.get("U"), Some(&Type::named("String")));
+    assert!(
+        !type_pattern_matches(
+            &pattern,
+            &Type::named("String"),
+            &type_params,
+            &mut HashMap::new(),
+        ),
+        "a function pattern does not match a non-callable value",
+    );
+
+    let non_callable = unify_type_pattern(&pattern, &Type::named("String"), &mut HashMap::new())
+        .expect_err("function unification rejects a non-callable actual type");
+    assert_eq!(
+        non_callable.message,
+        "expected `def(mut T) -> Vec[U]`, found `String`",
+    );
+
+    let wrong_capability = Type::Function {
+        params: vec![FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("int32"),
+            passing: ReceiverKind::Value,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+    };
+    let mismatch = unify_type_pattern(&pattern, &wrong_capability, &mut HashMap::new())
+        .expect_err("function unification preserves parameter capabilities");
+    assert!(mismatch
+        .message
+        .contains("function parameter 1 has `own` capability"));
+    assert!(mismatch.message.contains("requires `mut`"));
+
+    let wrong_arity = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+    };
+    let mismatch = unify_type_pattern(&pattern, &wrong_arity, &mut HashMap::new())
+        .expect_err("function unification preserves callable arity");
+    assert_eq!(
+        mismatch.message,
+        "expected `def(mut T) -> Vec[U]`, found `def() -> Vec[String]`",
+    );
+
+    assert!(
+        rng_clone_obligation_params_in_context_with_modules(
+            &pattern,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .is_empty(),
+        "a capture-free code pointer does not clone values of its parameter or return types",
+    );
+}
+
+#[test]
+fn function_value_diagnostics_distinguish_lowering_capability_and_call_contract_failures() {
+    for (surface, source) in [
+        (
+            "parameter",
+            "def apply(callback: def(Vec[int32, String]) -> int32):\n    pass\n",
+        ),
+        (
+            "return",
+            "def apply(callback: def(int32) -> Vec[int32, String]):\n    pass\n",
+        ),
+    ] {
+        let error =
+            crate::check_source(source).expect_err("nested function types enforce type arity");
+        assert_eq!(error.code, "AU2002", "{surface}: {error:?}");
+        assert!(
+            error
+                .message
+                .contains("`Vec` expects exactly one type argument"),
+            "{surface}: {error:?}",
+        );
+    }
+
+    let reassignment = crate::check_source(
+        r#"
+def consume(value: own String) -> String:
+    return value
+
+def inspect(value: String) -> String:
+    return value.clone()
+
+def main():
+    mut callback = consume
+    callback = inspect
+"#,
+    )
+    .expect_err("reassignment cannot change a function parameter capability");
+    assert_eq!(reassignment.code, "AU2002");
+    assert!(reassignment
+        .message
+        .contains("function parameter 1 has `shared` capability"));
+    assert!(reassignment.message.contains("requires `own`"));
+
+    let member_specialization = crate::check_source(
+        r#"
+class Holder:
+    callback: def(int32) -> int32
+
+def identity(value: int32) -> int32:
+    return value
+
+def main():
+    holder = Holder(callback=identity)
+    result: int32 = holder.callback[int32](1)
+"#,
+    )
+    .expect_err("stored function values already have a concrete signature");
+    assert_eq!(member_specialization.code, "AU2005");
+    assert!(member_specialization
+        .message
+        .contains("function values have a concrete signature"));
+
+    let non_callable = crate::check_source("def main():\n    value = 1\n    value()\n")
+        .expect_err("a local integer is not callable");
+    assert_eq!(non_callable.code, "AU2999");
+    assert_eq!(non_callable.message, "unsupported call target");
+
+    let required = crate::check_source(
+        r#"
+def required(value: int32) -> int32:
+    return value
+
+def main():
+    callback = required
+    callback()
+"#,
+    )
+    .expect_err("an originally required function-value parameter stays required");
+    assert_eq!(required.code, "AU2004");
+    assert!(required
+        .message
+        .contains("missing required argument `value`"));
+}
+
+#[test]
+fn contextual_generic_function_values_report_each_specialization_failure_at_the_value() {
+    let capability = crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def main():
+    callback: def(mut String) -> String = identity
+"#,
+    )
+    .expect_err("contextual generic specialization preserves capabilities");
+    assert_eq!(capability.code, "AU2002");
+    assert!(capability
+        .message
+        .contains("function parameter 1 has `own` capability"));
+    assert!(capability.message.contains("requires `mut`"));
+
+    let parameter = crate::check_source(
+        r#"
+def first[T](values: own Vec[T]) -> Vec[T]:
+    return values
+
+def main():
+    callback: def(own Set[int32]) -> Vec[int32] = first
+"#,
+    )
+    .expect_err("the expected parameter shape must specialize the generic declaration");
+    assert_eq!(parameter.code, "AU2002");
+    assert!(parameter
+        .message
+        .contains("cannot specialize function `first`"));
+    assert!(parameter
+        .message
+        .contains("expected `Vec[T]`, found `Set[int32]`"));
+
+    let return_type = crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def main():
+    callback: def(own int32) -> String = identity
+"#,
+    )
+    .expect_err("parameter and return evidence must agree on one specialization");
+    assert_eq!(return_type.code, "AU2002");
+    assert!(return_type
+        .message
+        .contains("cannot specialize function `identity`"));
+    assert!(return_type
+        .message
+        .contains("conflicting inferred types for `T`: `int32` and `String`"));
+
+    let unresolved = crate::check_source(
+        r#"
+def marker[T](value: int32) -> int32:
+    return value
+
+def main():
+    callback: def(int32) -> int32 = marker
+"#,
+    )
+    .expect_err("unused generic parameters cannot be invented from context");
+    assert_eq!(unresolved.code, "AU2002");
+    assert!(unresolved
+        .message
+        .contains("cannot infer type parameter `T` for function `marker`"));
+
+    let arity = crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def main():
+    callback = identity[int32, String]
+"#,
+    )
+    .expect_err("explicit specialization supplies every type argument exactly once");
+    assert_eq!(arity.code, "AU2002");
+    assert!(arity
+        .message
+        .contains("function `identity` expects 1 type argument, found 2"));
+
+    crate::check_source(
+        r#"
+trait Marker:
+    def marker(self) -> int32
+
+class Tagged:
+    value: int32
+
+impl Marker for Tagged:
+    def marker(self) -> int32:
+        return self.value
+
+def identity[T: Marker](value: own T) -> T:
+    return value
+
+def main():
+    callback = identity[Tagged]
+    tagged = callback(Tagged(value=7))
+"#,
+    )
+    .expect("explicit function-value specialization enforces and accepts trait bounds");
+
+    let bound = crate::check_source(
+        r#"
+trait Marker:
+    def marker(self) -> int32
+
+def identity[T: Marker](value: own T) -> T:
+    return value
+
+def main():
+    callback = identity[int32]
+"#,
+    )
+    .expect_err("explicit function-value specialization rejects an unsatisfied trait bound");
+    assert_eq!(bound.code, "AU2002");
+    assert!(bound
+        .message
+        .contains("type `int32` does not implement trait `Marker`"));
+}
+
+#[test]
+fn imported_generic_function_values_specialize_as_values_and_task_targets() {
+    let mut identity_decl = unary_function_decl("identity");
+    identity_decl.type_params = vec!["T".to_string()];
+    identity_decl.params[0].ty = type_ref("T");
+    identity_decl.return_type = type_ref("T");
+    let identity = FunctionInfo {
+        module_name: "pkg.tools".to_string(),
+        decl: identity_decl,
+        signature: FunctionSignature {
+            params: vec![Type::TypeParam("T".to_string())],
+            param_passings: vec![ReceiverKind::Value],
+            return_type: Type::TypeParam("T".to_string()),
+            rng_clone_safe_type_params: BTreeSet::new(),
+        },
+        type_param_bounds: BTreeMap::new(),
+    };
+    let namespace = ModuleNamespace {
+        name: "tools".to_string(),
+        path: "pkg.tools".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::from([("identity".to_string(), identity.clone())]),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::from([("identity".to_string(), identity)]),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    };
+    let module = crate::parser::parse(
+        r#"
+def main():
+    callback = tools.identity[int32]
+    value: int32 = callback(1)
+    direct: int32 = tools.identity[int32](3)
+    with group = TaskGroup():
+        task: Task[int32] = group.start(tools.identity[int32], 2)
+"#,
+    )
+    .expect("imported generic function-value source should parse");
+    check_with_context(
+        module,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "tools".to_string(),
+                ImportedBinding::Module(namespace.clone()),
+            )]),
+            module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect("qualified generic functions specialize both as values and task targets");
+}
+
+#[test]
+fn function_types_are_transfer_and_do_not_create_task_observation_rights() {
+    crate::check_source(
+        r#"
+class Holder:
+    callback: def(int32) -> int32
+
+def identity(value: int32) -> int32:
+    return value
+
+def apply(callback: own def(int32) -> int32, value: int32) -> int32:
+    return callback(value)
+
+def clone_holders(values: Vec[Holder]) -> Vec[Holder]:
+    return values.clone()
+
+def clone_tasks(
+    tasks: Vec[Task[def(int32) -> int32]]
+) -> Vec[Task[def(int32) -> int32]]:
+    return tasks.clone()
+
+def launch():
+    with group = TaskGroup():
+        task: Task[int32] = group.start(apply, identity, 1)
+"#,
+    )
+    .expect(
+        "capture-free callbacks cross task boundaries and stay repeatable inside holders and Task results",
+    );
+}
+
+#[test]
+fn function_value_task_targets_preserve_call_and_transfer_failure_diagnostics() {
+    let call_mismatch = crate::check_source(
+        r#"
+def worker(value: int32) -> int32:
+    return value
+
+def launch():
+    target = worker
+    with group = TaskGroup():
+        group.start(target, "wrong")
+"#,
+    )
+    .expect_err("an indirect task target still checks its concrete argument types");
+    assert_eq!(call_mismatch.code, "AU2002");
+    assert!(call_mismatch
+        .message
+        .contains("argument type mismatch for function value: expected `int32`, found `String`"));
+
+    let argument = crate::check_source(
+        r#"
+import random
+
+def use_rng(value: own random.Rng) -> int32:
+    return 1
+
+def launch():
+    target = use_rng
+    with group = TaskGroup():
+        group.start(target, random.Rng(seed=7))
+"#,
+    )
+    .expect_err("a function-value task argument must be Transfer");
+    assert_eq!(argument.code, "AU3008");
+    assert!(argument
+        .message
+        .contains("task argument 1 for function value"));
+    assert!(argument
+        .message
+        .contains("`random.Rng` is a stateful generator and is not Transfer"));
+
+    let result = crate::check_source(
+        r#"
+import random
+
+def make_rng() -> random.Rng:
+    return random.Rng(seed=7)
+
+def launch():
+    target = make_rng
+    with group = TaskGroup():
+        group.start(target)
+"#,
+    )
+    .expect_err("a function-value task result must be Transfer");
+    assert_eq!(result.code, "AU3008");
+    assert!(result
+        .message
+        .contains("task result `random.Rng` cannot cross a task boundary"));
+}
+
+#[test]
+fn function_value_specialization_enforces_clone_safety_at_value_creation() {
+    let rejected = crate::check_source(
+        r#"
+import random
+
+def duplicate[T](values: Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def main():
+    callback = duplicate[random.Rng]
+"#,
+    )
+    .expect_err("specializing a function value must enforce its inferred clone-safety contract");
+    assert_eq!(rejected.code, "AU3007");
+    assert!(rejected.message.contains("function `duplicate`"));
+    assert!(rejected.message.contains("non-cloneable `random.Rng`"));
+}
+
+#[test]
+fn class_field_default_calls_keep_the_callable_boundary_diagnostic() {
+    let rejected = crate::check_source(
+        r#"
+class Settings:
+    value: int32 = make_value()
+
+def make_value() -> int32:
+    return 7
+"#,
+    )
+    .expect_err("class defaults cannot call a module function before callable registration");
+    assert_eq!(rejected.code, "AU2999");
+    assert_eq!(rejected.message, "unsupported call target");
 }

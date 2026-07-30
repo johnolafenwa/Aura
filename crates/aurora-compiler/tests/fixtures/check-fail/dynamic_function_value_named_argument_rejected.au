@@ -1,0 +1,13 @@
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(amount: int32) -> int32:
+    return amount * 2
+
+def choose(use_increment: bool) -> def(int32) -> int32:
+    return increment if use_increment else double
+
+def main() -> int32:
+    selected = choose(true)
+    print(selected(value=20))
+    return 0

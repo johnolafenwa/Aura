@@ -59,7 +59,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 2;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 3;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -92,7 +92,8 @@ pub mod native_runtime_coverage {
         aurora_direct_duration_to_float, aurora_direct_enum_variant, aurora_direct_file_close,
         aurora_direct_file_flush, aurora_direct_file_read_all, aurora_direct_file_write_all,
         aurora_direct_fs_append_string, aurora_direct_fs_create, aurora_direct_fs_create_dir,
-        aurora_direct_fs_open, aurora_direct_fs_read_dir, aurora_direct_host_builtin,
+        aurora_direct_fs_open, aurora_direct_fs_read_dir, aurora_direct_function_default_binder,
+        aurora_direct_function_thunk, aurora_direct_function_value, aurora_direct_host_builtin,
         aurora_direct_http_listener_accept, aurora_direct_http_listener_close,
         aurora_direct_http_listener_local_addr, aurora_direct_http_response_bytes,
         aurora_direct_http_response_headers, aurora_direct_http_response_reason,
@@ -825,6 +826,22 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                 .map(|element| qualify_export_type(program, element))
                 .collect(),
         ),
+        sema::Type::Function {
+            params,
+            return_type,
+        } => sema::Type::Function {
+            params: params
+                .iter()
+                .map(|param| sema::FunctionParamContract {
+                    name: param.name.clone(),
+                    ty: qualify_export_type(program, &param.ty),
+                    passing: param.passing,
+                    has_default: param.has_default,
+                    default_erased: param.default_erased,
+                })
+                .collect(),
+            return_type: Box::new(qualify_export_type(program, return_type)),
+        },
         sema::Type::TypeParam(name) => sema::Type::TypeParam(name.clone()),
         sema::Type::Module(path) => sema::Type::Module(path.clone()),
         sema::Type::Unit => sema::Type::Unit,
@@ -839,6 +856,15 @@ fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::T
                 .iter()
                 .map(|element| qualify_export_type_ref(program, element))
                 .collect();
+        }
+        ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                param.ty = qualify_export_type_ref(program, &param.ty);
+            }
+            **return_type = qualify_export_type_ref(program, return_type);
         }
         ast::TypeRefKind::Named { name, args } => {
             *args = args

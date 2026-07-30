@@ -60,6 +60,23 @@ printed-output order unless they explicitly coordinate that order.
     - `hello aurora`
     - `6`
     - `12`
+- `function_values.au`
+  - capture-free named function values in bindings, parameters, fields, and
+    `Vec`, including copy semantics, explicit generic specialization, and a
+    statically known indirect call that uses a default and a named argument
+  - explicit `def(mut T) -> R` and `def(own T) -> R` contracts through fields
+    and `Vec`
+  - prints:
+    - `2`
+    - `3`
+    - `6`
+    - `5`
+    - `5`
+    - `12`
+    - `11`
+    - `21`
+    - `2`
+    - `owned`
 - `borrow_parameters.au`
   - free-function bare shared and `mut` parameters with caller-visible mutation
   - prints:
@@ -483,6 +500,15 @@ printed-output order unless they explicitly coordinate that order.
   - prints:
     - `10`
     - `2`
+- `function_values.au`
+  - stores a namespace-qualified imported function, then calls it directly and
+    through a `def(int32) -> int32` parameter
+  - contextually specializes an imported zero-argument generic function and
+    uses the result as a `TaskGroup.start` target
+  - prints:
+    - `10`
+    - `12`
+    - `none`
 - `namespace_import_types.au`
   - namespace-qualified class construction, enum variants, and qualified `match` arms through `import ...`
   - prints:
@@ -821,6 +847,7 @@ cargo run -p aura -- run examples/basics/top_level_script.au
 cargo run -p aura -- run examples/basics/named_arguments.au
 cargo run -p aura -- run examples/basics/named_builtin_arguments.au
 cargo run -p aura -- run examples/basics/default_arguments.au
+cargo run -p aura -- run examples/basics/function_values.au
 cargo run -p aura -- run examples/basics/borrow_parameters.au
 cargo run -p aura -- run examples/basics/numbers.au
 cargo run -p aura -- run examples/basics/pass_keyword.au

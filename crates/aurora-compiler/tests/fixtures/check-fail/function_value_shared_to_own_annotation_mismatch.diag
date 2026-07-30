@@ -1,0 +1,5 @@
+error[AU2002]: function parameter 1 has `shared` capability, but `def(own String) -> int64` requires `own`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
+ --> crates/aurora-compiler/tests/fixtures/check-fail/function_value_shared_to_own_annotation_mismatch.au:5:5
+  |
+5 |     consuming: def(own String) -> int64 = length
+  |     ^

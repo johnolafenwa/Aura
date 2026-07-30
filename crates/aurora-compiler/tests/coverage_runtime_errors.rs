@@ -116,6 +116,25 @@ def main() -> int32:
 }
 
 #[test]
+fn task_group_queue_iteration_surfaces_a_delayed_sibling_failure() {
+    let source = r#"
+def fail_after_iterator_waits() -> int32:
+    sleep(5ms)
+    return 1 // 0
+
+def main() -> int32:
+    values = Queue[int32]()
+    with TaskGroup() as group:
+        group.start(fail_after_iterator_waits)
+        for value in values:
+            print(value)
+    return 0
+"#;
+
+    assert_runtime_error_contains(source, "division by zero");
+}
+
+#[test]
 fn path_with_source_public_wrappers_cover_success_and_error_paths() {
     let temp = TempDir::new("aurora-path-with-source");
     temp.write(

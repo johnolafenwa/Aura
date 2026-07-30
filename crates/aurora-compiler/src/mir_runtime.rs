@@ -49,7 +49,7 @@ use crate::runtime_value::{
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
+    ChannelValue, EnumVariantValue, FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue,
     HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
     ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
@@ -174,6 +174,12 @@ fn module_uses_lightweight_tasks(module: &MirModule) -> bool {
         .functions
         .iter()
         .chain(module.top_level.iter())
+        // Runtime-provided declarations receive forwarding MIR bodies so
+        // first-class builtin values dispatch through the same implementation
+        // as direct calls. Those wrappers are not source reachability: in
+        // particular, the always-present `process::run` wrapper must not force
+        // every otherwise-synchronous program onto a 512 KiB task stack.
+        .filter(|function| !crate::mir::has_runtime_named_function(&function.name))
         .any(function_uses_lightweight_tasks)
 }
 
@@ -201,6 +207,79 @@ fn rvalue_uses_lightweight_tasks(value: &Rvalue) -> bool {
                 ..
             } if name == "process::run"
         )
+        || rvalue_materializes_process_run(value)
+}
+
+fn operand_is_process_run_function(operand: &Operand) -> bool {
+    matches!(
+        operand,
+        Operand::Function { name, .. } if name == "process::run"
+    )
+}
+
+fn args_materialize_process_run(args: &[MirArg]) -> bool {
+    args.iter()
+        .any(|argument| operand_is_process_run_function(&argument.value))
+}
+
+fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
+    match value {
+        Rvalue::Use(value)
+        | Rvalue::Unary { value, .. }
+        | Rvalue::Cast { value, .. }
+        | Rvalue::Try { value }
+        | Rvalue::TupleElement { tuple: value, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: value, ..
+        }
+        | Rvalue::Member { object: value, .. } => operand_is_process_run_function(value),
+        Rvalue::FormatString { parts } => parts.iter().any(|part| {
+            matches!(
+                part,
+                crate::mir::MirFormatPart::Value(value)
+                    if operand_is_process_run_function(value)
+            )
+        }),
+        Rvalue::StartTask {
+            stack_size,
+            task_group,
+            function,
+            args,
+            ..
+        } => {
+            stack_size
+                .as_ref()
+                .is_some_and(operand_is_process_run_function)
+                || operand_is_process_run_function(task_group)
+                || operand_is_process_run_function(function)
+                || args_materialize_process_run(args)
+        }
+        Rvalue::Binary { left, right, .. } => {
+            operand_is_process_run_function(left) || operand_is_process_run_function(right)
+        }
+        Rvalue::Call { callee, args } => {
+            let callee_materializes = match callee {
+                CallTarget::Name(_) => false,
+                CallTarget::Value(value) => operand_is_process_run_function(value),
+                CallTarget::Member { object, .. } => operand_is_process_run_function(object),
+            };
+            callee_materializes || args_materialize_process_run(args)
+        }
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => elements.iter().any(operand_is_process_run_function),
+        Rvalue::MapLiteral { entries, .. } => entries.iter().any(|entry| {
+            operand_is_process_run_function(&entry.key)
+                || operand_is_process_run_function(&entry.value)
+        }),
+        Rvalue::Construct { fields, .. } => fields
+            .iter()
+            .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::TupleTakeElement { .. } => false,
+    }
 }
 
 fn lock_stdout(stdout: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
@@ -481,9 +560,20 @@ struct StartTaskRequest<'a> {
     result_is_repeatable: bool,
     stack_size: Option<usize>,
     task_group: &'a Operand,
-    function: &'a str,
+    function: &'a Operand,
     args: &'a [MirArg],
     spawn_span: Span,
+}
+
+fn mir_function_value(name: &str, signature: &Type) -> Value {
+    Value::Function(Box::new(FunctionValue {
+        name: name.to_string(),
+        signature: signature.clone(),
+        source_path: None,
+        entry_span: Span::new(0, 0),
+        direct_thunk: None,
+        direct_default_binder: None,
+    }))
 }
 
 enum RvalueOutcome {
@@ -844,6 +934,9 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
                 "cannot borrow consuming MIR operand `{place}`"
             )))
         }
+        Operand::Function { name, signature } => {
+            MirBorrowedOperand::Immediate(mir_function_value(name, signature))
+        }
         Operand::Int(value) => {
             MirBorrowedOperand::Immediate(Value::Int(IntegerValue::from_literal(*value)))
         }
@@ -910,6 +1003,7 @@ fn take_mir_operand(operand: &Operand, env: &mut Env) -> Result<Value> {
     match operand {
         Operand::Place(place) => env.read_place(place),
         Operand::MovePlace(place) => env.take_place(place),
+        Operand::Function { name, signature } => Ok(mir_function_value(name, signature)),
         Operand::Int(value) => Ok(Value::Int(IntegerValue::from_literal(*value))),
         Operand::Duration(value) => Ok(Value::Duration(*value)),
         Operand::Float(value) => Ok(Value::Float(*value)),
@@ -1387,6 +1481,7 @@ impl MirRuntime {
             Some(receiver),
             evaluated_args,
             expected_return_type,
+            None,
             Some(receiver_ty),
         )?;
         if method.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -1583,6 +1678,7 @@ impl MirRuntime {
             Value::Rng(_) => Some(Type::named("random.Rng")),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(_) => None,
+            Value::Function(function) => Some(function.signature.clone()),
             Value::Unit => Some(Type::Unit),
             Value::Instance(instance) => Some(Type::named(&instance.class_name)),
             Value::EnumVariant(variant) => match (
@@ -1764,6 +1860,11 @@ impl MirRuntime {
                     elements,
                 })
             }
+            (Value::Function(function), Type::Function { .. }) => {
+                let mut function = function.clone();
+                function.signature = ty.clone();
+                Value::Function(function)
+            }
             _ => value,
         };
         self.validate_value_fits_type(&coerced, ty, span)?;
@@ -1806,6 +1907,7 @@ impl MirRuntime {
             Operand::Place(place) | Operand::MovePlace(place) => {
                 self.resolve_place_type(place, env)
             }
+            Operand::Function { signature, .. } => Some(signature.as_ref().clone()),
             Operand::Int(_) => Some(Type::named("int64")),
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
@@ -1831,7 +1933,31 @@ impl MirRuntime {
         args: Vec<EvaluatedMirArg>,
         expected_return_type: Option<&Type>,
     ) -> Result<CallOutcome> {
-        self.call_function_with_receiver_type(function, receiver, args, expected_return_type, None)
+        self.call_function_with_receiver_type(
+            function,
+            receiver,
+            args,
+            expected_return_type,
+            None,
+            None,
+        )
+    }
+
+    fn call_function_for_value(
+        &mut self,
+        function: &MirFunction,
+        args: Vec<EvaluatedMirArg>,
+        signature: &Type,
+        expected_return_type: Option<&Type>,
+    ) -> Result<CallOutcome> {
+        self.call_function_with_receiver_type(
+            function,
+            None,
+            args,
+            expected_return_type,
+            Some(signature),
+            None,
+        )
     }
 
     fn call_function_with_receiver_type(
@@ -1840,6 +1966,7 @@ impl MirRuntime {
         receiver: Option<Value>,
         args: Vec<EvaluatedMirArg>,
         expected_return_type: Option<&Type>,
+        concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
         if self.call_depth >= MAX_CALL_DEPTH {
@@ -1851,13 +1978,19 @@ impl MirRuntime {
                 ),
             ));
         }
+        // Supplied arguments have already been evaluated in source order.
+        // Bind them to declaration slots, then evaluate target-owned defaults
+        // freshly in declaration order before entering the selected function's
+        // call frame.
+        let bound_args =
+            self.bind_function_args(function, args, expected_return_type, concrete_function_type)?;
+        let public_function_name = public_runtime_function_name(&function.name);
         self.call_stack.push(RuntimeCallFrame {
-            function: function.name.clone(),
+            function: public_function_name,
             span: RuntimeSourceSpan::point(function.source_path.clone(), function.span),
         });
         self.call_depth += 1;
         let outcome = (|| {
-            let bound_args = bind_args(&function.params, args)?;
             let mut substitutions = HashMap::new();
             if let Some(receiver_type) = receiver_type {
                 if let Some(receiver_local) = function
@@ -1879,6 +2012,11 @@ impl MirRuntime {
                     &mut substitutions,
                 );
             }
+            collect_function_signature_substitutions(
+                function,
+                concrete_function_type,
+                &mut substitutions,
+            );
             for (param, argument) in function.params.iter().zip(bound_args.iter()) {
                 if let Some(actual_ty) = argument
                     .ty
@@ -1939,6 +2077,72 @@ impl MirRuntime {
         let outcome = outcome.map_err(|error| self.annotate_runtime_trap_once(error));
         self.call_stack.pop();
         outcome
+    }
+
+    fn bind_function_args(
+        &mut self,
+        function: &MirFunction,
+        args: Vec<EvaluatedMirArg>,
+        expected_return_type: Option<&Type>,
+        concrete_function_type: Option<&Type>,
+    ) -> Result<Vec<EvaluatedMirArg>> {
+        let mut bound = bind_optional_function_args(&function.params, args)?;
+        let mut substitutions = HashMap::new();
+        if let Some(expected_return_type) = expected_return_type {
+            collect_runtime_type_substitutions(
+                &function.return_type,
+                expected_return_type,
+                &mut substitutions,
+            );
+        }
+        collect_function_signature_substitutions(
+            function,
+            concrete_function_type,
+            &mut substitutions,
+        );
+        for (param, argument) in function.params.iter().zip(bound.iter()) {
+            let Some(argument) = argument else {
+                continue;
+            };
+            if let Some(actual_ty) = argument
+                .ty
+                .clone()
+                .or_else(|| self.infer_runtime_value_type(&argument.value))
+            {
+                collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
+            }
+        }
+        for (index, param) in function.params.iter().enumerate() {
+            if bound[index].is_some() {
+                continue;
+            }
+            let default_name = param.default_function.as_ref().ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "missing MIR argument `{}` for function `{}`",
+                    param.name, function.name
+                ))
+            })?;
+            let default_function = self.functions.get(default_name).cloned().ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "unknown MIR default function `{default_name}` for `{}`",
+                    function.name
+                ))
+            })?;
+            let expected = substitute_type(&param.ty, &substitutions);
+            let value = self
+                .call_function_for_target(&default_function, None, Vec::new(), Some(&expected))?
+                .value;
+            bound[index] = Some(EvaluatedMirArg {
+                name: Some(param.name.clone()),
+                value,
+                ty: Some(expected),
+                writeback_place: None,
+            });
+        }
+        Ok(bound
+            .into_iter()
+            .map(|argument| argument.expect("every function argument is supplied or has a default"))
+            .collect())
     }
 
     fn execute_function(&mut self, function: &MirFunction, env: &mut Env) -> Result<Value> {
@@ -2323,6 +2527,7 @@ impl MirRuntime {
                     &function,
                     Some(Value::Instance(instance)),
                     Vec::new(),
+                    None,
                     None,
                     resource_type.as_ref(),
                 )?;
@@ -3155,10 +3360,8 @@ impl MirRuntime {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
                     })?;
                 let evaluated_args = evaluate_named_args(args, env)?;
-                let writeback_places = evaluated_args
-                    .iter()
-                    .map(|argument| argument.writeback_place.clone())
-                    .collect::<Vec<_>>();
+                let writeback_places =
+                    bind_function_writeback_places(&function.params, &evaluated_args)?;
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
@@ -3172,6 +3375,9 @@ impl MirRuntime {
                     env,
                 )?;
                 Ok(outcome.value)
+            }
+            CallTarget::Value(function) => {
+                self.evaluate_function_value_call(function, args, env, expected_return_type)
             }
             CallTarget::Member {
                 object,
@@ -3447,6 +3653,7 @@ impl MirRuntime {
                             }),
                             evaluated_args,
                             expected_return_type,
+                            None,
                             Some(&resolved_receiver_ty),
                         )?;
                         if method.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -3501,6 +3708,7 @@ impl MirRuntime {
                                     }),
                                     evaluated_args,
                                     expected_return_type,
+                                    None,
                                     Some(&resolved_receiver_ty),
                                 )?;
                                 if method.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -3534,6 +3742,44 @@ impl MirRuntime {
         }
     }
 
+    fn evaluate_function_value_call(
+        &mut self,
+        function: &Operand,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+    ) -> Result<Value> {
+        let function_value = self.evaluate_operand(function, env)?;
+        let Value::Function(function_value) = function_value else {
+            return Err(Diagnostic::new(format!(
+                "indirect MIR call expected a function value, found `{}`",
+                function_value.render()
+            )));
+        };
+        let function = self
+            .functions
+            .get(&function_value.name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
+            })?;
+        let evaluated_args = evaluate_named_args(args, env)?;
+        let writeback_places = bind_function_writeback_places(&function.params, &evaluated_args)?;
+        let outcome = self.call_function_for_value(
+            &function,
+            evaluated_args,
+            &function_value.signature,
+            expected_return_type,
+        )?;
+        self.apply_borrowed_param_writebacks(
+            &function.params,
+            &writeback_places,
+            outcome.updated_params,
+            env,
+        )?;
+        Ok(outcome.value)
+    }
+
     fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
         let StartTaskRequest {
             returns_handle,
@@ -3544,13 +3790,32 @@ impl MirRuntime {
             args,
             spawn_span,
         } = request;
+        let function_value = self.evaluate_operand(function, env)?;
+        let Value::Function(function_value) = function_value else {
+            return Err(Diagnostic::new(format!(
+                "MIR task start expected a function value, found `{}`",
+                function_value.render()
+            )));
+        };
         let function = self
             .functions
-            .get(function)
+            .get(&function_value.name)
             .cloned()
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{}`", function)))?;
+            .ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
+            })?;
         self.require_task_startable_function(&function)?;
-        let bound_args = evaluate_named_args(args, env)?;
+        // Capture evaluation and target-owned defaults both happen in the
+        // parent task. The child receives a complete declaration-ordered
+        // argument vector, so a dynamically selected target cannot defer its
+        // default side effects until after scheduling.
+        let supplied_args = evaluate_named_args(args, env)?;
+        let bound_args = self.bind_function_args(
+            &function,
+            supplied_args,
+            None,
+            Some(&function_value.signature),
+        )?;
         let mut producer_queues = Vec::new();
         for argument in &bound_args {
             collect_queue_handles(&argument.value, &mut producer_queues);
@@ -3570,6 +3835,7 @@ impl MirRuntime {
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
         let function_for_task = function.clone();
+        let function_signature = function_value.signature.clone();
         let mut task_ancestry = self.task_ancestry.clone();
         let parent_frame = self
             .call_stack
@@ -3591,7 +3857,7 @@ impl MirRuntime {
             );
             runtime.task_ancestry = task_ancestry;
             runtime
-                .call_function(&function_for_task, None, bound_args)
+                .call_function_for_value(&function_for_task, bound_args, &function_signature, None)
                 .map(|outcome| outcome.value)
         };
         let register_before_submit = |task: &TaskValue| {
@@ -6775,6 +7041,7 @@ impl MirRuntime {
             Operand::MovePlace(place) => Err(Diagnostic::new(format!(
                 "consuming MIR operand `{place}` reached a non-consuming context"
             ))),
+            Operand::Function { name, signature } => Ok(mir_function_value(name, signature)),
             Operand::Int(value) => Ok(Value::Int(IntegerValue::from_literal(*value))),
             Operand::Duration(value) => Ok(Value::Duration(*value)),
             Operand::Float(value) => Ok(Value::Float(*value)),
@@ -6975,6 +7242,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
         .map(|arg| {
             let ty = match &arg.value {
                 Operand::Place(place) | Operand::MovePlace(place) => env.place_type(place).cloned(),
+                Operand::Function { signature, .. } => Some(signature.as_ref().clone()),
                 Operand::Int(_) => Some(Type::named("int64")),
                 Operand::Duration(_) => Some(Type::named("Duration")),
                 Operand::Float(_) => Some(Type::named("float64")),
@@ -6985,6 +7253,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
                 Operand::MovePlace(place) => env.take_place(place)?,
+                Operand::Function { name, signature } => mir_function_value(name, signature),
                 Operand::Int(value) => Value::Int(IntegerValue::from_literal(*value)),
                 Operand::Duration(value) => Value::Duration(*value),
                 Operand::Float(value) => Value::Float(*value),
@@ -7131,12 +7400,111 @@ fn validate_mir_select_sources(args: Vec<EvaluatedMirArg>) -> Result<Vec<Value>>
     Ok(sources)
 }
 
-fn bind_args(params: &[MirParam], args: Vec<EvaluatedMirArg>) -> Result<Vec<EvaluatedMirArg>> {
+fn bind_optional_function_args(
+    params: &[MirParam],
+    args: Vec<EvaluatedMirArg>,
+) -> Result<Vec<Option<EvaluatedMirArg>>> {
     let names = params
         .iter()
         .map(|param| param.name.as_str())
         .collect::<Vec<_>>();
-    bind_builtin_args(&names, args)
+    let mut values = vec![None; names.len()];
+    let mut next_positional = 0usize;
+    let mut saw_named = false;
+    for argument in args {
+        if let Some(name) = argument.name.as_deref() {
+            saw_named = true;
+            let Some(index) = names.iter().position(|candidate| *candidate == name) else {
+                return Err(Diagnostic::new(format!("unknown MIR argument `{name}`")));
+            };
+            if values[index].is_some() {
+                return Err(Diagnostic::new(format!("duplicate MIR argument `{name}`")));
+            }
+            values[index] = Some(argument);
+            continue;
+        }
+        if saw_named {
+            return Err(Diagnostic::new(
+                "positional MIR argument cannot follow a named argument",
+            ));
+        }
+        while next_positional < values.len() && values[next_positional].is_some() {
+            next_positional += 1;
+        }
+        if next_positional >= values.len() {
+            return Err(Diagnostic::new("too many MIR arguments"));
+        }
+        values[next_positional] = Some(argument);
+        next_positional += 1;
+    }
+    Ok(values)
+}
+
+#[cfg(test)]
+fn bind_args(params: &[MirParam], args: Vec<EvaluatedMirArg>) -> Result<Vec<EvaluatedMirArg>> {
+    bind_optional_function_args(params, args)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            argument.ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "missing MIR argument `{}`",
+                    params
+                        .get(index)
+                        .map(|param| param.name.as_str())
+                        .unwrap_or("<unknown>")
+                ))
+            })
+        })
+        .collect()
+}
+
+fn bind_function_writeback_places(
+    params: &[MirParam],
+    args: &[EvaluatedMirArg],
+) -> Result<Vec<Option<String>>> {
+    let names = params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>();
+    let mut places = vec![None; names.len()];
+    let mut occupied = vec![false; names.len()];
+    let mut next_positional = 0usize;
+    let mut saw_named = false;
+    for argument in args {
+        let index = if let Some(name) = argument.name.as_deref() {
+            saw_named = true;
+            names
+                .iter()
+                .position(|candidate| *candidate == name)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR argument `{name}`")))?
+        } else {
+            if saw_named {
+                return Err(Diagnostic::new(
+                    "positional MIR argument cannot follow a named argument",
+                ));
+            }
+            while next_positional < occupied.len() && occupied[next_positional] {
+                next_positional += 1;
+            }
+            if next_positional >= occupied.len() {
+                return Err(Diagnostic::new("too many MIR arguments"));
+            }
+            let index = next_positional;
+            next_positional += 1;
+            index
+        };
+        if occupied[index] {
+            let name = argument
+                .name
+                .as_deref()
+                .unwrap_or(names.get(index).copied().unwrap_or("<unknown>"));
+            return Err(Diagnostic::new(format!("duplicate MIR argument `{name}`")));
+        }
+        occupied[index] = true;
+        places[index] = argument.writeback_place.clone();
+    }
+    Ok(places)
 }
 
 fn bind_builtin_args(
@@ -7674,8 +8042,70 @@ fn collect_runtime_type_substitutions(
                 collect_runtime_type_substitutions(pattern_element, actual_element, substitutions);
             }
         }
+        Type::Function {
+            params: pattern_params,
+            return_type: pattern_return,
+            ..
+        } => {
+            let Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+                ..
+            } = actual
+            else {
+                return;
+            };
+            if pattern_params.len() != actual_params.len() {
+                return;
+            }
+            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params) {
+                if pattern_param.passing != actual_param.passing {
+                    return;
+                }
+                collect_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_runtime_type_substitutions(pattern_return, actual_return, substitutions);
+        }
         Type::Unit | Type::Module(_) => {}
     }
+}
+
+fn collect_function_signature_substitutions(
+    function: &MirFunction,
+    concrete_function_type: Option<&Type>,
+    substitutions: &mut HashMap<String, Type>,
+) {
+    let Some(Type::Function {
+        params,
+        return_type,
+    }) = concrete_function_type
+    else {
+        return;
+    };
+    if function.params.len() != params.len() {
+        return;
+    }
+    for (declared, concrete) in function.params.iter().zip(params) {
+        let concrete_passing = match concrete.passing {
+            crate::ast::ReceiverKind::Borrow => MirReceiverKind::Borrow,
+            crate::ast::ReceiverKind::BorrowMut => MirReceiverKind::BorrowMut,
+            crate::ast::ReceiverKind::Value => MirReceiverKind::Value,
+        };
+        if declared.passing != concrete_passing {
+            return;
+        }
+        collect_runtime_type_substitutions(&declared.ty, &concrete.ty, substitutions);
+    }
+    collect_runtime_type_substitutions(&function.return_type, return_type, substitutions);
+}
+
+fn public_runtime_function_name(name: &str) -> String {
+    name.split_once("::__default_")
+        .map_or_else(|| name.to_string(), |(public, _)| public.to_string())
 }
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {
@@ -7692,6 +8122,16 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
             for element in elements {
                 collect_type_params_from_type(element, collected);
             }
+        }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
         }
         Type::Unit | Type::Module(_) => {}
     }

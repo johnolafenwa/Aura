@@ -338,6 +338,82 @@ def main() -> int32:
 }
 
 #[test]
+fn public_mir_callable_values_cover_specialization_defaults_and_dynamic_task_targets() {
+    let source = r#"
+import process
+
+class Pipeline:
+    transform: def(int32) -> int32
+
+def increment(value: int32) -> int32:
+    return value + 1
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def show[T](value: T) -> None:
+    print(value)
+
+def take_first[A, B](first: own A, second: B) -> A:
+    return first
+
+def mark(label: String, value: int32) -> int32:
+    print(label)
+    return value
+
+def first_default(value: int32 = mark("first-default", 11)) -> int32:
+    return value
+
+def second_default(value: int32 = mark("second-default", 22)) -> int32:
+    return value
+
+def choose_transform(use_increment: bool) -> def(int32) -> int32:
+    return increment if use_increment else double
+
+def main() -> int32:
+    selected = choose_transform(false)
+    specialized = show[int32]
+    known_default = first_default
+    selected_default = first_default if false else second_default
+    pipeline = Pipeline(transform=selected)
+    callbacks: Vec[def(int32) -> int32] = [double]
+    stdio_factory: def() -> process.Stdio = process.pipe
+
+    print(selected(4))
+    specialized(9)
+    print(known_default(value=30))
+    print(selected_default())
+    match own stdio_factory():
+        case process.Stdio.Pipe:
+            print("pipe")
+        case process.Stdio.Null:
+            print("null")
+        case process.Stdio.Inherit:
+            print("inherit")
+
+    with group = TaskGroup():
+        field_task = group.start(pipeline.transform, 5)
+        index_task = group.start(callbacks[0], 6)
+        generic_task = group.start(take_first[int32, int32], 7, 8)
+        print(field_task.result_or(-1, timeout=1s))
+        print(index_task.result_or(-1, timeout=1s))
+        print(generic_task.result_or(-1, timeout=1s))
+    return 0
+"#;
+
+    check_source(source).expect("callable-value integration source should type-check");
+    let direct = run_source(source).expect("callable-value integration source should run");
+    assert_eq!(
+        direct.stdout,
+        "8\n9\n30\nsecond-default\n22\npipe\n10\n12\n7\n"
+    );
+
+    let mir = lower_source_to_mir(source).expect("callable-value source should lower to MIR");
+    let mir_output = run_mir(&mir).expect("callable-value MIR should run");
+    assert_eq!(mir_output.stdout, direct.stdout);
+}
+
+#[test]
 fn public_native_codegen_rejects_invalid_mir_surface() {
     let invalid_module = MirModule {
         functions: vec![MirFunction {

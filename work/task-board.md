@@ -26,10 +26,35 @@ Last updated: 2026-07-29
   `npm run ci` gate passes at `14f2b8b`: 308 CLI tests, 1,157 compiler tests,
   forced MIR/direct parity, 90 LSP tests, 13 extension tests, both coverage
   gates, reference integrity, docs, audits, warning-denied Clippy, and hygiene.
-  Compiler coverage is 71,457/74,328 lines (96.137391%), 4,800/4,953
+  B5.0 compiler coverage is 71,457/74,328 lines (96.137391%), 4,800/4,953
   functions (96.910963%), and 104,919/111,056 regions (94.473959%), above the
   frozen `96.13/96.90/94.46` floors. No synthetic coverage test or exclusion
-  was added. B5.0 is closed; Phase 6.1 is now the active stage.
+  was added. B5.0 is closed.
+
+  Phase 6.1 capture-free function values are implemented across parser, AST,
+  static semantics, generic specialization, callable-contract flow, MIR,
+  direct native ABI/runtime, TaskGroup targets, analysis/LSP, fixtures,
+  examples, tutorials, and the normative Manual. Concrete inferred function
+  values preserve names and defaults; written structural types and mutable
+  storage intentionally erase them. Bare/`mut`/`own` capabilities retain
+  shared access, mutable writeback, and transfer semantics on indirect calls.
+  Method values remain out of scope with teaching diagnostics. The first exact
+  instrumented replay passed 317/317 CLI tests, 1,220/1,220 compiler tests,
+  all fixtures and integration targets. Its behavior-focused function-gap
+  closure adds a public invalid-UTF-8/sorted-directory regression and an
+  `i64::MAX` native Set boundary pin, while redundant or unreachable compiler
+  closure boundaries use equivalent explicit control flow. The final exact
+  compiler gate passes 317/317 CLI tests and 1,221/1,221 compiler tests at
+  74,018/76,980 lines (96.15%), 4,975/5,127 functions (97.04%), and
+  108,683/114,967 regions (94.53%), above the frozen
+  `96.13/96.90/94.46` floors. No synthetic coverage test or exclusion has
+  been added. The full repository gate is green through formatting, all Rust
+  and forced-backend tests, LSP and extension tests, both coverage gates,
+  reference integrity, docs, audits, and warning-denied Clippy. The final
+  global hygiene command reports only whitespace in the excluded user-owned
+  `personal/file_ops.au`; the complete Phase 6.1 diff and every remaining
+  hygiene rule pass independently. The isolated Phase 6.1 commit is now the
+  active stage.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the
