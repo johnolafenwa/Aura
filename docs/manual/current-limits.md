@@ -55,6 +55,18 @@ This page documents known current limits of the Aurora compiler and runtime.
   Conditional and `match` expressions cannot merge capturing closures from
   multiple branches because Phase 6.3 has no closure-union type; invoke the
   closure within each branch or use capture-free lambdas or named functions.
+- FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
+  package also reports every reachable FFI-enabled dependency under exact
+  `[ffi] dependencies`. Calls resolve already-loaded process-global symbols
+  and are synchronous on the current worker. The accepted ABI is limited to
+  fixed-width scalars, temporary String/byte pointer-length views,
+  same-length mutable byte scratch copy-in/out, and non-null opaque handles.
+  Empty views use `(NULL, 0)`. There is no library-loading/link-name syntax,
+  callback, variadic, raw-pointer arithmetic, returned view, nullable handle,
+  foreign aggregate layout, automatic handle destructor, or async offload.
+  Process-global lookup is currently supported on Unix-family hosts. A false C
+  signature or misbehaving native function remains outside Aurora's safety
+  guarantees and may terminate or corrupt the process.
 - Callable-powered Vec algorithms are eager. `map` and `filter` return owned
   vectors rather than iterators; `filter` requires clone-safe elements.
   `sort_by`, `map`, and `filter` accept only their exact bare/shared callback

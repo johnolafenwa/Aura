@@ -8,21 +8,22 @@ use super::{
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirClosureCapture, MirFunction,
-    MirLocalType, MirMatchArm, MirMethod, MirModule, MirParam, MirTraitImpl, Operand, Rvalue,
-    Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirClosureCapture, MirExternCall,
+    MirExternParam, MirFunction, MirLocalType, MirMatchArm, MirMethod, MirModule, MirParam,
+    MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
-    RangeValue, SetValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
-    WebSocketValue,
+    ChannelValue, EnumVariantValue, FfiHandleValue, FileValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue,
+    ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::c_void;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -61,6 +62,1071 @@ fn test_runtime() -> MirRuntime {
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
     )
+}
+
+fn lower_ffi_runtime_source(source: &str) -> MirModule {
+    let module = crate::parse_source(source).expect("FFI runtime source should parse");
+    let program = crate::check_module_with_builtin_imports(module)
+        .expect("FFI runtime source should type check");
+    crate::mir::lower(&program)
+}
+
+#[test]
+fn mir_runtime_ffi_calls_process_symbols_and_reports_missing_lookups() {
+    let getpid = lower_ffi_runtime_source(
+        r#"
+public extern "C" def getpid() -> int32
+
+def main() -> int32:
+    return getpid()
+"#,
+    );
+    let output =
+        super::run_trusted(&getpid).expect("trusted compiler-lowered FFI MIR should execute");
+    let Value::Int(process_id) = output.value else {
+        panic!("getpid should return int32");
+    };
+    assert!(process_id.as_i128().is_some_and(|value| value > 0));
+    assert_eq!(process_id.runtime_kind(), Some(IntegerKind::Int32));
+
+    let serialized_getpid = serde_json::to_vec(&getpid).expect("trusted FFI MIR should serialize");
+    let embedded = super::run_serialized_mir_trusted(
+        &serialized_getpid,
+        "/tmp/trusted-getpid.au",
+        "def main():\n    pass\n",
+    )
+    .expect("compiler-embedded FFI MIR should retain its trusted runtime route");
+    let Value::Int(embedded_process_id) = embedded.value else {
+        panic!("embedded getpid should return int32");
+    };
+    assert!(embedded_process_id.as_i128().is_some_and(|value| value > 0));
+    assert_eq!(embedded_process_id.runtime_kind(), Some(IntegerKind::Int32));
+
+    let missing = lower_ffi_runtime_source(
+        r#"
+public extern "C" def __aurora_missing_mir_ffi_symbol__() -> int32
+
+def main():
+    __aurora_missing_mir_ffi_symbol__()
+"#,
+    );
+    let error = super::run_trusted(&missing).expect_err("a missing FFI symbol must trap");
+    assert_eq!(error.code, "AU4005");
+    assert!(error
+        .message
+        .starts_with("FFI call to `__aurora_missing_mir_ffi_symbol__` failed: FFI symbol"));
+}
+
+#[test]
+fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
+    let forged = MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<forged>".to_string(),
+            source_path: Some("/tmp/forged.au".to_string()),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![MirLocalType {
+                name: "process_id".to_string(),
+                ty: Type::named("int32"),
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![Instruction::Assign {
+                    target: "process_id".to_string(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Extern(MirExternCall {
+                            symbol: "getpid".to_string(),
+                            abi: "C".to_string(),
+                            params: Vec::new(),
+                            return_type: Type::named("int32"),
+                        }),
+                        args: Vec::new(),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::Place("process_id".to_string())),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    let public_results = [
+        ("run_mir", crate::run_mir(&forged)),
+        (
+            "run_mir_with_stdout_sink",
+            crate::run_mir_with_stdout_sink(&forged, None),
+        ),
+        (
+            "run_mir_with_stdout_sink_and_program_args",
+            crate::run_mir_with_stdout_sink_and_program_args(&forged, None, Vec::new()),
+        ),
+        (
+            "run_mir_entry",
+            crate::run_mir_entry(&forged, Some("main"), None, Vec::new()),
+        ),
+    ];
+    let mut rejection_message = None;
+    for (api, result) in public_results {
+        let diagnostic =
+            result.expect_err("safe public MIR execution must reject caller-supplied FFI metadata");
+        assert_eq!(diagnostic.code, "AU4001", "{api}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("getpid"),
+            "{api}: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic.message.contains("manifest-rooted package")
+                && diagnostic.message.contains("allow_ffi = true")
+                && diagnostic.message.contains("path-based"),
+            "{api}: {}",
+            diagnostic.message
+        );
+        match &rejection_message {
+            Some(expected) => assert_eq!(&diagnostic.message, expected, "{api}"),
+            None => rejection_message = Some(diagnostic.message),
+        }
+    }
+
+    let serialized = serde_json::to_vec(&forged).expect("forged MIR should serialize");
+    let deserialized =
+        crate::run_serialized_mir(&serialized, "/tmp/forged.au", "def main():\n    pass\n")
+            .expect_err("safe serialized-MIR execution must reject forged FFI metadata");
+    assert_eq!(deserialized.code, "AU4001");
+    assert_eq!(Some(deserialized.message), rejection_message);
+}
+
+#[test]
+fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque_handles() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "minimum",
+        Type::named("int8"),
+        Value::Int(
+            IntegerValue::from_typed_signed(i8::MIN.into(), IntegerKind::Int8)
+                .expect("i8 minimum is representable"),
+        ),
+    );
+    env.define_typed(
+        "maximum",
+        Type::named("uint64"),
+        Value::Int(IntegerValue::from_u64(u64::MAX)),
+    );
+    env.define_typed(
+        "bytes",
+        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        super::bytes_runtime_value(&[0, 254]),
+    );
+    let source_pointer = 0x1234usize as *mut c_void;
+    env.define_typed(
+        "handle",
+        Type::named("Token"),
+        Value::FfiHandle(
+            FfiHandleValue::new("Token".to_string(), source_pointer)
+                .expect("test handle is non-null"),
+        ),
+    );
+
+    let call = MirExternCall {
+        symbol: "aurora_test_exchange".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "minimum".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("int8"),
+            },
+            MirExternParam {
+                name: "maximum".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("uint64"),
+            },
+            MirExternParam {
+                name: "bytes".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            },
+            MirExternParam {
+                name: "handle".to_string(),
+                passing: MirReceiverKind::Value,
+                ty: Type::named("Token"),
+            },
+        ],
+        return_type: Type::named("Token"),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Place("minimum".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("maximum".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("bytes".to_string()),
+            writeback_place: Some("bytes".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::MovePlace("handle".to_string()),
+            writeback_place: None,
+        },
+    ];
+    let returned_pointer = 0x5678usize as *mut c_void;
+    let result = runtime
+        .evaluate_extern_call_with(&call, &args, &mut env, |symbol, signature, arguments| {
+            assert_eq!(symbol, "aurora_test_exchange");
+            assert_eq!(
+                signature.parameters(),
+                &[
+                    crate::ffi::FfiType::I8,
+                    crate::ffi::FfiType::U64,
+                    crate::ffi::FfiType::BytesViewMut,
+                    crate::ffi::FfiType::OpaqueHandle,
+                ]
+            );
+            assert_eq!(signature.result(), crate::ffi::FfiType::OpaqueHandle);
+            assert!(matches!(arguments[0], crate::ffi::FfiValue::I8(i8::MIN)));
+            assert!(matches!(arguments[1], crate::ffi::FfiValue::U64(u64::MAX)));
+            assert!(matches!(
+                &arguments[2],
+                crate::ffi::FfiValue::Bytes(bytes) if bytes == &[0, 254]
+            ));
+            assert!(matches!(
+                &arguments[3],
+                crate::ffi::FfiValue::OpaqueHandle(handle)
+                    if handle.as_ptr() == source_pointer
+            ));
+            let crate::ffi::FfiValue::Bytes(bytes) = &mut arguments[2] else {
+                unreachable!("third argument is the mutable byte view");
+            };
+            bytes.copy_from_slice(&[1, 255]);
+            Ok(crate::ffi::FfiValue::OpaqueHandle(
+                crate::ffi::OpaqueHandle::new(returned_pointer)
+                    .expect("returned test handle is non-null"),
+            ))
+        })
+        .expect("the injected FFI call should succeed");
+
+    assert!(
+        env.read_place("handle").is_err(),
+        "own handles are consumed"
+    );
+    assert_eq!(
+        env.read_place("bytes").expect("bytes remain live").render(),
+        "[1, 255]"
+    );
+    let Value::FfiHandle(handle) = result else {
+        panic!("opaque results should use the dedicated runtime representation");
+    };
+    assert_eq!(handle.type_name(), "Token");
+    assert_eq!(handle.as_ptr(), returned_pointer);
+    assert_eq!(Value::FfiHandle(handle).render(), "<opaque Token>");
+}
+
+#[test]
+fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let call = MirExternCall {
+        symbol: "bad_bool".to_string(),
+        abi: "C".to_string(),
+        params: Vec::new(),
+        return_type: Type::named("bool"),
+    };
+    let error = runtime
+        .evaluate_extern_call_with(&call, &[], &mut env, |_, _, _| {
+            Err(crate::ffi::FfiError::NonCanonicalBoolReturn(2))
+        })
+        .expect_err("a noncanonical C bool must trap");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "FFI call to `bad_bool` failed: FFI bool return must be encoded as 0 or 1, but received 2"
+    );
+}
+
+#[test]
+fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let values = [
+        ("boolean", Type::named("bool"), Value::Bool(true)),
+        (
+            "i8_value",
+            Type::named("int8"),
+            Value::Int(
+                IntegerValue::from_typed_signed((-8).into(), IntegerKind::Int8)
+                    .expect("-8 is representable as int8"),
+            ),
+        ),
+        (
+            "i16_value",
+            Type::named("int16"),
+            Value::Int(
+                IntegerValue::from_typed_signed((-1_600).into(), IntegerKind::Int16)
+                    .expect("-1600 is representable as int16"),
+            ),
+        ),
+        (
+            "i32_value",
+            Type::named("int32"),
+            Value::Int(IntegerValue::from_i32(-32_000)),
+        ),
+        (
+            "int_value",
+            Type::named("int"),
+            Value::Int(IntegerValue::from_i64(-64_000)),
+        ),
+        (
+            "i64_value",
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_i64(i64::MIN)),
+        ),
+        (
+            "u8_value",
+            Type::named("uint8"),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(8, IntegerKind::Uint8)
+                    .expect("8 is representable as uint8"),
+            ),
+        ),
+        (
+            "u16_value",
+            Type::named("uint16"),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(1_600, IntegerKind::Uint16)
+                    .expect("1600 is representable as uint16"),
+            ),
+        ),
+        (
+            "u32_value",
+            Type::named("uint32"),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(32_000, IntegerKind::Uint32)
+                    .expect("32000 is representable as uint32"),
+            ),
+        ),
+        (
+            "u64_value",
+            Type::named("uint64"),
+            Value::Int(IntegerValue::from_u64(u64::MAX)),
+        ),
+        ("f32_value", Type::named("float32"), Value::Float(3.5)),
+        ("f64_value", Type::named("float64"), Value::Float(7.25)),
+        ("text", Type::named("String"), Value::String(String::new())),
+        (
+            "bytes",
+            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            super::bytes_runtime_value(&[]),
+        ),
+    ];
+    for (name, ty, value) in values {
+        env.define_typed(name, ty, value);
+    }
+
+    let parameter_specs = [
+        ("boolean", Type::named("bool")),
+        ("i8_value", Type::named("int8")),
+        ("i16_value", Type::named("int16")),
+        ("i32_value", Type::named("int32")),
+        ("int_value", Type::named("int")),
+        ("i64_value", Type::named("int64")),
+        ("u8_value", Type::named("uint8")),
+        ("u16_value", Type::named("uint16")),
+        ("u32_value", Type::named("uint32")),
+        ("u64_value", Type::named("uint64")),
+        ("f32_value", Type::named("float32")),
+        ("f64_value", Type::named("float64")),
+        ("text", Type::named("String")),
+        (
+            "bytes",
+            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        ),
+    ];
+    let call = MirExternCall {
+        symbol: "aurora_test_observe_all".to_string(),
+        abi: "C".to_string(),
+        params: parameter_specs
+            .iter()
+            .map(|(name, ty)| MirExternParam {
+                name: (*name).to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: ty.clone(),
+            })
+            .collect(),
+        return_type: Type::Unit,
+    };
+    let args = parameter_specs
+        .iter()
+        .map(|(name, _)| MirArg {
+            name: None,
+            value: Operand::Place((*name).to_string()),
+            writeback_place: None,
+        })
+        .collect::<Vec<_>>();
+
+    let result = runtime
+        .evaluate_extern_call_with(&call, &args, &mut env, |symbol, signature, arguments| {
+            use crate::ffi::{FfiType, FfiValue};
+
+            assert_eq!(symbol, "aurora_test_observe_all");
+            assert_eq!(
+                signature.parameters(),
+                &[
+                    FfiType::Bool,
+                    FfiType::I8,
+                    FfiType::I16,
+                    FfiType::I32,
+                    FfiType::I64,
+                    FfiType::I64,
+                    FfiType::U8,
+                    FfiType::U16,
+                    FfiType::U32,
+                    FfiType::U64,
+                    FfiType::F32,
+                    FfiType::F64,
+                    FfiType::StringView,
+                    FfiType::BytesView,
+                ]
+            );
+            assert_eq!(signature.result(), FfiType::Unit);
+            assert_eq!(
+                arguments,
+                &[
+                    FfiValue::Bool(true),
+                    FfiValue::I8(-8),
+                    FfiValue::I16(-1_600),
+                    FfiValue::I32(-32_000),
+                    FfiValue::I64(-64_000),
+                    FfiValue::I64(i64::MIN),
+                    FfiValue::U8(8),
+                    FfiValue::U16(1_600),
+                    FfiValue::U32(32_000),
+                    FfiValue::U64(u64::MAX),
+                    FfiValue::F32(3.5),
+                    FfiValue::F64(7.25),
+                    FfiValue::String(String::new()),
+                    FfiValue::Bytes(Vec::new()),
+                ]
+            );
+            Ok(FfiValue::Unit)
+        })
+        .expect("all FFI v0 scalar and shared-view shapes should marshal");
+    assert_eq!(result, Value::Unit);
+}
+
+#[test]
+fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
+    fn evaluate(
+        runtime: &mut MirRuntime,
+        ty: Type,
+        expected_ffi_type: crate::ffi::FfiType,
+        returned: crate::ffi::FfiValue,
+    ) -> Value {
+        let call = MirExternCall {
+            symbol: "aurora_test_scalar_result".to_string(),
+            abi: "C".to_string(),
+            params: Vec::new(),
+            return_type: ty,
+        };
+        runtime
+            .evaluate_extern_call_with(
+                &call,
+                &[],
+                &mut Env::default(),
+                move |symbol, signature, arguments| {
+                    assert_eq!(symbol, "aurora_test_scalar_result");
+                    assert!(arguments.is_empty());
+                    assert_eq!(signature.parameters(), &[]);
+                    assert_eq!(signature.result(), expected_ffi_type);
+                    Ok(returned)
+                },
+            )
+            .expect("matching FFI scalar result should unmarshal")
+    }
+
+    fn assert_integer(value: Value, expected: i128, kind: IntegerKind) {
+        let Value::Int(value) = value else {
+            panic!("expected integer result");
+        };
+        assert_eq!(value.as_i128(), Some(expected));
+        assert_eq!(value.runtime_kind(), Some(kind));
+    }
+
+    use crate::ffi::{FfiType, FfiValue};
+    let mut runtime = test_runtime();
+    assert_eq!(
+        evaluate(&mut runtime, Type::Unit, FfiType::Unit, FfiValue::Unit),
+        Value::Unit
+    );
+    assert_eq!(
+        evaluate(
+            &mut runtime,
+            Type::named("bool"),
+            FfiType::Bool,
+            FfiValue::Bool(true),
+        ),
+        Value::Bool(true)
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("int8"),
+            FfiType::I8,
+            FfiValue::I8(i8::MIN),
+        ),
+        i128::from(i8::MIN),
+        IntegerKind::Int8,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("int16"),
+            FfiType::I16,
+            FfiValue::I16(i16::MIN),
+        ),
+        i128::from(i16::MIN),
+        IntegerKind::Int16,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("int32"),
+            FfiType::I32,
+            FfiValue::I32(i32::MIN),
+        ),
+        i128::from(i32::MIN),
+        IntegerKind::Int32,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("int"),
+            FfiType::I64,
+            FfiValue::I64(i64::MIN),
+        ),
+        i128::from(i64::MIN),
+        IntegerKind::Int64,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("int64"),
+            FfiType::I64,
+            FfiValue::I64(i64::MAX),
+        ),
+        i128::from(i64::MAX),
+        IntegerKind::Int64,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("uint8"),
+            FfiType::U8,
+            FfiValue::U8(u8::MAX),
+        ),
+        i128::from(u8::MAX),
+        IntegerKind::Uint8,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("uint16"),
+            FfiType::U16,
+            FfiValue::U16(u16::MAX),
+        ),
+        i128::from(u16::MAX),
+        IntegerKind::Uint16,
+    );
+    assert_integer(
+        evaluate(
+            &mut runtime,
+            Type::named("uint32"),
+            FfiType::U32,
+            FfiValue::U32(u32::MAX),
+        ),
+        i128::from(u32::MAX),
+        IntegerKind::Uint32,
+    );
+    let Value::Int(u64_result) = evaluate(
+        &mut runtime,
+        Type::named("uint64"),
+        FfiType::U64,
+        FfiValue::U64(u64::MAX),
+    ) else {
+        panic!("expected uint64 result");
+    };
+    assert_eq!(u64_result.to_string(), u64::MAX.to_string());
+    assert_eq!(u64_result.runtime_kind(), Some(IntegerKind::Uint64));
+    assert_eq!(
+        evaluate(
+            &mut runtime,
+            Type::named("float32"),
+            FfiType::F32,
+            FfiValue::F32(3.5),
+        ),
+        Value::Float(3.5)
+    );
+    assert_eq!(
+        evaluate(
+            &mut runtime,
+            Type::named("float64"),
+            FfiType::F64,
+            FfiValue::F64(7.25),
+        ),
+        Value::Float(7.25)
+    );
+}
+
+#[test]
+fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() {
+    use crate::ffi::{FfiError, FfiType, FfiValue};
+
+    fn call() -> MirExternCall {
+        MirExternCall {
+            symbol: "aurora_test_writeback_order".to_string(),
+            abi: "C".to_string(),
+            params: vec![MirExternParam {
+                name: "bytes".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            }],
+            return_type: Type::named("int32"),
+        }
+    }
+
+    fn args(writeback_place: Option<&str>) -> Vec<MirArg> {
+        vec![MirArg {
+            name: None,
+            value: Operand::Place("bytes".to_string()),
+            writeback_place: writeback_place.map(str::to_string),
+        }]
+    }
+
+    fn env() -> Env {
+        let mut env = Env::default();
+        env.define_typed(
+            "bytes",
+            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            super::bytes_runtime_value(&[1, 2]),
+        );
+        env
+    }
+
+    let mut runtime = test_runtime();
+    let mut foreign_error_env = env();
+    let foreign_error = runtime
+        .evaluate_extern_call_with(
+            &call(),
+            &args(Some("bytes")),
+            &mut foreign_error_env,
+            |_, signature, arguments| {
+                assert_eq!(signature.parameters(), &[FfiType::BytesViewMut]);
+                let FfiValue::Bytes(bytes) = &mut arguments[0] else {
+                    panic!("mutable Vec[uint8] should marshal as bytes");
+                };
+                bytes.copy_from_slice(&[3, 4]);
+                Err(FfiError::NullOpaqueHandleReturn)
+            },
+        )
+        .expect_err("foreign boundary errors should trap");
+    assert_eq!(foreign_error.code, "AU4005");
+    assert_eq!(
+        foreign_error.message,
+        "FFI call to `aurora_test_writeback_order` failed: FFI function returned a null opaque handle"
+    );
+    assert_eq!(
+        foreign_error_env
+            .read_place("bytes")
+            .expect("bytes remain live")
+            .render(),
+        "[3, 4]"
+    );
+
+    let mut result_error_env = env();
+    let result_error = runtime
+        .evaluate_extern_call_with(
+            &call(),
+            &args(Some("bytes")),
+            &mut result_error_env,
+            |_, _, arguments| {
+                let FfiValue::Bytes(bytes) = &mut arguments[0] else {
+                    panic!("mutable Vec[uint8] should marshal as bytes");
+                };
+                bytes.copy_from_slice(&[5, 6]);
+                Ok(FfiValue::Bool(true))
+            },
+        )
+        .expect_err("a C result with the wrong runtime shape should trap");
+    assert_eq!(result_error.code, "AU4005");
+    assert_eq!(
+        result_error.message,
+        "FFI call to `aurora_test_writeback_order` failed: FFI result `bool` does not match source return type `int32`"
+    );
+    assert_eq!(
+        result_error_env
+            .read_place("bytes")
+            .expect("bytes remain live")
+            .render(),
+        "[5, 6]"
+    );
+
+    let mut missing_place_env = env();
+    let missing_place = runtime
+        .evaluate_extern_call_with(
+            &call(),
+            &args(None),
+            &mut missing_place_env,
+            |_, _, arguments| {
+                let FfiValue::Bytes(bytes) = &mut arguments[0] else {
+                    panic!("mutable Vec[uint8] should marshal as bytes");
+                };
+                bytes.copy_from_slice(&[7, 8]);
+                Ok(FfiValue::I32(0))
+            },
+        )
+        .expect_err("mutable FFI views require a source writeback place");
+    assert_eq!(missing_place.code, "AU4005");
+    assert_eq!(
+        missing_place.message,
+        "FFI call to `aurora_test_writeback_order` failed: mutable parameter `bytes` requires a writeback place"
+    );
+    assert_eq!(
+        missing_place_env
+            .read_place("bytes")
+            .expect("bytes remain live")
+            .render(),
+        "[1, 2]"
+    );
+}
+
+#[test]
+fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispatch() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "value",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_i32(1)),
+    );
+    let params = vec![MirExternParam {
+        name: "value".to_string(),
+        passing: MirReceiverKind::Borrow,
+        ty: Type::named("int32"),
+    }];
+
+    let unsupported_abi = runtime
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_bad_abi".to_string(),
+                abi: "stdcall".to_string(),
+                params: params.clone(),
+                return_type: Type::Unit,
+            },
+            &[MirArg {
+                name: None,
+                value: Operand::Place("value".to_string()),
+                writeback_place: None,
+            }],
+            &mut env,
+            |_, _, _| panic!("unsupported ABI must be rejected before dispatch"),
+        )
+        .expect_err("only the C ABI is executable");
+    assert_eq!(unsupported_abi.code, "AU4005");
+    assert_eq!(
+        unsupported_abi.message,
+        "FFI call to `aurora_test_bad_abi` failed: unsupported runtime ABI `stdcall`"
+    );
+
+    let unknown_argument = runtime
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_bad_binding".to_string(),
+                abi: "C".to_string(),
+                params,
+                return_type: Type::Unit,
+            },
+            &[MirArg {
+                name: Some("other".to_string()),
+                value: Operand::Place("value".to_string()),
+                writeback_place: None,
+            }],
+            &mut env,
+            |_, _, _| panic!("invalid argument binding must be rejected before dispatch"),
+        )
+        .expect_err("unknown named FFI arguments must be diagnosed");
+    assert_eq!(unknown_argument.code, "AU4005");
+    assert_eq!(
+        unknown_argument.message,
+        "FFI call to `aurora_test_bad_binding` failed: unknown MIR argument `other`"
+    );
+}
+
+#[test]
+fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
+    use crate::ffi::{FfiError, FfiSignature, FfiValue};
+
+    fn boundary_dispatch(
+        symbol: &str,
+        _: &FfiSignature,
+        arguments: &mut [FfiValue],
+    ) -> std::result::Result<FfiValue, FfiError> {
+        match symbol {
+            "aurora_test_mutable_shape_guard" => {
+                arguments[0] = FfiValue::Bool(true);
+                Ok(FfiValue::Unit)
+            }
+            "aurora_test_foreign_failure" => Err(FfiError::NullOpaqueHandleReturn),
+            "aurora_test_result_shape_guard" => Ok(FfiValue::Bool(true)),
+            _ => Ok(FfiValue::Unit),
+        }
+    }
+
+    fn shape_error(param_ty: Type, value: Value) -> Diagnostic {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        env.define_typed("value", param_ty.clone(), value);
+        runtime
+            .evaluate_extern_call_with(
+                &MirExternCall {
+                    symbol: "aurora_test_shape_guard".to_string(),
+                    abi: "C".to_string(),
+                    params: vec![MirExternParam {
+                        name: "value".to_string(),
+                        passing: MirReceiverKind::Borrow,
+                        ty: param_ty,
+                    }],
+                    return_type: Type::Unit,
+                },
+                &[MirArg {
+                    name: None,
+                    value: Operand::Place("value".to_string()),
+                    writeback_place: None,
+                }],
+                &mut env,
+                boundary_dispatch,
+            )
+            .expect_err("forged MIR runtime shapes must not cross the FFI boundary")
+    }
+
+    let malformed_shapes = [
+        (Type::Unit, Value::Bool(true)),
+        (Type::named("bool"), Value::Int(IntegerValue::from_i32(1))),
+        (Type::named("int8"), Value::Bool(true)),
+        (Type::named("uint8"), Value::Bool(true)),
+        (
+            Type::named("uint8"),
+            Value::Int(IntegerValue::from_signed(-1)),
+        ),
+        (Type::named("float32"), Value::Bool(true)),
+        (Type::named("float64"), Value::Bool(true)),
+        (Type::named("String"), Value::Bool(true)),
+        (Type::named("Token"), Value::Bool(true)),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Value::Bool(true),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Value::Vec(VecValue {
+                element_type: Type::named("uint8"),
+                elements: vec![Value::Bool(true)],
+            }),
+        ),
+    ];
+    for (ty, value) in malformed_shapes {
+        let rendered_type = ty.to_string();
+        let error = shape_error(ty, value);
+        assert_eq!(error.code, "AU4005", "{rendered_type}: {error:?}");
+        assert!(
+            error.message.contains("incompatible runtime shape"),
+            "{rendered_type}: {}",
+            error.message
+        );
+    }
+
+    let unsupported = shape_error(
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_i32(1))],
+        }),
+    );
+    assert_eq!(unsupported.code, "AU4005");
+    assert_eq!(
+        unsupported.message,
+        "unsupported FFI source type `Vec[int32]` reached MIR execution"
+    );
+
+    let bytes_type = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let mut env = Env::default();
+    env.define_typed(
+        "bytes",
+        bytes_type.clone(),
+        super::bytes_runtime_value(&[1]),
+    );
+    let mutated_shape = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_mutable_shape_guard".to_string(),
+                abi: "C".to_string(),
+                params: vec![MirExternParam {
+                    name: "bytes".to_string(),
+                    passing: MirReceiverKind::BorrowMut,
+                    ty: bytes_type,
+                }],
+                return_type: Type::Unit,
+            },
+            &[MirArg {
+                name: None,
+                value: Operand::Place("bytes".to_string()),
+                writeback_place: Some("bytes".to_string()),
+            }],
+            &mut env,
+            boundary_dispatch,
+        )
+        .expect_err("foreign dispatch must not replace a mutable byte view's runtime shape");
+    assert_eq!(mutated_shape.code, "AU4005");
+    assert_eq!(
+        mutated_shape.message,
+        "FFI call to `aurora_test_mutable_shape_guard` failed: mutable parameter `bytes` did not marshal as bytes"
+    );
+    assert_eq!(
+        env.read_place("bytes")
+            .expect("rejected writeback keeps the original place live")
+            .render(),
+        "[1]"
+    );
+
+    let binding_error = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_binding_guard".to_string(),
+                abi: "C".to_string(),
+                params: vec![MirExternParam {
+                    name: "expected".to_string(),
+                    passing: MirReceiverKind::Borrow,
+                    ty: Type::named("int32"),
+                }],
+                return_type: Type::Unit,
+            },
+            &[MirArg {
+                name: Some("other".to_string()),
+                value: Operand::Place("integer".to_string()),
+                writeback_place: None,
+            }],
+            &mut {
+                let mut env = Env::default();
+                env.define_typed(
+                    "integer",
+                    Type::named("int32"),
+                    Value::Int(IntegerValue::from_i32(1)),
+                );
+                env
+            },
+            boundary_dispatch,
+        )
+        .expect_err("unknown FFI argument names must fail before dispatch");
+    assert_eq!(binding_error.code, "AU4005");
+    assert!(binding_error
+        .message
+        .contains("unknown MIR argument `other`"));
+
+    let missing_writeback = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_missing_writeback".to_string(),
+                abi: "C".to_string(),
+                params: vec![MirExternParam {
+                    name: "bytes".to_string(),
+                    passing: MirReceiverKind::BorrowMut,
+                    ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                }],
+                return_type: Type::Unit,
+            },
+            &[MirArg {
+                name: None,
+                value: Operand::Place("bytes".to_string()),
+                writeback_place: None,
+            }],
+            &mut {
+                let mut env = Env::default();
+                env.define_typed(
+                    "bytes",
+                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    super::bytes_runtime_value(&[1]),
+                );
+                env
+            },
+            boundary_dispatch,
+        )
+        .expect_err("mutable FFI views require an explicit source writeback place");
+    assert_eq!(missing_writeback.code, "AU4005");
+    assert!(missing_writeback
+        .message
+        .contains("requires a writeback place"));
+
+    let foreign_failure = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_foreign_failure".to_string(),
+                abi: "C".to_string(),
+                params: Vec::new(),
+                return_type: Type::Unit,
+            },
+            &[],
+            &mut Env::default(),
+            boundary_dispatch,
+        )
+        .expect_err("foreign failures must be mapped to a source runtime diagnostic");
+    assert_eq!(foreign_failure.code, "AU4005");
+    assert!(foreign_failure
+        .message
+        .contains("FFI function returned a null opaque handle"));
+
+    let result_shape = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_result_shape_guard".to_string(),
+                abi: "C".to_string(),
+                params: Vec::new(),
+                return_type: Type::named("int32"),
+            },
+            &[],
+            &mut Env::default(),
+            boundary_dispatch,
+        )
+        .expect_err("foreign result shapes must match the declared source return type");
+    assert_eq!(result_shape.code, "AU4005");
+    assert!(result_shape
+        .message
+        .contains("FFI result `bool` does not match source return type `int32`"));
+
+    let unit = test_runtime()
+        .evaluate_extern_call_with(
+            &MirExternCall {
+                symbol: "aurora_test_success".to_string(),
+                abi: "C".to_string(),
+                params: Vec::new(),
+                return_type: Type::Unit,
+            },
+            &[],
+            &mut Env::default(),
+            boundary_dispatch,
+        )
+        .expect("a matching Unit result should cross the boundary");
+    assert_eq!(unit, Value::Unit);
 }
 
 #[test]

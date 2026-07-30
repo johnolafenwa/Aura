@@ -41,6 +41,7 @@ When the implemented language surface changes, update these in the same pass:
 24. [23-assertions.md](23-assertions.md)
 25. [24-multiline-expressions.md](24-multiline-expressions.md)
 26. [25-tuples.md](25-tuples.md)
+27. [26-ffi.md](26-ffi.md)
 
 ## Scope Today
 
@@ -65,6 +66,9 @@ The current tutorial set covers:
 - trait declarations, trait impls, and bounded generic calls
 - local file modules with `import`, `from ... import ...`, and `public` visibility at module boundaries
 - `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
+- package-authorized FFI v0 with bodyless `extern "C"` declarations,
+  fixed-width scalars, pointer-length String/byte views, opaque handles, and
+  exact root dependency reports
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - conditional expressions such as `value if condition else alternative`, with

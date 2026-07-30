@@ -15,6 +15,8 @@ pub struct Module {
 pub enum Item {
     Class(ClassDecl),
     Enum(EnumDecl),
+    ExternFunction(ExternFunctionDecl),
+    ExternOpaqueClass(ExternOpaqueClassDecl),
     Function(FunctionDecl),
     Trait(TraitDecl),
     Impl(ImplDecl),
@@ -25,6 +27,8 @@ impl Item {
         match self {
             Item::Class(class_decl) => &class_decl.name,
             Item::Enum(enum_decl) => &enum_decl.name,
+            Item::ExternFunction(function_decl) => &function_decl.name,
+            Item::ExternOpaqueClass(class_decl) => &class_decl.name,
             Item::Function(function_decl) => &function_decl.name,
             Item::Trait(trait_decl) => &trait_decl.name,
             Item::Impl(impl_decl) => &impl_decl.trait_name,
@@ -105,6 +109,32 @@ pub struct FunctionDecl {
     pub params: Vec<Param>,
     pub return_type: TypeRef,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// A bodyless foreign function declaration.
+///
+/// The parser currently admits only the v0 `"C"` ABI, but the ABI is kept in
+/// the AST so compiler analysis and serialized tooling output preserve the
+/// declaration's source contract.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExternFunctionDecl {
+    pub public: bool,
+    pub abi: String,
+    pub name: String,
+    pub name_span: Span,
+    pub params: Vec<Param>,
+    pub return_type: TypeRef,
+    pub span: Span,
+}
+
+/// A bodyless, layout-opaque foreign handle type declaration.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExternOpaqueClassDecl {
+    pub public: bool,
+    pub abi: String,
+    pub name: String,
+    pub name_span: Span,
     pub span: Span,
 }
 

@@ -4,6 +4,7 @@ mod builtin_modules;
 pub(crate) mod bytes_codec;
 pub mod call;
 pub mod diag;
+pub mod ffi;
 pub mod integer;
 pub(crate) mod json_codec;
 pub mod lexer;
@@ -169,7 +170,22 @@ pub fn parse_source(source: &str) -> Result<ast::Module> {
 
 pub fn check_source(source: &str) -> Result<Program> {
     let module = parse_source(source)?;
+    reject_source_only_ffi(&module)?;
     check_module_with_builtin_imports(module)
+}
+
+fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
+    if module
+        .items
+        .iter()
+        .any(|item| matches!(item, Item::ExternFunction(_) | Item::ExternOpaqueClass(_)))
+    {
+        return Err(Diagnostic::coded(
+            "AU2999",
+            "FFI declarations require a manifest-rooted Aurora package; add `Aurora.toml` with `[package] allow_ffi = true` and use a path-based compiler API",
+        ));
+    }
+    Ok(())
 }
 
 pub fn run_source(source: &str) -> Result<RunOutput> {
@@ -187,7 +203,7 @@ pub fn run_source_with_stdout_sink(source: &str, stdout_sink: StdoutSink) -> Res
 pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
     let mir = lower_to_mir(&program);
-    run_mir(&mir)
+    mir_runtime::run_trusted(&mir)
 }
 
 pub fn run_path_with_source_and_stdout_sink(
@@ -197,7 +213,7 @@ pub fn run_path_with_source_and_stdout_sink(
 ) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
     let mir = lower_to_mir(&program);
-    run_mir_with_stdout_sink(&mir, Some(stdout_sink))
+    mir_runtime::run_with_stdout_sink_trusted(&mir, Some(stdout_sink))
 }
 
 pub fn run_path_with_source_and_stdout_sink_and_program_args(
@@ -208,7 +224,11 @@ pub fn run_path_with_source_and_stdout_sink_and_program_args(
 ) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
     let mir = lower_to_mir(&program);
-    run_mir_with_stdout_sink_and_program_args(&mir, Some(stdout_sink), program_args)
+    mir_runtime::run_with_stdout_sink_and_program_args_trusted(
+        &mir,
+        Some(stdout_sink),
+        program_args,
+    )
 }
 
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
@@ -305,13 +325,13 @@ fn check_path_with_source_inner(
 pub fn run_path(path: &Path) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
-    run_mir(&mir)
+    mir_runtime::run_trusted(&mir)
 }
 
 pub fn run_path_with_stdout_sink(path: &Path, stdout_sink: StdoutSink) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
-    run_mir_with_stdout_sink(&mir, Some(stdout_sink))
+    mir_runtime::run_with_stdout_sink_trusted(&mir, Some(stdout_sink))
 }
 
 pub fn run_path_with_stdout_sink_and_program_args(
@@ -321,7 +341,32 @@ pub fn run_path_with_stdout_sink_and_program_args(
 ) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
-    run_mir_with_stdout_sink_and_program_args(&mir, Some(stdout_sink), program_args)
+    mir_runtime::run_with_stdout_sink_and_program_args_trusted(
+        &mir,
+        Some(stdout_sink),
+        program_args,
+    )
+}
+
+/// Runs one parameterless top-level entry from a manifest-checked path.
+///
+/// Unlike the arbitrary-MIR execution APIs, this path-based API may execute
+/// FFI because package loading has already enforced the root opt-in and
+/// dependency-report contract before MIR is lowered.
+pub fn run_path_entry_with_stdout_sink_and_program_args(
+    path: &Path,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    let program = check_path(path)?;
+    let mir = lower_to_mir(&program);
+    mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
+        &mir,
+        entry,
+        stdout_sink,
+        program_args,
+    )
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
@@ -406,6 +451,24 @@ impl ModuleLoader {
         let display_path = path.display().to_string();
         let module = parse_source(&source)
             .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
+        if module
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::ExternFunction(_) | Item::ExternOpaqueClass(_)))
+        {
+            match &self.package_graph {
+                Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
+                None => {
+                    return Err(Diagnostic::coded(
+                        "AU2999",
+                        format!(
+                            "FFI declarations in `{}` require an Aurora package manifest; add `Aurora.toml` with `[package] allow_ffi = true`",
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+        }
         let module_name = self.module_name_for_path(&path);
         let imported_bindings = self.resolve_imports(&module, &path)?;
         let module_registry = self.build_module_registry();
@@ -806,6 +869,7 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
             if program.classes.contains_key(name)
                 || program.enums.contains_key(name)
                 || program.traits.contains_key(name)
+                || program.opaque_handles.contains_key(name)
             {
                 return sema::Type::Named(
                     format!("{}.{}", program.module_name, name),
@@ -1047,6 +1111,26 @@ fn qualify_function_info_for_export(
     qualified
 }
 
+fn qualify_extern_function_info_for_export(
+    program: &Program,
+    info: &sema::ExternFunctionInfo,
+) -> sema::ExternFunctionInfo {
+    let mut qualified = info.clone();
+    for param in &mut qualified.decl.params {
+        param.ty = qualify_export_type_ref(program, &param.ty);
+    }
+    qualified.decl.return_type = qualify_export_type_ref(program, &qualified.decl.return_type);
+    qualified.signature.params = qualified
+        .signature
+        .params
+        .iter()
+        .map(|ty| qualify_export_type(program, ty))
+        .collect();
+    qualified.signature.return_type =
+        qualify_export_type(program, &qualified.signature.return_type);
+    qualified
+}
+
 fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> sema::ClassInfo {
     let mut qualified = info.clone();
     qualified.decl = qualify_class_decl_for_export(program, &qualified.decl);
@@ -1127,6 +1211,20 @@ fn qualify_trait_impl_info_for_export(
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
     for item in &program.module.items {
         match item {
+            Item::ExternFunction(decl) if decl.name == name && decl.public => {
+                return program
+                    .extern_functions
+                    .get(name)
+                    .map(|info| qualify_extern_function_info_for_export(program, info))
+                    .map(ImportedBinding::ExternFunction);
+            }
+            Item::ExternOpaqueClass(decl) if decl.name == name && decl.public => {
+                return program
+                    .opaque_handles
+                    .get(name)
+                    .cloned()
+                    .map(ImportedBinding::OpaqueHandle);
+            }
             Item::Function(decl) if decl.name == name && decl.public => {
                 return program
                     .functions
@@ -1172,6 +1270,8 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         source_path: program.source_path.clone(),
         modules: BTreeMap::new(),
         functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
@@ -1190,6 +1290,17 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                 )
             })
             .collect(),
+        all_extern_functions: program
+            .extern_functions
+            .iter()
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_extern_function_info_for_export(program, info),
+                )
+            })
+            .collect(),
+        all_opaque_handles: program.opaque_handles.clone(),
         all_classes: program
             .classes
             .iter()
@@ -1240,6 +1351,21 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
 
     for item in &program.module.items {
         match item {
+            Item::ExternFunction(decl) if decl.public => {
+                if let Some(info) = program.extern_functions.get(&decl.name) {
+                    namespace.extern_functions.insert(
+                        decl.name.clone(),
+                        qualify_extern_function_info_for_export(program, info),
+                    );
+                }
+            }
+            Item::ExternOpaqueClass(decl) if decl.public => {
+                if let Some(info) = program.opaque_handles.get(&decl.name) {
+                    namespace
+                        .opaque_handles
+                        .insert(decl.name.clone(), info.clone());
+                }
+            }
             Item::Function(decl) if decl.public => {
                 if let Some(info) = program.functions.get(&decl.name) {
                     namespace.functions.insert(
@@ -1296,11 +1422,15 @@ fn insert_namespace_import(
             source_path: None,
             modules: BTreeMap::new(),
             functions: BTreeMap::new(),
+            extern_functions: BTreeMap::new(),
+            opaque_handles: BTreeMap::new(),
             classes: BTreeMap::new(),
             enums: BTreeMap::new(),
             traits: BTreeMap::new(),
             trait_impls: Vec::new(),
             all_functions: BTreeMap::new(),
+            all_extern_functions: BTreeMap::new(),
+            all_opaque_handles: BTreeMap::new(),
             all_classes: BTreeMap::new(),
             all_enums: BTreeMap::new(),
             all_traits: BTreeMap::new(),
@@ -1333,11 +1463,15 @@ fn insert_namespace_import(
                 source_path: None,
                 modules: BTreeMap::new(),
                 functions: BTreeMap::new(),
+                extern_functions: BTreeMap::new(),
+                opaque_handles: BTreeMap::new(),
                 classes: BTreeMap::new(),
                 enums: BTreeMap::new(),
                 traits: BTreeMap::new(),
                 trait_impls: Vec::new(),
                 all_functions: BTreeMap::new(),
+                all_extern_functions: BTreeMap::new(),
+                all_opaque_handles: BTreeMap::new(),
                 all_classes: BTreeMap::new(),
                 all_enums: BTreeMap::new(),
                 all_traits: BTreeMap::new(),

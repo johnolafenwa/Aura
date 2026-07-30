@@ -55,6 +55,492 @@ fn write_package(temp: &TempDir, dir: &str, name: &str, dependencies: &str) -> P
     temp.path.join(dir)
 }
 
+fn canonical_manifest_path(temp: &TempDir, package_dir: &str) -> PathBuf {
+    fs::canonicalize(temp.path.join(package_dir).join(MANIFEST_NAME))
+        .expect("fixture manifest should canonicalize")
+}
+
+#[test]
+fn ffi_manifest_opt_in_defaults_off_and_allows_direct_root_use_when_enabled() {
+    let temp = TempDir::new("aurora-packages-ffi-root-opt-in");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("legacy manifests should remain valid")
+        .expect("package graph should exist");
+    let denied = graph
+        .ensure_ffi_allowed_for_path(&main_path)
+        .expect_err("FFI must require an explicit package opt-in");
+    assert_eq!(denied.code, "AU2999");
+    assert_eq!(
+        denied.message,
+        format!(
+            "package `app` uses FFI but its manifest `{}` does not opt in; add `allow_ffi = true` to `[package]`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("an opted-in root package should resolve")
+        .expect("package graph should exist");
+    graph
+        .ensure_ffi_allowed_for_path(&main_path)
+        .expect("the opted-in root package should be allowed to use FFI");
+}
+
+#[test]
+fn extern_declarations_enforce_manifest_authorization_during_module_loading() {
+    let temp = TempDir::new("aurora-packages-ffi-module-authorization");
+    let standalone = temp.write(
+        "standalone.au",
+        "public extern \"C\" opaque class Handle\npublic extern \"C\" def acquire() -> Handle\n\ndef main():\n    pass\n",
+    );
+    let standalone_error =
+        crate::check_path(&standalone).expect_err("standalone files must not declare FFI");
+    assert_eq!(standalone_error.code, "AU2999");
+    assert_eq!(
+        standalone_error.message,
+        format!(
+            "FFI declarations in `{}` require an Aurora package manifest; add `Aurora.toml` with `[package] allow_ffi = true`",
+            fs::canonicalize(&standalone)
+                .expect("standalone fixture should canonicalize")
+                .display()
+        )
+    );
+
+    let package_main = temp.write(
+        "app/src/main.au",
+        "public extern \"C\" opaque class Handle\npublic extern \"C\" def acquire() -> Handle\n\ndef main():\n    pass\n",
+    );
+    temp.write(
+        "app/Aurora.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+    let package_error =
+        crate::check_path(&package_main).expect_err("a package must opt in before declaring FFI");
+    assert_eq!(package_error.code, "AU2999");
+    assert_eq!(
+        package_error.message,
+        format!(
+            "package `app` uses FFI but its manifest `{}` does not opt in; add `allow_ffi = true` to `[package]`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+    crate::check_path(&package_main).expect("an opted-in package should be allowed to declare FFI");
+}
+
+#[test]
+fn ffi_authorization_rejects_paths_outside_the_discovered_package_graph() {
+    let temp = TempDir::new("aurora-packages-ffi-unknown-source");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+    let outside_path = temp.write("outside.au", "public extern \"C\" def getpid() -> int32\n");
+
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("the opted-in package should resolve")
+        .expect("package graph should exist");
+    let diagnostic = graph
+        .ensure_ffi_allowed_for_path(&outside_path)
+        .expect_err("an opt-in cannot authorize source outside its package graph");
+    assert_eq!(diagnostic.code, "AU2999");
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "could not determine the Aurora package for FFI declaration in `{}`",
+            fs::canonicalize(&outside_path)
+                .expect("outside fixture should canonicalize")
+                .display()
+        )
+    );
+}
+
+#[test]
+fn ffi_dependency_report_accepts_listed_direct_and_transitive_dependencies() {
+    let temp = TempDir::new("aurora-packages-ffi-dependency-report");
+    let main_path = temp.write(
+        "app/src/main.au",
+        "import util.bridge\n\ndef main():\n    pass\n",
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+util = { path = "../util" }
+
+[ffi]
+dependencies = ["native"]
+"#,
+    );
+    temp.write(
+        "util/src/bridge.au",
+        "import native.sys\n\npublic def ready() -> bool:\n    return true\n",
+    );
+    temp.write(
+        "util/Aurora.toml",
+        r#"[package]
+name = "util"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+native = { path = "../native" }
+"#,
+    );
+    let native_path = temp.write(
+        "native/src/sys.au",
+        "public extern \"C\" def getpid() -> int32\n",
+    );
+    temp.write(
+        "native/Aurora.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("a complete transitive FFI report should resolve")
+        .expect("package graph should exist");
+    graph
+        .ensure_ffi_allowed_for_path(&native_path)
+        .expect("the reported, opted-in transitive dependency should use FFI");
+    crate::check_path(&main_path)
+        .expect("module loading should authorize the reported transitive FFI declaration");
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+native = { path = "../native" }
+
+[ffi]
+dependencies = ["native"]
+"#,
+    );
+    PackageGraph::discover_for_entry(&main_path)
+        .expect("a complete direct FFI report should resolve")
+        .expect("package graph should exist");
+}
+
+#[test]
+fn ffi_dependency_report_names_the_missing_transitive_dependency_path() {
+    let temp = TempDir::new("aurora-packages-ffi-missing-report");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+util = { path = "../util" }
+"#,
+    );
+    temp.write("util/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "util/Aurora.toml",
+        r#"[package]
+name = "util"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+native = { path = "../native" }
+"#,
+    );
+    temp.write("native/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "native/Aurora.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+
+    let error = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("an unreported FFI dependency must be rejected");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        format!(
+            "dependency package `native` enables FFI but is missing from root package `app`'s `[ffi] dependencies` report; add `\"native\"` to `[ffi] dependencies` in `{}` (dependency path: app -> util -> native)",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+}
+
+#[test]
+fn ffi_dependency_report_requires_the_root_package_opt_in_too() {
+    let temp = TempDir::new("aurora-packages-ffi-root-dependency-opt-in");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+native = { path = "../native" }
+
+[ffi]
+dependencies = ["native"]
+"#,
+    );
+    temp.write("native/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "native/Aurora.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+
+    let error = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("a root package must opt in to dependency FFI");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        format!(
+            "root package `app` includes FFI-enabled dependency `native` but does not opt in; add `allow_ffi = true` to `[package]` in `{}` and keep `\"native\"` listed in `[ffi] dependencies` (dependency path: app -> native)",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+}
+
+#[test]
+fn ffi_dependency_report_teaches_unopted_root_to_add_the_missing_report_entry() {
+    let temp = TempDir::new("aurora-packages-ffi-root-missing-report");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+native = { path = "../native" }
+"#,
+    );
+    temp.write("native/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "native/Aurora.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+
+    let error = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("root opt-in and dependency report are both required");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        format!(
+            "root package `app` includes FFI-enabled dependency `native` but does not opt in; add `allow_ffi = true` to `[package]` in `{}` and also add `\"native\"` to `[ffi] dependencies` (dependency path: app -> native)",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+}
+
+#[test]
+fn ffi_dependency_missing_own_opt_in_names_its_dependency_path() {
+    let temp = TempDir::new("aurora-packages-ffi-dependency-own-opt-in");
+    let main_path = temp.write(
+        "app/src/main.au",
+        "import native.sys\n\ndef main():\n    pass\n",
+    );
+    let native_path = temp.write(
+        "native/src/sys.au",
+        "public extern \"C\" def getpid() -> int32\n",
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+native = { path = "../native" }
+"#,
+    );
+    temp.write(
+        "native/Aurora.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("a dependency without FFI should not need a report entry")
+        .expect("package graph should exist");
+    let error = graph
+        .ensure_ffi_allowed_for_path(&native_path)
+        .expect_err("a dependency that declares FFI must opt in itself");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        format!(
+            "dependency package `native` uses FFI but its manifest `{}` does not opt in; add `allow_ffi = true` to `[package]` (dependency path: app -> native)",
+            canonical_manifest_path(&temp, "native").display()
+        )
+    );
+    let module_error = crate::check_path(&main_path)
+        .expect_err("module loading must enforce the dependency's own FFI opt-in");
+    assert_eq!(module_error.code, error.code);
+    assert_eq!(module_error.message, error.message);
+}
+
+#[test]
+fn ffi_dependency_report_rejects_unknown_and_non_ffi_entries() {
+    let temp = TempDir::new("aurora-packages-ffi-stale-report");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write("util/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "util/Aurora.toml",
+        "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+util = { path = "../util" }
+
+[ffi]
+dependencies = ["missing"]
+"#,
+    );
+    let unknown = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("unknown report entries must be rejected");
+    assert_eq!(unknown.code, "AU2999");
+    assert_eq!(
+        unknown.message,
+        format!(
+            "root package `app` lists `missing` in `[ffi] dependencies`, but no such dependency is reachable from `app`; remove the stale entry or add the dependency in `{}`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+util = { path = "../util" }
+
+[ffi]
+dependencies = ["util"]
+"#,
+    );
+    let non_ffi = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("non-FFI report entries must be rejected");
+    assert_eq!(non_ffi.code, "AU2999");
+    assert_eq!(
+        non_ffi.message,
+        format!(
+            "root package `app` lists `util` in `[ffi] dependencies`, but dependency `util` does not enable FFI; remove the stale entry or add `allow_ffi = true` to `[package]` in `{}` (dependency path: app -> util)",
+            canonical_manifest_path(&temp, "util").display()
+        )
+    );
+}
+
+#[test]
+fn ffi_dependency_report_rejects_duplicate_invalid_and_self_entries() {
+    let temp = TempDir::new("aurora-packages-ffi-report-entry-validation");
+    let main_path = temp.write("app/src/main.au", "def main():\n    pass\n");
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+dependencies = ["native", "native"]
+"#,
+    );
+    let duplicate = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("duplicate FFI report entries must be rejected");
+    assert_eq!(
+        duplicate.message,
+        format!(
+            "manifest `{}` lists dependency `native` more than once in `[ffi] dependencies`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+dependencies = ["not-a-package"]
+"#,
+    );
+    let invalid = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("invalid FFI report package names must be rejected");
+    assert_eq!(
+        invalid.message,
+        format!(
+            "manifest `{}` has invalid FFI dependency report entry `not-a-package`; entries in `[ffi] dependencies` must be package names matching `[A-Za-z_][A-Za-z0-9_]*`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+dependencies = ["app"]
+"#,
+    );
+    let self_entry = PackageGraph::discover_for_entry(&main_path)
+        .expect_err("the root package must not report itself as a dependency");
+    assert_eq!(
+        self_entry.message,
+        format!(
+            "root package `app` lists itself in `[ffi] dependencies`; remove the stale entry from `{}` because the root package's own FFI use is authorized by `[package] allow_ffi = true`",
+            canonical_manifest_path(&temp, "app").display()
+        )
+    );
+}
+
 struct EnvVarGuard {
     name: &'static str,
     original: Option<std::ffi::OsString>,
@@ -540,11 +1026,13 @@ fn package_resolver_reports_graph_limit_and_workspace_lookup_edges() {
             PackageSource {
                 name,
                 version: "0.1.0".to_string(),
+                allow_ffi: false,
                 manifest_dir: package_dir,
                 source_root: source_root.clone(),
                 canonical_source_root: source_root,
                 external_prefix: None,
                 dependencies: BTreeMap::new(),
+                ffi_dependencies: BTreeSet::new(),
                 origin: PackageOrigin::Path,
             },
         );

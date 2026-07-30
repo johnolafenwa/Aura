@@ -12,7 +12,7 @@ use super::{
     recover_checked_program_after_member_errors, recover_checked_program_after_member_errors_with,
     recover_checked_program_after_parse_error_with, recover_checked_program_after_position,
     replace_dangling_member_stmt_with_recovery_stmt, sanitize_member_completion_source,
-    stmt_end_line, stmt_start_line, AnalysisBuilder, TypeExt,
+    stmt_end_line, stmt_start_line, symbols_from_module, AnalysisBuilder, TypeExt,
 };
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item,
@@ -51,11 +51,15 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
             closures: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
+            extern_functions: Default::default(),
+            opaque_handles: Default::default(),
             classes: Default::default(),
             enums: remote.enums.clone(),
             traits: Default::default(),
             trait_impls: Vec::new(),
             all_functions: Default::default(),
+            all_extern_functions: Default::default(),
+            all_opaque_handles: Default::default(),
             all_classes: Default::default(),
             all_enums: remote.enums,
             all_traits: Default::default(),
@@ -675,6 +679,233 @@ fn machine_readable_analysis_covers_symbols_and_occurrences() {
         .occurrences
         .iter()
         .any(|occurrence| occurrence.hover.contains("sqrt() -> float64")));
+}
+
+#[test]
+fn p64_extern_items_are_preserved_in_machine_readable_symbols() {
+    let module = crate::parser::parse(concat!(
+        "public extern \"C\" opaque class ProcessHandle\n",
+        "public extern \"C\" def getpid() -> int32\n",
+    ))
+    .expect("extern declarations should parse");
+    let symbols = symbols_from_module(&module);
+
+    assert!(symbols.iter().any(|symbol| {
+        symbol.kind == "class"
+            && symbol.name == "ProcessHandle"
+            && symbol.detail == "extern \"C\" opaque"
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol.kind == "function"
+            && symbol.name == "getpid"
+            && symbol.detail == "extern \"C\" -> int32"
+    }));
+
+    let serialized = serde_json::to_value(&symbols).expect("analysis symbols should serialize");
+    assert!(serialized.to_string().contains("ProcessHandle"));
+    assert!(serialized.to_string().contains("getpid"));
+}
+
+#[test]
+fn p64_path_analysis_exposes_local_extern_completions_hovers_and_definitions() {
+    let temp_dir = TempDir::new("aurora-analysis-local-ffi");
+    let main_path = temp_dir.path().join("src/main.au");
+    fs::create_dir_all(main_path.parent().expect("main path should have a parent"))
+        .expect("failed to create package source dir");
+    fs::write(
+        temp_dir.path().join("Aurora.toml"),
+        concat!(
+            "[package]\n",
+            "name = \"ffi_analysis\"\n",
+            "version = \"0.1.0\"\n",
+            "edition = \"2026\"\n",
+            "allow_ffi = true\n",
+        ),
+    )
+    .expect("failed to write package manifest");
+    let source = concat!(
+        "public extern \"C\" opaque class Handle\n",
+        "public extern \"C\" def acquire() -> Handle\n",
+        "public extern \"C\" def release(handle: own Handle) -> int32\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    handle = acquire()\n",
+        "    return release(handle)\n",
+    );
+    fs::write(&main_path, source).expect("failed to write FFI analysis source");
+
+    let completions = complete_path_source(&main_path, source, 3, 0, None)
+        .expect("an opted-in FFI package should provide completions");
+    assert!(completions.iter().any(|completion| {
+        completion.name == "Handle"
+            && completion.kind == "class"
+            && completion.detail == "extern \"C\" opaque class"
+    }));
+    assert!(completions.iter().any(|completion| {
+        completion.name == "acquire"
+            && completion.kind == "function"
+            && completion.detail == "extern \"C\" acquire() -> Handle"
+    }));
+    assert!(completions.iter().any(|completion| {
+        completion.name == "release"
+            && completion.kind == "function"
+            && completion.detail == "extern \"C\" release(handle: own Handle) -> int32"
+    }));
+
+    let program = crate::check_path(&main_path).expect("the local FFI source should type check");
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let handle = builder
+        .resolve_name("Handle", &BTreeMap::new())
+        .expect("the local opaque handle should resolve");
+    assert_eq!(
+        handle.hover,
+        "```aurora\nextern \"C\" opaque class Handle\n```"
+    );
+    let handle_definition = handle
+        .definition
+        .expect("the local opaque handle should have a definition");
+    assert_eq!(handle_definition.line, 0);
+    assert_eq!(handle_definition.start_character, 31);
+    assert_eq!(handle_definition.end_character, 37);
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    for (name, hover, definition_line) in [
+        ("acquire", "extern \"C\" function acquire() -> Handle", 1),
+        (
+            "release",
+            "extern \"C\" function release(handle: own Handle) -> int32",
+            2,
+        ),
+    ] {
+        let occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.hover.contains(hover))
+            .unwrap_or_else(|| panic!("missing `{name}` FFI occurrence"));
+        let definition = occurrence
+            .definition
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing `{name}` FFI definition"));
+        assert_eq!(definition.line, definition_line);
+        assert_eq!(
+            definition.file_path.as_deref(),
+            Some(
+                fs::canonicalize(&main_path)
+                    .expect("main path should canonicalize")
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
+        );
+    }
+}
+
+#[test]
+fn p64_path_analysis_exposes_imported_extern_members_and_handle_types() {
+    let temp_dir = TempDir::new("aurora-analysis-imported-ffi");
+    let source_dir = temp_dir.path().join("src");
+    fs::create_dir_all(&source_dir).expect("failed to create package source dir");
+    fs::write(
+        temp_dir.path().join("Aurora.toml"),
+        concat!(
+            "[package]\n",
+            "name = \"ffi_analysis\"\n",
+            "version = \"0.1.0\"\n",
+            "edition = \"2026\"\n",
+            "allow_ffi = true\n",
+        ),
+    )
+    .expect("failed to write package manifest");
+    let native_path = source_dir.join("native.au");
+    fs::write(
+        &native_path,
+        concat!(
+            "public extern \"C\" opaque class Handle\n",
+            "public extern \"C\" def acquire() -> Handle\n",
+            "public extern \"C\" def release(handle: own Handle) -> int32\n",
+        ),
+    )
+    .expect("failed to write imported FFI module");
+    let main_path = source_dir.join("main.au");
+    let source = concat!(
+        "import native\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    handle = native.acquire()\n",
+        "    return native.release(handle)\n",
+    );
+    fs::write(&main_path, source).expect("failed to write importing module");
+
+    let completion_source = concat!(
+        "import native\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    native.\n",
+        "    return 0\n",
+    );
+    let completions = complete_path_source(&main_path, completion_source, 3, 11, Some('.'))
+        .expect("an imported FFI module should provide member completions");
+    assert!(completions.iter().any(|completion| {
+        completion.name == "Handle"
+            && completion.kind == "class"
+            && completion.detail == "extern \"C\" opaque class"
+    }));
+    assert!(completions.iter().any(|completion| {
+        completion.name == "acquire"
+            && completion.kind == "function"
+            && completion.detail == "extern \"C\" acquire() -> Handle"
+    }));
+    assert!(completions.iter().any(|completion| {
+        completion.name == "release"
+            && completion.kind == "function"
+            && completion.detail == "extern \"C\" release(handle: own Handle) -> int32"
+    }));
+
+    let program = crate::check_path(&main_path).expect("the importing source should type check");
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let handle = builder
+        .resolve_member_type(&Type::Module("native".to_string()), "Handle")
+        .expect("the imported opaque handle should resolve as a module member");
+    assert_eq!(
+        handle.hover,
+        "```aurora\nextern \"C\" opaque class Handle\n```"
+    );
+    assert_eq!(handle.ty, Some(Type::named("native.Handle")));
+    let handle_definition = handle
+        .definition
+        .expect("the imported opaque handle should have a definition");
+    assert_eq!(handle_definition.line, 0);
+    assert_eq!(handle_definition.start_character, 31);
+    assert_eq!(handle_definition.end_character, 37);
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    let canonical_native_path = fs::canonicalize(&native_path)
+        .expect("native module should canonicalize")
+        .display()
+        .to_string();
+    for hover in [
+        "extern \"C\" function acquire() -> Handle",
+        "extern \"C\" function release(handle: own Handle) -> int32",
+    ] {
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains(hover)
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(canonical_native_path.as_str())
+        }));
+    }
 }
 
 #[test]
@@ -1894,11 +2125,15 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         closures: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: remote_program.classes.clone(),
         enums: remote_program.enums.clone(),
         traits: remote_program.traits.clone(),
         trait_impls: remote_program.trait_impls.clone(),
         all_functions: remote_program.functions.clone(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: remote_program.classes.clone(),
         all_enums: remote_program.enums.clone(),
         all_traits: remote_program.traits.clone(),
@@ -1913,11 +2148,15 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             closures: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
+            extern_functions: Default::default(),
+            opaque_handles: Default::default(),
             classes: Default::default(),
             enums: Default::default(),
             traits: Default::default(),
             trait_impls: Vec::new(),
             all_functions: Default::default(),
+            all_extern_functions: Default::default(),
+            all_opaque_handles: Default::default(),
             all_classes: Default::default(),
             all_enums: Default::default(),
             all_traits: Default::default(),
@@ -1936,11 +2175,15 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                 tools_namespace.clone(),
             )]),
             functions: Default::default(),
+            extern_functions: Default::default(),
+            opaque_handles: Default::default(),
             classes: Default::default(),
             enums: Default::default(),
             traits: Default::default(),
             trait_impls: Vec::new(),
             all_functions: Default::default(),
+            all_extern_functions: Default::default(),
+            all_opaque_handles: Default::default(),
             all_classes: Default::default(),
             all_enums: Default::default(),
             all_traits: Default::default(),
@@ -2874,11 +3117,15 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
                     closures: Default::default(),
                     modules: Default::default(),
                     functions: Default::default(),
+                    extern_functions: Default::default(),
+                    opaque_handles: Default::default(),
                     classes: Default::default(),
                     enums: Default::default(),
                     traits: Default::default(),
                     trait_impls: Vec::new(),
                     all_functions: Default::default(),
+                    all_extern_functions: Default::default(),
+                    all_opaque_handles: Default::default(),
                     all_classes: Default::default(),
                     all_enums: Default::default(),
                     all_traits: Default::default(),
@@ -2886,11 +3133,15 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
                 },
             )]),
             functions: Default::default(),
+            extern_functions: Default::default(),
+            opaque_handles: Default::default(),
             classes: Default::default(),
             enums: Default::default(),
             traits: Default::default(),
             trait_impls: Vec::new(),
             all_functions: Default::default(),
+            all_extern_functions: Default::default(),
+            all_opaque_handles: Default::default(),
             all_classes: Default::default(),
             all_enums: Default::default(),
             all_traits: Default::default(),
@@ -3080,11 +3331,15 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         closures: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: remote_program.classes.clone(),
         enums: remote_program.enums.clone(),
         traits: remote_program.traits.clone(),
         trait_impls: remote_program.trait_impls.clone(),
         all_functions: remote_program.functions.clone(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: remote_program.classes.clone(),
         all_enums: remote_program.enums.clone(),
         all_traits: remote_program.traits.clone(),
@@ -3102,11 +3357,15 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
                 tools_namespace.clone(),
             )]),
             functions: Default::default(),
+            extern_functions: Default::default(),
+            opaque_handles: Default::default(),
             classes: Default::default(),
             enums: Default::default(),
             traits: Default::default(),
             trait_impls: Vec::new(),
             all_functions: Default::default(),
+            all_extern_functions: Default::default(),
+            all_opaque_handles: Default::default(),
             all_classes: Default::default(),
             all_enums: Default::default(),
             all_traits: Default::default(),

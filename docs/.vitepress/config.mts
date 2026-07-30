@@ -41,7 +41,8 @@ export default defineConfig({
             { text: 'Modules And Packages', link: '/learn/modules-and-packages' },
             { text: 'Concurrency', link: '/learn/concurrency' },
             { text: 'Files, Processes, Networking', link: '/learn/io-process-networking' },
-            { text: 'Native Builds', link: '/learn/native-builds' }
+            { text: 'Native Builds', link: '/learn/native-builds' },
+            { text: 'Calling C With FFI', link: '/learn/ffi' }
           ]
         },
         {
@@ -71,6 +72,7 @@ export default defineConfig({
             { text: 'Assertions', link: '/manual/assertions' },
             { text: 'Functions', link: '/manual/functions' },
             { text: 'Closures', link: '/manual/closures' },
+            { text: 'Foreign Function Interface', link: '/manual/ffi' },
             { text: 'Classes', link: '/manual/classes' },
             { text: 'Enums And Pattern Matching', link: '/manual/enums-and-match' },
             { text: 'Generics And Traits', link: '/manual/generics-and-traits' },

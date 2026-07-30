@@ -15,6 +15,7 @@ One `.au` file defines one module scope. Its top-level item namespace contains:
 - classes
 - enums
 - functions
+- extern functions and extern opaque handle types
 - traits
 - imported names
 - imported module aliases
@@ -41,7 +42,11 @@ from tools.text import parse, ResultRow
 
 An import path consists of dot-separated identifiers and maps to a module path inside the current package/dependency graph. Filesystem path traversal is not part of import syntax. Package roots and dependency aliases are described by [Packages](/manual/packages).
 
-Only `public` top-level classes, enums, functions, and traits may be imported from another module. Class fields and methods also have individual visibility. A non-public member remains accessible inside its defining module but is rejected across a module boundary.
+Only `public` top-level classes, enums, Aurora functions, extern functions,
+extern opaque handle types, and traits may be imported from another module.
+Class fields and methods also have individual visibility. A non-public member
+remains accessible inside its defining module but is rejected across a module
+boundary.
 
 Imports do not mean "include this file". Imported declarations retain their defining module identity, which is used for private access, qualified type names, diagnostics, trait implementations, and go-to-definition.
 
@@ -51,7 +56,7 @@ Types are resolved from:
 
 1. type parameters in the innermost declaration
 2. `Self` in a trait or trait-implementation method where it is permitted
-3. local and directly imported class, enum, and trait names
+3. local and directly imported class, enum, extern opaque handle, and trait names
 4. module-qualified public types
 5. builtin and builtin-module type names
 

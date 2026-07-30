@@ -62,6 +62,15 @@ callable type. Capturing closures retain compiler metadata and therefore do
 not cross arbitrary written-`def` parameter, field, collection, or annotated
 return boundaries.
 
+Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
+`extern "C"` functions call process-global symbols synchronously through
+fixed-width scalars, pointer-length String/byte views, or non-null opaque
+handles. FFI-enabled dependencies must be visible in the root manifest's exact
+`[ffi] dependencies` report. Externs are direct-call-only; callbacks, raw
+pointers, variadics, returned views, nullable handles, and explicit library
+loading remain unavailable. This is an unsafe native boundary, not a memory
+safety promise for a false declaration or misbehaving C implementation.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

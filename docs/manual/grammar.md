@@ -52,7 +52,7 @@ There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-d
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public
+class enum def trait impl import from mut borrow own indirect public extern opaque
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -170,11 +170,23 @@ item
     = [ "public" ], class-declaration
     | [ "public" ], enum-declaration
     | [ "public" ], function-declaration
+    | [ "public" ], extern-function-declaration
+    | [ "public" ], extern-opaque-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
+
+extern-function-declaration
+    = "extern", STRING, "def", identifier,
+      "(", [ parameter-list ], ")", "->", type, NEWLINE ;
+
+extern-opaque-declaration
+    = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
 ```
 
 `public` is not allowed on an implementation block. Item declarations are module-level; they are not statements and cannot appear inside function/control-flow suites.
+Parsing requires the extern ABI string to be exactly `"C"`.
+Extern declarations are bodyless and non-generic. Their parameter modes and
+types are restricted by [FFI v0](/manual/ffi).
 
 ## Type References And Type Parameters
 

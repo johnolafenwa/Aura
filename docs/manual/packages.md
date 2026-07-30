@@ -24,6 +24,33 @@ All three package fields are required:
 - `version` must begin with an ASCII digit and otherwise contain only ASCII letters, digits, `.`, `-`, or `+`
 - `edition` must be exactly `"2026"` in Aurora 0.1
 
+`allow_ffi = true` is an optional `[package]` field whose default is `false`.
+It authorizes that package to contain FFI declarations. It grants no ambient
+permission to unrelated packages and does not validate the native code.
+
+When any direct or transitive dependency enables FFI, the root package must
+also opt in and provide an exact dependency report:
+
+```toml
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+native = { path = "../native" }
+
+[ffi]
+dependencies = ["native"]
+```
+
+The report lists every reachable FFI-enabled dependency by its package name,
+including transitive dependencies. It does not list the root package itself.
+Duplicate, unknown, unreachable, and non-FFI entries are rejected, as is an
+omitted FFI-enabled dependency. Every listed dependency must independently set
+its own `[package] allow_ffi = true`. See [FFI v0](/manual/ffi).
+
 An empty or unsupported value is rejected. Hyphenated package names are invalid even though `-` is allowed later in the version string.
 
 The conventional and required package source root is `src/`. A package entry selected by ordinary check/run/build commands must be under that root. Package-aware test entries may instead be under the root package's `tests/` directory; they receive logical module names beginning with `tests.`.
@@ -187,6 +214,9 @@ Package boundaries do not create implicit public exports, wildcard imports, rela
 - source roots are fixed at `src/`
 - ordinary package entry files must be below `src/`; package test programs may be below the root `tests/`
 - package graphs and direct dependency counts have the documented finite limits
+- FFI declarations require a package manifest, the declaring package's
+  explicit opt-in, and an exact root dependency report when dependencies use
+  FFI
 
 See [Current Limits](/manual/current-limits#runtime) for the broader maintained implementation limits and [Conformance](/manual/conformance) for package test coverage.
 
@@ -194,11 +224,17 @@ See [Current Limits](/manual/current-limits#runtime) for the broader maintained 
 
 Source imports have the maintained forms `import dotted.module` and `from dotted.module import name`, as specified in [Grammar](/manual/grammar#imports). Import paths are absolute within the resolved local or dependency namespace. Relative imports, wildcard imports, aliases, and package-name prefixes for the current package are not grammar.
 
-`Aurora.toml` and `Aurora.lock` use TOML as external tooling formats, not Aurora source grammar. Their accepted keys, table shapes, selector combinations, identifier rules, and lockfile version are exactly the contracts documented above; unrecognized source kinds or unsupported dependency forms are rejected rather than inferred.
+`Aurora.toml` and `Aurora.lock` use TOML as external tooling formats, not Aurora source grammar. Their accepted keys, table shapes, selector combinations, identifier rules, FFI opt-in/report fields, and lockfile version are exactly the contracts documented above; unrecognized source kinds or unsupported dependency forms are rejected rather than inferred.
 
 ## Typing Rules
 
-Package and module resolution completes before static checking. An import binds a module namespace or a visible declaration with its defining module identity and declared type. Local modules use their `src/`-relative dotted name; a dependency's package name is its import root. Only `public` top-level declarations cross a module boundary, with class member visibility checked separately.
+Package and module resolution completes before static checking. It also
+authorizes every loaded FFI declaration against the declaring package and
+root dependency report before execution. An import binds a module namespace
+or a visible declaration with its defining module identity and declared type.
+Local modules use their `src/`-relative dotted name; a dependency's package
+name is its import root. Only `public` top-level declarations cross a module
+boundary, with class member visibility checked separately.
 
 Imports do not erase types or ownership modes. Calls to imported functions and methods are checked against their original signatures, and trait implementations retain defining-module identities for coherence and dispatch. A package manifest does not create an Aurora value, implicit export, prelude, or relationship between workspace members.
 
@@ -222,7 +258,7 @@ Package traversal order cannot introduce initialization side effects. Lockfile a
 
 ## Diagnostics
 
-`AU1101` means invalid syntax in a loaded Aurora module or malformed TOML syntax in a manifest or lockfile. `AU2001` means module, import, package, or name resolution failed. `AU2002` means a cross-module type mismatch. `AU2004` means imported-call argument binding failed. `AU2999` means a manifest, lockfile, package-graph, source-root, cycle, limit, or dependency-safety rejection without a narrower code. Through imported declarations, `AU3001` means use of a moved value, `AU3002` means a borrow violation, `AU3003` means a mutability violation, and `AU3004` means an invalid ownership mode. `AU3007` means an imported callable's clone-safety obligation was not satisfied or an imported nominal value would duplicate non-cloneable `random.Rng` state.
+`AU1101` means invalid syntax in a loaded Aurora module or malformed TOML syntax in a manifest or lockfile. `AU2001` means module, import, package, or name resolution failed. `AU2002` means a cross-module type mismatch. `AU2004` means imported-call argument binding failed. `AU2999` means a manifest, lockfile, package-graph, source-root, cycle, limit, FFI authorization/dependency-report, or dependency-safety rejection without a narrower code. Through imported declarations, `AU3001` means use of a moved value, `AU3002` means a borrow violation, `AU3003` means a mutability violation, and `AU3004` means an invalid ownership mode. `AU3007` means an imported callable's clone-safety obligation was not satisfied or an imported nominal value would duplicate non-cloneable `random.Rng` state.
 
 File-backed `check`, `run`, and `build` render package-loading diagnostics through the normal compiler diagnostic path. `aura deps update` renders compiler-owned resolver failures in human form with the same stable `error[AU####]` code and exit status `1`; structured `--format` output is limited to `check`, `run`, and `build`. Malformed `deps` invocation is a command-usage error with status `2`, not a language diagnostic.
 
@@ -240,6 +276,6 @@ Git commands default to a 60-second timeout, disable interactive credential prom
 
 ## Status
 
-Single packages, exact-path workspaces, path dependencies, pinned and moving git selectors, deterministic lockfile version 1, package visibility, cross-package trait dispatch, and editor no-lockfile analysis are implemented and maintained in Aurora 0.1. No package semantics on this page are provisional.
+Single packages, exact-path workspaces, path dependencies, pinned and moving git selectors, deterministic lockfile version 1, package visibility, cross-package trait dispatch, editor no-lockfile analysis, package-local FFI authorization, and exact root FFI dependency reporting are implemented and maintained in Aurora 0.1. No package semantics on this page are provisional.
 
 Registry resolution, publishing, installation, alternative source roots, workspace globs, import aliases, wildcard or relative imports, implicit re-exports, and import-time initialization are unavailable. Any future mention of those facilities is non-normative until this reference and conformance suite are amended.

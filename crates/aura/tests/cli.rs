@@ -986,6 +986,53 @@ fn fmt_is_idempotent_for_lambda_expression_syntax() {
 }
 
 #[test]
+fn fmt_is_idempotent_for_extern_c_declarations() {
+    let temp = TempDir::new("aurora-ffi-format");
+    let source_path = temp.path().join("ffi.au");
+    fs::write(
+        &source_path,
+        concat!(
+            "public extern \"C\" opaque class ProcessHandle   \r\n",
+            "public extern \"C\" def getpid() -> int32\t\r\n",
+            "extern \"C\" def write(fd: int32, data: String) -> int64\r\n",
+        ),
+    )
+    .expect("FFI source should write");
+
+    let first = Command::new(aura_bin())
+        .args(["fmt"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to format extern C declarations");
+    assert!(
+        first.status.success(),
+        "extern C syntax should format successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let once = fs::read_to_string(&source_path).expect("formatted source should read");
+    assert!(once.contains("public extern \"C\" opaque class ProcessHandle"));
+    assert!(once.contains("public extern \"C\" def getpid() -> int32"));
+    assert!(once.contains("extern \"C\" def write(fd: int32, data: String) -> int64"));
+    assert!(!once.contains('\r'));
+    assert!(!once.lines().any(|line| line.ends_with([' ', '\t'])));
+
+    let check = Command::new(aura_bin())
+        .args(["fmt", "--check"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to check formatted extern C declarations");
+    assert!(
+        check.status.success(),
+        "a second formatter pass must be idempotent, stderr was:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&source_path).expect("idempotent source should read"),
+        once
+    );
+}
+
+#[test]
 fn run_and_built_programs_receive_arguments_and_environment() {
     let source = r#"import sys
 

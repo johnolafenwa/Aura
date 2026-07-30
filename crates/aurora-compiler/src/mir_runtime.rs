@@ -15,12 +15,13 @@ use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::{
     Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
 };
+use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::json_codec;
 use crate::mir::{
-    CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
-    MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
-    MIR_LOOP_SAFEPOINT_INTERVAL,
+    CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirExternParam, MirFormatPart,
+    MirFunction, MirMethod, MirModule, MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue,
+    Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
@@ -49,12 +50,12 @@ use crate::runtime_value::{
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FileValue,
-    FunctionValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
-    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FfiHandleValue,
+    FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
+    RangeValue, RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError,
+    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
@@ -79,11 +80,22 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
     run_with_stdout_sink(module, None)
 }
 
+pub(crate) fn run_trusted(module: &MirModule) -> Result<RunOutput> {
+    run_with_stdout_sink_trusted(module, None)
+}
+
 pub fn run_with_stdout_sink(
     module: &MirModule,
     stdout_sink: Option<StdoutSink>,
 ) -> Result<RunOutput> {
     run_with_stdout_sink_and_program_args(module, stdout_sink, Vec::new())
+}
+
+pub(crate) fn run_with_stdout_sink_trusted(
+    module: &MirModule,
+    stdout_sink: Option<StdoutSink>,
+) -> Result<RunOutput> {
+    run_with_stdout_sink_and_program_args_trusted(module, stdout_sink, Vec::new())
 }
 
 pub fn run_with_stdout_sink_and_program_args(
@@ -94,6 +106,14 @@ pub fn run_with_stdout_sink_and_program_args(
     run_entry_with_stdout_sink_and_program_args(module, None, stdout_sink, program_args)
 }
 
+pub(crate) fn run_with_stdout_sink_and_program_args_trusted(
+    module: &MirModule,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    run_entry_with_stdout_sink_and_program_args_trusted(module, None, stdout_sink, program_args)
+}
+
 /// Runs `module`, entering at `entry` instead of its ordinary entry point.
 ///
 /// `entry` names a parameterless top-level function. It exists so a test runner
@@ -101,6 +121,16 @@ pub fn run_with_stdout_sink_and_program_args(
 /// scheduler, and trap handling an ordinary run uses, rather than a parallel
 /// execution path that could diverge.
 pub fn run_entry_with_stdout_sink_and_program_args(
+    module: &MirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    reject_untrusted_extern_calls(module)?;
+    run_entry_with_stdout_sink_and_program_args_trusted(module, entry, stdout_sink, program_args)
+}
+
+pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     module: &MirModule,
     entry: Option<&str>,
     stdout_sink: Option<StdoutSink>,
@@ -166,6 +196,41 @@ pub fn run_entry_with_stdout_sink_and_program_args(
     match handle.join() {
         Ok(result) => result.map_err(Diagnostic::into_runtime_trap),
         Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
+    let symbol = module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        ..
+                    },
+                ..
+            } => Some(call.symbol.as_str()),
+            Instruction::Safepoint
+            | Instruction::Assign { .. }
+            | Instruction::Eval { .. }
+            | Instruction::PushCleanup { .. }
+            | Instruction::PopCleanup { .. } => None,
+        });
+
+    match symbol {
+        Some(symbol) => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "public MIR execution rejects the untrusted extern call `{symbol}`; FFI must be authorized by a manifest-rooted package with `[package] allow_ffi = true` and executed through a path-based API"
+            ),
+        )
+        .into_runtime_trap()),
+        None => Ok(()),
     }
 }
 
@@ -262,7 +327,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         }
         Rvalue::Call { callee, args } => {
             let callee_materializes = match callee {
-                CallTarget::Name(_) => false,
+                CallTarget::Name(_) | CallTarget::Extern(_) => false,
                 CallTarget::Value(value) => operand_is_process_run_function(value),
                 CallTarget::Member { object, .. } => operand_is_process_run_function(object),
             };
@@ -293,6 +358,26 @@ fn lock_stdout(stdout: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String>
 }
 
 pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
+    let module = deserialize_runtime_module(mir_json)?;
+    validate_runtime_module_complexity(&module).map_err(Diagnostic::into_runtime_trap)?;
+    let _ = source_path;
+    let _ = source;
+    run_with_stdout_sink_and_program_args(&module, None, host_process_args())
+}
+
+fn run_serialized_mir_trusted(
+    mir_json: &[u8],
+    source_path: &str,
+    source: &str,
+) -> Result<RunOutput> {
+    let module = deserialize_runtime_module(mir_json)?;
+    validate_runtime_module_complexity(&module).map_err(Diagnostic::into_runtime_trap)?;
+    let _ = source_path;
+    let _ = source;
+    run_with_stdout_sink_and_program_args_trusted(&module, None, host_process_args())
+}
+
+fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
     let module = match serde_json::from_slice::<MirModule>(mir_json) {
         Ok(module) => module,
         Err(error) => {
@@ -302,10 +387,7 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
             ))
         }
     };
-    validate_runtime_module_complexity(&module).map_err(Diagnostic::into_runtime_trap)?;
-    let _ = source_path;
-    let _ = source;
-    run_with_stdout_sink_and_program_args(&module, None, host_process_args())
+    Ok(module)
 }
 
 // Keep the MIR runtime call-depth budget comfortably below the host thread's
@@ -411,7 +493,7 @@ fn run_serialized_mir_entrypoint_with_streams(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> i32 {
-    match run_serialized_mir(mir_json, source_path, source) {
+    match run_serialized_mir_trusted(mir_json, source_path, source) {
         Ok(output) => {
             if let Err(error) = write_stream(&mut *stdout, &output.stdout) {
                 if error.kind() == io::ErrorKind::BrokenPipe {
@@ -1684,6 +1766,7 @@ impl MirRuntime {
             Value::ModuleNamespace(_) => None,
             Value::Function(function) => Some(function.signature.clone()),
             Value::Unit => Some(Type::Unit),
+            Value::FfiHandle(handle) => Some(Type::named(handle.type_name())),
             Value::Instance(instance) => Some(Type::named(&instance.class_name)),
             Value::EnumVariant(variant) => match (
                 variant.enum_name.as_str(),
@@ -3424,6 +3507,7 @@ impl MirRuntime {
                 )?;
                 Ok(outcome.value)
             }
+            CallTarget::Extern(call) => self.evaluate_extern_call(call, args, env),
             CallTarget::Value(function) => {
                 self.evaluate_function_value_call(function, args, env, expected_return_type)
             }
@@ -3788,6 +3872,105 @@ impl MirRuntime {
                 }
             }
         }
+    }
+
+    fn evaluate_extern_call(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        self.evaluate_extern_call_with(call, args, env, |symbol, signature, arguments| {
+            // SAFETY: semantic analysis admits only the documented FFI v0
+            // surface. The remaining process-symbol signature and foreign
+            // implementation obligations belong to the package author.
+            unsafe { crate::ffi::call_process_symbol(symbol, signature, arguments) }
+        })
+    }
+
+    fn evaluate_extern_call_with<F>(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        env: &mut Env,
+        dispatch: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(&str, &FfiSignature, &mut [FfiValue]) -> std::result::Result<FfiValue, FfiError>,
+    {
+        if call.abi != "C" {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "FFI call to `{}` failed: unsupported runtime ABI `{}`",
+                    call.symbol, call.abi
+                ),
+            ));
+        }
+        let evaluated = evaluate_named_args(args, env)?;
+        let names = call
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>();
+        let ordered = bind_builtin_args(&names, evaluated).map_err(|error| {
+            Diagnostic::coded(
+                "AU4005",
+                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+            )
+        })?;
+
+        let parameter_types = call
+            .params
+            .iter()
+            .map(ffi_type_for_extern_param)
+            .collect::<Result<Vec<_>>>()?;
+        let result_type = ffi_type_for_extern_result(&call.return_type)?;
+        let signature = FfiSignature::new(parameter_types, result_type);
+        let mut arguments = ordered
+            .iter()
+            .zip(&call.params)
+            .map(|(argument, param)| ffi_value_from_runtime(&argument.value, &param.ty))
+            .collect::<Result<Vec<_>>>()?;
+
+        let result = dispatch(&call.symbol, &signature, &mut arguments);
+
+        // Mutable byte views are fixed-length copy-in/out values. Apply the
+        // engine's updated scratch bytes to the original Aurora place before
+        // interpreting the foreign return, so both backends share the same
+        // post-call state even when return validation traps.
+        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(&arguments) {
+            if param.passing != MirReceiverKind::BorrowMut {
+                continue;
+            }
+            let FfiValue::Bytes(bytes) = ffi_value else {
+                return Err(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "FFI call to `{}` failed: mutable parameter `{}` did not marshal as bytes",
+                        call.symbol, param.name
+                    ),
+                ));
+            };
+            let place = argument.writeback_place.as_deref().ok_or_else(|| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "FFI call to `{}` failed: mutable parameter `{}` requires a writeback place",
+                        call.symbol, param.name
+                    ),
+                )
+            })?;
+            env.write_place(place, bytes_runtime_value(bytes))?;
+        }
+
+        let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
+        runtime_value_from_ffi(result, &call.return_type).map_err(|error| {
+            Diagnostic::coded(
+                "AU4005",
+                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+            )
+        })
     }
 
     fn evaluate_function_value_call(
@@ -7328,6 +7511,254 @@ fn runtime_deadline_after_timeout(timeout: Option<StdDuration>) -> Result<Option
 enum BlockOutcome {
     Return(Value),
     Goto(String),
+}
+
+fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
+    match (&param.ty, param.passing) {
+        (Type::Named(name, args), MirReceiverKind::BorrowMut)
+            if name == "Vec" && args.as_slice() == [Type::named("uint8")] =>
+        {
+            Ok(FfiType::BytesViewMut)
+        }
+        (ty, _) => ffi_type_for_extern_result(ty),
+    }
+}
+
+fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
+    let ffi_type = match ty {
+        Type::Unit => FfiType::Unit,
+        Type::Named(name, args) if args.is_empty() => match name.as_str() {
+            "bool" => FfiType::Bool,
+            "int8" => FfiType::I8,
+            "int16" => FfiType::I16,
+            "int32" => FfiType::I32,
+            "int" | "int64" => FfiType::I64,
+            "uint8" => FfiType::U8,
+            "uint16" => FfiType::U16,
+            "uint32" => FfiType::U32,
+            "uint64" => FfiType::U64,
+            "float32" => FfiType::F32,
+            "float64" => FfiType::F64,
+            "String" => FfiType::StringView,
+            // Every other argument-less nominal admitted by semantic analysis
+            // is a declared extern opaque handle.
+            _ => FfiType::OpaqueHandle,
+        },
+        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+            FfiType::BytesView
+        }
+        other => {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!("unsupported FFI source type `{other}` reached MIR execution"),
+            ))
+        }
+    };
+    Ok(ffi_type)
+}
+
+fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI value for source type `{ty}` has incompatible runtime shape `{}`",
+                value.render()
+            ),
+        )
+    };
+    match ty {
+        Type::Unit => matches!(value, Value::Unit)
+            .then_some(FfiValue::Unit)
+            .ok_or_else(mismatch),
+        Type::Named(name, args) if args.is_empty() => match name.as_str() {
+            "bool" => match value {
+                Value::Bool(value) => Ok(FfiValue::Bool(*value)),
+                _ => Err(mismatch()),
+            },
+            "int8" => runtime_signed_integer(value)
+                .and_then(|value| i8::try_from(value).ok())
+                .map(FfiValue::I8)
+                .ok_or_else(mismatch),
+            "int16" => runtime_signed_integer(value)
+                .and_then(|value| i16::try_from(value).ok())
+                .map(FfiValue::I16)
+                .ok_or_else(mismatch),
+            "int32" => runtime_signed_integer(value)
+                .and_then(|value| i32::try_from(value).ok())
+                .map(FfiValue::I32)
+                .ok_or_else(mismatch),
+            "int" | "int64" => runtime_signed_integer(value)
+                .and_then(|value| i64::try_from(value).ok())
+                .map(FfiValue::I64)
+                .ok_or_else(mismatch),
+            "uint8" => runtime_unsigned_integer(value)
+                .and_then(|value| u8::try_from(value).ok())
+                .map(FfiValue::U8)
+                .ok_or_else(mismatch),
+            "uint16" => runtime_unsigned_integer(value)
+                .and_then(|value| u16::try_from(value).ok())
+                .map(FfiValue::U16)
+                .ok_or_else(mismatch),
+            "uint32" => runtime_unsigned_integer(value)
+                .and_then(|value| u32::try_from(value).ok())
+                .map(FfiValue::U32)
+                .ok_or_else(mismatch),
+            "uint64" => runtime_unsigned_integer(value)
+                .and_then(|value| u64::try_from(value).ok())
+                .map(FfiValue::U64)
+                .ok_or_else(mismatch),
+            "float32" => match value {
+                Value::Float(value) => Ok(FfiValue::F32(*value as f32)),
+                _ => Err(mismatch()),
+            },
+            "float64" => match value {
+                Value::Float(value) => Ok(FfiValue::F64(*value)),
+                _ => Err(mismatch()),
+            },
+            "String" => match value {
+                Value::String(value) => Ok(FfiValue::String(value.clone())),
+                _ => Err(mismatch()),
+            },
+            _ => opaque_handle_from_runtime(value).ok_or_else(mismatch),
+        },
+        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+            let Value::Vec(vector) = value else {
+                return Err(mismatch());
+            };
+            let bytes = vector
+                .elements
+                .iter()
+                .map(|element| {
+                    runtime_unsigned_integer(element)
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(mismatch)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(FfiValue::Bytes(bytes))
+        }
+        _ => Err(mismatch()),
+    }
+}
+
+fn runtime_signed_integer(value: &Value) -> Option<i128> {
+    let Value::Int(value) = value else {
+        return None;
+    };
+    value.as_i128()
+}
+
+fn runtime_unsigned_integer(value: &Value) -> Option<u128> {
+    let Value::Int(value) = value else {
+        return None;
+    };
+    match value.representation() {
+        IntegerRepresentation::Signed(value) => u128::try_from(value).ok(),
+        IntegerRepresentation::Unsigned(value) => Some(value),
+    }
+}
+
+fn opaque_handle_from_runtime(value: &Value) -> Option<FfiValue> {
+    let Value::FfiHandle(handle) = value else {
+        return None;
+    };
+    let handle = crate::ffi::OpaqueHandle::new(handle.as_ptr())?;
+    Some(FfiValue::OpaqueHandle(handle))
+}
+
+fn bytes_runtime_value(bytes: &[u8]) -> Value {
+    Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: bytes
+            .iter()
+            .copied()
+            .map(|value| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(value.into(), IntegerKind::Uint8)
+                        .expect("every byte is representable as uint8"),
+                )
+            })
+            .collect(),
+    })
+}
+
+fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
+    let mismatch = |actual: FfiType| {
+        Diagnostic::coded(
+            "AU4005",
+            format!("FFI result `{actual}` does not match source return type `{ty}`"),
+        )
+    };
+    match (value, ty) {
+        (FfiValue::Unit, Type::Unit) => Ok(Value::Unit),
+        (FfiValue::Bool(value), Type::Named(name, args)) if name == "bool" && args.is_empty() => {
+            Ok(Value::Bool(value))
+        }
+        (FfiValue::I8(value), Type::Named(name, args)) if name == "int8" && args.is_empty() => {
+            Ok(Value::Int(
+                IntegerValue::from_typed_signed(value.into(), IntegerKind::Int8)
+                    .expect("every i8 is representable as int8"),
+            ))
+        }
+        (FfiValue::I16(value), Type::Named(name, args)) if name == "int16" && args.is_empty() => {
+            Ok(Value::Int(
+                IntegerValue::from_typed_signed(value.into(), IntegerKind::Int16)
+                    .expect("every i16 is representable as int16"),
+            ))
+        }
+        (FfiValue::I32(value), Type::Named(name, args)) if name == "int32" && args.is_empty() => {
+            Ok(Value::Int(IntegerValue::from_i32(value)))
+        }
+        (FfiValue::I64(value), Type::Named(name, args))
+            if matches!(name.as_str(), "int" | "int64") && args.is_empty() =>
+        {
+            Ok(Value::Int(IntegerValue::from_i64(value)))
+        }
+        (FfiValue::U8(value), Type::Named(name, args)) if name == "uint8" && args.is_empty() => {
+            Ok(Value::Int(
+                IntegerValue::from_typed_unsigned(value.into(), IntegerKind::Uint8)
+                    .expect("every u8 is representable as uint8"),
+            ))
+        }
+        (FfiValue::U16(value), Type::Named(name, args)) if name == "uint16" && args.is_empty() => {
+            Ok(Value::Int(
+                IntegerValue::from_typed_unsigned(value.into(), IntegerKind::Uint16)
+                    .expect("every u16 is representable as uint16"),
+            ))
+        }
+        (FfiValue::U32(value), Type::Named(name, args)) if name == "uint32" && args.is_empty() => {
+            Ok(Value::Int(
+                IntegerValue::from_typed_unsigned(value.into(), IntegerKind::Uint32)
+                    .expect("every u32 is representable as uint32"),
+            ))
+        }
+        (FfiValue::U64(value), Type::Named(name, args)) if name == "uint64" && args.is_empty() => {
+            Ok(Value::Int(IntegerValue::from_u64(value)))
+        }
+        (FfiValue::F32(value), Type::Named(name, args)) if name == "float32" && args.is_empty() => {
+            Ok(Value::Float(f64::from(value)))
+        }
+        (FfiValue::F64(value), Type::Named(name, args)) if name == "float64" && args.is_empty() => {
+            Ok(Value::Float(value))
+        }
+        (FfiValue::OpaqueHandle(handle), Type::Named(class_name, args)) if args.is_empty() => {
+            FfiHandleValue::new(class_name.clone(), handle.as_ptr())
+                .map(Value::FfiHandle)
+                .ok_or_else(|| {
+                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
+                })
+        }
+        (value, _) => Err(mismatch(value.ffi_type())),
+    }
+}
+
+fn ffi_runtime_diagnostic(symbol: &str, error: FfiError) -> Diagnostic {
+    let code = if matches!(error, FfiError::NonCanonicalBoolReturn(_)) {
+        "AU4001"
+    } else {
+        "AU4005"
+    };
+    Diagnostic::coded(code, format!("FFI call to `{symbol}` failed: {error}"))
 }
 
 fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMirArg>> {

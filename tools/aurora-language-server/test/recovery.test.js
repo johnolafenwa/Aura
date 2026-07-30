@@ -97,3 +97,74 @@ test("recovery document symbols tolerate empty and nested declarations", () => {
     [["show", "method"], ["consume", "method"]]
   );
 });
+
+test("recovery preserves extern C declarations while the compiler is unavailable", () => {
+  const ffiSource = [
+    'public extern "C" opaque class ProcessHandle',
+    'public extern "C" def getpid() -> int32',
+    ""
+  ].join("\n");
+  const symbols = documentSymbols(ffiSource);
+
+  assert.deepEqual(
+    symbols.map((symbol) => [symbol.name, symbol.kind]),
+    [["ProcessHandle", "class"], ["getpid", "function"]]
+  );
+  const completions = completionsForDocument(ffiSource, 2, 0, null);
+  const names = new Set(completions.map((item) => item.name));
+  for (const expected of ["extern", "opaque", "ProcessHandle", "getpid"]) {
+    assert.ok(names.has(expected), `recovery completion should include ${expected}`);
+  }
+  assert.deepEqual(definitionForPosition(`${ffiSource}getpid()\n`, 2, 2), {
+    line: 1,
+    startCharacter: ffiSource.split("\n")[1].indexOf("getpid"),
+    endCharacter: ffiSource.split("\n")[1].indexOf("getpid") + "getpid".length
+  });
+  assert.deepEqual(hoverForPosition(`${ffiSource}getpid()\n`, 2, 2), {
+    value: 'extern "C" function getpid',
+    range: {
+      start: { line: 2, character: 0 },
+      end: { line: 2, character: 6 }
+    }
+  });
+
+  const unsupported = documentSymbols(
+    [
+      'public extern "C" enum WrongEnum',
+      'public extern "C" opaque def wrong_function() -> int32',
+      'copy extern "C" opaque class CopyHandle',
+      ""
+    ].join("\n")
+  );
+  assert.deepEqual(
+    unsupported,
+    [],
+    "recovery must not present unsupported extern spellings as valid declarations"
+  );
+});
+
+test("recovery locates an extern declaration named C after the ABI string", () => {
+  for (const source of [
+    'extern "C" def C() -> int32\nC()\n',
+    'extern "C" opaque class C\nC\n'
+  ]) {
+    const declarationLine = source.split("\n")[0];
+    const expectedStart = declarationLine.lastIndexOf("C");
+    assert.deepEqual(documentSymbols(source)[0], {
+      name: "C",
+      kind: source.includes(" def ") ? "function" : "class",
+      detail: source.includes(" def ")
+        ? 'extern "C" function'
+        : 'extern "C" opaque class',
+      line: 0,
+      startCharacter: expectedStart,
+      endCharacter: expectedStart + 1,
+      children: []
+    });
+    assert.deepEqual(definitionForPosition(source, 1, 0), {
+      line: 0,
+      startCharacter: expectedStart,
+      endCharacter: expectedStart + 1
+    });
+  }
+});

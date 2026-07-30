@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::ffi::OsStr;
+use std::ffi::{c_void, OsStr};
 use std::fmt;
 use std::fs::{File as StdFile, OpenOptions};
 use std::io::{self, BufRead, Read, Seek, Write};
@@ -9,6 +9,7 @@ use std::net::{
     Shutdown, SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream, ToSocketAddrs,
     UdpSocket as StdUdpSocket,
 };
+use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::process::{
@@ -270,6 +271,7 @@ pub enum Value {
     ModuleNamespace(ModuleNamespaceValue),
     Function(Box<FunctionValue>),
     Unit,
+    FfiHandle(FfiHandleValue),
     Instance(InstanceValue),
     EnumVariant(EnumVariantValue),
     Channel(ChannelValue),
@@ -293,6 +295,47 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+}
+
+/// A non-null foreign-owned opaque address tagged with its Aurora nominal
+/// type.
+///
+/// The address is deliberately stored as a non-zero integer rather than a raw
+/// pointer so the general runtime value remains `Send`. Cloning this internal
+/// transport value aliases the same foreign object; Aurora's semantic move and
+/// Transfer rules still prevent source programs from cloning or task-sending
+/// an opaque handle.
+#[derive(Clone)]
+pub struct FfiHandleValue {
+    type_name: String,
+    address: NonZeroUsize,
+}
+
+impl fmt::Debug for FfiHandleValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FfiHandleValue")
+            .field("type_name", &self.type_name)
+            .field("pointer", &"<opaque>")
+            .finish()
+    }
+}
+
+impl FfiHandleValue {
+    pub(crate) fn new(type_name: String, pointer: *mut c_void) -> Option<Self> {
+        Some(Self {
+            type_name,
+            address: NonZeroUsize::new(pointer as usize)?,
+        })
+    }
+
+    pub(crate) fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut c_void {
+        self.address.get() as *mut c_void
+    }
 }
 
 /// A capture-free Aurora function value.
@@ -1228,6 +1271,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
             Value::Function(function) => function.signature.to_string(),
             Value::Unit => "None".to_string(),
+            Value::FfiHandle(handle) => handle.type_name().to_string(),
             Value::Instance(instance) => {
                 nominal_runtime_base_name(&instance.class_name).to_string()
             }
@@ -4808,6 +4852,7 @@ impl Clone for Value {
             Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
             Self::Function(value) => Self::Function(value.clone()),
             Self::Unit => Self::Unit,
+            Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => Self::Instance(value.clone()),
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
             Self::Channel(value) => Self::Channel(value.clone()),
@@ -4957,6 +5002,9 @@ impl Value {
                         rendered.push_str(&format!("<function {}>", function.name));
                     }
                     Value::Unit => {}
+                    Value::FfiHandle(handle) => {
+                        rendered.push_str(&format!("<opaque {}>", handle.type_name()));
+                    }
                     Value::Channel(_) => rendered.push_str("<queue>"),
                     Value::Task(_) => rendered.push_str("<task>"),
                     Value::TaskGroup(_) => rendered.push_str("<tasks>"),

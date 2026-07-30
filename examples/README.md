@@ -564,8 +564,18 @@ Helper modules under `modules/pkg/` support the maintained module examples above
   - run it with:
     - `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
   - prints `8`
+- `ffi_getpid/`
+  - an FFI v0 package with `[package] allow_ffi = true` and a bodyless
+    `extern "C" def getpid() -> int32` declaration
+  - run it on a Unix-family host through both maintained backends:
+    - `cargo run -p aura -- run --backend mir examples/packages/ffi_getpid/src/main.au`
+    - `cargo run -p aura -- run --backend direct examples/packages/ffi_getpid/src/main.au`
+  - both runs print `true`
 
-Package examples are multi-file package trees rather than standalone single-file entrypoints. Their committed `Aurora.lock` files are part of the maintained surface.
+Package examples are package trees rather than standalone single-file
+entrypoints. Their committed `Aurora.lock` files, where dependency resolution
+creates one, are part of the maintained surface. FFI examples additionally
+pin their explicit unsafe package authorization.
 
 Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, or `branch`, defaulting to `main`. Those are covered by compiler, CLI, and language-server regression tests rather than a committed runnable example tree, because they resolve through cached git checkouts instead of a static in-repo package directory.
 

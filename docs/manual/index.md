@@ -30,6 +30,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Closures](/manual/closures): contextual expression lambdas, by-value
   captures, repeated read-only calls, consuming single-use calls, and
   structural Transfer.
+- [Foreign Function Interface (FFI) v0](/manual/ffi): explicit package
+  authorization, bodyless C declarations, fixed-width scalars, pointer-length
+  views, opaque handles, and the native safety boundary.
 - [Classes](/manual/classes): fields, constructors, methods, receivers, associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads, exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait declarations, impls, bounds, dispatch, and current restrictions.

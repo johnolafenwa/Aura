@@ -1,7 +1,7 @@
 use super::{
     BinaryOp, BindingTarget, ClassDecl, CompareLink, CompareOp, EnumDecl, Expr, ExprKind,
-    FieldDecl, ForStmt, FunctionDecl, FunctionTypeParam, ImplDecl, Item, ParamMode, ReceiverKind,
-    TraitDecl, TypeRef,
+    ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FunctionDecl, FunctionTypeParam,
+    ImplDecl, Item, ParamMode, ReceiverKind, TraitDecl, TypeRef,
 };
 use crate::diag::Span;
 use serde_json::json;
@@ -52,6 +52,22 @@ fn item_name_matches_decl_name() {
         span: Span::new(1, 1),
     });
     let function_item = Item::Function(dummy_function("main"));
+    let extern_function_item = Item::ExternFunction(ExternFunctionDecl {
+        public: true,
+        abi: "C".to_string(),
+        name: "getpid".to_string(),
+        name_span: Span::new(1, 16),
+        params: vec![],
+        return_type: dummy_type("int32"),
+        span: Span::new(1, 1),
+    });
+    let extern_opaque_item = Item::ExternOpaqueClass(ExternOpaqueClassDecl {
+        public: true,
+        abi: "C".to_string(),
+        name: "ProcessHandle".to_string(),
+        name_span: Span::new(1, 25),
+        span: Span::new(1, 1),
+    });
     let trait_item = Item::Trait(TraitDecl {
         public: true,
         name: "Display".to_string(),
@@ -73,6 +89,8 @@ fn item_name_matches_decl_name() {
     assert_eq!(class_item.name(), "Point");
     assert_eq!(enum_item.name(), "Status");
     assert_eq!(function_item.name(), "main");
+    assert_eq!(extern_function_item.name(), "getpid");
+    assert_eq!(extern_opaque_item.name(), "ProcessHandle");
     assert_eq!(trait_item.name(), "Display");
     assert_eq!(impl_item.name(), "Display");
 }

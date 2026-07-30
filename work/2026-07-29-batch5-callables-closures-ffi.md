@@ -288,6 +288,192 @@ tracked-executable, raw-scheduler-pointer, and unsafe-scheduler-reconstruction
 checks all pass independently. The user file and untracked ADR-0022 draft
 remain untouched and outside the commit.
 
+## Phase 6.4 provisional FFI v0 rulings
+
+Implementation proceeds with these deliberately narrow provisional choices:
+
+- declarations use `public extern "C" def name(...) -> Type` and
+  `public extern "C" opaque class Handle`; only the exact `"C"` ABI is
+  accepted
+- every package that declares FFI must set `[package] allow_ffi = true`; a
+  root build containing any FFI, including dependency-only FFI, must opt in
+  too
+- the root manifest uses `[ffi] dependencies = ["binding_package"]` as an
+  exact report of every direct or transitive FFI-enabled dependency; stale,
+  unknown, non-FFI, duplicate, self, and missing entries are rejected with
+  dependency-path diagnostics
+- v0 resolves only process-global/system symbols; library paths, symbol
+  aliases, callbacks, raw pointers and pointer arithmetic, and variadics are
+  reserved
+- the scalar ABI accepts `bool`, signed and unsigned 8/16/32/64-bit integers,
+  `float32`, `float64`, and `None` returns; `int` remains accepted as its exact
+  `int64` alias, while ABI documentation recommends the explicit spelling
+- scalar parameters use the bare form; meaningless `mut`/`own` scalar
+  modifiers are rejected
+- bare `String` and `Vec[uint8]` expand to adjacent const pointer/length
+  arguments; `mut Vec[uint8]` is fixed-length copy-in/copy-out; owned views,
+  mutable strings, non-byte vectors, and returned views are rejected
+- opaque handles are non-Copy, non-Clone, and non-Transfer; bare parameters
+  share the pointer, `own` parameters consume it, `mut` is reserved, and a
+  null non-nullable return is a runtime error
+- extern functions are direct-call-only and synchronous; they are not
+  function values, callback targets, or task targets
+
+The backend plan uses one libffi-based, typed host-call engine for MIR and
+direct execution. Aurora marshalling failures occur before entering C and
+return validation after C returns. Aurora never unwinds through a foreign
+frame. Foreign undefined behavior, signals, exceptions, or `longjmp` remain
+capable of terminating the process and cannot be promised as recoverable
+diagnostics.
+
+The first component wave is complete: frontend grammar/analysis symbols,
+manifest graph policy, dedicated semantic metadata and ownership checks, and
+the shared host-call engine all pass focused tests. A review then found and
+reproduced two policy gaps before backend integration: qualified module access
+could consult internal `all_*` maps and expose private externs/handles, and
+public source-only compiler APIs could bypass the manifest loader. Regression
+tests now require public-only namespace lookup and reject source-only FFI with
+AU2999; package/path APIs remain the authorized execution route. Internal
+semantic tests use a crate-private checker helper rather than weakening that
+product rule.
+
+Empty String and byte views now have an exact ABI contract: null pointer plus
+zero length. Non-empty views carry a valid pointer and byte length. Mutable
+byte views use an isolated same-length scratch allocation, copy back after the
+foreign call returns even when return validation subsequently fails, and can
+never resize the Aurora vector. Behavior tests pin both empty views and
+post-call-error writeback.
+
+Before this integration wave, `target/` reached roughly 18 GiB while free disk
+fell to 14 GiB. After all active workers became idle, `cargo clean` removed
+37.3 GiB of disposable build output and restored 31 GiB free. Only the minimal
+profiles needed for current focused tests are being rebuilt.
+
+The complete Phase 6.4 implementation now spans both maintained backends and
+the product surface:
+
+- manifest-rooted package checking enforces the declaring package and root
+  opt-ins plus the exact direct/transitive FFI dependency report
+- the parser, semantic model, MIR, direct code generator, shared libffi call
+  engine, runtime values, analysis, LSP recovery, VS Code grammar/snippets,
+  Manual, Learn track, tutorial, and maintained `ffi_getpid` package agree on
+  the v0 surface
+- extern functions require an explicit ABI return type, including `-> None`;
+  all ordinary Aurora functions retain their existing implicit-`None` form
+- public arbitrary-MIR execution rejects caller-supplied extern metadata
+  before dispatch. Compiler-authorized path APIs and private embedded-MIR
+  entrypoints use crate-private trusted routes, and `aura test` revalidates
+  the package path before invoking an FFI-bearing test function
+
+The final pre-gate audit found and closed five semantic/tooling defects rather
+than recording them as follow-ups:
+
+- imported opaque handles no longer authorize an unrelated local class with
+  the same basename; only canonical nominal identity satisfies an extern
+  signature
+- opaque handles and structural values containing them have no Aurora
+  equality, ordering, or pointer arithmetic; AU2003 teaches callers to expose
+  stable scalar/String operations through reviewed bindings
+- the raw semantic checkers are no longer public manifest bypasses; supported
+  public source wrappers reject unmanifested FFI and path APIs enforce package
+  authorization
+- fallback LSP spans correctly locate extern declarations named `C`, and the
+  TextMate grammar assigns scopes to every FFI keyword while accepting every
+  grammar-valid lowercase or uppercase opaque name
+- the Learn navigation order, rendering contract (`<opaque TypeName>` with no
+  address), and grammar-phase wording now agree with the reference
+
+Focused verification passes 52 FFI compiler tests, both public frontend tests,
+and all four CLI acceptance cases. The acceptance suite covers manifest
+rejection, a real `getpid` declaration, the maintained example on MIR and
+direct, and manifest-authorized `aura test` discovery. Focused LSP, extension,
+reference-integrity, documentation-build, warning-denied production Clippy,
+formatting, and whitespace gates also pass.
+
+The first complete instrumented behavior replay then passed every test but
+missed only the frozen coverage floors: 80,353/83,646 lines (96.06%) and
+5,330/5,513 functions (96.68%) were below 96.13% and 96.90%, while
+117,209/123,985 regions (94.53%) already passed 94.46%. The exact deficits
+were 56 lines and 13 functions. Four behavior-focused lanes closed the gap:
+
+- public wrapper tests pin sinks, source overrides, explicit program
+  arguments, selected entries, manifest-authorized FFI, serialized-MIR
+  rejection, native entrypoint buffers, and runtime-shape diagnostics
+- public frontend/engine tests pin imported extern completion/hover/
+  definition, all scalar/view/handle marshalling, writeback, type metadata,
+  lookup errors, invalid booleans, null handles, and boundary diagnostics
+- the production native-library adapter test executes every v0 scalar tag,
+  String/byte/mutable-byte views, writeback, handle production/consumption,
+  and `None`; a separate metadata test pins all sixteen encoded type tags
+- semantic and manifest tests pin exact opaque equality/arithmetic/ordering
+  guidance, explicit return types, tuple ABI rejection, package opt-in/path
+  failures, and canonical imported handle parameter/result compatibility
+
+This coverage work exposed one additional product bug: a public imported
+extern returning its module-local `Handle` exported the unqualified type name,
+so a caller expecting `module.Handle` received a false mismatch. Export type
+qualification now includes opaque handles, and the public integration
+regression passes. No synthetic test, production coverage edit, or exclusion
+was added. Parser-preempted non-C/callback branches, Unix-excluded loader
+fallbacks, and structurally unreachable validated-MIR/runtime branches remain
+recorded defensive paths rather than forced with artificial tests.
+
+The first clean coverage replay after coverage closure was invalidated by a
+deliberately cleaned standard runtime archive: six install-layout CLI fixtures
+correctly failed before execution because their fixture archive was absent.
+The archive was rebuilt, and the replay was restarted. A later final-audit
+finding made that replay stale, so it was stopped before reporting coverage.
+After the audit fixes, the aborted coverage-only profile was cleaned, reducing
+`target/` to 8.2 GiB and restoring 26 GiB free while preserving the standard
+runtime archive needed by the clean gate.
+
+The next clean replay passed every behavior target, including 320 CLI tests,
+1,384 compiler unit tests, 15 public-surface tests, 12 frontend/engine tests,
+and the complete fixture and integration matrix. Lines passed at
+80,437/83,647 (96.162444558681%) and regions passed at 117,301/123,988
+(94.606736135755%). Function coverage reached 5,342/5,513
+(96.898240522402%), which renders as 96.90% but is one function below the
+unrounded 96.90% floor.
+
+The final standing-rule closure adds only observable behavior:
+
+- canonical import and checked-program tests retrieve consuming closure
+  metadata and preserve opaque, function-parameter, and tuple identities
+- a public native-object acceptance test pins `sys.args()` and typed
+  `wait_any(Vec[Task[int32]])` lowering to their runtime adapters
+- exact direct-FFI boundary tests reject every fixed-width integer just above
+  its declared maximum
+- public MIR tests pin contextual float, custom operator, consuming pattern,
+  mutable match writeback, and authorized extern-call shapes
+- the direct process wrapper now proves source-reachable stdout/stderr capture
+  and exact byte preservation on the task scheduler
+
+An instrumented proof after that last runtime regression passes the frozen
+floors at 80,453/83,647 lines (96.181572560881%), 5,346/5,513 functions
+(96.970796299655%), and 117,329/123,988 regions (94.629318966352%). Full CI
+will perform the final clean canonical replay. No synthetic test, production
+coverage edit, or exclusion was added.
+
+The clean canonical Phase 6.4 full-CI replay is now complete. It passes 49
+benchmark checks, 320 CLI tests, 6 retry tests, 4 FFI acceptance tests, 2
+closure acceptance tests, the 712.40-second forced MIR/direct parity matrix,
+1,385 compiler tests, all remaining Rust integration targets, 97 LSP tests,
+15 extension tests, the executable reference gate, documentation build, both
+dependency audits, and warning-denied Clippy. LSP coverage remains exactly
+100% at 937/937 lines, 49/49 functions, and 251/251 branches. Canonical
+compiler coverage is 80,452/83,647 lines (96.18037706074335%),
+5,346/5,513 functions (96.97079629965536%), and 117,328/123,988 regions
+(94.62851243668743%), above the frozen 96.13/96.90/94.46 floors.
+
+The global hygiene command reaches only whitespace and the final blank line
+in the excluded user-owned `personal/file_ops.au`. The complete Phase 6.4
+diff passes `git diff --check` when that file and the unrelated untracked
+ADR-0022 draft are excluded; historical-commit, forbidden-artifact,
+tracked-executable, raw-scheduler-pointer, and unsafe-scheduler-reconstruction
+checks all pass independently. Neither user-owned file was changed for or
+included in Phase 6.4. No synthetic coverage test, production coverage edit,
+or coverage exclusion was added.
+
 ## Verification policy
 
 Each behavior change starts with a failing regression and receives focused

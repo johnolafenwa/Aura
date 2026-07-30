@@ -10,8 +10,8 @@ use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTa
 
 use super::{
     box_thunk_value, builtin_opaque_member_return_type, cleanup_place_type,
-    collect_type_params_from_type, direct_field_type, direct_type, direct_type_to_type,
-    emit_host_object, emit_host_object_with_metadata, ensure_direct_type,
+    collect_type_params_from_type, direct_ffi_type_for_source, direct_field_type, direct_type,
+    direct_type_to_type, emit_host_object, emit_host_object_with_metadata, ensure_direct_type,
     enum_variant_payload_types_for_target, infer_operand_type, infer_rvalue_type, infer_try_type,
     infer_variant_payload_type, is_numeric_type_name, main_signature, mangle_default_binder_symbol,
     mangle_symbol, mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
@@ -25,8 +25,8 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::MirReceiverKind;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirFormatPart, MirFunction, MirLocalType,
-    MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirExternCall, MirExternParam, MirFormatPart,
+    MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
 };
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
@@ -1884,6 +1884,421 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
         trait_impls: Vec::new(),
         top_level: None,
     }
+}
+
+#[test]
+fn direct_ffi_codegen_embeds_call_metadata_and_uses_only_the_runtime_adapter() {
+    let call = Rvalue::Call {
+        callee: CallTarget::Extern(MirExternCall {
+            symbol: "getpid".to_string(),
+            abi: "C".to_string(),
+            params: Vec::new(),
+            return_type: Type::named("int32"),
+        }),
+        args: Vec::new(),
+    };
+    let module = module_with_main_call_result_type(call, Type::named("int32"));
+    let object = emit_host_object(&module).expect("direct getpid FFI should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_ffi_call")),
+        "direct FFI must route through the shared runtime adapter: {referenced:?}"
+    );
+    assert!(
+        referenced.iter().all(|symbol| !symbol.contains("getpid")),
+        "generated objects must resolve process symbols at runtime: {referenced:?}"
+    );
+    assert!(
+        object.windows(4).any(|bytes| bytes == b"AUFI")
+            && object.windows(6).any(|bytes| bytes == b"getpid"),
+        "the validated serialized call spec must be embedded in the object"
+    );
+}
+
+#[test]
+fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership() {
+    let handle_ty = Type::named("ProcessHandle");
+    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            source_path: None,
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "bytes".to_string(),
+                    ty: bytes_ty.clone(),
+                },
+                MirLocalType {
+                    name: "read_count".to_string(),
+                    ty: Type::named("int64"),
+                },
+                MirLocalType {
+                    name: "handle".to_string(),
+                    ty: handle_ty.clone(),
+                },
+                MirLocalType {
+                    name: "released".to_string(),
+                    ty: Type::Unit,
+                },
+                MirLocalType {
+                    name: "narrow".to_string(),
+                    ty: Type::named("uint16"),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "bytes".to_string(),
+                        value: Rvalue::VecLiteral {
+                            elements: vec![Operand::Int(0), Operand::Int(0)],
+                            element_type: Type::named("uint8"),
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "read_count".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(MirExternCall {
+                                symbol: "read".to_string(),
+                                abi: "C".to_string(),
+                                params: vec![
+                                    MirExternParam {
+                                        name: "fd".to_string(),
+                                        passing: MirReceiverKind::Borrow,
+                                        ty: Type::named("int32"),
+                                    },
+                                    MirExternParam {
+                                        name: "bytes".to_string(),
+                                        passing: MirReceiverKind::BorrowMut,
+                                        ty: bytes_ty.clone(),
+                                    },
+                                ],
+                                return_type: Type::named("int64"),
+                            }),
+                            args: vec![
+                                MirArg {
+                                    name: None,
+                                    value: Operand::Int(0),
+                                    writeback_place: None,
+                                },
+                                MirArg {
+                                    name: None,
+                                    value: Operand::MovePlace("bytes".to_string()),
+                                    writeback_place: Some("bytes".to_string()),
+                                },
+                            ],
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "handle".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(MirExternCall {
+                                symbol: "malloc".to_string(),
+                                abi: "C".to_string(),
+                                params: vec![MirExternParam {
+                                    name: "size".to_string(),
+                                    passing: MirReceiverKind::Borrow,
+                                    ty: Type::named("uint64"),
+                                }],
+                                return_type: handle_ty.clone(),
+                            }),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::Int(1),
+                                writeback_place: None,
+                            }],
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "released".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(MirExternCall {
+                                symbol: "free".to_string(),
+                                abi: "C".to_string(),
+                                params: vec![MirExternParam {
+                                    name: "handle".to_string(),
+                                    passing: MirReceiverKind::Value,
+                                    ty: handle_ty,
+                                }],
+                                return_type: Type::Unit,
+                            }),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::MovePlace("handle".to_string()),
+                                writeback_place: None,
+                            }],
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "narrow".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(MirExternCall {
+                                symbol: "htons".to_string(),
+                                abi: "C".to_string(),
+                                params: vec![MirExternParam {
+                                    name: "value".to_string(),
+                                    passing: MirReceiverKind::Borrow,
+                                    ty: Type::named("uint16"),
+                                }],
+                                return_type: Type::named("uint16"),
+                            }),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::Int(7),
+                                writeback_place: None,
+                            }],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let object = emit_host_object(&module)
+        .expect("mutable byte views, opaque ownership, and narrow scalars should emit");
+    assert!(
+        object_referenced_symbol_occurrences(&object, "aurora_direct_ffi_call") >= 4,
+        "each extern call must reference the shared runtime adapter"
+    );
+}
+
+#[test]
+fn direct_ffi_validation_rejects_unvalidated_metadata() {
+    let invalid_abi = module_with_main_call_result_type(
+        Rvalue::Call {
+            callee: CallTarget::Extern(MirExternCall {
+                symbol: "foreign".to_string(),
+                abi: "Rust".to_string(),
+                params: Vec::new(),
+                return_type: Type::named("int32"),
+            }),
+            args: Vec::new(),
+        },
+        Type::named("int32"),
+    );
+    let error = emit_host_object(&invalid_abi).expect_err("non-C FFI must never reach codegen");
+    assert!(error.contains("unsupported FFI ABI `Rust`"));
+
+    let wrong_arity = module_with_main_call_result_type(
+        Rvalue::Call {
+            callee: CallTarget::Extern(MirExternCall {
+                symbol: "foreign".to_string(),
+                abi: "C".to_string(),
+                params: vec![MirExternParam {
+                    name: "value".to_string(),
+                    passing: MirReceiverKind::Borrow,
+                    ty: Type::named("int32"),
+                }],
+                return_type: Type::named("int32"),
+            }),
+            args: Vec::new(),
+        },
+        Type::named("int32"),
+    );
+    assert_eq!(
+        emit_host_object(&wrong_arity).expect_err("extern arity drift must be rejected"),
+        "direct backend expected 1 argument(s) for extern `foreign`, found 0"
+    );
+
+    let unexpected_writeback = module_with_main_call_result_type(
+        Rvalue::Call {
+            callee: CallTarget::Extern(MirExternCall {
+                symbol: "foreign".to_string(),
+                abi: "C".to_string(),
+                params: vec![MirExternParam {
+                    name: "value".to_string(),
+                    passing: MirReceiverKind::Borrow,
+                    ty: Type::named("int32"),
+                }],
+                return_type: Type::named("int32"),
+            }),
+            args: vec![MirArg {
+                name: None,
+                value: Operand::Int(1),
+                writeback_place: Some("value".to_string()),
+            }],
+        },
+        Type::named("int32"),
+    );
+    assert_eq!(
+        emit_host_object(&unexpected_writeback)
+            .expect_err("shared extern arguments must not request writeback"),
+        "direct backend extern argument 1 unexpectedly requests writeback"
+    );
+
+    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let missing_mut_writeback = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            source_path: None,
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "bytes".to_string(),
+                    ty: bytes_ty.clone(),
+                },
+                MirLocalType {
+                    name: "%t0".to_string(),
+                    ty: Type::named("int64"),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "bytes".to_string(),
+                        value: Rvalue::VecLiteral {
+                            elements: vec![Operand::Int(0)],
+                            element_type: Type::named("uint8"),
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%t0".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(MirExternCall {
+                                symbol: "read".to_string(),
+                                abi: "C".to_string(),
+                                params: vec![MirExternParam {
+                                    name: "bytes".to_string(),
+                                    passing: MirReceiverKind::BorrowMut,
+                                    ty: bytes_ty,
+                                }],
+                                return_type: Type::named("int64"),
+                            }),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::MovePlace("bytes".to_string()),
+                                writeback_place: None,
+                            }],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    assert_eq!(
+        emit_host_object(&missing_mut_writeback)
+            .expect_err("mutable byte views require an explicit writeback place"),
+        "direct backend extern mutable argument 1 has no writeback place"
+    );
+}
+
+#[test]
+fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
+    use crate::ffi::FfiType;
+
+    for (name, expected) in [
+        ("bool", FfiType::Bool),
+        ("int8", FfiType::I8),
+        ("int16", FfiType::I16),
+        ("int32", FfiType::I32),
+        ("int", FfiType::I64),
+        ("int64", FfiType::I64),
+        ("uint8", FfiType::U8),
+        ("uint16", FfiType::U16),
+        ("uint32", FfiType::U32),
+        ("uint64", FfiType::U64),
+        ("float32", FfiType::F32),
+        ("float64", FfiType::F64),
+    ] {
+        let direct = direct_ffi_type_for_source(&Type::named(name), Some(MirReceiverKind::Borrow))
+            .unwrap_or_else(|error| panic!("{name} should be a valid shared FFI scalar: {error}"));
+        assert_eq!(direct.ffi_type, expected, "{name} ABI kind");
+        assert_eq!(direct.opaque_name, None, "{name} is not nominal");
+    }
+
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::Unit, None)
+            .expect("None is the FFI unit return")
+            .ffi_type,
+        FfiType::Unit
+    );
+    let string = direct_ffi_type_for_source(&Type::named("String"), Some(MirReceiverKind::Borrow))
+        .expect("shared String is a UTF-8 view");
+    assert_eq!(string.ffi_type, FfiType::StringView);
+    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    assert_eq!(
+        direct_ffi_type_for_source(&bytes_ty, Some(MirReceiverKind::Borrow))
+            .expect("shared bytes are a const view")
+            .ffi_type,
+        FfiType::BytesView
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(&bytes_ty, Some(MirReceiverKind::BorrowMut))
+            .expect("mutable bytes are a scratch view")
+            .ffi_type,
+        FfiType::BytesViewMut
+    );
+    let handle =
+        direct_ffi_type_for_source(&Type::named("ProcessHandle"), Some(MirReceiverKind::Value))
+            .expect("owned opaque handles are consumed");
+    assert_eq!(handle.ffi_type, FfiType::OpaqueHandle);
+    assert_eq!(handle.opaque_name.as_deref(), Some("ProcessHandle"));
+
+    for passing in [MirReceiverKind::BorrowMut, MirReceiverKind::Value] {
+        assert_eq!(
+            direct_ffi_type_for_source(&Type::named("int32"), Some(passing)),
+            Err(format!(
+                "direct backend cannot pass `int32` with ownership mode `{passing:?}` through FFI v0"
+            ))
+        );
+    }
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::named("String"), Some(MirReceiverKind::BorrowMut)),
+        Err("direct backend can pass `String` through FFI v0 only as a shared view".to_string())
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(
+            &Type::named("ProcessHandle"),
+            Some(MirReceiverKind::BorrowMut)
+        ),
+        Err(
+            "direct backend cannot mutably borrow opaque handle `ProcessHandle` through FFI v0"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(&bytes_ty, Some(MirReceiverKind::Value)),
+        Err("direct backend cannot pass `own Vec[uint8]` through FFI v0".to_string())
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(&bytes_ty, None),
+        Err("direct backend cannot return `Vec[uint8]` through FFI v0".to_string())
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(
+            &Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Some(MirReceiverKind::Borrow),
+        ),
+        Err("direct backend cannot lower `Vec[int32]` through FFI v0".to_string())
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(
+            &Type::Tuple(vec![Type::named("int32")]),
+            Some(MirReceiverKind::Borrow),
+        ),
+        Err("direct backend cannot lower `(int32,)` through FFI v0".to_string())
+    );
 }
 
 fn module_with_main_member_call(

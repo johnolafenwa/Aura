@@ -7,16 +7,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aurora_compiler::call::BuiltinMember;
 use aurora_compiler::diag::Span;
 use aurora_compiler::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirFunction, MirModule, Operand, Rvalue,
-    Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirExternCall, MirFunction, MirLocalType,
+    MirModule, Operand, Rvalue, Terminator,
 };
 use aurora_compiler::sema::Type;
 use aurora_compiler::{
     analyze_path_source, analyze_source, check_path, check_source, complete_path_source,
     complete_source, emit_host_native_object, emit_host_native_object_with_metadata,
     lower_path_to_mir, lower_source_to_mir, run_mir, run_path,
-    run_path_with_source_and_stdout_sink, run_path_with_stdout_sink, run_source,
-    run_source_with_stdout_sink, StdoutSink,
+    run_path_with_source_and_stdout_sink, run_path_with_stdout_sink, run_serialized_mir,
+    run_source, run_source_with_stdout_sink, StdoutSink,
 };
 
 struct TempDir {
@@ -414,6 +414,147 @@ def main() -> int32:
 }
 
 #[test]
+fn public_mir_lowering_preserves_contextual_floats_operators_and_consuming_match_updates() {
+    let source = r#"
+trait Add[Rhs, Out]:
+    def add(self, rhs: Rhs) -> Out
+
+trait Neg[Out]:
+    def neg(self) -> Out
+
+copy class Score:
+    value: int32
+
+impl Add[Score, Score] for Score:
+    def add(self, rhs: Score) -> Score:
+        return Score(value=self.value + rhs.value)
+
+impl Neg[Score] for Score:
+    def neg(self) -> Score:
+        return Score(value=0 - self.value)
+
+enum Bucket:
+    Items(Vec[int32])
+    Empty
+
+def main() -> int32:
+    base: float32 = 2.5
+    first: float32 = (1.25) if true else base
+    second: float32 = base if false else (3.5)
+    print(first)
+    print(second)
+
+    total = Score(value=1) + Score(value=2)
+    print(total.value)
+    negative = -total
+    print(negative.value)
+
+    match own ("left", "right"):
+        case (left, right):
+            print(f"{left}:{right}")
+
+    mut bucket = Bucket.Items([1])
+    match mut bucket:
+        case Items(items):
+            items.push(2)
+        case Empty:
+            pass
+    match own bucket:
+        case Items(items):
+            print(items.len())
+        case Empty:
+            print(0)
+    return 0
+"#;
+
+    check_source(source).expect("combined MIR behavior source should type-check");
+    let direct = run_source(source).expect("combined MIR behavior source should run");
+    assert_eq!(direct.stdout, "1.25\n3.5\n3\n-3\nleft:right\n2\n");
+
+    let mir = lower_source_to_mir(source).expect("combined behavior source should lower to MIR");
+    let mir_output = run_mir(&mir).expect("combined behavior MIR should execute");
+    assert_eq!(mir_output.stdout, direct.stdout);
+    assert!(
+        mir.functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::TupleTakeElement { .. },
+                    ..
+                }
+            )),
+        "consuming tuple bindings must take their owned elements"
+    );
+    assert!(
+        mir.functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Member {
+                                    field,
+                                    receiver_place: Some(_),
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } if field == "push"
+            )),
+        "mutable match payload updates must retain the mutating receiver place"
+    );
+    assert!(!emit_host_native_object(&mir)
+        .expect("combined behavior source should lower through the direct backend")
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_authorized_ffi_lowering_exposes_exact_extern_mir_to_backends() {
+    let path = repo_root().join("examples/packages/ffi_getpid/src/main.au");
+    let mir = lower_path_to_mir(&path).expect("maintained FFI example should lower by path");
+    let extern_call = mir
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        ..
+                    },
+                ..
+            } if call.symbol == "getpid" => Some(call),
+            _ => None,
+        })
+        .expect("maintained FFI MIR should contain the getpid extern call");
+    assert_eq!(extern_call.abi, "C");
+    assert!(extern_call.params.is_empty());
+    assert_eq!(extern_call.return_type, Type::named("int32"));
+
+    let output =
+        run_path(&path).expect("manifest-authorized FFI path should use the trusted route");
+    assert_eq!(output.stdout, "true\n");
+    let public_error =
+        run_mir(&mir).expect_err("arbitrary public MIR execution must reject extern metadata");
+    assert_eq!(public_error.code, "AU4001");
+    assert!(public_error.message.contains("getpid"));
+    assert!(!emit_host_native_object(&mir)
+        .expect("exact extern MIR should lower through the direct backend adapter")
+        .is_empty());
+}
+
+#[test]
 fn public_native_codegen_rejects_invalid_mir_surface() {
     let invalid_module = MirModule {
         functions: vec![MirFunction {
@@ -538,6 +679,99 @@ def main() -> int32:
             .expect("captured override output should be readable")
             .as_str(),
         "override\n"
+    );
+}
+
+#[test]
+fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
+    let safe_source = "def main():\n    print(\"serialized-safe\")\n";
+    let safe = lower_source_to_mir(safe_source).expect("safe source should lower to MIR");
+    let safe_json = serde_json::to_vec(&safe).expect("safe MIR should serialize");
+    let output = run_serialized_mir(&safe_json, "/virtual/safe.au", safe_source)
+        .expect("public serialized-MIR execution should run safe payloads");
+    assert_eq!(output.stdout, "serialized-safe\n");
+
+    let malformed = run_serialized_mir(b"{not json", "/virtual/bad.au", "def main():\n    pass\n")
+        .expect_err("malformed serialized MIR must be diagnosed");
+    assert_eq!(malformed.code, "AU4001");
+    assert!(
+        malformed
+            .message
+            .contains("failed to deserialize embedded MIR"),
+        "{}",
+        malformed.message
+    );
+
+    let forged = MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<forged>".to_string(),
+            source_path: Some("/virtual/forged.au".to_string()),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![MirLocalType {
+                name: "process_id".to_string(),
+                ty: Type::named("int32"),
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![Instruction::Assign {
+                    target: "process_id".to_string(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Extern(MirExternCall {
+                            symbol: "getpid".to_string(),
+                            abi: "C".to_string(),
+                            params: Vec::new(),
+                            return_type: Type::named("int32"),
+                        }),
+                        args: Vec::new(),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::Place("process_id".to_string())),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let forged_json = serde_json::to_vec(&forged).expect("forged MIR should serialize");
+    let rejected = run_serialized_mir(
+        &forged_json,
+        "/virtual/forged.au",
+        "def main():\n    pass\n",
+    )
+    .expect_err("public serialized-MIR execution must reject caller-supplied FFI metadata");
+    assert_eq!(rejected.code, "AU4001");
+    assert!(rejected.message.contains("getpid"));
+    assert!(rejected.message.contains("manifest-rooted package"));
+    assert!(rejected.message.contains("path-based API"));
+}
+
+#[test]
+fn native_runtime_abi_accepts_valid_embedded_buffers_and_returns_main_code() {
+    let source = "def main() -> int32:\n    return 7\n";
+    let module = lower_source_to_mir(source).expect("native ABI source should lower");
+    let mir_json = serde_json::to_vec(&module).expect("native ABI MIR should serialize");
+    let source_path = b"/virtual/native-abi.au";
+
+    // SAFETY: each pointer refers to the paired live byte slice for the
+    // duration of the call, exactly as the exported ABI requires.
+    let code = unsafe {
+        aurora_compiler::mir_runtime::aurora_native_run(
+            mir_json.as_ptr(),
+            mir_json.len(),
+            source_path.as_ptr(),
+            source_path.len(),
+            source.as_ptr(),
+            source.len(),
+        )
+    };
+    assert_eq!(
+        code, 7,
+        "the native runtime ABI must return main's int32 exit code"
     );
 }
 

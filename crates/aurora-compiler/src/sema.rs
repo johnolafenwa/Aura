@@ -28,6 +28,8 @@ pub struct Program {
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
+    pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
     pub trait_impls: Vec<TraitImplInfo>,
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
@@ -149,6 +151,19 @@ pub struct FunctionInfo {
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
     pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExternFunctionInfo {
+    pub module_name: String,
+    pub decl: crate::ast::ExternFunctionDecl,
+    pub signature: FunctionSignature,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpaqueHandleInfo {
+    pub module_name: String,
+    pub decl: crate::ast::ExternOpaqueClassDecl,
 }
 
 #[derive(Clone, Debug)]
@@ -285,6 +300,8 @@ pub(crate) fn builtin_duration_binary_result(
 #[derive(Clone, Debug)]
 pub enum ImportedBinding {
     Function(FunctionInfo),
+    ExternFunction(ExternFunctionInfo),
+    OpaqueHandle(OpaqueHandleInfo),
     Class(ClassInfo),
     Enum(EnumInfo),
     Trait(TraitInfo),
@@ -298,11 +315,15 @@ pub struct ModuleNamespace {
     pub source_path: Option<String>,
     pub modules: BTreeMap<String, ModuleNamespace>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
+    pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
     pub trait_impls: Vec<TraitImplInfo>,
     pub all_functions: BTreeMap<String, FunctionInfo>,
+    pub all_extern_functions: BTreeMap<String, ExternFunctionInfo>,
+    pub all_opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub all_classes: BTreeMap<String, ClassInfo>,
     pub all_enums: BTreeMap<String, EnumInfo>,
     pub all_traits: BTreeMap<String, TraitInfo>,
@@ -1317,11 +1338,15 @@ impl fmt::Display for Type {
     }
 }
 
-pub fn check(module: Module) -> Result<Program> {
+#[cfg(test)]
+fn check(module: Module) -> Result<Program> {
     check_with_context(module, ModuleContext::default())
 }
 
-pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+// This checker accepts already-authorized module context and therefore stays
+// crate-private. Public callers must use the source wrappers (which reject
+// unmanifested FFI) or path APIs (which enforce package opt-in and reports).
+pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
     let module_name = if context.module_name.is_empty() {
         "<main>".to_string()
     } else {
@@ -1334,6 +1359,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     let mut imported_modules = BTreeMap::new();
 
     let mut imported_functions = BTreeMap::new();
+    let mut imported_extern_functions = BTreeMap::new();
+    let mut imported_opaque_handles = BTreeMap::new();
     let mut imported_classes = BTreeMap::new();
     let mut imported_enums = BTreeMap::new();
     let mut imported_traits = BTreeMap::new();
@@ -1346,6 +1373,26 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
                 }
                 imported_functions.insert(name.clone(), function.clone());
+            }
+            ImportedBinding::ExternFunction(function) => {
+                item_names.insert(name.clone(), ("extern function", function.decl.name_span));
+                if let Some(namespace) = context.module_registry.get(&function.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
+                imported_extern_functions.insert(name.clone(), function.clone());
+            }
+            ImportedBinding::OpaqueHandle(handle) => {
+                canonical_type_names.insert(
+                    name.clone(),
+                    format!("{}.{}", handle.module_name, handle.decl.name),
+                );
+                type_names.insert(name.clone(), handle.decl.span);
+                type_arities.insert(name.clone(), 0);
+                item_names.insert(name.clone(), ("opaque class", handle.decl.name_span));
+                if let Some(namespace) = context.module_registry.get(&handle.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
+                imported_opaque_handles.insert(name.clone(), handle.clone());
             }
             ImportedBinding::Class(class_info) => {
                 canonical_type_names.insert(
@@ -1429,6 +1476,47 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 type_names.insert(enum_decl.name.clone(), enum_decl.span);
                 type_arities.insert(enum_decl.name.clone(), enum_decl.type_params.len());
                 canonical_type_names.insert(enum_decl.name.clone(), enum_decl.name.clone());
+            }
+            Item::ExternOpaqueClass(class_decl) => {
+                reject_reserved_type_name(&class_decl.name, class_decl.span)?;
+                if let Some((kind, existing)) =
+                    item_names.insert(class_decl.name.clone(), ("opaque class", class_decl.span))
+                {
+                    return Err(Diagnostic::at(
+                        class_decl.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            class_decl.name, kind, existing
+                        ),
+                    ));
+                }
+                type_names.insert(class_decl.name.clone(), class_decl.span);
+                type_arities.insert(class_decl.name.clone(), 0);
+                canonical_type_names.insert(class_decl.name.clone(), class_decl.name.clone());
+            }
+            Item::ExternFunction(function_decl) => {
+                if BuiltinFunction::from_name(&function_decl.name).is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2007",
+                        function_decl.span,
+                        format!(
+                            "`{}` is a builtin function name and cannot be redefined",
+                            function_decl.name
+                        ),
+                    ));
+                }
+                if let Some((kind, existing)) = item_names.insert(
+                    function_decl.name.clone(),
+                    ("extern function", function_decl.span),
+                ) {
+                    return Err(Diagnostic::at(
+                        function_decl.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            function_decl.name, kind, existing
+                        ),
+                    ));
+                }
             }
             Item::Function(function_decl) => {
                 if BuiltinFunction::from_name(&function_decl.name).is_some() {
@@ -2038,6 +2126,71 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         );
     }
 
+    let mut opaque_handles = imported_opaque_handles;
+    for item in &module.items {
+        let Item::ExternOpaqueClass(extern_decl) = item else {
+            continue;
+        };
+        opaque_handles.insert(
+            extern_decl.name.clone(),
+            OpaqueHandleInfo {
+                module_name: module_name.clone(),
+                decl: extern_decl.clone(),
+            },
+        );
+    }
+    let mut ffi_signature_opaque_handles = opaque_handles.clone();
+    for namespace in imported_modules.values() {
+        register_public_namespace_opaque_handles(namespace, &mut ffi_signature_opaque_handles);
+    }
+
+    let mut extern_functions = imported_extern_functions;
+    for item in &module.items {
+        let Item::ExternFunction(extern_decl) = item else {
+            continue;
+        };
+        validate_ffi_signature(
+            extern_decl,
+            &ffi_signature_opaque_handles,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+        )?;
+        let params = extern_decl
+            .params
+            .iter()
+            .map(|param| {
+                lower_type(
+                    &param.ty,
+                    &type_names,
+                    &type_arities,
+                    &canonical_type_names,
+                    &BTreeMap::new(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let return_type = lower_type(
+            &extern_decl.return_type,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &BTreeMap::new(),
+        )?;
+        extern_functions.insert(
+            extern_decl.name.clone(),
+            ExternFunctionInfo {
+                module_name: module_name.clone(),
+                decl: extern_decl.clone(),
+                signature: FunctionSignature {
+                    params,
+                    param_passings: resolve_param_passings(&extern_decl.params),
+                    return_type,
+                    rng_clone_safe_type_params: BTreeSet::new(),
+                },
+            },
+        );
+    }
+
     let mut trait_impls = Vec::new();
     for item in &module.items {
         let Item::Impl(impl_decl) = item else {
@@ -2301,6 +2454,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         classes,
         enums,
         functions,
+        extern_functions,
+        opaque_handles,
         traits,
         trait_impls,
         imported_modules,
@@ -2369,7 +2524,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &program.trait_impls,
                 &program.imported_modules,
                 &program.module_registry,
-            );
+            )
+            .with_ffi(&program.extern_functions, &program.opaque_handles);
             let closure_infos = checker.closure_infos.clone();
             let mut function_obligations = BTreeMap::<String, BTreeSet<String>>::new();
             let mut class_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
@@ -2652,7 +2808,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &program.trait_impls,
         &program.imported_modules,
         &program.module_registry,
-    );
+    )
+    .with_ffi(&program.extern_functions, &program.opaque_handles);
     top_level_checker.check_top_level(&program.top_level_stmts)?;
     program
         .closures
@@ -2998,6 +3155,11 @@ fn register_module_namespace_types(
     type_names: &mut BTreeMap<String, crate::diag::Span>,
     type_arities: &mut BTreeMap<String, usize>,
 ) {
+    for handle in namespace.opaque_handles.values() {
+        let qualified_name = format!("{}.{}", namespace.path, handle.decl.name);
+        type_names.insert(qualified_name.clone(), handle.decl.span);
+        type_arities.insert(qualified_name, 0);
+    }
     for class in namespace.classes.values() {
         let qualified_name = format!("{}.{}", namespace.path, class.decl.name);
         type_names.insert(qualified_name.clone(), class.decl.span);
@@ -3018,6 +3180,24 @@ fn register_module_namespace_types(
     }
     for imported in namespace.imported_modules.values() {
         register_module_namespace_types(imported, type_names, type_arities);
+    }
+}
+
+fn register_public_namespace_opaque_handles(
+    namespace: &ModuleNamespace,
+    handles: &mut BTreeMap<String, OpaqueHandleInfo>,
+) {
+    for handle in namespace.opaque_handles.values() {
+        handles.insert(
+            format!("{}.{}", namespace.path, handle.decl.name),
+            handle.clone(),
+        );
+    }
+    for child in namespace.modules.values() {
+        register_public_namespace_opaque_handles(child, handles);
+    }
+    for imported in namespace.imported_modules.values() {
+        register_public_namespace_opaque_handles(imported, handles);
     }
 }
 
@@ -3082,6 +3262,255 @@ fn validate_params(receiver: Option<ReceiverKind>, params: &[Param], owner: &str
         }
     }
     Ok(())
+}
+
+fn validate_ffi_signature(
+    decl: &crate::ast::ExternFunctionDecl,
+    opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
+) -> Result<()> {
+    if decl.abi != "C" {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            decl.span,
+            format!(
+                "FFI ABI `{}` is reserved; FFI v0 supports only `extern \"C\"`",
+                decl.abi
+            ),
+        ));
+    }
+    validate_params(
+        None,
+        &decl.params,
+        &format!("extern function `{}`", decl.name),
+    )?;
+
+    for param in &decl.params {
+        if matches!(param.ty.kind, crate::ast::TypeRefKind::Function { .. }) {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                param.ty.span,
+                format!(
+                    "FFI callbacks are reserved; parameter `{}` cannot use a function type",
+                    param.name
+                ),
+            )
+            .with_help(
+                "write a named Aurora wrapper around a fixed extern declaration; C-to-Aurora callbacks are not supported in FFI v0",
+            ));
+        }
+        if ffi_type_ref_is_raw_pointer(&param.ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                param.ty.span,
+                format!(
+                    "FFI raw pointers are reserved; parameter `{}` must use a String, Vec[uint8], or opaque handle contract",
+                    param.name
+                ),
+            )
+            .with_help(
+                "use bare `String` or `Vec[uint8]` for a const pointer-length view, `mut Vec[uint8]` for fixed-length copy-in/out, or declare an opaque handle",
+            ));
+        }
+        let ty = lower_type(
+            &param.ty,
+            type_names,
+            type_arities,
+            canonical_type_names,
+            &BTreeMap::new(),
+        )?;
+        validate_ffi_parameter(&param.name, param.mode, &ty, param.span, opaque_handles)?;
+    }
+
+    if matches!(
+        decl.return_type.kind,
+        crate::ast::TypeRefKind::Function { .. }
+    ) {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            decl.return_type.span,
+            "FFI callbacks are reserved; an extern declaration cannot return a function value",
+        ));
+    }
+    if ffi_type_ref_is_raw_pointer(&decl.return_type) {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            decl.return_type.span,
+            "FFI raw-pointer returns are reserved; use an opaque handle return type",
+        ));
+    }
+    let return_type = lower_type(
+        &decl.return_type,
+        type_names,
+        type_arities,
+        canonical_type_names,
+        &BTreeMap::new(),
+    )?;
+    validate_ffi_return(&return_type, decl.return_type.span, opaque_handles)
+}
+
+fn ffi_type_ref_is_raw_pointer(ty: &TypeRef) -> bool {
+    matches!(
+        &ty.kind,
+        crate::ast::TypeRefKind::Named { name, .. } if name == "Ptr"
+    )
+}
+
+fn ffi_scalar_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name, args)
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "bool"
+                        | "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "float32"
+                        | "float64"
+                )
+    )
+}
+
+fn ffi_opaque_handle(ty: &Type, handles: &BTreeMap<String, OpaqueHandleInfo>) -> bool {
+    let Type::Named(name, args) = ty else {
+        return false;
+    };
+    args.is_empty()
+        && handles.iter().any(|(visible_name, handle)| {
+            name == visible_name || name == &format!("{}.{}", handle.module_name, handle.decl.name)
+        })
+}
+
+fn validate_ffi_parameter(
+    param_name: &str,
+    mode: ParamMode,
+    ty: &Type,
+    span: crate::diag::Span,
+    opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+) -> Result<()> {
+    if ffi_scalar_type(ty) {
+        if mode != ParamMode::Default {
+            return Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!(
+                    "fixed-width scalar parameter `{param_name}` must use the bare capability"
+                ),
+            )
+            .with_help(
+                "remove `own` or `mut`; FFI v0 passes scalar bits by value and reserves pointer-style scalar parameters",
+            ));
+        }
+        return Ok(());
+    }
+
+    if *ty == Type::named("String") {
+        return match mode {
+            ParamMode::Default => Ok(()),
+            ParamMode::Own => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("String view parameter `{param_name}` must use the bare capability"),
+            )
+            .with_help(
+                "use bare `String`; it passes a temporary const UTF-8 pointer and byte length for the duration of the call",
+            )),
+            ParamMode::BorrowMut => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("mutable String views are reserved for parameter `{param_name}`"),
+            )
+            .with_help(
+                "use `mut Vec[uint8]` for fixed-length writable bytes, or bare `String` for a const UTF-8 view",
+            )),
+        };
+    }
+
+    if matches!(ty, Type::Named(name, args) if name == "Vec" && args == &[Type::named("uint8")]) {
+        return match mode {
+            ParamMode::Default | ParamMode::BorrowMut => Ok(()),
+            ParamMode::Own => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("owned byte views are reserved for parameter `{param_name}`"),
+            )
+            .with_help(
+                "use bare `Vec[uint8]` for a const view or `mut Vec[uint8]` for fixed-length copy-in/out",
+            )),
+        };
+    }
+
+    if matches!(ty, Type::Named(name, args) if name == "Vec" && args.len() == 1) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!(
+                "only `Vec[uint8]` is supported as an FFI byte view; parameter `{param_name}` has `{ty}`"
+            ),
+        ));
+    }
+
+    if ffi_opaque_handle(ty, opaque_handles) {
+        return match mode {
+            ParamMode::Default | ParamMode::Own => Ok(()),
+            ParamMode::BorrowMut => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("mutable opaque-handle parameters are reserved for `{param_name}`"),
+            )
+            .with_help(
+                "use a bare handle to share it for the call, or `own Handle` when the C function consumes it",
+            )),
+        };
+    }
+
+    Err(Diagnostic::coded_at(
+        "AU2002",
+        span,
+        format!("FFI v0 does not support parameter type `{ty}`"),
+    )
+    .with_help(
+        "use a fixed-width scalar, bare String, bare or mut Vec[uint8], or a declared opaque handle",
+    ))
+}
+
+fn validate_ffi_return(
+    ty: &Type,
+    span: crate::diag::Span,
+    opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+) -> Result<()> {
+    if *ty == Type::Unit || ffi_scalar_type(ty) || ffi_opaque_handle(ty, opaque_handles) {
+        return Ok(());
+    }
+    if *ty == Type::named("String") {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            "FFI v0 cannot return a String view because no foreign lifetime or allocator contract exists",
+        ));
+    }
+    if matches!(ty, Type::Named(name, args) if name == "Vec" && args == &[Type::named("uint8")]) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            "FFI v0 cannot return a Vec[uint8] view because no foreign lifetime or allocator contract exists",
+        ));
+    }
+    Err(Diagnostic::coded_at(
+        "AU2002",
+        span,
+        format!("FFI v0 does not support return type `{ty}`"),
+    )
+    .with_help("return None, a fixed-width scalar, or a declared opaque handle"))
 }
 
 fn type_param_scope(type_params: &[String]) -> BTreeMap<String, ()> {
@@ -4609,6 +5038,8 @@ struct FunctionChecker<'a> {
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
     functions: &'a BTreeMap<String, FunctionInfo>,
+    extern_functions: &'a BTreeMap<String, ExternFunctionInfo>,
+    opaque_handles: &'a BTreeMap<String, OpaqueHandleInfo>,
     traits: &'a BTreeMap<String, TraitInfo>,
     trait_impls: &'a [TraitImplInfo],
     imported_modules: &'a BTreeMap<String, ModuleNamespace>,
@@ -4979,6 +5410,14 @@ impl<'a> FunctionChecker<'a> {
     ) -> TransferSummary {
         if self.is_copy_type(ty) {
             return TransferSummary::default();
+        }
+        if self.is_opaque_handle_type(ty) {
+            return TransferSummary {
+                failure: Some(format!(
+                    "`{ty}` is an opaque FFI handle and is not Transfer"
+                )),
+                requirements: Vec::new(),
+            };
         }
         match ty {
             Type::Unit | Type::Function { .. } => TransferSummary::default(),
@@ -5798,6 +6237,81 @@ impl<'a> FunctionChecker<'a> {
         changed
     }
 
+    fn opaque_handle_in_type(&self, ty: &Type) -> Option<Type> {
+        self.opaque_handle_in_type_inner(ty, &mut BTreeSet::new())
+    }
+
+    fn opaque_handle_in_type_inner(
+        &self,
+        ty: &Type,
+        visiting: &mut BTreeSet<String>,
+    ) -> Option<Type> {
+        if self.is_opaque_handle_type(ty) {
+            return Some(ty.clone());
+        }
+        match ty {
+            Type::Tuple(elements) => elements
+                .iter()
+                .find_map(|element| self.opaque_handle_in_type_inner(element, visiting)),
+            Type::Closure { captures, .. } => captures
+                .iter()
+                .find_map(|capture| self.opaque_handle_in_type_inner(&capture.ty, visiting)),
+            Type::Named(name, args) => {
+                if let Some(handle) = args
+                    .iter()
+                    .find_map(|arg| self.opaque_handle_in_type_inner(arg, visiting))
+                {
+                    return Some(handle);
+                }
+
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    if args.len() != class_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    let handle = class_info.fields.values().find_map(|field| {
+                        let field_ty = substitute_type(&field.ty, &substitutions);
+                        self.opaque_handle_in_type_inner(&field_ty, visiting)
+                    });
+                    visiting.remove(&key);
+                    return handle;
+                }
+
+                if let Some(enum_info) = self.resolve_enum_info(name) {
+                    if args.len() != enum_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    let handle = enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| &variant.payloads)
+                        .find_map(|payload| {
+                            let payload_ty = substitute_type(&payload.ty, &substitutions);
+                            self.opaque_handle_in_type_inner(&payload_ty, visiting)
+                        });
+                    visiting.remove(&key);
+                    return handle;
+                }
+
+                None
+            }
+            // Function parameter and result types are call contracts, not
+            // values retained inside the capture-free code pointer.
+            Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+        }
+    }
+
     fn reject_rng_duplication(
         &self,
         operation: &str,
@@ -5835,6 +6349,18 @@ impl<'a> FunctionChecker<'a> {
                     "transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers",
                 ));
             }
+        }
+        if let Some(handle_ty) = self.opaque_handle_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU3007",
+                span,
+                format!(
+                    "cannot use {operation} because duplicating `{ty}` would duplicate opaque FFI handle `{handle_ty}`"
+                ),
+            )
+            .with_help(
+                "move the value so the opaque handle keeps one owner; use a consuming `pop`, `remove`, or replacement operation when extracting it from a collection",
+            ));
         }
         let qualifier = match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe => return Ok(()),
@@ -6275,6 +6801,10 @@ impl<'a> FunctionChecker<'a> {
         imported_modules: &'a BTreeMap<String, ModuleNamespace>,
         module_registry: &'a BTreeMap<String, ModuleNamespace>,
     ) -> Self {
+        static EMPTY_EXTERN_FUNCTIONS: std::sync::OnceLock<BTreeMap<String, ExternFunctionInfo>> =
+            std::sync::OnceLock::new();
+        static EMPTY_OPAQUE_HANDLES: std::sync::OnceLock<BTreeMap<String, OpaqueHandleInfo>> =
+            std::sync::OnceLock::new();
         Self {
             root_module_name: module_name,
             module_name,
@@ -6284,6 +6814,8 @@ impl<'a> FunctionChecker<'a> {
             classes,
             enums,
             functions,
+            extern_functions: EMPTY_EXTERN_FUNCTIONS.get_or_init(BTreeMap::new),
+            opaque_handles: EMPTY_OPAQUE_HANDLES.get_or_init(BTreeMap::new),
             traits,
             trait_impls,
             imported_modules,
@@ -6300,6 +6832,16 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn with_ffi(
+        mut self,
+        extern_functions: &'a BTreeMap<String, ExternFunctionInfo>,
+        opaque_handles: &'a BTreeMap<String, OpaqueHandleInfo>,
+    ) -> Self {
+        self.extern_functions = extern_functions;
+        self.opaque_handles = opaque_handles;
+        self
+    }
+
     fn with_return_type(&self, return_type: Type) -> Self {
         Self {
             root_module_name: self.root_module_name,
@@ -6310,6 +6852,8 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            extern_functions: self.extern_functions,
+            opaque_handles: self.opaque_handles,
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
@@ -6340,6 +6884,8 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            extern_functions: self.extern_functions,
+            opaque_handles: self.opaque_handles,
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
@@ -6366,6 +6912,8 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            extern_functions: self.extern_functions,
+            opaque_handles: self.opaque_handles,
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
@@ -6392,6 +6940,8 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            extern_functions: self.extern_functions,
+            opaque_handles: self.opaque_handles,
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
@@ -9946,6 +10496,30 @@ impl<'a> FunctionChecker<'a> {
                         &format!("function `{name}`"),
                     );
                 }
+                if self.resolve_extern_function_info(name).is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        expr.span,
+                        format!(
+                            "extern function `{name}` is direct-call-only and cannot be used as a function value"
+                        ),
+                    )
+                    .with_help(format!(
+                        "call `{name}(...)` synchronously, or write a named Aurora wrapper when a function value is required"
+                    )));
+                }
+                if self.resolve_opaque_handle_info(name).is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2005",
+                        expr.span,
+                        format!(
+                            "opaque FFI handle type `{name}` is not a value and cannot be constructed"
+                        ),
+                    )
+                    .with_help(
+                        "obtain opaque handles from extern function returns and pass them only according to the declared handle capability",
+                    ));
+                }
                 if let Some(class_info) = self.resolve_class_info(name) {
                     return Ok(Type::named(self.canonical_class_name(name, class_info)));
                 }
@@ -10478,7 +11052,18 @@ impl<'a> FunctionChecker<'a> {
                         }
                         _ => self.type_of_expr_hint(value, locals, expected)?,
                     };
-                    if is_integer_type(&value_ty) || is_float_type(&value_ty) {
+                    if self.is_opaque_handle_type(&value_ty) {
+                        Err(Diagnostic::coded_at(
+                            "AU2003",
+                            expr.span,
+                            format!(
+                                "opaque FFI handle `{value_ty}` does not support unary operator `-`; FFI v0 does not expose raw pointer arithmetic"
+                            ),
+                        )
+                        .with_help(
+                            "declare a reviewed extern function for the native handle operation instead of manipulating its address",
+                        ))
+                    } else if is_integer_type(&value_ty) || is_float_type(&value_ty) {
                         Ok(value_ty)
                     } else if let Some(operator) =
                         self.type_of_unary_operator_via_trait(expr.span, *op, &value_ty)?
@@ -10862,6 +11447,23 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
+                    if self
+                        .module_namespace(&module_path)
+                        .is_some_and(|namespace| {
+                            namespace.extern_functions.contains_key(&function_name)
+                        })
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2999",
+                            expr.span,
+                            format!(
+                                "extern function `{module_path}.{function_name}` is direct-call-only and cannot be used as a function value"
+                            ),
+                        )
+                        .with_help(format!(
+                            "call `{module_path}.{function_name}(...)` synchronously, or write a named Aurora wrapper"
+                        )));
+                    }
                     if let Some(function) =
                         self.module_namespace(&module_path).and_then(|namespace| {
                             namespace
@@ -11317,6 +11919,75 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
+        }
+        let opaque_operand = if self.is_opaque_handle_type(&left_ty) {
+            Some(&left_ty)
+        } else if self.is_opaque_handle_type(&right_ty) {
+            Some(&right_ty)
+        } else {
+            None
+        };
+        if let Some(handle_ty) = opaque_operand {
+            let arithmetic_operator = match op {
+                BinaryOp::Add => Some("+"),
+                BinaryOp::Sub => Some("-"),
+                BinaryOp::Mul => Some("*"),
+                BinaryOp::Div => Some("/"),
+                BinaryOp::FloorDiv => Some("//"),
+                BinaryOp::Mod => Some("%"),
+                _ => None,
+            };
+            if let Some(operator) = arithmetic_operator {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    span,
+                    format!(
+                        "opaque FFI handle `{handle_ty}` does not support operator `{operator}`; FFI v0 does not expose raw pointer arithmetic"
+                    ),
+                )
+                .with_help(
+                    "declare a reviewed extern function for the native handle operation instead of manipulating its address",
+                ));
+            }
+            let ordering_operator = match op {
+                BinaryOp::Less => Some("<"),
+                BinaryOp::LessEq => Some("<="),
+                BinaryOp::Greater => Some(">"),
+                BinaryOp::GreaterEq => Some(">="),
+                _ => None,
+            };
+            if let Some(operator) = ordering_operator {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    span,
+                    format!(
+                        "opaque FFI handle `{handle_ty}` does not support operator `{operator}`; FFI v0 does not define ordering for foreign addresses"
+                    ),
+                )
+                .with_help(
+                    "compare a stable scalar or String ordering key exposed by the binding instead of a foreign address",
+                ));
+            }
+        }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            let handle_comparison = if let Some(handle_ty) = self.opaque_handle_in_type(&left_ty) {
+                Some((&left_ty, handle_ty))
+            } else {
+                self.opaque_handle_in_type(&right_ty)
+                    .map(|handle_ty| (&right_ty, handle_ty))
+            };
+            if let Some((compared_ty, handle_ty)) = handle_comparison {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    span,
+                    format!(
+                        "cannot compare `{compared_ty}` because it contains opaque FFI handle `{handle_ty}` and FFI v0 does not define equality for foreign identity"
+                    ),
+                )
+                .with_help(
+                    "compare a stable scalar or String identifier exposed by the binding instead of a foreign address",
+                ));
+            }
         }
         if matches!(
             op,
@@ -12133,6 +12804,68 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         let (base_callee, explicit_type_args) = self.peel_specialization(callee);
+
+        let extern_target = match &base_callee.kind {
+            ExprKind::Name(name) if !locals.contains_key(name) => self
+                .resolve_extern_function_info(name)
+                .map(|function| (function, format!("extern function `{name}`"))),
+            ExprKind::Member { .. } => {
+                self.qualified_module_item(base_callee)
+                    .and_then(|(module_path, function_name)| {
+                        self.module_namespace(&module_path).and_then(|namespace| {
+                            namespace
+                                .extern_functions
+                                .get(&function_name)
+                                .map(|function| {
+                                    (
+                                        function,
+                                        format!("extern function `{module_path}.{function_name}`"),
+                                    )
+                                })
+                        })
+                    })
+            }
+            _ => None,
+        };
+        if let Some((function, display_name)) = extern_target {
+            if explicit_type_args.is_some() {
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
+                    span,
+                    format!("{display_name} does not take type arguments"),
+                ));
+            }
+            return self.type_check_callable_args(
+                &display_name,
+                &[],
+                &function.decl.params,
+                &function.signature.param_passings,
+                &function.signature.params,
+                &function.signature.return_type,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                args,
+                span,
+                locals,
+                expected,
+                HashMap::new(),
+            );
+        }
+
+        if let ExprKind::Name(name) = &base_callee.kind {
+            if self.resolve_opaque_handle_info(name).is_some() {
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
+                    span,
+                    format!(
+                        "opaque FFI handle `{name}` cannot be constructed by Aurora code"
+                    ),
+                )
+                .with_help(
+                    "opaque handles are returned by an extern function and have no Aurora-visible layout or constructor",
+                ));
+            }
+        }
 
         if matches!(&base_callee.kind, ExprKind::Name(name) if name == "TaskGroup")
             && explicit_type_args.is_none()
@@ -14501,6 +15234,13 @@ impl<'a> FunctionChecker<'a> {
                                 {
                                     Ok(callable) => callable,
                                     Err(named_target_error) => {
+                                        if named_target_error.code == "AU2999"
+                                            && named_target_error
+                                                .message
+                                                .starts_with("extern function `")
+                                        {
+                                            return Err(named_target_error);
+                                        }
                                         let target_ty =
                                             self.type_of_expr(&args[target_index].value, locals)?;
                                         let (params, return_type, closure_captures) =
@@ -17919,11 +18659,32 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
+                if namespace.extern_functions.contains_key(field) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        span,
+                        format!(
+                            "extern function `{}` from module `{}` is direct-call-only",
+                            field, path
+                        ),
+                    )
+                    .with_help(format!("call `{path}.{field}(...)` synchronously")));
+                }
                 if namespace.classes.contains_key(field) {
                     return Err(Diagnostic::at(
                         span,
                         format!(
                             "class `{}` from module `{}` must be constructed with `(...)`",
+                            field, path
+                        ),
+                    ));
+                }
+                if namespace.opaque_handles.contains_key(field) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2005",
+                        span,
+                        format!(
+                            "opaque FFI handle type `{}` from module `{}` is not a value",
                             field, path
                         ),
                     ));
@@ -20376,6 +21137,30 @@ impl<'a> FunctionChecker<'a> {
             .or_else(|| self.functions.get(name))
     }
 
+    fn resolve_extern_function_info(&self, name: &str) -> Option<&ExternFunctionInfo> {
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_extern_functions.get(name))
+            .or_else(|| self.extern_functions.get(name))
+    }
+
+    fn resolve_opaque_handle_info(&self, name: &str) -> Option<&OpaqueHandleInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(handle) = namespace.opaque_handles.get(item_name) {
+                    return Some(handle);
+                }
+            }
+        }
+        self.opaque_handles.get(name)
+    }
+
+    fn is_opaque_handle_type(&self, ty: &Type) -> bool {
+        let Type::Named(name, args) = ty else {
+            return false;
+        };
+        args.is_empty() && self.resolve_opaque_handle_info(name).is_some()
+    }
+
     fn resolve_class_info(&self, name: &str) -> Option<&ClassInfo> {
         if let Some((module_path, item_name)) = name.rsplit_once('.') {
             if let Some(namespace) = self.module_namespace(module_path) {
@@ -20860,6 +21645,18 @@ impl<'a> FunctionChecker<'a> {
 
         match &base_callee.kind {
             ExprKind::Name(function_name) => {
+                if self.resolve_extern_function_info(function_name).is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        callee.span,
+                        format!(
+                            "extern function `{function_name}` is direct-call-only and cannot be handed to a task"
+                        ),
+                    )
+                    .with_help(
+                        "call the extern function synchronously inside a named Aurora task function",
+                    ));
+                }
                 let function = self.functions.get(function_name).ok_or_else(|| {
                     Diagnostic::at(
                         callee.span,
@@ -20949,6 +21746,18 @@ impl<'a> FunctionChecker<'a> {
                     self.qualified_module_item(base_callee)
                 {
                     if let Some(namespace) = self.module_namespace(&module_path) {
+                        if namespace.extern_functions.contains_key(&function_name) {
+                            return Err(Diagnostic::coded_at(
+                                "AU2999",
+                                callee.span,
+                                format!(
+                                    "extern function `{module_path}.{function_name}` is direct-call-only and cannot be handed to a task"
+                                ),
+                            )
+                            .with_help(
+                                "call the extern function synchronously inside a named Aurora task function",
+                            ));
+                        }
                         if let Some(function) = namespace
                             .functions
                             .get(&function_name)

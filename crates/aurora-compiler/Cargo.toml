@@ -18,6 +18,7 @@ cranelift-object = "0.118"
 getrandom = "0.2"
 httparse = "1"
 libc = "0.2"
+libffi = "5.1.1"
 mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
 rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }

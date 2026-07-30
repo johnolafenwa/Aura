@@ -28,6 +28,24 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]) -> int64` | Delegates to the value's own `len()` member with the same `int64` type and value. |
 | `str` | `str(value) -> String` | Renders `value` exactly as `print` and f-string interpolation render it. |
 
+## Foreign Declarations
+
+FFI declarations are package-authorized direct calls, not builtins or
+first-class function values. Their names and exact signatures come from the
+binding package.
+
+| Surface | Signature | Contract |
+| --- | --- | --- |
+| C function | `extern "C" def name(...) -> R` | Bodyless synchronous call to the same process-global symbol name. |
+| Opaque handle | `extern "C" opaque class Handle` | Non-null, non-Copy, non-cloneable, non-Transfer foreign pointer wrapper. |
+| String view | `text: String` | Temporary const UTF-8 pointer plus byte length; empty is `(NULL, 0)` and no NUL terminator is promised. |
+| Byte view | `bytes: Vec[uint8]` | Temporary const pointer plus byte length; empty is `(NULL, 0)`. |
+| Mutable byte view | `bytes: mut Vec[uint8]` | Same-length scratch copy-in/out; writeback occurs after native return before result validation. |
+| Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign close/free-style call. |
+
+The complete scalar table, manifest report, safety boundary, diagnostics, and
+backend rules are in [FFI v0](/manual/ffi).
+
 ## Scalars And String
 
 | API | Signature | Contract |

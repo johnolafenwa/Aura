@@ -6,10 +6,19 @@ use crate::ast::{
 use crate::diag::Span;
 use crate::integer::IntegerValue;
 use crate::sema::{binary_operator_trait, unary_operator_trait, ModuleNamespace, TraitBound};
+use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn checked_program(source: &str) -> Program {
     crate::check_source(source).expect("source should type check")
+}
+
+fn lower_ffi_source(source: &str) -> MirModule {
+    let module = crate::parse_source(source).expect("FFI source should parse");
+    let program =
+        crate::check_module_with_builtin_imports(module).expect("FFI source should type check");
+    lower(&program)
 }
 
 fn expr(kind: ExprKind) -> Expr {
@@ -71,6 +80,248 @@ fn arg(value: Expr) -> Argument {
         span: value.span,
         value,
     }
+}
+
+#[test]
+fn extern_calls_lower_to_explicit_abi_metadata_without_synthetic_function_bodies() {
+    let module = lower_ffi_source(
+        r#"
+public extern "C" opaque class Handle
+public extern "C" def consume(
+    value: int32,
+    bytes: mut Vec[uint8],
+    handle: own Handle
+) -> int32
+public extern "C" def acquire() -> Handle
+public extern "C" def close(handle: own Handle) -> None
+
+def main():
+    handle = acquire()
+    close(handle)
+"#,
+    );
+    assert!(
+        module
+            .functions
+            .iter()
+            .all(|function| !matches!(function.name.as_str(), "consume" | "acquire" | "close")),
+        "an extern declaration must not acquire an ordinary Aurora MIR body"
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let (close, close_args) = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                    },
+                ..
+            } if call.symbol == "close" => Some((call, args)),
+            _ => None,
+        })
+        .expect("own-handle extern call should lower");
+    assert_eq!(close.params[0].passing, MirReceiverKind::Value);
+    assert!(matches!(close_args[0].value, Operand::MovePlace(_)));
+
+    let call_module = lower_ffi_source(
+        r#"
+public extern "C" def mutate(value: int32, bytes: mut Vec[uint8]) -> int32
+
+def main():
+    mut bytes: Vec[uint8] = [1, 2]
+    answer = mutate(bytes=bytes, value=7)
+"#,
+    );
+    let main = call_module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let (extern_call, args) = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                    },
+                ..
+            } => Some((call, args)),
+            _ => None,
+        })
+        .expect("the extern call should retain an explicit MIR target");
+    assert_eq!(extern_call.symbol, "mutate");
+    assert_eq!(extern_call.abi, "C");
+    assert_eq!(extern_call.return_type, Type::named("int32"));
+    assert_eq!(
+        extern_call
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.passing, param.ty.clone(),))
+            .collect::<Vec<_>>(),
+        vec![
+            ("value", MirReceiverKind::Borrow, Type::named("int32")),
+            (
+                "bytes",
+                MirReceiverKind::BorrowMut,
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            ),
+        ]
+    );
+    assert_eq!(args.len(), 2, "named arguments bind in declaration order");
+    assert!(args[0].writeback_place.is_none());
+    assert_eq!(args[1].writeback_place.as_deref(), Some("bytes"));
+}
+
+#[test]
+fn extern_view_and_shared_handle_calls_preserve_exact_mir_contracts() {
+    let module = lower_ffi_source(
+        r#"
+public extern "C" opaque class Handle
+public extern "C" def acquire() -> Handle
+public extern "C" def inspect(
+    text: String,
+    input: Vec[uint8],
+    output: mut Vec[uint8],
+    handle: Handle
+) -> uint64
+
+def main():
+    mut output: Vec[uint8] = [0, 0]
+    handle = acquire()
+    answer = inspect("hi", [1, 2], output, handle)
+"#,
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let (call, args) = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                    },
+                ..
+            } if call.symbol == "inspect" => Some((call, args)),
+            _ => None,
+        })
+        .expect("view-and-handle extern call should lower");
+
+    assert_eq!(call.abi, "C");
+    assert_eq!(call.return_type, Type::named("uint64"));
+    assert_eq!(
+        call.params
+            .iter()
+            .map(|param| (param.name.as_str(), param.passing, param.ty.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("text", MirReceiverKind::Borrow, Type::named("String")),
+            (
+                "input",
+                MirReceiverKind::Borrow,
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            ),
+            (
+                "output",
+                MirReceiverKind::BorrowMut,
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            ),
+            ("handle", MirReceiverKind::Borrow, Type::named("Handle")),
+        ]
+    );
+    assert_eq!(args.len(), 4);
+    assert_eq!(
+        args.iter()
+            .map(|arg| arg.writeback_place.as_deref())
+            .collect::<Vec<_>>(),
+        vec![None, None, Some("output"), None]
+    );
+    assert!(
+        matches!(args[3].value, Operand::Place(_)),
+        "a shared opaque handle must not lower as a consuming move"
+    );
+}
+
+#[test]
+fn imported_extern_calls_lower_from_and_qualified_names_without_wrapper_bodies() {
+    let unique = format!(
+        "aurora-mir-ffi-imports-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow the Unix epoch")
+            .as_nanos()
+    );
+    let package = std::env::temp_dir().join(unique);
+    let src = package.join("src");
+    fs::create_dir_all(&src).expect("temporary FFI package source directory should exist");
+    fs::write(
+        package.join("Aurora.toml"),
+        "[package]\nname = \"mir_ffi_imports\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("temporary FFI manifest should be writable");
+    fs::write(
+        src.join("api.au"),
+        "public extern \"C\" def getpid() -> int32\n",
+    )
+    .expect("temporary FFI module should be writable");
+    let main_path = src.join("main.au");
+    fs::write(
+        &main_path,
+        "from api import getpid\nimport api\n\ndef main():\n    direct = getpid()\n    qualified = api.getpid()\n",
+    )
+    .expect("temporary FFI entry should be writable");
+
+    let module = crate::lower_path_to_mir(&main_path)
+        .expect("from-imported and qualified extern calls should lower");
+    let _ = fs::remove_dir_all(&package);
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let extern_calls = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        ..
+                    },
+                ..
+            } => Some(call),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(extern_calls.len(), 2);
+    assert!(extern_calls
+        .iter()
+        .all(|call| call.symbol == "getpid" && call.abi == "C"));
+    assert!(module
+        .functions
+        .iter()
+        .all(|function| !function.name.ends_with("getpid")));
 }
 
 #[test]
@@ -2804,11 +3055,15 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         source_path: None,
         modules: BTreeMap::new(),
         functions: program.functions.clone(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: program.classes.clone(),
         enums: program.enums.clone(),
         traits: program.traits.clone(),
         trait_impls: program.trait_impls.clone(),
         all_functions: program.functions.clone(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: program.classes.clone(),
         all_enums: program.enums.clone(),
         all_traits: program.traits.clone(),
@@ -2882,11 +3137,15 @@ def generic_helper[T](value: own T) -> T:
             ("reexport".to_string(), reexport.clone()),
         ]),
         functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
@@ -2904,11 +3163,15 @@ def generic_helper[T](value: own T) -> T:
         source_path: None,
         modules: BTreeMap::new(),
         functions: program.functions.clone(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: program.classes.clone(),
         enums: program.enums.clone(),
         traits: program.traits.clone(),
         trait_impls: program.trait_impls.clone(),
         all_functions: program.functions.clone(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: program.classes.clone(),
         all_enums: program.enums.clone(),
         all_traits: program.traits.clone(),
@@ -3209,11 +3472,15 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),

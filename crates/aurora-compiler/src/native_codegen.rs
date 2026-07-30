@@ -17,10 +17,14 @@ use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::Span;
+use crate::ffi::FfiType;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMapEntry,
-    MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
-    NATIVE_LOOP_SAFEPOINT_INTERVAL,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirFormatPart,
+    MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue,
+    Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
+};
+use crate::native_runtime::{
+    encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
@@ -437,6 +441,7 @@ struct NativeCodegen<'a> {
     task_arg_buffer_guard: FuncId,
     task_arg_buffer_disarm: FuncId,
     host_builtin: FuncId,
+    ffi_call: FuncId,
     monotonic_time_ms: FuncId,
     channel_new: FuncId,
     channel_send: FuncId,
@@ -924,6 +929,7 @@ impl<'a> NativeCodegen<'a> {
             task_arg_buffer_guard => ("aurora_direct_task_arg_buffer_guard", [types::I64, types::I64], Some(types::I64)),
             task_arg_buffer_disarm => ("aurora_direct_task_arg_buffer_disarm", [types::I64], None),
             host_builtin => ("aurora_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            ffi_call => ("aurora_direct_ffi_call", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             monotonic_time_ms => ("aurora_direct_monotonic_time_ms", [], Some(types::I64)),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
@@ -1336,6 +1342,7 @@ impl<'a> NativeCodegen<'a> {
             task_arg_buffer_guard,
             task_arg_buffer_disarm,
             host_builtin,
+            ffi_call,
             monotonic_time_ms,
             channel_new,
             channel_send,
@@ -2197,6 +2204,9 @@ impl<'a> NativeCodegen<'a> {
         let host_builtin = self
             .object
             .declare_func_in_func(self.host_builtin, builder.func);
+        let ffi_call = self
+            .object
+            .declare_func_in_func(self.ffi_call, builder.func);
         let monotonic_time_ms = self
             .object
             .declare_func_in_func(self.monotonic_time_ms, builder.func);
@@ -2886,6 +2896,7 @@ impl<'a> NativeCodegen<'a> {
             task_arg_buffer_guard,
             task_arg_buffer_disarm,
             host_builtin,
+            ffi_call,
             monotonic_time_ms,
             channel_new,
             channel_send,
@@ -3696,6 +3707,7 @@ struct FunctionCompiler<'a> {
     task_arg_buffer_guard: cranelift_codegen::ir::FuncRef,
     task_arg_buffer_disarm: cranelift_codegen::ir::FuncRef,
     host_builtin: cranelift_codegen::ir::FuncRef,
+    ffi_call: cranelift_codegen::ir::FuncRef,
     monotonic_time_ms: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
@@ -5187,11 +5199,125 @@ impl<'a> FunctionCompiler<'a> {
             CallTarget::Name(name) if name == "print" => self.compile_print(args),
             CallTarget::Name(name) => self.compile_named_call(name, args, target),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
+            CallTarget::Extern(call) => self.compile_extern_call(call, args, target),
             CallTarget::Member {
                 object,
                 field,
                 receiver_place,
             } => self.compile_member_call(object, field, receiver_place.as_deref(), args),
+        }
+    }
+
+    fn compile_extern_call(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
+        if call.abi != "C" {
+            return Err(format!(
+                "direct backend received unsupported FFI ABI `{}`",
+                call.abi
+            ));
+        }
+        if args.len() != call.params.len() {
+            return Err(format!(
+                "direct backend expected {} argument(s) for extern `{}`, found {}",
+                call.params.len(),
+                call.symbol,
+                args.len()
+            ));
+        }
+
+        let mut spec_params = Vec::with_capacity(call.params.len());
+        let mut expected_types = Vec::with_capacity(call.params.len());
+        for param in &call.params {
+            spec_params.push(DirectFfiParam {
+                passing: match param.passing {
+                    MirReceiverKind::Value => ReceiverKind::Value,
+                    MirReceiverKind::Borrow => ReceiverKind::Borrow,
+                    MirReceiverKind::BorrowMut => ReceiverKind::BorrowMut,
+                },
+                ty: direct_ffi_type_for_source(&param.ty, Some(param.passing))?,
+            });
+            expected_types.push(ensure_direct_type(
+                &param.ty,
+                &self.classes,
+                &format!("extern parameter `{}`", param.name),
+            )?);
+        }
+        let result_spec = direct_ffi_type_for_source(&call.return_type, None)?;
+        let encoded_spec = encode_direct_ffi_call_spec(&DirectFfiCallSpec {
+            symbol: call.symbol.clone(),
+            params: spec_params,
+            result: result_spec,
+        });
+        let (spec_ptr, spec_len) = self.string_constant(&encoded_spec)?;
+        let buffer_size = u32::try_from(args.len().max(1).saturating_mul(8))
+            .map_err(|_| "direct backend FFI argument buffer is too large".to_string())?;
+        let buffer_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            buffer_size,
+            3,
+        ));
+        let buffer = self.builder.ins().stack_addr(types::I64, buffer_slot, 0);
+        let mut writebacks = Vec::new();
+        for (index, ((argument, param), expected)) in args
+            .iter()
+            .zip(&call.params)
+            .zip(&expected_types)
+            .enumerate()
+        {
+            let loaded = self.load_operand_for_target(&argument.value, expected)?;
+            let coerced = self.coerce_value(loaded, expected)?;
+            let boxed = self.ensure_opaque(coerced)?;
+            self.builder
+                .ins()
+                .store(MemFlags::new(), boxed.values[0], buffer, (index as i32) * 8);
+            match (param.passing, argument.writeback_place.as_ref()) {
+                (MirReceiverKind::BorrowMut, Some(place)) => {
+                    writebacks.push((place.clone(), boxed, expected.clone()));
+                }
+                (MirReceiverKind::BorrowMut, None) => {
+                    return Err(format!(
+                        "direct backend extern mutable argument {} has no writeback place",
+                        index + 1
+                    ));
+                }
+                (_, Some(_)) => {
+                    return Err(format!(
+                        "direct backend extern argument {} unexpectedly requests writeback",
+                        index + 1
+                    ));
+                }
+                (_, None) => {}
+            }
+        }
+        let count = self
+            .builder
+            .ins()
+            .iconst(types::I64, call.params.len() as i64);
+        let invocation = self
+            .builder
+            .ins()
+            .call(self.ffi_call, &[spec_ptr, spec_len, buffer, count]);
+        let raw_result = self.builder.inst_results(invocation)[0];
+
+        for (place, boxed, expected) in writebacks {
+            let writeback = self.coerce_value(boxed, &expected)?;
+            self.store_place(&place, writeback)?;
+        }
+
+        let boxed_result = self.owned_opaque_result(vec![raw_result], call.return_type.clone());
+        let return_direct = ensure_direct_type(
+            &call.return_type,
+            &self.classes,
+            &format!("extern return from `{}`", call.symbol),
+        )?;
+        let result = self.coerce_value(boxed_result, &return_direct)?;
+        match target {
+            Some(target) => self.coerce_value(result, target),
+            None => Ok(result),
         }
     }
 
@@ -12909,6 +13035,14 @@ fn validate_rvalue(
                 CallTarget::Value(function) => {
                     validate_non_consuming_operand(function, "an indirect-call target")?
                 }
+                CallTarget::Extern(call) => {
+                    for param in &call.params {
+                        ensure_direct_type(&param.ty, classes, "extern parameter")?;
+                        direct_ffi_type_for_source(&param.ty, Some(param.passing))?;
+                    }
+                    ensure_direct_type(&call.return_type, classes, "extern return")?;
+                    direct_ffi_type_for_source(&call.return_type, None)?;
+                }
                 CallTarget::Member { object, .. } => validate_operand(object)?,
             }
             for argument in args {
@@ -13079,6 +13213,71 @@ fn ensure_direct_type(
             context, ty
         )
     })
+}
+
+fn direct_ffi_type_for_source(
+    ty: &Type,
+    passing: Option<MirReceiverKind>,
+) -> std::result::Result<DirectFfiType, String> {
+    let Type::Named(name, args) = ty else {
+        if *ty == Type::Unit && passing.is_none() {
+            return Ok(DirectFfiType::scalar(FfiType::Unit));
+        }
+        return Err(format!("direct backend cannot lower `{ty}` through FFI v0"));
+    };
+    if args.is_empty() {
+        let scalar = match name.as_str() {
+            "bool" => Some(FfiType::Bool),
+            "int8" => Some(FfiType::I8),
+            "int16" => Some(FfiType::I16),
+            "int32" => Some(FfiType::I32),
+            "int" | "int64" => Some(FfiType::I64),
+            "uint8" => Some(FfiType::U8),
+            "uint16" => Some(FfiType::U16),
+            "uint32" => Some(FfiType::U32),
+            "uint64" => Some(FfiType::U64),
+            "float32" => Some(FfiType::F32),
+            "float64" => Some(FfiType::F64),
+            "String" if passing == Some(MirReceiverKind::Borrow) => Some(FfiType::StringView),
+            _ => None,
+        };
+        if let Some(ffi_type) = scalar {
+            if ffi_type != FfiType::StringView {
+                if let Some(passing) = passing {
+                    if passing != MirReceiverKind::Borrow {
+                        return Err(format!(
+                            "direct backend cannot pass `{ty}` with ownership mode `{passing:?}` through FFI v0"
+                        ));
+                    }
+                }
+            }
+            return Ok(DirectFfiType::scalar(ffi_type));
+        }
+        if name == "String" {
+            return Err(
+                "direct backend can pass `String` through FFI v0 only as a shared view".to_string(),
+            );
+        }
+        if passing == Some(MirReceiverKind::BorrowMut) {
+            return Err(format!(
+                "direct backend cannot mutably borrow opaque handle `{ty}` through FFI v0"
+            ));
+        }
+        return Ok(DirectFfiType::opaque(name.clone()));
+    }
+    if name == "Vec" && args.as_slice() == [Type::named("uint8")] {
+        return Ok(DirectFfiType::scalar(match passing {
+            Some(MirReceiverKind::Borrow) => FfiType::BytesView,
+            Some(MirReceiverKind::BorrowMut) => FfiType::BytesViewMut,
+            Some(MirReceiverKind::Value) => {
+                return Err("direct backend cannot pass `own Vec[uint8]` through FFI v0".to_string())
+            }
+            None => {
+                return Err("direct backend cannot return `Vec[uint8]` through FFI v0".to_string())
+            }
+        }));
+    }
+    Err(format!("direct backend cannot lower `{ty}` through FFI v0"))
 }
 
 fn direct_type(ty: &Type, classes: &HashMap<String, MirClass>) -> Option<DirectType> {
@@ -13280,6 +13479,7 @@ fn infer_rvalue_type(
                 };
                 direct_type(&return_type, classes)
             }
+            CallTarget::Extern(call) => direct_type(&call.return_type, classes),
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) if name == "random::Rng" => {
                 Some(DirectType::Opaque(Type::named("random.Rng")))

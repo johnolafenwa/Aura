@@ -1,11 +1,12 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, CompareLink, CompareOp, ContinueStmt, DestructureStmt, EnumDecl,
-    EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt,
-    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
-    ImportKind, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm,
-    MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt,
-    TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl,
+    ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LambdaParam, LiteralPattern,
+    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
+    Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind,
+    UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -98,6 +99,7 @@ impl Parser {
                 || self.at_copy_class_start()
                 || self.at_keyword_class()
                 || self.at_keyword_enum()
+                || self.at_keyword_extern()
                 || self.at_keyword_def()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
@@ -122,6 +124,8 @@ impl Parser {
             Ok(Item::Class(self.parse_class(public)?))
         } else if self.at_keyword_enum() {
             Ok(Item::Enum(self.parse_enum(public)?))
+        } else if self.at_keyword_extern() {
+            self.parse_extern_item(public)
         } else if self.at_keyword_def() {
             Ok(Item::Function(self.parse_function(public)?))
         } else if self.at_keyword_trait() {
@@ -132,8 +136,125 @@ impl Parser {
             }
             Ok(Item::Impl(self.parse_impl()?))
         } else {
-            Err(self.error_here("expected `class`, `enum`, `def`, `trait`, or `impl`"))
+            Err(self.error_here("expected `class`, `enum`, `extern`, `def`, `trait`, or `impl`"))
         }
+    }
+
+    fn parse_extern_item(&mut self, public: bool) -> Result<Item> {
+        let span = self.expect_keyword(TokenKind::KwExtern)?.span;
+        let abi_token = self.bump();
+        let abi = match abi_token.kind {
+            TokenKind::StringLiteral(abi) if abi == "C" => abi,
+            TokenKind::StringLiteral(_) => {
+                return Err(parse_error(
+                    abi_token.span,
+                    "FFI v0 supports only `extern \"C\"` declarations",
+                ));
+            }
+            _ => {
+                return Err(parse_error(
+                    abi_token.span,
+                    "expected ABI string `\"C\"` after `extern`",
+                ));
+            }
+        };
+
+        if self.eat_simple(&TokenKind::KwOpaque).is_some() {
+            self.expect_keyword(TokenKind::KwClass)?;
+            let (name, name_span) = self.expect_identifier_with_span()?;
+            if self.at_simple(&TokenKind::LBracket) {
+                return Err(self
+                    .error_here("FFI v0 opaque handle declarations cannot have type parameters"));
+            }
+            if self.at_simple(&TokenKind::Colon) {
+                return Err(self.error_here(
+                    "`extern` opaque classes have no Aurora body; remove `:` and the indented block",
+                ));
+            }
+            self.expect_newline()?;
+            return Ok(Item::ExternOpaqueClass(ExternOpaqueClassDecl {
+                public,
+                abi,
+                name,
+                name_span,
+                span,
+            }));
+        }
+
+        self.expect_keyword(TokenKind::KwDef)?;
+        let (name, name_span) = self.expect_identifier_with_span()?;
+        if self.at_simple(&TokenKind::LBracket) {
+            return Err(self.error_here("FFI v0 `extern` declarations cannot have type parameters"));
+        }
+        self.reject_reserved_ffi_signature_syntax()?;
+        self.expect_simple(TokenKind::LParen)?;
+        let (_, params) = self.parse_params(false)?;
+        self.expect_simple(TokenKind::RParen)?;
+        if params.iter().any(|param| param.default.is_some()) {
+            return Err(parse_error(
+                params
+                    .iter()
+                    .find(|param| param.default.is_some())
+                    .map(|param| param.span)
+                    .unwrap_or(span),
+                "`extern` function parameters cannot have default values",
+            ));
+        }
+        if !self.at_simple(&TokenKind::Arrow) {
+            return Err(parse_error(
+                self.current_span(),
+                "`extern` function declarations require an explicit return type; write `-> None` when the function returns no value",
+            ));
+        }
+        let return_type = self.parse_return_annotation(span)?;
+        if self.at_simple(&TokenKind::Colon) {
+            return Err(self.error_here(
+                "`extern` function declarations have no Aurora body; remove `:` and the indented block",
+            ));
+        }
+        self.expect_newline()?;
+
+        Ok(Item::ExternFunction(ExternFunctionDecl {
+            public,
+            abi,
+            name,
+            name_span,
+            params,
+            return_type,
+            span,
+        }))
+    }
+
+    fn reject_reserved_ffi_signature_syntax(&self) -> Result<()> {
+        let mut index = self.index;
+        while let Some(kind) = self.peek_kind_at(index) {
+            if matches!(kind, TokenKind::Newline | TokenKind::Eof) {
+                break;
+            }
+            if matches!(kind, TokenKind::Dot)
+                && matches!(self.peek_kind_at(index + 1), Some(TokenKind::Dot))
+                && matches!(self.peek_kind_at(index + 2), Some(TokenKind::Dot))
+            {
+                return Err(parse_error(
+                    self.tokens[index].span,
+                    "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
+                ));
+            }
+            if matches!(kind, TokenKind::KwDef) {
+                return Err(parse_error(
+                    self.tokens[index].span,
+                    "FFI v0 does not support callback parameters or returns",
+                ));
+            }
+            if matches!(kind, TokenKind::Star) {
+                return Err(parse_error(
+                    self.tokens[index].span,
+                    "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
+                ));
+            }
+            index += 1;
+        }
+        Ok(())
     }
 
     fn parse_import(&mut self) -> Result<ImportDecl> {
@@ -2799,11 +2920,16 @@ impl Parser {
     }
 
     fn expect_identifier(&mut self) -> Result<String> {
+        self.expect_identifier_with_span().map(|(name, _)| name)
+    }
+
+    fn expect_identifier_with_span(&mut self) -> Result<(String, Span)> {
         let token = self.bump();
+        let span = token.span;
         match token.kind {
-            TokenKind::Identifier(name) => Ok(name),
-            TokenKind::KwFrom => Ok("from".to_string()),
-            _ => Err(parse_error(token.span, "expected identifier")),
+            TokenKind::Identifier(name) => Ok((name, span)),
+            TokenKind::KwFrom => Ok(("from".to_string(), span)),
+            _ => Err(parse_error(span, "expected identifier")),
         }
     }
 
@@ -2841,6 +2967,10 @@ impl Parser {
 
     fn at_keyword_def(&self) -> bool {
         self.at_simple(&TokenKind::KwDef)
+    }
+
+    fn at_keyword_extern(&self) -> bool {
+        self.at_simple(&TokenKind::KwExtern)
     }
 
     fn at_keyword_trait(&self) -> bool {

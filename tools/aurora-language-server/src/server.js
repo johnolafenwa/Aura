@@ -259,7 +259,7 @@ function toDocumentSymbol(document, symbol) {
 
   return {
     name: symbol.name,
-    detail: "",
+    detail: symbol.detail || "",
     kind: symbolKind(symbol.kind),
     range,
     selectionRange: range,

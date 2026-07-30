@@ -63,6 +63,8 @@ The chapters are ordered so that each idea has a practical reason to exist befor
 8. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.
 9. [Talking To The World](/learn/io-process-networking) — files, processes, sockets, HTTP, and supervisors.
 10. [Running And Shipping](/learn/native-builds) — when to use `run`, when to use `build`, and what the native binary gives you.
+11. [Calling A Small C API](/learn/ffi) — package-authorized FFI v0 for
+    fixed-width values, temporary byte views, and opaque handles.
 
 Three case studies put the pieces together:
 
@@ -79,6 +81,7 @@ Each Learn chapter ends by pointing at the matching Manual section. When a rule 
 - [Collections](/manual/collections)
 - [Concurrency](/manual/concurrency)
 - [Process Module](/manual/process)
+- [Foreign Function Interface (FFI) v0](/manual/ffi)
 - [API Index](/manual/api-index)
 
 The Manual is deliberately less chatty than Learn. It says what a thing is, not why you might want it.

@@ -151,6 +151,45 @@
     "declarations": {
       "patterns": [
         {
+          "name": "meta.definition.ffi.opaque.aurora",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(opaque)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aurora"
+            },
+            "2": {
+              "name": "string.quoted.double.aurora"
+            },
+            "3": {
+              "name": "keyword.declaration.ffi.aurora"
+            },
+            "4": {
+              "name": "keyword.declaration.aurora"
+            },
+            "5": {
+              "name": "entity.name.type.aurora"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.ffi.function.aurora",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aurora"
+            },
+            "2": {
+              "name": "string.quoted.double.aurora"
+            },
+            "3": {
+              "name": "keyword.declaration.function.aurora"
+            },
+            "4": {
+              "name": "entity.name.function.aurora"
+            }
+          }
+        },
+        {
           "name": "meta.definition.class.aurora",
           "match": "\\b(class|enum|trait)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {
@@ -178,6 +217,10 @@
     },
     "keywords": {
       "patterns": [
+        {
+          "name": "keyword.declaration.ffi.aurora",
+          "match": "\\b(extern|opaque)\\b"
+        },
         {
           "name": "keyword.control.aurora",
           "match": "\\b(import|return|assert|if|elif|else|while|for|in|match|case|with|try|lambda|and|or|not|break|continue|pass|impl|as)\\b"

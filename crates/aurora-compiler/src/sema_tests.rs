@@ -12,6 +12,1246 @@ fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
     NAMES.get_or_init(BTreeMap::new)
 }
 
+fn check_ffi_source_for_test(source: &str) -> Result<Program> {
+    let module = crate::parse_source(source)?;
+    crate::check_module_with_builtin_imports(module)
+}
+
+fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
+    let remote = check_ffi_source_for_test("public extern \"C\" opaque class Handle\n")
+        .expect("public remote opaque handle should check");
+    let mut handle = remote.opaque_handles["Handle"].clone();
+    handle.module_name = module_name.to_string();
+    ModuleNamespace {
+        name: module_name.to_string(),
+        path: module_name.to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::from([("Handle".to_string(), handle.clone())]),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::from([("Handle".to_string(), handle)]),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+    }
+}
+
+fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
+    let remote =
+        check_ffi_source_for_test("public extern \"C\" def scalar(value: int32) -> int64\n")
+            .expect("public remote extern function should check");
+    let mut scalar = remote.extern_functions["scalar"].clone();
+    scalar.module_name = module_name.to_string();
+    ModuleNamespace {
+        name: module_name.to_string(),
+        path: module_name.to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        extern_functions: BTreeMap::from([("scalar".to_string(), scalar.clone())]),
+        opaque_handles: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::from([("scalar".to_string(), scalar)]),
+        all_opaque_handles: BTreeMap::new(),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn ffi_v0_accepts_fixed_width_scalar_signatures_and_the_int64_alias() {
+    let source = r#"
+extern "C" def scalars(a: bool, b: int8, c: int16, d: int32, e: int64, f: int, g: uint8, h: uint16, i: uint32, j: uint64, k: float32, l: float64) -> None
+"#;
+    let program =
+        check_ffi_source_for_test(source).expect("the complete FFI v0 scalar set should check");
+    let function = &program.extern_functions["scalars"];
+    assert_eq!(function.decl.abi, "C");
+    assert_eq!(function.signature.params[5], Type::named("int64"));
+    assert_eq!(function.signature.return_type, Type::Unit);
+}
+
+#[test]
+fn ffi_v0_validates_views_and_opaque_handle_capabilities() {
+    check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def inspect(name: String, bytes: Vec[uint8], output: mut Vec[uint8], handle: Handle) -> int32
+extern "C" def close(handle: own Handle) -> None
+extern "C" def acquire() -> Handle
+"#,
+    )
+    .expect("FFI byte views and opaque handle ownership should check");
+
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: own int32) -> None
+"#,
+            "fixed-width scalar parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" def bad(value: mut int32) -> None
+"#,
+            "fixed-width scalar parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" def bad(value: own String) -> None
+"#,
+            "String view parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" def bad(value: mut String) -> None
+"#,
+            "mutable String views are reserved",
+        ),
+        (
+            r#"extern "C" def bad(value: own Vec[uint8]) -> None
+"#,
+            "owned byte views are reserved",
+        ),
+        (
+            r#"extern "C" opaque class Handle
+extern "C" def bad(value: mut Handle) -> None
+"#,
+            "mutable opaque-handle parameters are reserved",
+        ),
+    ];
+    for (source, message) in rejected {
+        let diagnostic = check_ffi_source_for_test(source)
+            .expect_err("the unsupported FFI capability must fail");
+        assert_eq!(diagnostic.code, "AU3004", "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: int128) -> None
+"#,
+            "FFI v0 does not support parameter type `int128`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: intsize) -> None
+"#,
+            "FFI v0 does not support parameter type `intsize`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: Vec[int32]) -> None
+"#,
+            "only `Vec[uint8]` is supported as an FFI byte view",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: (int32, int32)) -> None
+"#,
+            "FFI v0 does not support parameter type `(int32, int32)`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: def(int32) -> int32) -> None
+"#,
+            "FFI v0 does not support callback parameters or returns",
+            "AU1101",
+        ),
+        (
+            r#"extern "C" def bad(value: Ptr[uint8]) -> None
+"#,
+            "raw pointers are reserved",
+            "AU2005",
+        ),
+        (
+            r#"extern "C" def bad() -> String
+"#,
+            "FFI v0 cannot return a String view",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad() -> Vec[uint8]
+"#,
+            "FFI v0 cannot return a Vec[uint8] view",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad() -> (int32, int32)
+"#,
+            "FFI v0 does not support return type `(int32, int32)`",
+            "AU2002",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported FFI type must fail");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_calls_preserve_the_declared_result_type_in_aurora_contexts() {
+    let diagnostic = check_ffi_source_for_test(
+        r#"
+extern "C" def current_value() -> int64
+
+def main():
+    narrowed: int32 = current_value()
+"#,
+    )
+    .expect_err("an extern result must retain its declared fixed-width type");
+    assert_eq!(diagnostic.code, "AU2002");
+    assert_eq!(
+        diagnostic.message,
+        "result type mismatch for extern function `current_value`: expected `int64`, found `int32`"
+    );
+}
+
+#[test]
+fn ffi_v0_rejects_duplicate_names_and_unsupported_returns() {
+    let rejected = [
+        (
+            "duplicate parameter",
+            "extern \"C\" def bad(value: int32, value: int64) -> None\n",
+            "AU2999",
+            "duplicate parameter `value` on extern function `bad`",
+        ),
+        (
+            "builtin function name",
+            "extern \"C\" def len(value: int32) -> int32\n",
+            "AU2007",
+            "`len` is a builtin function name and cannot be redefined",
+        ),
+        (
+            "duplicate opaque item",
+            "extern \"C\" opaque class Handle\nclass Handle:\n    value: int32\n",
+            "AU2999",
+            "duplicate item `Handle`",
+        ),
+        (
+            "raw-pointer return",
+            "extern \"C\" def bad() -> Ptr[uint8]\n",
+            "AU2005",
+            "FFI raw-pointer returns are reserved",
+        ),
+        (
+            "unsupported scalar return",
+            "extern \"C\" def bad() -> int128\n",
+            "AU2002",
+            "FFI v0 does not support return type `int128`",
+        ),
+    ];
+
+    for (case, source, code, message) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("invalid FFI declarations must fail");
+        assert_eq!(diagnostic.code, code, "{case}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{case}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_direct_call_only_contract_covers_specialization_values_and_tasks() {
+    let specialized = check_ffi_source_for_test(
+        r#"
+extern "C" def scalar(value: int32) -> int64
+
+def main():
+    value = scalar[int32](7)
+"#,
+    )
+    .expect_err("extern functions do not accept Aurora type arguments");
+    assert_eq!(specialized.code, "AU2005");
+    assert!(
+        specialized
+            .message
+            .contains("extern function `scalar` does not take type arguments"),
+        "{}",
+        specialized.message
+    );
+
+    let opaque_value = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+
+def main():
+    handle_type = Handle
+"#,
+    )
+    .expect_err("an opaque handle type must not become a runtime value");
+    assert_eq!(opaque_value.code, "AU2005");
+    assert!(
+        opaque_value
+            .message
+            .contains("opaque FFI handle type `Handle` is not a value"),
+        "{}",
+        opaque_value.message
+    );
+
+    let task_target = check_ffi_source_for_test(
+        r#"
+extern "C" def scalar(value: int32) -> int64
+
+def main():
+    with group = TaskGroup():
+        group.start(scalar, 7)
+"#,
+    )
+    .expect_err("extern calls are synchronous and cannot be task targets");
+    assert_eq!(task_target.code, "AU2999");
+    assert!(
+        task_target.message.contains(
+            "extern function `scalar` is direct-call-only and cannot be handed to a task"
+        ),
+        "{}",
+        task_target.message
+    );
+}
+
+#[test]
+fn ffi_qualified_externs_remain_direct_call_only_as_values_and_task_targets() {
+    let namespace = public_ffi_function_namespace("ffi_api");
+    let imported_bindings = BTreeMap::from([(
+        "ffi_api".to_string(),
+        ImportedBinding::Module(namespace.clone()),
+    )]);
+    let module_registry = BTreeMap::from([("ffi_api".to_string(), namespace)]);
+
+    for (case, body, expected) in [
+        (
+            "function value",
+            "def main():\n    callback = ffi_api.scalar\n",
+            "extern function `ffi_api.scalar` is direct-call-only and cannot be used as a function value",
+        ),
+        (
+            "task target",
+            "def main():\n    with group = TaskGroup():\n        group.start(ffi_api.scalar, 7)\n",
+            "extern function `ffi_api.scalar` is direct-call-only and cannot be handed to a task",
+        ),
+    ] {
+        let source = crate::parse_source(&format!("import ffi_api\n\n{body}"))
+            .expect("qualified extern rejection probe should parse");
+        let diagnostic = check_with_context(
+            source,
+            ModuleContext {
+                module_name: "app".to_string(),
+                imported_bindings: imported_bindings.clone(),
+                module_registry: module_registry.clone(),
+                is_entry_module: true,
+            },
+        )
+        .expect_err("qualified externs must remain direct-call-only");
+        assert_eq!(diagnostic.code, "AU2999", "{case}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(expected),
+            "{case}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_from_imported_opaque_handles_preserve_canonical_type_identity() {
+    let namespace = public_ffi_handle_namespace("ffi_types");
+    let handle = namespace.opaque_handles["Handle"].clone();
+    let module = crate::parse_source(
+        "from ffi_types import Handle\n\nextern \"C\" def inspect(handle: Handle) -> Handle\n",
+    )
+    .expect("from-imported opaque-handle signature should parse");
+    let program = check_with_context(
+        module,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "Handle".to_string(),
+                ImportedBinding::OpaqueHandle(handle),
+            )]),
+            module_registry: BTreeMap::from([("ffi_types".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect("from-imported opaque handles should be valid FFI parameter and return types");
+
+    assert_eq!(
+        program
+            .canonical_type_names
+            .get("Handle")
+            .map(String::as_str),
+        Some("ffi_types.Handle")
+    );
+    let signature = &program.extern_functions["inspect"].signature;
+    assert_eq!(signature.params, vec![Type::named("ffi_types.Handle")]);
+    assert_eq!(signature.return_type, Type::named("ffi_types.Handle"));
+}
+
+#[test]
+fn ffi_opaque_signature_validation_uses_canonical_nominal_identity() {
+    let namespace = public_ffi_handle_namespace("ffi_types");
+    let imported_bindings = BTreeMap::from([(
+        "ffi_types".to_string(),
+        ImportedBinding::Module(namespace.clone()),
+    )]);
+    let module_registry = BTreeMap::from([("ffi_types".to_string(), namespace)]);
+
+    for (case, declaration) in [
+        (
+            "parameter",
+            "extern \"C\" def inspect(handle: Handle) -> None",
+        ),
+        ("return", "extern \"C\" def acquire() -> Handle"),
+    ] {
+        let module = crate::parse_source(&format!(
+            r#"
+import ffi_types
+
+class Handle:
+    value: int32
+
+{declaration}
+"#
+        ))
+        .expect("local-class/remote-handle collision probe should parse");
+        let diagnostic = check_with_context(
+            module,
+            ModuleContext {
+                module_name: "app".to_string(),
+                imported_bindings: imported_bindings.clone(),
+                module_registry: module_registry.clone(),
+                is_entry_module: true,
+            },
+        )
+        .expect_err("a same-basename ordinary class must not become an opaque FFI handle");
+        assert_eq!(diagnostic.code, "AU2002", "{case}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(if case == "parameter" {
+                "does not support parameter type `Handle`"
+            } else {
+                "does not support return type `Handle`"
+            }),
+            "{case}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_externs_are_direct_call_only_and_opaque_handles_are_not_transferable() {
+    check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def get_number() -> int32
+extern "C" def acquire() -> Handle
+extern "C" def close(handle: own Handle) -> None
+
+def main():
+    number: int32 = get_number()
+    handle = acquire()
+    close(handle)
+"#,
+    )
+    .expect("direct FFI calls and explicit handle consumption should check");
+
+    let as_value = check_ffi_source_for_test(
+        r#"
+extern "C" def get_number() -> int32
+
+def main():
+    callback = get_number
+"#,
+    )
+    .expect_err("an extern declaration must not become a function value");
+    assert_eq!(as_value.code, "AU2999");
+    assert!(as_value.message.contains("direct-call-only"));
+
+    let construction = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+
+def main():
+    handle = Handle()
+"#,
+    )
+    .expect_err("opaque handles cannot be constructed by Aurora code");
+    assert_eq!(construction.code, "AU2005");
+    assert!(
+        construction.message.contains("cannot be constructed"),
+        "{}",
+        construction.message
+    );
+
+    let consumed = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+extern "C" def close(handle: own Handle) -> None
+
+def main():
+    handle = acquire()
+    close(handle)
+    print(handle)
+"#,
+    )
+    .expect_err("an own opaque-handle parameter must consume the handle");
+    assert_eq!(consumed.code, "AU3001");
+    assert!(consumed.message.contains("use of moved value `handle`"));
+
+    let transfer = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def use(handle: own Handle):
+    pass
+
+def main():
+    handle = acquire()
+    with group = TaskGroup():
+        group.start(use, handle)
+"#,
+    )
+    .expect_err("opaque handles are never Transfer");
+    assert_eq!(transfer.code, "AU3008");
+    assert!(transfer.message.contains("opaque FFI handle"));
+}
+
+#[test]
+fn ffi_opaque_handles_and_containing_values_do_not_have_equality() {
+    let cases = [
+        (
+            "direct handle",
+            "Handle",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left = acquire()
+    right = acquire()
+    equal = left == right
+"#,
+        ),
+        (
+            "tuple containing a handle",
+            "(Handle, int64)",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left = (acquire(), 1)
+    right = (acquire(), 1)
+    different = left != right
+"#,
+        ),
+        (
+            "class containing a handle",
+            "Wrapper",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+class Wrapper:
+    handle: Handle
+
+def main():
+    left = Wrapper(handle=acquire())
+    right = Wrapper(handle=acquire())
+    equal = left == right
+"#,
+        ),
+        (
+            "generic collection containing a handle",
+            "Vec[Handle]",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left = [acquire()]
+    right = [acquire()]
+    different = left != right
+"#,
+        ),
+    ];
+
+    for (shape, compared_type, source) in cases {
+        let diagnostic = check_ffi_source_for_test(source)
+            .expect_err("opaque handle identity is intentionally not observable");
+        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "cannot compare `{compared_type}` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity"
+            ),
+            "{shape}"
+        );
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                    .to_string()
+            ],
+            "{shape}"
+        );
+    }
+}
+
+#[test]
+fn ffi_opaque_handle_equality_is_rejected_when_the_handle_is_the_right_operand() {
+    for operator in ["==", "!="] {
+        let source = format!(
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handle = acquire()
+    result = 0 {operator} handle
+"#
+        );
+        let diagnostic = check_ffi_source_for_test(&source)
+            .expect_err("opaque identity must remain hidden in either operand position");
+        assert_eq!(diagnostic.code, "AU2003", "{operator}: {diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            "{operator}"
+        );
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                    .to_string()
+            ],
+            "{operator}"
+        );
+    }
+}
+
+#[test]
+fn ffi_closures_that_capture_opaque_handles_do_not_gain_equality() {
+    let diagnostic = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left_handle = acquire()
+    right_handle = acquire()
+    left: def() -> Handle = lambda: left_handle
+    right: def() -> Handle = lambda: right_handle
+    result = left == right
+"#,
+    )
+    .expect_err("a closure value retains the non-comparable identity of its capture");
+    assert_eq!(diagnostic.code, "AU2003", "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("contains opaque FFI handle `Handle`"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("does not define equality for foreign identity"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn ffi_opaque_handles_reject_pointer_arithmetic_and_address_ordering() {
+    let unary = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handle = acquire()
+    result = -handle
+"#,
+    )
+    .expect_err("FFI v0 must reject unary raw pointer arithmetic");
+    assert_eq!(unary.code, "AU2003", "{unary:?}");
+    assert_eq!(
+        unary.message,
+        "opaque FFI handle `Handle` does not support unary operator `-`; FFI v0 does not expose raw pointer arithmetic"
+    );
+    assert_eq!(
+        unary.help,
+        vec![
+            "declare a reviewed extern function for the native handle operation instead of manipulating its address"
+                .to_string()
+        ]
+    );
+
+    for operator in ["+", "-", "*", "/", "//", "%"] {
+        let source = format!(
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left = acquire()
+    right = acquire()
+    result = left {operator} right
+"#
+        );
+        let diagnostic = check_ffi_source_for_test(&source)
+            .expect_err("FFI v0 must reject raw pointer arithmetic");
+        assert_eq!(diagnostic.code, "AU2003", "{operator}: {diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "opaque FFI handle `Handle` does not support operator `{operator}`; FFI v0 does not expose raw pointer arithmetic"
+            ),
+            "{operator}"
+        );
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "declare a reviewed extern function for the native handle operation instead of manipulating its address"
+                    .to_string()
+            ],
+            "{operator}"
+        );
+    }
+
+    let rhs_handle = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handle = acquire()
+    result = 1 + handle
+"#,
+    )
+    .expect_err("an opaque right operand must also receive the pointer-arithmetic diagnostic");
+    assert_eq!(rhs_handle.code, "AU2003", "{rhs_handle:?}");
+    assert_eq!(
+        rhs_handle.message,
+        "opaque FFI handle `Handle` does not support operator `+`; FFI v0 does not expose raw pointer arithmetic"
+    );
+
+    for (expression, operator) in [
+        ("left < right", "<"),
+        ("left <= right", "<="),
+        ("left > right", ">"),
+        ("left >= right", ">="),
+        ("left < middle <= right", "<"),
+    ] {
+        let middle = expression
+            .contains("middle")
+            .then_some("    middle = acquire()\n")
+            .unwrap_or("");
+        let source = format!(
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    left = acquire()
+{middle}    right = acquire()
+    result = {expression}
+"#
+        );
+        let diagnostic = check_ffi_source_for_test(&source)
+            .expect_err("FFI v0 must reject ordering by a foreign address");
+        assert_eq!(diagnostic.code, "AU2003", "{expression}: {diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "opaque FFI handle `Handle` does not support operator `{operator}`; FFI v0 does not define ordering for foreign addresses"
+            ),
+            "{expression}"
+        );
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "compare a stable scalar or String ordering key exposed by the binding instead of a foreign address"
+                    .to_string()
+            ],
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn ffi_opaque_handles_are_rejected_by_every_clone_producing_collection_observer() {
+    let cases = [
+        (
+            "Vec.clone",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles = [acquire()]
+    copied = handles.clone()
+"#,
+        ),
+        (
+            "Vec.get",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles = [acquire()]
+    copied = handles.get(0)
+"#,
+        ),
+        (
+            "Vec.filter",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def keep(handle: Handle) -> bool:
+    return true
+
+def main():
+    handles = [acquire()]
+    copied = handles.filter(keep)
+"#,
+        ),
+        (
+            "Map.clone",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[String, Handle] = {"one": acquire()}
+    copied = handles.clone()
+"#,
+        ),
+        (
+            "Map.get",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[String, Handle] = {"one": acquire()}
+    copied = handles.get("one")
+"#,
+        ),
+        (
+            "Map.keys",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[Handle, int32] = {acquire(): 1}
+    copied = handles.keys()
+"#,
+        ),
+        (
+            "Map.values",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[String, Handle] = {"one": acquire()}
+    copied = handles.values()
+"#,
+        ),
+        (
+            "Map.items",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[String, Handle] = {"one": acquire()}
+    copied = handles.items()
+"#,
+        ),
+        (
+            "Map.entries",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Map[String, Handle] = {"one": acquire()}
+    copied = handles.entries()
+"#,
+        ),
+        (
+            "Set.clone",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    handles: Set[Handle] = Set{acquire()}
+    copied = handles.clone()
+"#,
+        ),
+    ];
+
+    for (operation, source) in cases {
+        let diagnostic = check_ffi_source_for_test(source)
+            .expect_err("clone-producing collection observers must reject opaque handles");
+        assert_eq!(diagnostic.code, "AU3007", "{operation}");
+        assert!(
+            diagnostic.message.contains(operation),
+            "{operation}: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic.message.contains("opaque FFI handle `Handle`"),
+            "{operation}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_opaque_handle_duplication_is_rejected_through_structural_and_generic_shapes() {
+    let cases = [
+        (
+            "tuple",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    values: Vec[(Handle, int32)] = [(acquire(), 1)]
+    copied = values.clone()
+"#,
+        ),
+        (
+            "class",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+class Wrapper:
+    handle: Handle
+
+def main():
+    values = [Wrapper(handle=acquire())]
+    copied = values.get(0)
+"#,
+        ),
+        (
+            "enum",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+enum Wrapper:
+    Present(Handle)
+
+def main():
+    values = [Wrapper.Present(acquire())]
+    copied = values.filter(lambda value: true)
+"#,
+        ),
+        (
+            "generic specialization",
+            r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def duplicate[T](values: Vec[T]) -> Vec[T]:
+    return values.clone()
+
+def main():
+    values = [acquire()]
+    copied = duplicate(values)
+"#,
+        ),
+    ];
+
+    for (shape, source) in cases {
+        let diagnostic = check_ffi_source_for_test(source)
+            .expect_err("opaque handles must remain non-cloneable through structural shapes");
+        assert_eq!(diagnostic.code, "AU3007", "{shape}");
+        assert!(
+            diagnostic.message.contains("opaque FFI handle `Handle`"),
+            "{shape}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_opaque_handles_remain_movable_out_of_collections_without_duplication() {
+    check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def acquire() -> Handle
+
+def main():
+    mut popped_values = [acquire()]
+    popped: Option[Handle] = popped_values.pop()
+
+    mut removed_values = [acquire()]
+    removed: Option[Handle] = removed_values.remove(0)
+
+    mut replaced_values = [acquire()]
+    replaced: Option[Handle] = replaced_values.set(0, acquire())
+
+    mut handles: Map[String, Handle] = {"one": acquire()}
+    removed_from_map: Option[Handle] = handles.remove("one")
+"#,
+    )
+    .expect("move-producing collection operations must preserve one opaque-handle owner");
+}
+
+#[test]
+fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
+    let remote =
+        check_ffi_source_for_test("public extern \"C\" def scalar(value: int32) -> int64\n")
+            .expect("remote extern declaration");
+    let mut scalar = remote.extern_functions["scalar"].clone();
+    scalar.module_name = "ffi_api".to_string();
+    let namespace = ModuleNamespace {
+        name: "ffi_api".to_string(),
+        path: "ffi_api".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        extern_functions: BTreeMap::from([("scalar".to_string(), scalar.clone())]),
+        opaque_handles: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::from([("scalar".to_string(), scalar.clone())]),
+        all_opaque_handles: BTreeMap::new(),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+    };
+
+    let qualified = crate::parse_source(
+        "import ffi_api\n\ndef main():\n    value: int64 = ffi_api.scalar(7)\n",
+    )
+    .expect("qualified source parses");
+    check_with_context(
+        qualified,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "ffi_api".to_string(),
+                ImportedBinding::Module(namespace.clone()),
+            )]),
+            module_registry: BTreeMap::from([("ffi_api".to_string(), namespace.clone())]),
+            is_entry_module: true,
+        },
+    )
+    .expect("qualified extern calls should check");
+
+    let from_import = crate::parse_source(
+        "from ffi_api import scalar\n\ndef main():\n    value: int64 = scalar(7)\n",
+    )
+    .expect("from-import source parses");
+    check_with_context(
+        from_import,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "scalar".to_string(),
+                ImportedBinding::ExternFunction(scalar),
+            )]),
+            module_registry: BTreeMap::from([("ffi_api".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect("from-imported extern calls should check");
+}
+
+#[test]
+fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
+    let remote = check_ffi_source_for_test("extern \"C\" def hidden(value: int32) -> int64\n")
+        .expect("private remote extern declaration");
+    let mut hidden = remote.extern_functions["hidden"].clone();
+    hidden.module_name = "ffi_api".to_string();
+    let namespace = ModuleNamespace {
+        name: "ffi_api".to_string(),
+        path: "ffi_api".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::from([("hidden".to_string(), hidden)]),
+        all_opaque_handles: BTreeMap::new(),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+    };
+    let source = crate::parse_source(
+        "import ffi_api\n\ndef main():\n    value: int64 = ffi_api.hidden(7)\n",
+    )
+    .expect("qualified private-extern probe parses");
+    let diagnostic = check_with_context(
+        source,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "ffi_api".to_string(),
+                ImportedBinding::Module(namespace.clone()),
+            )]),
+            module_registry: BTreeMap::from([("ffi_api".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect_err("qualified imports must not expose private extern declarations");
+    assert_eq!(diagnostic.code, "AU2001");
+    assert_eq!(
+        diagnostic.message,
+        "module `ffi_api` has no callable member `hidden`"
+    );
+}
+
+#[test]
+fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
+    let remote = check_ffi_source_for_test("extern \"C\" opaque class Hidden\n")
+        .expect("private remote opaque declaration");
+    let mut hidden = remote.opaque_handles["Hidden"].clone();
+    hidden.module_name = "ffi_api".to_string();
+    let namespace = ModuleNamespace {
+        name: "ffi_api".to_string(),
+        path: "ffi_api".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::from([("Hidden".to_string(), hidden)]),
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+    };
+    let source =
+        crate::parse_source("import ffi_api\n\ndef inspect(value: ffi_api.Hidden):\n    pass\n")
+            .expect("qualified private-handle probe parses");
+    let diagnostic = check_with_context(
+        source,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "ffi_api".to_string(),
+                ImportedBinding::Module(namespace.clone()),
+            )]),
+            module_registry: BTreeMap::from([("ffi_api".to_string(), namespace)]),
+            is_entry_module: true,
+        },
+    )
+    .expect_err("qualified imports must not expose private opaque handles");
+    assert!(
+        diagnostic.message.contains("unknown type `ffi_api.Hidden`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn ffi_qualified_public_opaque_handles_are_valid_in_signatures_and_non_cloneable() {
+    let namespace = public_ffi_handle_namespace("ffi_types");
+    let imported_bindings = BTreeMap::from([(
+        "ffi_types".to_string(),
+        ImportedBinding::Module(namespace.clone()),
+    )]);
+    let module_registry = BTreeMap::from([("ffi_types".to_string(), namespace)]);
+
+    let signature = crate::parse_source(
+        "import ffi_types\n\nextern \"C\" def inspect(handle: ffi_types.Handle) -> int32\n",
+    )
+    .expect("qualified opaque-handle signature parses");
+    check_with_context(
+        signature,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings: imported_bindings.clone(),
+            module_registry: module_registry.clone(),
+            is_entry_module: true,
+        },
+    )
+    .expect("a public qualified opaque handle should be valid in an extern signature");
+
+    let duplication = crate::parse_source(
+        "import ffi_types\n\ndef duplicate(values: Vec[ffi_types.Handle]):\n    copied = values.clone()\n",
+    )
+    .expect("qualified opaque-handle duplication probe parses");
+    let diagnostic = check_with_context(
+        duplication,
+        ModuleContext {
+            module_name: "app".to_string(),
+            imported_bindings,
+            module_registry,
+            is_entry_module: true,
+        },
+    )
+    .expect_err("qualified public opaque handles must remain non-cloneable");
+    assert_eq!(diagnostic.code, "AU3007");
+    assert!(
+        diagnostic
+            .message
+            .contains("opaque FFI handle `ffi_types.Handle`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
 fn type_ref(name: &str) -> TypeRef {
     TypeRef::named(name, Vec::new(), false, Span::new(1, 1))
 }
@@ -4507,11 +5747,15 @@ fn namespace(path: &str) -> ModuleNamespace {
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
@@ -16751,11 +17995,15 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::from([("remote_fn".to_string(), remote_function.clone())]),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::from([("RemoteBox".to_string(), remote_class.clone())]),
         enums: BTreeMap::from([("RemoteStatus".to_string(), remote_enum.clone())]),
         traits: BTreeMap::from([("RemoteShow".to_string(), remote_trait.clone())]),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::from([("remote_fn".to_string(), remote_function.clone())]),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::from([("RemoteBox".to_string(), remote_class.clone())]),
         all_enums: BTreeMap::from([("RemoteStatus".to_string(), remote_enum.clone())]),
         all_traits: BTreeMap::from([("RemoteShow".to_string(), remote_trait.clone())]),
@@ -20828,11 +22076,15 @@ fn imported_module_functions_are_first_class_values() {
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::from([("remote_fn".to_string(), remote_function.clone())]),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::from([("remote_fn".to_string(), remote_function)]),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
@@ -20872,11 +22124,15 @@ fn nested_imported_module_functions_are_first_class_values() {
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::from([("triple".to_string(), triple.clone())]),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::from([("triple".to_string(), triple)]),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
@@ -20889,11 +22145,15 @@ fn nested_imported_module_functions_are_first_class_values() {
         source_path: None,
         modules: BTreeMap::from([("helpers".to_string(), helpers.clone())]),
         functions: BTreeMap::new(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::new(),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
@@ -21334,11 +22594,15 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         source_path: None,
         modules: BTreeMap::new(),
         functions: BTreeMap::from([("identity".to_string(), identity.clone())]),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
         trait_impls: Vec::new(),
         all_functions: BTreeMap::from([("identity".to_string(), identity)]),
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
         all_classes: BTreeMap::new(),
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),

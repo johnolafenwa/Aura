@@ -91,6 +91,14 @@ A declaration is valid only when:
 
 Class, enum, function, and trait declarations may be `public` at module scope. `impl` cannot be public because it introduces no independently imported item.
 
+An extern declaration participates in the module namespace but has no Aurora
+body. The ABI must be `"C"`, its package must be authorized, and its complete
+signature must belong to the fixed FFI v0 scalar/view/opaque-handle table.
+Extern functions are direct-call-only: referencing one without immediately
+calling it is rejected rather than producing a function value. An opaque
+declaration contributes a nominal type but no constructor, fields, methods, or
+Aurora-visible layout. See [FFI v0](/manual/ffi).
+
 ## Bindings And Assignment
 
 The first simple-name assignment introduces a binding. Its type is the annotation when present, otherwise the initializer type. The initializer must match exactly.
@@ -256,6 +264,13 @@ The structural type does retain each parameter's capability: bare is shared,
 `mut` requires a mutable place and caller-visible writeback, and `own`
 transfers a non-copy argument. Function-type assignment and substitution
 require those modes, parameter types, and the return type to match.
+
+Extern calls use ordinary positional/named argument binding and left-to-right
+evaluation, then apply the declared FFI capabilities. Scalars require bare
+parameters; `String` is a bare const UTF-8 view; `Vec[uint8]` is a bare const
+byte view or `mut` fixed-length byte view; opaque handles permit bare sharing
+or `own` consumption. A `mut` view requires a mutable place. Extern defaults,
+generics, callbacks, variadics, returned views, and raw pointers are rejected.
 
 Callable-powered Vec methods use exact structural callback types. `map`
 requires `f: def(T) -> U`; `filter` requires

@@ -109,6 +109,28 @@ checking if a reachable path falls through.
 
 A recursive Aurora call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aurora calls with a source diagnostic rather than allowing the host stack to overflow.
 
+## Foreign Calls
+
+A direct extern call evaluates its arguments left-to-right, marshals them only
+after ordinary call binding succeeds, and synchronously invokes the matching
+process-global C symbol. The current Aurora worker remains occupied until the
+foreign function returns. A missing symbol or pre-call marshalling failure
+prevents entry. Return validation occurs after the foreign function and cannot
+roll back native side effects or mutable-byte writeback.
+
+Empty `String`, `Vec[uint8]`, and `mut Vec[uint8]` views pass a null pointer
+with length zero. A non-empty shared view passes a valid const pointer and byte
+length. A non-empty mutable byte view uses a same-length scratch buffer:
+initial bytes are copied in, then exactly that length is copied back after the
+foreign function returns, even when later return-value validation produces an
+Aurora runtime error. The callee must not retain a pointer or read/write
+outside the supplied length.
+
+Aurora diagnostics do not unwind through a foreign frame. A native abort,
+signal, memory fault, or foreign unwind is not caught and may terminate the
+process. The complete type, ownership, package, and safety contract is in
+[FFI v0](/manual/ffi).
+
 ## Operators
 
 Arithmetic is checked under the selected concrete numeric type.
@@ -162,6 +184,8 @@ metadata-based tuple ordering.
 `print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is accepted under ADR-0019.
 
 Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. A deterministic random generator renders exactly `<rng>` without exposing or advancing its state. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
+An FFI opaque handle renders as `<opaque TypeName>`, using its canonical Aurora
+type name and never exposing the foreign pointer address.
 
 ## Assignment And Mutation
 

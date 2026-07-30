@@ -1,0 +1,5 @@
+public extern "C" def getpid() -> int32
+
+def main() -> int32:
+    print(getpid() > 0)
+    return 0

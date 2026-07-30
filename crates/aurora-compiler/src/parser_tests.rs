@@ -13,6 +13,149 @@ fn parse_stmt_from(source: &str) -> Result<Stmt> {
 }
 
 #[test]
+fn p64_extern_c_functions_and_opaque_classes_are_bodyless_items() {
+    let module = parse(concat!(
+        "public extern \"C\" opaque class ProcessHandle\n",
+        "public extern \"C\" def getpid() -> int32\n",
+        "extern \"C\" def write(fd: int32, bytes: Vec[uint8]) -> int64\n",
+        "def main():\n",
+        "    pass\n",
+    ))
+    .expect("FFI declarations should parse as bodyless module items");
+
+    assert_eq!(module.items.len(), 4);
+    assert!(matches!(
+        &module.items[0],
+        Item::ExternOpaqueClass(ExternOpaqueClassDecl {
+            public: true,
+            abi,
+            name,
+            ..
+        }) if abi == "C" && name == "ProcessHandle"
+    ));
+    assert!(matches!(
+        &module.items[1],
+        Item::ExternFunction(ExternFunctionDecl {
+            public: true,
+            abi,
+            name,
+            params,
+            return_type,
+            ..
+        }) if abi == "C"
+            && name == "getpid"
+            && params.is_empty()
+            && matches!(named_type_ref(return_type), Some(("int32", args)) if args.is_empty())
+    ));
+    assert!(matches!(
+        &module.items[2],
+        Item::ExternFunction(ExternFunctionDecl {
+            public: false,
+            abi,
+            name,
+            params,
+            return_type,
+            ..
+        }) if abi == "C"
+            && name == "write"
+            && params.len() == 2
+            && matches!(named_type_ref(&params[0].ty), Some(("int32", args)) if args.is_empty())
+            && matches!(named_type_ref(&params[1].ty), Some(("Vec", args)) if args.len() == 1)
+            && matches!(named_type_ref(return_type), Some(("int64", args)) if args.is_empty())
+    ));
+    assert!(matches!(&module.items[3], Item::Function(_)));
+
+    let serialized =
+        serde_json::to_value(&module.items[1]).expect("extern function AST should serialize");
+    assert_eq!(serialized["ExternFunction"]["abi"], "C");
+    assert_eq!(serialized["ExternFunction"]["name"], "getpid");
+    assert_eq!(
+        serialized["ExternFunction"]["params"],
+        serde_json::json!([])
+    );
+    assert!(
+        serialized["ExternFunction"].get("body").is_none(),
+        "a bodyless declaration must not serialize a synthetic Aurora body"
+    );
+}
+
+#[test]
+fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
+    let abi = parse("extern \"Rust\" def local() -> int32\n")
+        .expect_err("FFI v0 supports only the C ABI");
+    assert_eq!(
+        abi.message,
+        "FFI v0 supports only `extern \"C\"` declarations"
+    );
+
+    let body = parse("extern \"C\" def getpid() -> int32:\n    return 1\n")
+        .expect_err("extern functions have no Aurora body");
+    assert_eq!(
+        body.message,
+        "`extern` function declarations have no Aurora body; remove `:` and the indented block"
+    );
+
+    let missing_return = parse("extern \"C\" def flush()\n")
+        .expect_err("extern functions require an explicit ABI return type");
+    assert_eq!(
+        missing_return.message,
+        "`extern` function declarations require an explicit return type; write `-> None` when the function returns no value"
+    );
+
+    let default = parse("extern \"C\" def write(fd: int32 = 1) -> int64\n")
+        .expect_err("foreign declarations cannot synthesize Aurora defaults");
+    assert_eq!(
+        default.message,
+        "`extern` function parameters cannot have default values"
+    );
+
+    let generic = parse("extern \"C\" def identity[T](value: T) -> T\n")
+        .expect_err("FFI declarations cannot be generic");
+    assert_eq!(
+        generic.message,
+        "FFI v0 `extern` declarations cannot have type parameters"
+    );
+
+    let generic_handle = parse("extern \"C\" opaque class Handle[T]\n")
+        .expect_err("opaque handles cannot be generic");
+    assert_eq!(
+        generic_handle.message,
+        "FFI v0 opaque handle declarations cannot have type parameters"
+    );
+
+    let opaque_body = parse("extern \"C\" opaque class Handle:\n    pass\n")
+        .expect_err("opaque handles are declaration-only");
+    assert_eq!(
+        opaque_body.message,
+        "`extern` opaque classes have no Aurora body; remove `:` and the indented block"
+    );
+}
+
+#[test]
+fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
+    let variadic = parse("extern \"C\" def printf(format: String, ...) -> int32\n")
+        .expect_err("FFI v0 reserves C variadics");
+    assert_eq!(
+        variadic.message,
+        "FFI v0 does not support variadic declarations; declare fixed parameters explicitly"
+    );
+
+    let callback = parse("extern \"C\" def visit(callback: def(int32) -> None) -> int32\n")
+        .expect_err("FFI v0 reserves callbacks");
+    assert_eq!(
+        callback.message,
+        "FFI v0 does not support callback parameters or returns"
+    );
+
+    let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
+        .expect_err("FFI v0 reserves raw pointer syntax");
+    assert_eq!(
+        raw_pointer.message,
+        "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle"
+    );
+}
+
+#[test]
 fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let lambda = parse_expression("lambda value, own text, mut output: output")
         .expect("lambda with all supported parameter modes should parse");
@@ -1088,7 +1231,7 @@ fn parse_item_rejects_public_impl_and_non_item_tokens() {
     let non_item = parse_item_from("return 1\n").expect_err("non-item token");
     assert!(non_item
         .message
-        .contains("expected `class`, `enum`, `def`, `trait`, or `impl`"));
+        .contains("expected `class`, `enum`, `extern`, `def`, `trait`, or `impl`"));
 }
 
 #[test]

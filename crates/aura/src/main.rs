@@ -7,7 +7,8 @@ use std::process::{self, Command};
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path, run_path_with_source_and_stdout_sink_and_program_args,
+    parse_source, run_path, run_path_entry_with_stdout_sink_and_program_args,
+    run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir, Diagnostic,
     MirModule, StructuredDiagnostic, Value,
 };
@@ -663,9 +664,12 @@ fn run_test_case(
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
             let result = match (module, entry) {
-                (Some(module), Some(entry)) => {
-                    aurora_compiler::run_mir_entry(&module, Some(&entry), None, Vec::new())
-                }
+                (Some(_), Some(entry)) => run_path_entry_with_stdout_sink_and_program_args(
+                    &test_path,
+                    Some(&entry),
+                    None,
+                    Vec::new(),
+                ),
                 _ => run_path(&test_path),
             };
             let _ = sender.send(result);

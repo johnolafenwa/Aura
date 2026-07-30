@@ -4,12 +4,138 @@ use aurora_compiler::ast::ReceiverKind;
 use aurora_compiler::native_runtime_coverage::*;
 use aurora_compiler::sema::{FunctionParamContract, Type};
 use aurora_compiler::Value;
+use std::ffi::c_void;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::ptr;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+extern "C-unwind" {
+    fn aurora_direct_ffi_call(
+        spec_ptr: *const u8,
+        spec_len: i64,
+        args_ptr: *const i64,
+        arg_count: i64,
+    ) -> *mut c_void;
+}
+
+fn append_direct_ffi_text(encoded: &mut Vec<u8>, text: &str) {
+    encoded.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    encoded.extend_from_slice(text.as_bytes());
+}
+
+fn append_direct_ffi_type(encoded: &mut Vec<u8>, code: u8, nominal_name: &str) {
+    encoded.push(code);
+    append_direct_ffi_text(encoded, nominal_name);
+}
+
+fn direct_ffi_spec(symbol: &str, params: &[(u8, u8, &str)], result: (u8, &str)) -> Vec<u8> {
+    let mut encoded = b"AUFI".to_vec();
+    encoded.push(0);
+    append_direct_ffi_text(&mut encoded, symbol);
+    encoded.extend_from_slice(&(params.len() as u32).to_le_bytes());
+    for (passing, ty, nominal_name) in params {
+        encoded.push(*passing);
+        append_direct_ffi_type(&mut encoded, *ty, nominal_name);
+    }
+    append_direct_ffi_type(&mut encoded, result.0, result.1);
+    encoded
+}
+
+unsafe fn call_direct_ffi_adapter(spec: &[u8], arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
+    let arguments = arguments
+        .iter()
+        .map(|argument| *argument as i64)
+        .collect::<Vec<_>>();
+    unsafe {
+        aurora_direct_ffi_call(
+            spec.as_ptr(),
+            spec.len() as i64,
+            arguments.as_ptr(),
+            arguments.len() as i64,
+        )
+        .cast()
+    }
+}
+
+#[no_mangle]
+unsafe extern "C" fn aurora_coverage_ffi_scalars(
+    boolean: u8,
+    i8_value: i8,
+    i16_value: i16,
+    i32_value: i32,
+    i64_value: i64,
+    u8_value: u8,
+    u16_value: u16,
+    u32_value: u32,
+    u64_value: u64,
+    f32_value: f32,
+    f64_value: f64,
+) -> f64 {
+    if boolean == 1
+        && i8_value == -8
+        && i16_value == -1_600
+        && i32_value == -32_000
+        && i64_value == -64_000
+        && u8_value == 8
+        && u16_value == 1_600
+        && u32_value == 32_000
+        && u64_value == 64_000
+        && f32_value == 3.0
+        && f64_value == 7.0
+    {
+        42.5
+    } else {
+        -1.0
+    }
+}
+
+#[no_mangle]
+unsafe extern "C" fn aurora_coverage_ffi_bool_not(value: u8) -> u8 {
+    u8::from(value == 0)
+}
+
+#[no_mangle]
+unsafe extern "C" fn aurora_coverage_ffi_views(
+    text: *const u8,
+    text_len: usize,
+    bytes: *const u8,
+    bytes_len: usize,
+    mutable_bytes: *mut u8,
+    mutable_bytes_len: usize,
+) -> u64 {
+    let text = unsafe { std::slice::from_raw_parts(text, text_len) };
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, bytes_len) };
+    let mutable_bytes = unsafe { std::slice::from_raw_parts_mut(mutable_bytes, mutable_bytes_len) };
+    if text != b"ffi" || bytes != [1, 2, 3] {
+        return 0;
+    }
+    for byte in mutable_bytes.iter_mut() {
+        *byte = byte.wrapping_add(1);
+    }
+    mutable_bytes.iter().map(|byte| u64::from(*byte)).sum()
+}
+
+static AURORA_COVERAGE_HANDLE: u8 = 1;
+
+#[no_mangle]
+unsafe extern "C" fn aurora_coverage_ffi_new_handle() -> *mut c_void {
+    std::ptr::from_ref(&AURORA_COVERAGE_HANDLE)
+        .cast_mut()
+        .cast()
+}
+
+#[no_mangle]
+unsafe extern "C" fn aurora_coverage_ffi_consume_handle(handle: *mut c_void) {
+    assert_eq!(
+        handle,
+        std::ptr::from_ref(&AURORA_COVERAGE_HANDLE)
+            .cast_mut()
+            .cast()
+    );
+}
 
 unsafe fn release(value: *mut OpaqueValue) {
     if !value.is_null() {
@@ -25,6 +151,15 @@ unsafe fn int_value(value: i64) -> *mut OpaqueValue {
 
 unsafe fn bool_value(value: bool) -> *mut OpaqueValue {
     aurora_direct_box_bool(i64::from(value))
+}
+
+unsafe fn float_value(value: i64, runtime_type: &str) -> *mut OpaqueValue {
+    let integer = unsafe { int_value(value) };
+    let float = aurora_direct_cast_value(integer, runtime_type.as_ptr(), runtime_type.len());
+    unsafe {
+        release(integer);
+    }
+    float
 }
 
 unsafe fn duration_value(value: i64) -> *mut OpaqueValue {
@@ -151,6 +286,97 @@ fn unique_temp_path(name: &str) -> String {
         ))
         .to_string_lossy()
         .to_string()
+}
+
+#[test]
+fn direct_ffi_adapter_executes_every_v0_boundary_kind_through_the_library_copy() {
+    // Keep every test-owned C symbol in the executable's process-global symbol
+    // table. The adapter still resolves by name, exactly as generated Aurora
+    // programs do.
+    std::hint::black_box(aurora_coverage_ffi_scalars as *const ());
+    std::hint::black_box(aurora_coverage_ffi_bool_not as *const ());
+    std::hint::black_box(aurora_coverage_ffi_views as *const ());
+    std::hint::black_box(aurora_coverage_ffi_new_handle as *const ());
+    std::hint::black_box(aurora_coverage_ffi_consume_handle as *const ());
+
+    unsafe {
+        let scalar_spec = direct_ffi_spec(
+            "aurora_coverage_ffi_scalars",
+            &[
+                (0, 1, ""),
+                (0, 2, ""),
+                (0, 3, ""),
+                (0, 4, ""),
+                (0, 5, ""),
+                (0, 6, ""),
+                (0, 7, ""),
+                (0, 8, ""),
+                (0, 9, ""),
+                (0, 10, ""),
+                (0, 11, ""),
+            ],
+            (11, ""),
+        );
+        let scalar_arguments = [
+            bool_value(true),
+            int_value(-8),
+            int_value(-1_600),
+            int_value(-32_000),
+            int_value(-64_000),
+            int_value(8),
+            int_value(1_600),
+            int_value(32_000),
+            int_value(64_000),
+            float_value(3, "float32"),
+            float_value(7, "float64"),
+        ];
+        let scalar_result = call_direct_ffi_adapter(&scalar_spec, &scalar_arguments);
+        assert_eq!(cloned_value(scalar_result), Value::Float(42.5));
+        for argument in scalar_arguments {
+            release(argument);
+        }
+        release(scalar_result);
+
+        let bool_spec = direct_ffi_spec("aurora_coverage_ffi_bool_not", &[(0, 1, "")], (1, ""));
+        let truth = bool_value(true);
+        let inverted = call_direct_ffi_adapter(&bool_spec, &[truth]);
+        assert_eq!(cloned_value(inverted), Value::Bool(false));
+        release(truth);
+        release(inverted);
+
+        let views_spec = direct_ffi_spec(
+            "aurora_coverage_ffi_views",
+            &[(0, 12, ""), (0, 13, ""), (1, 14, "")],
+            (9, ""),
+        );
+        let text = string_value("ffi");
+        let bytes = byte_vec(&[1, 2, 3]);
+        let mutable_bytes = byte_vec(&[4, 5]);
+        let sum = call_direct_ffi_adapter(&views_spec, &[text, bytes, mutable_bytes]);
+        assert_eq!(expect_i64(sum), 11);
+        assert_eq!(cloned_value(mutable_bytes).render(), "[5, 6]");
+        release(text);
+        release(bytes);
+        release(mutable_bytes);
+
+        let new_handle_spec = direct_ffi_spec(
+            "aurora_coverage_ffi_new_handle",
+            &[],
+            (15, "CoverageHandle"),
+        );
+        let handle = call_direct_ffi_adapter(&new_handle_spec, &[]);
+        assert_eq!(cloned_value(handle).render(), "<opaque CoverageHandle>");
+
+        let consume_handle_spec = direct_ffi_spec(
+            "aurora_coverage_ffi_consume_handle",
+            &[(2, 15, "CoverageHandle")],
+            (0, ""),
+        );
+        let consumed = call_direct_ffi_adapter(&consume_handle_spec, &[handle]);
+        assert_eq!(cloned_value(consumed), Value::Unit);
+        release(handle);
+        release(consumed);
+    }
 }
 
 #[test]

@@ -100,6 +100,10 @@ Current compiler workflow:
   - execute a manifest-rooted package with `src/`, a sibling path dependency, and package-local helpers
 - `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
   - execute a workspace member package with a workspace-root `Aurora.toml`
+- `cargo run -p aura -- run --backend mir examples/packages/ffi_getpid/src/main.au`
+  - execute an explicitly authorized FFI v0 package that calls the
+    process-global C `getpid` symbol on a Unix-family host; use
+    `--backend direct` for the maintained backend-parity path
 - `cargo run -p aura -- run examples/traits/greeter.au`
   - execute trait declarations, `impl Trait for Type`, and bounded generic calls
 - `cargo run -p aura -- run examples/traits/generic_trait_impl.au`

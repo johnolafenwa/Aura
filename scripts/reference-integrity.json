@@ -61,6 +61,9 @@
     "docs/manual/expressions.md": {
       "kind": "feature"
     },
+    "docs/manual/ffi.md": {
+      "kind": "feature"
+    },
     "docs/manual/filesystem.md": {
       "kind": "feature"
     },
@@ -637,6 +640,26 @@
       "mode": "illustrative",
       "reason": "Numeric type-name catalog used by the cast matrix, not Aurora source."
     },
+    "docs/manual/ffi.md#aurora-1": {
+      "sha256": "56c96f2122f04d6bab30fb59387236e7ca72eff086b23c3745c2ce55b281b1cf",
+      "mode": "package-check",
+      "entry": "src/main.au",
+      "files": {
+        "Aurora.toml": "[package]\nname = \"ffi_reference\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n"
+      },
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/ffi.md#toml-1": {
+      "sha256": "95043a95c87f7db0dc08ab2d41714ce0fed2bd96e8bff37be4cb851c262ac27c",
+      "mode": "illustrative",
+      "reason": "Manifest excerpt whose native declarations are shown in the separately verified Aurora block."
+    },
+    "docs/manual/ffi.md#toml-2": {
+      "sha256": "2b790df00364b8e84136d621c405efc5412a4c5c67f535aef902e17f6428b3d7",
+      "mode": "illustrative",
+      "reason": "Root dependency-report excerpt that requires the neighboring opted-in native_binding package."
+    },
     "docs/manual/filesystem.md#aurora-1": {
       "sha256": "903c860138a6fac7472c8a37d9b492ab49d9c12d5c478567fd81c92d2cd6e24a",
       "mode": "check",
@@ -969,7 +992,7 @@
       "reason": "Normative module-and-import EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-3": {
-      "sha256": "bfb7901cd5906c8ce2a87ee05026bbe1fac3ae8305265789490b6dfe59ae1ebd",
+      "sha256": "421b4a630ec25c1267c3cf88c5d78e5f51f129698c1154e35dae43f5fbfed4dd",
       "mode": "illustrative",
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
@@ -1004,7 +1027,7 @@
       "reason": "Normative statement-and-assignment EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#text-1": {
-      "sha256": "2181a908837195ea579932f6d18b443d7ee3adce86cfaf363afaf4e9a4fed0d3",
+      "sha256": "f4e8b50a0e6a4d77248f9f497ce210f4a539c172cd2139b9a79a18ba8ad2ae6b",
       "mode": "illustrative",
       "reason": "Reserved-keyword catalog, not an Aurora compilation unit."
     },
@@ -1097,7 +1120,7 @@
       "reason": "Normative duration-literal EBNF production interpreted by the lexical prose, not Aurora source."
     },
     "docs/manual/lexical-structure.md#text-1": {
-      "sha256": "2181a908837195ea579932f6d18b443d7ee3adce86cfaf363afaf4e9a4fed0d3",
+      "sha256": "f4e8b50a0e6a4d77248f9f497ce210f4a539c172cd2139b9a79a18ba8ad2ae6b",
       "mode": "illustrative",
       "reason": "Reserved-keyword catalog, not an Aurora compilation unit."
     },
@@ -1263,11 +1286,16 @@
       "reason": "Package-manifest excerpt that requires the neighboring util package and source files."
     },
     "docs/manual/packages.md#toml-2": {
+      "sha256": "93d35a985ffbfff184ce473fea03a744e86ba0f87105bf1a6dcf5217a8b5e614",
+      "mode": "illustrative",
+      "reason": "FFI root-manifest excerpt that requires the neighboring native package and its opted-in manifest."
+    },
+    "docs/manual/packages.md#toml-3": {
       "sha256": "0c094d2a4ad4d59dd89f70a43b093d32542ff507b05b40bd34bba8b574e03be6",
       "mode": "illustrative",
       "reason": "Workspace-manifest excerpt that requires the listed member directories and manifests."
     },
-    "docs/manual/packages.md#toml-3": {
+    "docs/manual/packages.md#toml-4": {
       "sha256": "0c1964ea8e7794d5187aa6e786ab098de673a82b963d80e7571b0aad2fb9a26c",
       "mode": "illustrative",
       "reason": "Generated lockfile excerpt with example source metadata, not an input manifest."

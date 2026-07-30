@@ -565,11 +565,32 @@ pub struct MirClosureCapture {
 pub enum CallTarget {
     Name(String),
     Value(Operand),
+    /// A direct, synchronous call through Aurora's deliberately small C ABI.
+    ///
+    /// Extern declarations do not acquire ordinary [`MirFunction`] bodies.
+    /// Instead, every call retains the complete checked source contract needed
+    /// by either backend to marshal the arguments and result.
+    Extern(MirExternCall),
     Member {
         object: Operand,
         field: String,
         receiver_place: Option<String>,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirExternCall {
+    pub symbol: String,
+    pub abi: String,
+    pub params: Vec<MirExternParam>,
+    pub return_type: Type,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirExternParam {
+    pub name: String,
+    pub passing: MirReceiverKind,
+    pub ty: Type,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1467,6 +1488,37 @@ impl<'a> Lowerer<'a> {
         self.current_module_namespace()
             .and_then(|namespace| namespace.all_functions.get(name))
             .or_else(|| self.program.functions.get(name))
+    }
+
+    fn resolve_extern_function_info(&self, name: &str) -> Option<&crate::sema::ExternFunctionInfo> {
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_extern_functions.get(name))
+            .or_else(|| self.program.extern_functions.get(name))
+    }
+
+    fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
+        MirExternCall {
+            symbol: function.decl.name.clone(),
+            abi: function.decl.abi.clone(),
+            params: function
+                .decl
+                .params
+                .iter()
+                .zip(
+                    function
+                        .signature
+                        .params
+                        .iter()
+                        .zip(&function.signature.param_passings),
+                )
+                .map(|(param, (ty, passing))| MirExternParam {
+                    name: param.name.clone(),
+                    passing: lower_receiver_kind(*passing),
+                    ty: ty.clone(),
+                })
+                .collect(),
+            return_type: function.signature.return_type.clone(),
+        }
     }
 
     fn function_type(
@@ -6211,7 +6263,8 @@ impl<'a> Lowerer<'a> {
         let direct_decl_callee = match &base_callee.kind {
             ExprKind::Name(name) => {
                 !self.local_types.contains_key(&self.render_local_name(name))
-                    && self.resolve_function_info(name).is_some()
+                    && (self.resolve_function_info(name).is_some()
+                        || self.resolve_extern_function_info(name).is_some())
             }
             ExprKind::Member { object, field } => self
                 .infer_module_path(object)
@@ -6219,6 +6272,7 @@ impl<'a> Lowerer<'a> {
                 .is_some_and(|namespace| {
                     namespace.functions.contains_key(field)
                         || namespace.all_functions.contains_key(field)
+                        || namespace.extern_functions.contains_key(field)
                 }),
             _ => false,
         };
@@ -6622,6 +6676,24 @@ impl<'a> Lowerer<'a> {
                 }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(function) = namespace.extern_functions.get(field).cloned() {
+                            let lowered_args = self.lower_user_args_with_types(
+                                &format!("extern function `{}`", function.decl.name),
+                                &function.decl.params,
+                                args,
+                                callee.span,
+                                Some(&function.signature.params),
+                                Some(&function.signature.param_passings),
+                            );
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::Call {
+                                    callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                                    args: lowered_args,
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
                         if let Some(constructor) = namespace
                             .classes
                             .get(field)
@@ -7092,6 +7164,24 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name) => {
+                if let Some(function) = self.resolve_extern_function_info(name).cloned() {
+                    let lowered_args = self.lower_user_args_with_types(
+                        &format!("extern function `{}`", function.decl.name),
+                        &function.decl.params,
+                        args,
+                        callee.span,
+                        Some(&function.signature.params),
+                        Some(&function.signature.param_passings),
+                    );
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                            args: lowered_args,
+                        },
+                    });
+                    return Operand::Place(temp);
+                }
                 let resolved_function = self.resolve_function_info(name).cloned();
                 let contextual_param_types = resolved_function.as_ref().map(|function_info| {
                     let substitutions = match &callee.kind {

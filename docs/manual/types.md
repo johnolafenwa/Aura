@@ -121,6 +121,7 @@ Move values transfer ownership:
 - `Option`, `Result`, and related outcome values with move payloads
 - `TaskGroup`
 - file, process, supervisor, and network resources
+- opaque FFI handles declared by `extern "C" opaque class`
 
 Move values can still be shared through a bare parameter, accessed mutably
 through a `mut` parameter, or duplicated explicitly through methods such as
@@ -468,7 +469,10 @@ capture-free code pointers; compiler-known callback and task-start sites
 preserve the additional closure metadata. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aurora returns it. Other numeric widths and overflow
-behavior are language-defined rather than implementation-defined.
+behavior are language-defined rather than implementation-defined. FFI v0
+opaque handles are nominal non-Copy, non-cloneable, non-Transfer wrappers for
+one non-null foreign pointer. Extern functions are direct-call-only
+declarations rather than `def(...) -> ...` values.
 
 ## Status
 
@@ -476,7 +480,9 @@ The scalar, collection, enum, class, trait-bound, resource, optional, result,
 and indirect types described by this Manual are implemented for the post-Phase
 1.5 surface. Return values are owned, and current syntax reserves no future
 loan or view contract. Capture-free function types and by-value expression
-closures are implemented. Method-value and FFI types are unavailable.
+closures are implemented. FFI v0 fixed-width declarations, byte/string views,
+and opaque handle types are implemented; extern functions do not become
+first-class function values. Method-value types are unavailable.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the implemented compatibility alias for `String`; a distinct borrowed

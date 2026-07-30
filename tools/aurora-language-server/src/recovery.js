@@ -14,6 +14,7 @@ const KEYWORDS = [
   "elif",
   "else",
   "enum",
+  "extern",
   "false",
   "for",
   "from",
@@ -25,6 +26,7 @@ const KEYWORDS = [
   "match",
   "mut",
   "None",
+  "opaque",
   "own",
   "pass",
   "public",
@@ -64,6 +66,38 @@ function indentation(line) {
 }
 
 function declarationForLine(line, lineNumber) {
+  const ffiPatterns = [
+    {
+      pattern:
+        /^(\s*)((?:public\s+)?extern\s+"C"\s+opaque\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+      kind: "class",
+      detail: 'extern "C" opaque class'
+    },
+    {
+      pattern:
+        /^(\s*)((?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+      kind: "function",
+      detail: 'extern "C" function'
+    }
+  ];
+  for (const { pattern, kind, detail } of ffiPatterns) {
+    const ffiMatch = line.match(pattern);
+    if (ffiMatch) {
+      const [, indentation, declarationPrefix, name] = ffiMatch;
+      const startCharacter = indentation.length + declarationPrefix.length;
+      return {
+        name,
+        kind,
+        detail,
+        line: lineNumber,
+        startCharacter,
+        endCharacter: startCharacter + name.length,
+        indent: indentation.length,
+        children: []
+      };
+    }
+  }
+
   const match = line.match(
     /^(\s*)(?:(?:public|copy)\s+)*(class|enum|trait|def)\s+([A-Za-z_][A-Za-z0-9_]*)/
   );
@@ -72,9 +106,11 @@ function declarationForLine(line, lineNumber) {
   }
   const [, prefix, declaration, name] = match;
   const startCharacter = line.indexOf(name, prefix.length);
+  const kind = declaration === "def" ? "function" : declaration;
   return {
     name,
-    kind: declaration === "def" ? "function" : declaration,
+    kind,
+    detail: kind,
     line: lineNumber,
     startCharacter,
     endCharacter: startCharacter + name.length,
@@ -117,6 +153,7 @@ function publicSymbol(symbol) {
   return {
     name: symbol.name,
     kind: symbol.kind,
+    detail: symbol.detail,
     line: symbol.line,
     startCharacter: symbol.startCharacter,
     endCharacter: symbol.endCharacter,
@@ -165,7 +202,9 @@ function completionsForDocument(text, line, character, triggerCharacter) {
     ...flattenSymbols(documentSymbols(text)).map((symbol) => ({
       name: symbol.name,
       kind: symbol.kind,
-      detail: `recovered ${symbol.kind}`
+      detail: symbol.detail.startsWith("extern ")
+        ? symbol.detail
+        : `recovered ${symbol.kind}`
     }))
   ];
   const seen = new Set();
@@ -225,7 +264,7 @@ function hoverForPosition(text, line, character) {
     return null;
   }
   return {
-    value: `${declaration.kind} ${declaration.name}`,
+    value: `${declaration.detail} ${declaration.name}`,
     range: {
       start: { line: word.line, character: word.start },
       end: { line: word.line, character: word.end }

@@ -18,6 +18,9 @@ Current features:
 - document diagnostics for duplicate declarations and obvious unknown names/members
 - `lambda parameters: expression` highlighting and snippet support, with
   compiler-owned lambda scope, hover, completion, and capture diagnostics
+- `extern "C" def` and `extern "C" opaque class` highlighting and snippets,
+  with compiler-owned symbols, hover, definitions, completions, and
+  diagnostics
 
 The language intelligence comes from the in-repo `aurora-language-server`
 package. The extension bundles its JavaScript LSP transport and that transport
@@ -27,7 +30,7 @@ The VS Code extension now bundles its client and server entrypoints into `tools/
 
 Current completion scope is intentionally lightweight. The language server understands:
 
-- top-level classes and functions
+- top-level classes, functions, extern C functions, and opaque handles
 - top-level enums and enum variants
 - built-in `Result` and `Option` variants
 - class fields and methods

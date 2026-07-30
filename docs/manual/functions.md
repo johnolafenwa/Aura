@@ -426,7 +426,8 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora has no method values, trait-object function interactions, variadics,
+Aurora has no method values, trait-object function interactions, Aurora
+variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`
@@ -447,4 +448,6 @@ by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends. Return values are owned; no return-source or label contract
 is reserved. By-value expression closures are implemented under Provisional
-ADR-0037. First-class loan/view values and FFI call signatures are unavailable.
+ADR-0037. First-class loan/view values are unavailable. FFI v0 adds bodyless
+direct-call-only `extern "C" def` declarations; they are not function values
+and their restricted signatures are specified by [FFI v0](/manual/ffi).

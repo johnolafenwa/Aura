@@ -53,6 +53,808 @@ fn bool_value(value: bool) -> *mut OpaqueValue {
     super::aurora_direct_box_bool(i64::from(value))
 }
 
+fn direct_ffi_spec(
+    symbol: &str,
+    params: Vec<super::DirectFfiParam>,
+    result: super::DirectFfiType,
+) -> Vec<u8> {
+    super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: symbol.to_string(),
+        params,
+        result,
+    })
+}
+
+fn direct_ffi_call(spec: &[u8], args: &[*mut OpaqueValue]) -> *mut OpaqueValue {
+    let raw_args = args
+        .iter()
+        .map(|argument| *argument as i64)
+        .collect::<Vec<_>>();
+    super::aurora_direct_ffi_call(
+        spec.as_ptr(),
+        spec.len() as i64,
+        raw_args.as_ptr(),
+        raw_args.len() as i64,
+    )
+}
+
+#[test]
+fn direct_ffi_call_spec_round_trips_and_rejects_corruption() {
+    let call = super::DirectFfiCallSpec {
+        symbol: "read".to_string(),
+        params: vec![
+            super::DirectFfiParam {
+                passing: ReceiverKind::Borrow,
+                ty: super::DirectFfiType::scalar(crate::ffi::FfiType::I32),
+            },
+            super::DirectFfiParam {
+                passing: ReceiverKind::BorrowMut,
+                ty: super::DirectFfiType::scalar(crate::ffi::FfiType::BytesViewMut),
+            },
+            super::DirectFfiParam {
+                passing: ReceiverKind::Value,
+                ty: super::DirectFfiType::opaque("Handle"),
+            },
+        ],
+        result: super::DirectFfiType::scalar(crate::ffi::FfiType::I64),
+    };
+    let encoded = super::encode_direct_ffi_call_spec(&call);
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&encoded).expect("valid direct FFI metadata"),
+        call
+    );
+
+    let mut wrong_magic = encoded.clone();
+    wrong_magic[0] = b'X';
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&wrong_magic),
+        Err("metadata magic is not `AUFI`".to_string())
+    );
+    let mut trailing = encoded;
+    trailing.push(0);
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&trailing),
+        Err("metadata has trailing bytes".to_string())
+    );
+
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&[]),
+        Err("metadata ended unexpectedly".to_string())
+    );
+
+    let mut wrong_version = direct_ffi_spec(
+        "x",
+        Vec::new(),
+        super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
+    );
+    wrong_version[4] = 1;
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&wrong_version),
+        Err("unsupported metadata version 1".to_string())
+    );
+
+    let mut invalid_utf8 = direct_ffi_spec(
+        "x",
+        Vec::new(),
+        super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
+    );
+    invalid_utf8[9] = 0xff;
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&invalid_utf8),
+        Err("metadata text is not valid UTF-8".to_string())
+    );
+
+    let empty_symbol = direct_ffi_spec(
+        "",
+        Vec::new(),
+        super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
+    );
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&empty_symbol),
+        Err("symbol name is empty".to_string())
+    );
+
+    let mut unknown_ownership = direct_ffi_spec(
+        "x",
+        vec![super::DirectFfiParam {
+            passing: ReceiverKind::Borrow,
+            ty: super::DirectFfiType::scalar(crate::ffi::FfiType::I32),
+        }],
+        super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
+    );
+    unknown_ownership[14] = 9;
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&unknown_ownership),
+        Err("unknown ownership mode code 9".to_string())
+    );
+
+    let mut unknown_type = direct_ffi_spec(
+        "x",
+        Vec::new(),
+        super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
+    );
+    unknown_type[14] = 255;
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&unknown_type),
+        Err("unknown FFI type code 255".to_string())
+    );
+
+    let missing_handle_name = direct_ffi_spec("x", Vec::new(), super::DirectFfiType::opaque(""));
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&missing_handle_name),
+        Err("opaque-handle metadata is missing its nominal type".to_string())
+    );
+
+    let scalar_with_handle_name = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::I32,
+            opaque_name: Some("NotAHandle".to_string()),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&scalar_with_handle_name),
+        Err("non-handle FFI type `int32` carries an opaque nominal name".to_string())
+    );
+}
+
+#[test]
+fn direct_ffi_metadata_pins_every_v0_type_code() {
+    use crate::ffi::FfiType;
+
+    for (ffi_type, code) in [
+        (FfiType::Unit, 0),
+        (FfiType::Bool, 1),
+        (FfiType::I8, 2),
+        (FfiType::I16, 3),
+        (FfiType::I32, 4),
+        (FfiType::I64, 5),
+        (FfiType::U8, 6),
+        (FfiType::U16, 7),
+        (FfiType::U32, 8),
+        (FfiType::U64, 9),
+        (FfiType::F32, 10),
+        (FfiType::F64, 11),
+        (FfiType::StringView, 12),
+        (FfiType::BytesView, 13),
+        (FfiType::BytesViewMut, 14),
+        (FfiType::OpaqueHandle, 15),
+    ] {
+        let result = if ffi_type == FfiType::OpaqueHandle {
+            super::DirectFfiType::opaque("Handle")
+        } else {
+            super::DirectFfiType::scalar(ffi_type)
+        };
+        let call = super::DirectFfiCallSpec {
+            symbol: "x".to_string(),
+            params: Vec::new(),
+            result,
+        };
+        let encoded = super::encode_direct_ffi_call_spec(&call);
+
+        assert_eq!(encoded[14], code, "FFI v0 type-code drift for {ffi_type}");
+        assert_eq!(
+            super::decode_direct_ffi_call_spec(&encoded).expect("the v0 code must decode"),
+            call,
+            "FFI v0 type-code round trip for {ffi_type}"
+        );
+    }
+}
+
+#[test]
+fn direct_ffi_value_conversion_preserves_every_exact_scalar_kind() {
+    use crate::ffi::{FfiType, FfiValue};
+
+    let cases = [
+        (
+            FfiType::I8,
+            FfiValue::I8(i8::MIN),
+            Value::Int(
+                IntegerValue::from_typed_signed(i8::MIN as i128, IntegerKind::Int8).unwrap(),
+            ),
+        ),
+        (
+            FfiType::I16,
+            FfiValue::I16(i16::MIN),
+            Value::Int(
+                IntegerValue::from_typed_signed(i16::MIN as i128, IntegerKind::Int16).unwrap(),
+            ),
+        ),
+        (
+            FfiType::I32,
+            FfiValue::I32(i32::MIN),
+            Value::Int(IntegerValue::from_i32(i32::MIN)),
+        ),
+        (
+            FfiType::I64,
+            FfiValue::I64(i64::MIN),
+            Value::Int(IntegerValue::from_i64(i64::MIN)),
+        ),
+        (
+            FfiType::U8,
+            FfiValue::U8(u8::MAX),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(u8::MAX as u128, IntegerKind::Uint8).unwrap(),
+            ),
+        ),
+        (
+            FfiType::U16,
+            FfiValue::U16(u16::MAX),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(u16::MAX as u128, IntegerKind::Uint16).unwrap(),
+            ),
+        ),
+        (
+            FfiType::U32,
+            FfiValue::U32(u32::MAX),
+            Value::Int(
+                IntegerValue::from_typed_unsigned(u32::MAX as u128, IntegerKind::Uint32).unwrap(),
+            ),
+        ),
+        (
+            FfiType::U64,
+            FfiValue::U64(u64::MAX),
+            Value::Int(IntegerValue::from_u64(u64::MAX)),
+        ),
+    ];
+    for (ffi_type, ffi_value, runtime_value) in cases {
+        let ty = super::DirectFfiType::scalar(ffi_type);
+        assert_eq!(
+            super::direct_ffi_to_value(ffi_value, &ty).expect("exact scalar result"),
+            runtime_value
+        );
+        assert_eq!(
+            super::direct_value_to_ffi(&runtime_value, &ty).expect("exact scalar argument"),
+            match ffi_type {
+                FfiType::I8 => FfiValue::I8(i8::MIN),
+                FfiType::I16 => FfiValue::I16(i16::MIN),
+                FfiType::I32 => FfiValue::I32(i32::MIN),
+                FfiType::I64 => FfiValue::I64(i64::MIN),
+                FfiType::U8 => FfiValue::U8(u8::MAX),
+                FfiType::U16 => FfiValue::U16(u16::MAX),
+                FfiType::U32 => FfiValue::U32(u32::MAX),
+                FfiType::U64 => FfiValue::U64(u64::MAX),
+                _ => unreachable!(),
+            }
+        );
+    }
+
+    for (ffi_type, ffi_value, runtime_value) in [
+        (FfiType::Bool, FfiValue::Bool(true), Value::Bool(true)),
+        (
+            FfiType::F32,
+            FfiValue::F32(1.25),
+            Value::Float(f64::from(1.25_f32)),
+        ),
+        (FfiType::F64, FfiValue::F64(-9.5), Value::Float(-9.5)),
+    ] {
+        let ty = super::DirectFfiType::scalar(ffi_type);
+        assert_eq!(
+            super::direct_ffi_to_value(ffi_value, &ty).expect("exact scalar result"),
+            runtime_value
+        );
+    }
+
+    for (ffi_type, runtime_value, ffi_value) in [
+        (FfiType::Bool, Value::Bool(false), FfiValue::Bool(false)),
+        (FfiType::F32, Value::Float(3.5), FfiValue::F32(3.5)),
+        (FfiType::F64, Value::Float(-2.25), FfiValue::F64(-2.25)),
+    ] {
+        assert_eq!(
+            super::direct_value_to_ffi(&runtime_value, &super::DirectFfiType::scalar(ffi_type))
+                .expect("exact non-integer scalar argument"),
+            ffi_value
+        );
+    }
+
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::String("aurora".to_string()),
+            &super::DirectFfiType::scalar(FfiType::StringView),
+        ),
+        Ok(FfiValue::String("aurora".to_string()))
+    );
+    let bytes = super::bytes_vec_value(vec![0, 127, 255]);
+    for ffi_type in [FfiType::BytesView, FfiType::BytesViewMut] {
+        assert_eq!(
+            super::direct_value_to_ffi(&bytes, &super::DirectFfiType::scalar(ffi_type)),
+            Ok(FfiValue::Bytes(vec![0, 127, 255]))
+        );
+    }
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::Unit, &super::DirectFfiType::scalar(FfiType::Unit),),
+        Ok(Value::Unit)
+    );
+}
+
+#[test]
+fn direct_ffi_value_conversion_reports_range_type_and_nominal_mismatches() {
+    use crate::ffi::{FfiType, FfiValue};
+
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::Int(
+                IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+                    .expect("u128::MAX is a valid uint128"),
+            ),
+            &super::DirectFfiType::scalar(FfiType::I64),
+        ),
+        Err("FFI argument expected int64, but the integer is too large".to_string())
+    );
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::Int(IntegerValue::from_i32(-1)),
+            &super::DirectFfiType::scalar(FfiType::U8),
+        ),
+        Err("FFI argument expected uint8, but received -1".to_string())
+    );
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::Int(IntegerValue::from_i32(256)),
+            &super::DirectFfiType::scalar(FfiType::U8),
+        ),
+        Err("FFI argument expected uint8, but received `integer`".to_string())
+    );
+    for (ffi_type, value) in [
+        (FfiType::I8, i128::from(i8::MAX) + 1),
+        (FfiType::I16, i128::from(i16::MAX) + 1),
+        (FfiType::I32, i128::from(i32::MAX) + 1),
+        (FfiType::I64, i128::from(i64::MAX) + 1),
+    ] {
+        assert_eq!(
+            super::direct_value_to_ffi(
+                &Value::Int(IntegerValue::from_signed(value)),
+                &super::DirectFfiType::scalar(ffi_type),
+            ),
+            Err(format!(
+                "FFI argument expected {ffi_type}, but received `integer`"
+            )),
+            "the direct FFI adapter must reject a signed value just above {ffi_type}::MAX"
+        );
+    }
+    for (ffi_type, value) in [
+        (FfiType::U16, u128::from(u16::MAX) + 1),
+        (FfiType::U32, u128::from(u32::MAX) + 1),
+        (FfiType::U64, u128::from(u64::MAX) + 1),
+    ] {
+        assert_eq!(
+            super::direct_value_to_ffi(
+                &Value::Int(
+                    IntegerValue::from_typed_unsigned(value, IntegerKind::Uint128)
+                        .expect("each out-of-range probe still fits `uint128`"),
+                ),
+                &super::DirectFfiType::scalar(ffi_type),
+            ),
+            Err(format!(
+                "FFI argument expected {ffi_type}, but received `integer`"
+            )),
+            "the direct FFI adapter must reject an unsigned value just above {ffi_type}::MAX"
+        );
+    }
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::String("not-a-bool".to_string()),
+            &super::DirectFfiType::scalar(FfiType::Bool),
+        ),
+        Err("FFI argument expected bool, but received `String`".to_string())
+    );
+
+    let handle = crate::runtime_value::FfiHandleValue::new(
+        "ActualHandle".to_string(),
+        std::ptr::without_provenance_mut::<std::ffi::c_void>(1),
+    )
+    .expect("the non-null test address is an opaque identity only");
+    let rendered = Value::FfiHandle(handle.clone()).render();
+    assert_eq!(rendered, "<opaque ActualHandle>");
+    assert!(
+        !rendered.contains("0x") && !rendered.contains('1'),
+        "opaque handle rendering must never expose its address: {rendered}"
+    );
+    assert_eq!(
+        super::direct_value_to_ffi(
+            &Value::FfiHandle(handle),
+            &super::DirectFfiType::opaque("ExpectedHandle"),
+        ),
+        Err("FFI argument expected opaque handle, but received `ActualHandle`".to_string())
+    );
+    assert_eq!(
+        super::direct_ffi_to_value(
+            FfiValue::I32(7),
+            &super::DirectFfiType::scalar(FfiType::Bool),
+        ),
+        Err("FFI engine returned a value incompatible with declared result `bool`".to_string())
+    );
+}
+
+#[test]
+fn direct_ffi_mutable_byte_writeback_rejects_lost_buffer_without_mutating_the_caller() {
+    use crate::ffi::FfiValue;
+
+    let bytes = int_vec(&[4, 5]);
+    assert_eq!(
+        super::direct_ffi_write_back_mut_bytes(bytes, &FfiValue::Bool(false)),
+        Err("FFI mutable byte view lost its byte buffer".to_string())
+    );
+    assert_eq!(
+        unsafe { value_ref(bytes) },
+        super::bytes_vec_value(vec![4, 5])
+    );
+    unsafe { release_value(bytes) };
+}
+
+#[test]
+fn direct_ffi_adapter_rejects_invalid_boundary_metadata_and_argument_buffers() {
+    use crate::ffi::FfiType;
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_ffi_call(std::ptr::null(), -1, std::ptr::null(), 0);
+        }),
+        "invalid direct FFI call-spec length"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_ffi_call(std::ptr::null(), 1, std::ptr::null(), 0);
+        }),
+        "direct FFI call received a null call-spec pointer"
+    );
+
+    let invalid_spec = b"not-a-call-spec".to_vec();
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_ffi_call(
+                invalid_spec.as_ptr(),
+                invalid_spec.len() as i64,
+                std::ptr::null(),
+                0,
+            );
+        }),
+        "invalid direct FFI call spec: metadata magic is not `AUFI`"
+    );
+
+    let empty_call = direct_ffi_spec(
+        "getpid",
+        Vec::new(),
+        super::DirectFfiType::scalar(FfiType::I32),
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aurora_direct_ffi_call(
+                empty_call.as_ptr(),
+                empty_call.len() as i64,
+                std::ptr::null(),
+                -1,
+            );
+        }),
+        "invalid direct FFI argument count"
+    );
+
+    let one_argument = direct_ffi_spec(
+        "abs",
+        vec![super::DirectFfiParam {
+            passing: ReceiverKind::Borrow,
+            ty: super::DirectFfiType::scalar(FfiType::I32),
+        }],
+        super::DirectFfiType::scalar(FfiType::I32),
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message({
+            let one_argument = one_argument.clone();
+            move || {
+                super::aurora_direct_ffi_call(
+                    one_argument.as_ptr(),
+                    one_argument.len() as i64,
+                    std::ptr::null(),
+                    1,
+                );
+            }
+        }),
+        "direct FFI call received a null argument buffer"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message({
+            let one_argument = one_argument.clone();
+            move || {
+                super::aurora_direct_ffi_call(
+                    one_argument.as_ptr(),
+                    one_argument.len() as i64,
+                    std::ptr::null(),
+                    0,
+                );
+            }
+        }),
+        "direct FFI call spec expected 1 argument(s), but received 0"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            let null_argument = [0_i64];
+            super::aurora_direct_ffi_call(
+                one_argument.as_ptr(),
+                one_argument.len() as i64,
+                null_argument.as_ptr(),
+                1,
+            );
+        }),
+        "direct FFI argument 1 has a null runtime value"
+    );
+}
+
+#[test]
+fn direct_ffi_adapter_reports_argument_marshalling_as_au4005() {
+    use crate::ffi::FfiType;
+
+    let spec = direct_ffi_spec(
+        "abs",
+        vec![super::DirectFfiParam {
+            passing: ReceiverKind::Borrow,
+            ty: super::DirectFfiType::scalar(FfiType::Bool),
+        }],
+        super::DirectFfiType::scalar(FfiType::I32),
+    );
+    let value = int_value(7);
+    let value_address = value as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                direct_ffi_call(&spec, &[value_address as *mut OpaqueValue]);
+                Ok(Value::Unit)
+            })
+        })
+    })
+    .expect_err("a mismatched FFI argument must fail before the foreign call");
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(
+        diagnostic.message,
+        "FFI call to `abs` failed: FFI argument expected bool, but received `integer`"
+    );
+    unsafe { release_value(value) };
+}
+
+#[test]
+fn direct_ffi_mutable_bytes_write_back_before_return_validation_failure() {
+    use crate::ffi::{call_host_function, FfiError, FfiSignature, FfiType, FfiValue, HostFunction};
+
+    unsafe extern "C" fn mutate_then_return_invalid_bool(bytes: *mut u8, len: usize) -> u8 {
+        let bytes = unsafe { std::slice::from_raw_parts_mut(bytes, len) };
+        for byte in bytes {
+            *byte = byte.wrapping_add(1);
+        }
+        2
+    }
+
+    let bytes = int_vec(&[1, 2, 255]);
+    let mut arguments = vec![FfiValue::Bytes(vec![1, 2, 255])];
+    let signature = FfiSignature::new(vec![FfiType::BytesViewMut], FfiType::Bool);
+    let function =
+        HostFunction::new(mutate_then_return_invalid_bool as *const () as *mut std::ffi::c_void)
+            .expect("test function has a non-null address");
+    let engine_result =
+        unsafe { call_host_function(function, &signature, arguments.as_mut_slice()) };
+    assert_eq!(arguments, [FfiValue::Bytes(vec![2, 3, 0])]);
+    assert_eq!(engine_result, Err(FfiError::NonCanonicalBoolReturn(2)));
+
+    let spec = super::DirectFfiCallSpec {
+        symbol: "mutate_then_return_invalid_bool".to_string(),
+        params: vec![super::DirectFfiParam {
+            passing: ReceiverKind::BorrowMut,
+            ty: super::DirectFfiType::scalar(FfiType::BytesViewMut),
+        }],
+        result: super::DirectFfiType::scalar(FfiType::Bool),
+    };
+    assert_eq!(
+        super::finish_direct_ffi_call(&spec, &[bytes as i64], &arguments, engine_result),
+        Err(super::DirectFfiCompletionError::Engine(
+            FfiError::NonCanonicalBoolReturn(2)
+        ))
+    );
+    assert_eq!(
+        unsafe { value_ref(bytes) },
+        Value::Vec(VecValue {
+            element_type: Type::named("uint8"),
+            elements: vec![
+                Value::Int(IntegerValue::from_typed_unsigned(2, IntegerKind::Uint8).unwrap()),
+                Value::Int(IntegerValue::from_typed_unsigned(3, IntegerKind::Uint8).unwrap()),
+                Value::Int(IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8).unwrap()),
+            ],
+        })
+    );
+    unsafe { release_value(bytes) };
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_ffi_adapter_calls_process_symbols_and_maps_runtime_failures() {
+    use crate::ffi::FfiType;
+
+    let getpid = direct_ffi_spec(
+        "getpid",
+        Vec::new(),
+        super::DirectFfiType::scalar(FfiType::I32),
+    );
+    let pid = direct_ffi_call(&getpid, &[]);
+    let Value::Int(pid_value) = (unsafe { value_ref(pid) }) else {
+        panic!("getpid should return an integer");
+    };
+    assert!(pid_value.as_i128().is_some_and(|pid| pid > 0));
+    assert_eq!(pid_value.runtime_kind(), Some(IntegerKind::Int32));
+    unsafe { release_value(pid) };
+
+    let missing = direct_ffi_spec(
+        "__aurora_missing_direct_ffi_symbol__",
+        Vec::new(),
+        super::DirectFfiType::scalar(FfiType::I32),
+    );
+    let missing = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                direct_ffi_call(&missing, &[]);
+                Ok(Value::Unit)
+            })
+        })
+    })
+    .expect_err("missing FFI symbols should fail the direct task");
+    assert_eq!(missing.code, "AU4005");
+    assert!(missing
+        .message
+        .starts_with("FFI call to `__aurora_missing_direct_ffi_symbol__` failed:"));
+
+    let invalid_bool = direct_ffi_spec(
+        "dup2",
+        vec![
+            super::DirectFfiParam {
+                passing: ReceiverKind::Borrow,
+                ty: super::DirectFfiType::scalar(FfiType::I32),
+            },
+            super::DirectFfiParam {
+                passing: ReceiverKind::Borrow,
+                ty: super::DirectFfiType::scalar(FfiType::I32),
+            },
+        ],
+        super::DirectFfiType::scalar(FfiType::Bool),
+    );
+    let invalid_fd = super::aurora_direct_box_i32(-1);
+    let target_fd = super::aurora_direct_box_i32(2);
+    let invalid_fd_address = invalid_fd as usize;
+    let target_fd_address = target_fd as usize;
+    let invalid_bool = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                direct_ffi_call(
+                    &invalid_bool,
+                    &[
+                        invalid_fd_address as *mut OpaqueValue,
+                        target_fd_address as *mut OpaqueValue,
+                    ],
+                );
+                Ok(Value::Unit)
+            })
+        })
+    })
+    .expect_err("non-canonical FFI bools should fail the direct task");
+    assert_eq!(invalid_bool.code, "AU4001");
+    assert!(invalid_bool
+        .message
+        .contains("FFI bool return must be encoded as 0 or 1"));
+    unsafe {
+        release_value(invalid_fd);
+        release_value(target_fd);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_ffi_adapter_writes_back_bytes_and_keeps_handles_opaque() {
+    use crate::ffi::FfiType;
+
+    let mut pipe_fds = [-1; 2];
+    assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+    let payload = b"ABC";
+    assert_eq!(
+        unsafe {
+            libc::write(
+                pipe_fds[1],
+                payload.as_ptr().cast::<std::ffi::c_void>(),
+                payload.len(),
+            )
+        },
+        payload.len() as isize
+    );
+    assert_eq!(unsafe { libc::close(pipe_fds[1]) }, 0);
+
+    let fd = super::aurora_direct_box_i32(i64::from(pipe_fds[0]));
+    let bytes = int_vec(&[0, 0, 0]);
+    let read = direct_ffi_spec(
+        "read",
+        vec![
+            super::DirectFfiParam {
+                passing: ReceiverKind::Borrow,
+                ty: super::DirectFfiType::scalar(FfiType::I32),
+            },
+            super::DirectFfiParam {
+                passing: ReceiverKind::BorrowMut,
+                ty: super::DirectFfiType::scalar(FfiType::BytesViewMut),
+            },
+        ],
+        super::DirectFfiType::scalar(FfiType::I64),
+    );
+    let read_count = direct_ffi_call(&read, &[fd, bytes]);
+    assert_eq!(
+        unsafe { value_ref(read_count) },
+        Value::Int(IntegerValue::from_i64(3))
+    );
+    let Value::Vec(bytes_after) = (unsafe { value_ref(bytes) }) else {
+        panic!("mutable FFI byte argument should remain a vector");
+    };
+    assert_eq!(
+        bytes_after
+            .elements
+            .iter()
+            .map(|value| {
+                let Value::Int(value) = value else {
+                    panic!("byte vector should contain integers");
+                };
+                value.as_i128().unwrap() as u8
+            })
+            .collect::<Vec<_>>(),
+        payload
+    );
+    assert_eq!(unsafe { libc::close(pipe_fds[0]) }, 0);
+    unsafe {
+        release_value(fd);
+        release_value(bytes);
+        release_value(read_count);
+    }
+
+    let size = super::aurora_direct_box_u64(1);
+    let malloc = direct_ffi_spec(
+        "malloc",
+        vec![super::DirectFfiParam {
+            passing: ReceiverKind::Borrow,
+            ty: super::DirectFfiType::scalar(FfiType::U64),
+        }],
+        super::DirectFfiType::opaque("ProcessHandle"),
+    );
+    let handle = direct_ffi_call(&malloc, &[size]);
+    let pointer = match unsafe { value_ref(handle) } {
+        Value::FfiHandle(handle) => {
+            assert_eq!(handle.type_name(), "ProcessHandle");
+            assert_eq!(
+                Value::FfiHandle(handle.clone()).render(),
+                "<opaque ProcessHandle>"
+            );
+            handle.as_ptr()
+        }
+        other => panic!("malloc should return a dedicated opaque handle, found {other:?}"),
+    };
+    assert!(!pointer.is_null());
+    let ffi_value = super::direct_value_to_ffi(
+        &unsafe { value_ref(handle) },
+        &super::DirectFfiType::opaque("ProcessHandle"),
+    )
+    .expect("the dedicated handle should marshal");
+    let crate::ffi::FfiValue::OpaqueHandle(round_trip) = ffi_value else {
+        panic!("opaque handle should retain its FFI identity");
+    };
+    assert_eq!(round_trip.as_ptr(), pointer);
+
+    let free = direct_ffi_spec(
+        "free",
+        vec![super::DirectFfiParam {
+            passing: ReceiverKind::Value,
+            ty: super::DirectFfiType::opaque("ProcessHandle"),
+        }],
+        super::DirectFfiType::scalar(FfiType::Unit),
+    );
+    let unit = direct_ffi_call(&free, &[handle]);
+    assert_eq!(unsafe { value_ref(unit) }, Value::Unit);
+    unsafe {
+        release_value(size);
+        release_value(handle);
+        release_value(unit);
+    }
+}
+
 fn duration_value(value: i64) -> *mut OpaqueValue {
     let nanoseconds = (value as i128) * crate::runtime_value::NANOS_PER_MILLISECOND;
     duration_nanoseconds_value(nanoseconds)
@@ -3951,6 +4753,10 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
     assert!(
         expect_variant_ptr(super::aurora_direct_process_inherit(), "Stdio", "Inherit",).is_empty()
     );
+    assert!(
+        expect_variant_ptr(super::aurora_direct_process_pipe(), "Stdio", "Pipe").is_empty(),
+        "the direct process wrapper must expose captured stdio as process.Stdio.Pipe"
+    );
 
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
@@ -4601,6 +5407,33 @@ fn native_runtime_direct_process_run_wrapper_covers_timeout_result_path() {
         bool_value(false),
     ));
     assert!(expect_variant_value(timed_out, "Error", "TimedOut").is_empty());
+}
+
+#[test]
+fn native_runtime_direct_process_run_wrapper_captures_both_streams() {
+    let completed = run_lightweight_root_task(|| {
+        Ok(expect_result_ok_payload(super::aurora_direct_process_run(
+            string_vec(&[
+                "/bin/sh",
+                "-c",
+                "printf aurora-stdout; printf aurora-stderr >&2",
+            ]),
+            boxed_value(Value::Unit),
+            super::aurora_direct_map_empty(),
+            super::aurora_direct_process_null(),
+            super::aurora_direct_process_pipe(),
+            super::aurora_direct_process_pipe(),
+            duration_value(1_000),
+            bool_value(false),
+        )))
+    })
+    .expect("capturing process.run(...) should complete on the task scheduler");
+    let Value::ProcessCompleted(completed) = completed else {
+        panic!("process.run(...) should return process.Completed");
+    };
+    assert!(completed.success());
+    assert_eq!(completed.stdout_bytes(), b"aurora-stdout");
+    assert_eq!(completed.stderr_bytes(), b"aurora-stderr");
 }
 
 #[test]

@@ -102,7 +102,48 @@ Last updated: 2026-07-30
   global hygiene command reports only the excluded user-owned
   `personal/file_ops.au`; the staged Phase 6.3 tree passes whitespace checks
   and every other hygiene invariant independently. The isolated Phase 6.3
-  commit is the only remaining action before Phase 6.4 FFI starts.
+  isolated Phase 6.3 commit is settled as `e1feb04`.
+
+  Phase 6.4 FFI v0 implementation and final-audit hardening are complete.
+  Its provisional surface uses explicit-result `extern "C" def`
+  declarations, `extern "C" opaque class` handles, build-wide
+  `[package] allow_ffi = true`, and an exact root `[ffi] dependencies`
+  report for direct and transitive FFI-enabled dependencies. The frontend,
+  canonical nominal semantics, shared libffi engine, MIR/direct backends,
+  opaque runtime values, manifest policy, analysis/LSP, extension, reference,
+  tutorial, and maintained `ffi_getpid` package are integrated. The final
+  audit closed basename-based opaque-type confusion, undefined opaque
+  equality/address operations, public raw-checker authorization bypasses,
+  forged-FFI execution through safe public arbitrary-MIR APIs, an optional
+  extern-result parser mismatch, fallback extern-name spans, and incomplete
+  TextMate scopes. Public arbitrary-MIR runners now reject extern targets;
+  authorized path APIs, embedded MIR, and `aura test` use crate-private
+  trusted execution after package validation. Focused verification passes 58
+  FFI compiler tests, 12 frontend/engine tests, all four CLI acceptance
+  tests, 15 public-surface tests, focused LSP/extension/reference/docs gates,
+  production Clippy, formatting, and whitespace checks. The first final clean
+  replay passed every behavior target and reached 80,437/83,647 lines
+  (96.162444558681%) and 117,301/123,988 regions (94.606736135755%), but
+  5,342/5,513 functions (96.898240522402%) was exactly one function below the
+  unrounded 96.90% floor. Observable import, MIR, object-lowering,
+  fixed-width-boundary, and direct process-capture tests close that final gap;
+  an instrumented proof reaches 80,453/83,647 lines (96.181572560881%),
+  5,346/5,513 functions (96.970796299655%), and 117,329/123,988 regions
+  (94.629318966352%). No synthetic test, production coverage edit, or
+  exclusion was added. The clean canonical full-CI replay passes 49 benchmark
+  checks, 320 CLI tests, 6 retry tests, 4 FFI acceptance tests, 2 closure
+  acceptance tests, the 712.40-second forced MIR/direct parity matrix, 1,385
+  compiler tests, all remaining Rust integration targets, 97 LSP tests, 15
+  extension tests, executable reference integrity, the documentation build,
+  both dependency audits, and warning-denied Clippy. LSP coverage remains
+  exactly 100% at 937/937 lines, 49/49 functions, and 251/251 branches.
+  Canonical compiler coverage is 80,452/83,647 lines
+  (96.18037706074335%), 5,346/5,513 functions (96.97079629965536%), and
+  117,328/123,988 regions (94.62851243668743%), above the frozen floors.
+  Global hygiene reports only whitespace in the excluded user-owned
+  `personal/file_ops.au`; the Phase 6.4 diff and every other hygiene rule pass
+  independently. Obsolete coverage artifacts were cleaned at the
+  disk-hygiene threshold before the replay.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the

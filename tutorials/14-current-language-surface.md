@@ -125,6 +125,9 @@ Aurora now supports a first local package-system milestone:
 - workspace roots with `[workspace] members = [...]`
 - package-aware `check`, `run`, `build`, `analyze`, and `complete`
 - a local `Aurora.lock` written at the package root or workspace root
+- FFI v0 authorization through `[package] allow_ffi = true`, with every
+  reachable FFI-enabled dependency named exactly in the root package's
+  `[ffi] dependencies` report
 
 Current manifest shape:
 
@@ -157,6 +160,16 @@ Current package-system limits:
 - `aura deps update util` refreshes just the named git dependency
 - there are still no registry or publish/install flows yet
 
+An authorized package may declare bodyless `extern "C"` functions over the
+fixed-width scalar set, temporary String/byte pointer-length views, and opaque
+handles. Extern functions are direct-call-only and resolve process-global
+symbols synchronously. Empty views pass `(NULL, 0)`; `mut Vec[uint8]` uses
+same-length scratch copy-in/out. Opaque handles are non-Copy, non-cloneable,
+non-Transfer values and require an explicit consuming native close/free call.
+Callbacks, variadics, raw pointer arithmetic, returned views, nullable handles,
+and explicit library loading are not implemented. See
+[26-ffi.md](26-ffi.md).
+
 ## Ownership And Borrowing
 
 Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
@@ -165,7 +178,8 @@ Copy types (all numeric types, `bool`, `Duration`, and `Queue[T]`) are
 duplicated on assignment. `Task[T]` is copyable only when `T` is copyable, a
 `Queue[...]` handle, or a recursively repeatable `Task[...]` handle. Move
 types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `random.Rng`, `TaskGroup`,
-ordinary user-defined classes, and `Task[T]` for a non-repeatable `T`) transfer
+opaque FFI handles, ordinary user-defined classes, and `Task[T]` for a
+non-repeatable `T`) transfer
 ownership on assignment.
 
 `copy class` declarations are allowed when all fields are copy types.

@@ -326,6 +326,25 @@ owned values and cannot be captured. Captured state is read-only in Phase 6.3;
 in-loan and mutable capture wait for the separate loan/view design. See
 [Closures](/manual/closures) and Provisional ADR-0037.
 
+## FFI Views And Opaque Handles
+
+FFI v0 views are temporary call-boundary capabilities, not first-class Aurora
+references. Bare `String` and `Vec[uint8]` retain their owner while exposing a
+const pointer and byte length for one synchronous foreign call. `mut
+Vec[uint8]` requires an exclusive mutable vector place and copies the initial
+bytes into a same-length scratch buffer; exactly that length is written back
+after the foreign function returns. Empty views use a null pointer with length
+zero. Foreign code must not retain any view pointer.
+
+An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper
+for one non-null foreign pointer. A bare handle parameter retains it; `own
+Handle` consumes it; `mut Handle` is unavailable. Aurora does not automatically
+call a foreign destructor, so a binding must invoke its explicit consuming
+close/free declaration. Opaque handles cannot be task captures, task results,
+or Queue payloads.
+
+See [FFI v0](/manual/ffi) for the complete ABI and failure boundary.
+
 ## Tasks And Borrowing
 
 The four `TaskGroup` start methods accept named functions or associated

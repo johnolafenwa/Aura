@@ -6,7 +6,10 @@ use super::{
     lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir, parse_source,
     qualify_enum_decl_for_export, qualify_export_bounds, qualify_export_type,
     qualify_export_type_ref, qualify_impl_decl_for_export, qualify_imported_module_namespaces,
-    run_mir, run_path, run_path_with_source, run_serialized_mir, run_source, ModuleLoader, Value,
+    run_mir, run_path, run_path_entry_with_stdout_sink_and_program_args, run_path_with_source,
+    run_path_with_source_and_stdout_sink, run_path_with_source_and_stdout_sink_and_program_args,
+    run_path_with_stdout_sink, run_path_with_stdout_sink_and_program_args, run_serialized_mir,
+    run_source, run_source_with_stdout_sink, ModuleLoader, StdoutSink, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
@@ -18,7 +21,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,6 +36,208 @@ fn lock_io_example() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+fn captured_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let sink_capture = captured.clone();
+    let sink: StdoutSink = Arc::new(move |chunk| {
+        sink_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_str(chunk);
+    });
+    (captured, sink)
+}
+
+#[test]
+fn source_only_public_apis_reject_unmanifested_ffi() {
+    let source = "extern \"C\" def getpid() -> int32\n";
+    for (api, result) in [
+        ("check_source", check_source(source).map(|_| ())),
+        (
+            "lower_source_to_mir",
+            lower_source_to_mir(source).map(|_| ()),
+        ),
+        ("run_source", run_source(source).map(|_| ())),
+    ] {
+        let diagnostic = result.expect_err("source-only FFI must require a package manifest");
+        assert_eq!(diagnostic.code, "AU2999", "{api}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("Aurora.toml")
+                && diagnostic.message.contains("allow_ffi = true"),
+            "{api}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn exported_bindings_preserve_public_opaque_handle_identity_and_privacy() {
+    let module = parse_source(
+        "public extern \"C\" opaque class PublicHandle\nextern \"C\" opaque class PrivateHandle\n",
+    )
+    .expect("opaque handle declarations should parse");
+    let program = super::check_module_with_builtin_imports(module)
+        .expect("opaque handle declarations should type check");
+
+    match exported_binding(&program, "PublicHandle").expect("public opaque handle should export") {
+        crate::sema::ImportedBinding::OpaqueHandle(info) => {
+            assert_eq!(info.module_name, "<main>");
+            assert_eq!(info.decl.name, "PublicHandle");
+            assert!(info.decl.public);
+        }
+        other => panic!("expected opaque handle export, found {other:?}"),
+    }
+    assert!(
+        exported_binding(&program, "PrivateHandle").is_none(),
+        "private opaque handles must not become import bindings"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_authorized_path_run_uses_the_trusted_ffi_runtime_route() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/packages/ffi_getpid/src/main.au");
+    let output = run_path(&path).expect("the maintained FFI package should run by path");
+    assert_eq!(output.stdout, "true\n");
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_wrapper_matrix_preserves_sinks_args_entries_and_manifest_authorized_ffi() {
+    let (source_capture, source_sink) = captured_stdout_sink();
+    let source_output =
+        run_source_with_stdout_sink("def main():\n    print(\"source-safe\")\n", source_sink)
+            .expect("source-only stdout wrapper should run ordinary safe source");
+    assert_eq!(source_output.stdout, "source-safe\n");
+    assert_eq!(
+        source_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "source-safe\n"
+    );
+
+    let temp = TempDir::new("aurora-runtime-wrapper-matrix");
+    fs::write(
+        temp.path().join("Aurora.toml"),
+        r#"[package]
+name = "runtime_wrapper_matrix"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+"#,
+    )
+    .expect("test package manifest should be written");
+    fs::create_dir_all(temp.path().join("src")).expect("test package source dir should be created");
+    let main_path = temp.path().join("src/main.au");
+    fs::write(
+        &main_path,
+        r#"import sys
+
+extern "C" def getpid() -> int32
+
+def selected():
+    print(getpid() > 0)
+    print(sys.args().len())
+
+def main():
+    print(getpid() > 0)
+    print(sys.args().len())
+"#,
+    )
+    .expect("test package entry should be written");
+    let override_source = r#"import sys
+
+extern "C" def getpid() -> int32
+
+def main():
+    print(getpid() > 0)
+    print(sys.args().len())
+"#;
+
+    let overridden = run_path_with_source(&main_path, override_source)
+        .expect("manifest-authorized source override should execute FFI");
+    assert_eq!(overridden.stdout, "true\n0\n");
+
+    let (override_capture, override_sink) = captured_stdout_sink();
+    let overridden_with_sink =
+        run_path_with_source_and_stdout_sink(&main_path, override_source, override_sink)
+            .expect("manifest-authorized source override should preserve its stdout sink");
+    assert_eq!(overridden_with_sink.stdout, "true\n0\n");
+    assert_eq!(
+        override_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "true\n0\n"
+    );
+
+    let (override_args_capture, override_args_sink) = captured_stdout_sink();
+    let overridden_with_args = run_path_with_source_and_stdout_sink_and_program_args(
+        &main_path,
+        override_source,
+        override_args_sink,
+        vec!["alpha".to_string(), "beta".to_string()],
+    )
+    .expect("manifest-authorized source override should receive explicit program args");
+    assert_eq!(overridden_with_args.stdout, "true\n2\n");
+    assert_eq!(
+        override_args_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "true\n2\n"
+    );
+
+    let (path_capture, path_sink) = captured_stdout_sink();
+    let path_output = run_path_with_stdout_sink(&main_path, path_sink)
+        .expect("manifest-authorized path should preserve its stdout sink");
+    assert_eq!(path_output.stdout, "true\n0\n");
+    assert_eq!(
+        path_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "true\n0\n"
+    );
+
+    let (path_args_capture, path_args_sink) = captured_stdout_sink();
+    let path_with_args = run_path_with_stdout_sink_and_program_args(
+        &main_path,
+        path_args_sink,
+        vec!["one".to_string(), "two".to_string(), "three".to_string()],
+    )
+    .expect("manifest-authorized path should receive explicit program args");
+    assert_eq!(path_with_args.stdout, "true\n3\n");
+    assert_eq!(
+        path_args_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "true\n3\n"
+    );
+
+    let (entry_capture, entry_sink) = captured_stdout_sink();
+    let selected = run_path_entry_with_stdout_sink_and_program_args(
+        &main_path,
+        Some("selected"),
+        Some(entry_sink),
+        vec!["entry".to_string()],
+    )
+    .expect("manifest-authorized selected entry should execute FFI with explicit args");
+    assert_eq!(selected.stdout, "true\n1\n");
+    assert_eq!(
+        entry_capture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "true\n1\n"
+    );
+}
+
 const EXAMPLE_CASES: &[(&str, &str)] = &[
     (
         "examples/basics/top_level_script.au",

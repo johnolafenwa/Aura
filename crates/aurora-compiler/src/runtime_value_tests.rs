@@ -19,11 +19,11 @@ use super::{
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
     wait_timeout_condvar, BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue,
-    ClosureEnvironment, EnumVariantValue, FileValue, FunctionValue, HttpListenerValue,
-    HttpResponseValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy,
-    ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue, FunctionValue,
+    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
+    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
+    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
     TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
     WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
@@ -61,7 +61,7 @@ use crate::runtime_reactor::{RuntimeReactor, WaitKey};
 use crate::sema::{FunctionParamContract, Type};
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
+use std::ffi::{c_void, OsStr};
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -78,6 +78,31 @@ use super::{
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+
+#[test]
+fn ffi_handles_keep_addresses_opaque_in_runtime_rendering_and_identity_operations() {
+    assert!(
+        FfiHandleValue::new("ffi.Token".to_string(), std::ptr::null_mut()).is_none(),
+        "a null foreign pointer is never a valid opaque handle"
+    );
+    let pointer = 0x1234usize as *mut c_void;
+    let handle =
+        FfiHandleValue::new("ffi.Token".to_string(), pointer).expect("pointer is non-null");
+    assert_eq!(handle.type_name(), "ffi.Token");
+    assert_eq!(handle.as_ptr(), pointer);
+
+    let value = Value::FfiHandle(handle);
+    assert_eq!(value.render(), "<opaque ffi.Token>");
+    let debug = format!("{value:?}");
+    assert!(debug.contains("ffi.Token"));
+    assert!(!debug.contains("1234"));
+    assert!(!debug.contains("4660"));
+    assert_ne!(
+        value,
+        value.clone(),
+        "opaque handles have no source equality operation"
+    );
+}
 
 struct TempDir {
     path: PathBuf,

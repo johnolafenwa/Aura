@@ -70,7 +70,8 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 : The source file selected by a run, build, check, test, analysis, or completion command. Entrypoint-only rules such as the `main` signature apply to this module.
 
 **Item**
-: A top-level class, enum, function, trait, or trait implementation declaration.
+: A top-level class, enum, Aurora function, extern function, extern opaque
+  handle, trait, or trait implementation declaration.
 
 **Binding**
 : A name associated with a value, parameter, pattern payload, module, type parameter, or declaration.
@@ -136,7 +137,7 @@ Read the normative core in this order:
 4. [Types](/manual/types) and [Static Semantics](/manual/static-semantics)
 5. [Ownership And Borrowing](/manual/ownership-and-borrowing)
 6. [Expressions](/manual/expressions), [Statements](/manual/statements),
-   [Closures](/manual/closures), and declaration chapters
+   [Closures](/manual/closures), [FFI v0](/manual/ffi), and declaration chapters
 7. [Execution Model](/manual/execution-model)
 8. runtime/library chapters and the [API Index](/manual/api-index)
 9. [Diagnostics](/manual/diagnostics), [Current Limits](/manual/current-limits), and [Conformance](/manual/conformance)

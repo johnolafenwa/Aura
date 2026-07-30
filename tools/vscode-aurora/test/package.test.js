@@ -78,6 +78,66 @@ test("extension packages an expression-lambda snippet", () => {
   assert.match(snippets.Lambda.description, /expression/i);
 });
 
+test("extension highlights and snippets the maintained extern C surface", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammar = JSON.parse(
+    fs.readFileSync(
+      path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json"),
+      "utf8"
+    )
+  );
+  const keywordRule = grammar.repository.keywords.patterns.find(
+    (pattern) => pattern.name === "keyword.declaration.ffi.aurora"
+  );
+  const declarationRules = grammar.repository.declarations.patterns;
+  const snippets = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "snippets", "aurora.json"), "utf8")
+  );
+
+  assert.ok(keywordRule);
+  assert.equal(new RegExp(keywordRule.match).test("extern"), true);
+  assert.equal(new RegExp(keywordRule.match).test("opaque"), true);
+  const functionRule = declarationRules.find(
+    (pattern) => pattern.name === "meta.definition.ffi.function.aurora"
+  );
+  const opaqueRule = declarationRules.find(
+    (pattern) => pattern.name === "meta.definition.ffi.opaque.aurora"
+  );
+  assert.ok(functionRule);
+  assert.ok(opaqueRule);
+
+  const functionMatch = new RegExp(functionRule.match).exec(
+    'extern "C" def getpid'
+  );
+  assert.deepEqual(functionMatch?.slice(1), ["extern", '"C"', "def", "getpid"]);
+  assert.equal(functionRule.captures["1"].name, "keyword.declaration.ffi.aurora");
+  assert.equal(functionRule.captures["2"].name, "string.quoted.double.aurora");
+  assert.equal(functionRule.captures["3"].name, "keyword.declaration.function.aurora");
+  assert.equal(functionRule.captures["4"].name, "entity.name.function.aurora");
+
+  const opaqueMatch = new RegExp(opaqueRule.match).exec(
+    'extern "C" opaque class native_handle'
+  );
+  assert.deepEqual(opaqueMatch?.slice(1), [
+    "extern",
+    '"C"',
+    "opaque",
+    "class",
+    "native_handle"
+  ]);
+  assert.equal(opaqueRule.captures["1"].name, "keyword.declaration.ffi.aurora");
+  assert.equal(opaqueRule.captures["2"].name, "string.quoted.double.aurora");
+  assert.equal(opaqueRule.captures["3"].name, "keyword.declaration.ffi.aurora");
+  assert.equal(opaqueRule.captures["4"].name, "keyword.declaration.aurora");
+  assert.equal(opaqueRule.captures["5"].name, "entity.name.type.aurora");
+  assert.deepEqual(snippets["Extern C function"].body, [
+    'public extern "C" def ${1:name}(${2}) -> ${3:int32}'
+  ]);
+  assert.deepEqual(snippets["Extern C opaque handle"].body, [
+    'public extern "C" opaque class ${1:Handle}'
+  ]);
+});
+
 test("syntax grammar treats mut and own as Aurora storage modifiers without retired borrow", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");

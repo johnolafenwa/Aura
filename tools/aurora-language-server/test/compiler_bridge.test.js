@@ -951,6 +951,76 @@ test("compiler bridge returns machine-readable analysis for a real example", asy
   assert.ok(analysis.symbols.some((symbol) => symbol.name === "Point"));
 });
 
+test("compiler bridge exposes extern C symbols, hover, definitions, and completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-ffi-"));
+  const source = [
+    'public extern "C" opaque class ProcessHandle',
+    'public extern "C" def getpid() -> int32',
+    "",
+    "def main() -> int32:",
+    "    return getpid()",
+    ""
+  ].join("\n");
+
+  try {
+    fs.writeFileSync(
+      path.join(tempRoot, "Aurora.toml"),
+      [
+        "[package]",
+        'name = "ffi_lsp"',
+        'version = "0.1.0"',
+        'edition = "2026"',
+        "allow_ffi = true",
+        ""
+      ].join("\n")
+    );
+    fs.mkdirSync(path.join(tempRoot, "src"));
+    const mainPath = path.join(tempRoot, "src", "main.au");
+    const mainUri = `file://${mainPath}`;
+    setWorkspaceRoots([repoRoot, tempRoot]);
+
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.ok(
+      analysis.symbols.some(
+        (symbol) =>
+          symbol.name === "ProcessHandle" &&
+          symbol.kind === "class" &&
+          symbol.detail === 'extern "C" opaque'
+      )
+    );
+    assert.ok(
+      analysis.symbols.some(
+        (symbol) =>
+          symbol.name === "getpid" &&
+          symbol.kind === "function" &&
+          symbol.detail === 'extern "C" -> int32'
+      )
+    );
+
+    const callCharacter = source.split("\n")[4].indexOf("getpid") + 2;
+    assert.match(
+      compilerHoverAtPosition(analysis, 4, callCharacter)?.value || "",
+      /extern "C" function getpid\(\) -> int32/
+    );
+    assert.deepEqual(
+      compilerDefinitionAtPosition(mainUri, analysis, 4, callCharacter)?.range,
+      {
+        start: { line: 1, character: 22 },
+        end: { line: 1, character: 28 }
+      }
+    );
+
+    const completions = await completeWithCompiler(mainUri, source, 4, 4, null);
+    const getpid = completions.find((item) => item.name === "getpid");
+    assert.equal(getpid?.kind, "function");
+    assert.match(getpid?.detail || "", /extern "C".*int32/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge analyzes and completes inside continued delimiters", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-continuation-"));
   const source = [

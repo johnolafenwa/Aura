@@ -121,11 +121,13 @@ impl GitSelector {
 pub struct PackageSource {
     pub name: String,
     pub version: String,
+    pub allow_ffi: bool,
     pub manifest_dir: PathBuf,
     pub source_root: PathBuf,
     canonical_source_root: PathBuf,
     pub external_prefix: Option<String>,
     pub dependencies: BTreeMap<String, String>,
+    ffi_dependencies: BTreeSet<String>,
     origin: PackageOrigin,
 }
 
@@ -158,6 +160,7 @@ impl PackageGraph {
                 package.external_prefix = Some(name.clone());
             }
         }
+        validate_ffi_dependency_report(&root_package_name, &packages)?;
         let root_source_root = packages
             .get(&root_package_name)
             .expect("root package should be resolved")
@@ -231,6 +234,48 @@ impl PackageGraph {
         self.source_for_path(path)
             .map(|package| package.dependencies.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub fn ensure_ffi_allowed_for_path(&self, path: &Path) -> Result<()> {
+        let normalized_path = canonicalize_if_exists(path)?;
+        let package = self.source_for_path(&normalized_path).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "could not determine the Aurora package for FFI declaration in `{}`",
+                    normalized_path.display()
+                ),
+            )
+        })?;
+        if package.allow_ffi {
+            return Ok(());
+        }
+        if package.external_prefix.is_some() {
+            let (root_name, _) = self
+                .packages
+                .iter()
+                .find(|(_, candidate)| candidate.external_prefix.is_none())
+                .expect("a discovered package graph should contain its root package");
+            let path = dependency_path(&self.packages, root_name, &package.name)
+                .expect("dependency packages should be reachable from the root package");
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "dependency package `{}` uses FFI but its manifest `{}` does not opt in; add `allow_ffi = true` to `[package]` (dependency path: {})",
+                    package.name,
+                    package.manifest_dir.join(MANIFEST_NAME).display(),
+                    path.join(" -> ")
+                ),
+            ));
+        }
+        Err(Diagnostic::coded(
+            "AU2999",
+            format!(
+                "package `{}` uses FFI but its manifest `{}` does not opt in; add `allow_ffi = true` to `[package]`",
+                package.name,
+                package.manifest_dir.join(MANIFEST_NAME).display()
+            ),
+        ))
     }
 
     pub fn resolve_import_path(
@@ -308,6 +353,145 @@ impl PackageGraph {
             &format!("`{}`", lockfile_path.display()),
         )
     }
+}
+
+fn validate_ffi_dependency_report(
+    root_package_name: &str,
+    packages: &BTreeMap<String, PackageSource>,
+) -> Result<()> {
+    let root = packages
+        .get(root_package_name)
+        .expect("resolved package graph should contain its root package");
+    let root_manifest_path = root.manifest_dir.join(MANIFEST_NAME);
+
+    for reported_name in &root.ffi_dependencies {
+        let Some(reported) = packages.get(reported_name) else {
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "root package `{}` lists `{}` in `[ffi] dependencies`, but no such dependency is reachable from `{}`; remove the stale entry or add the dependency in `{}`",
+                    root_package_name,
+                    reported_name,
+                    root_package_name,
+                    root_manifest_path.display()
+                ),
+            ));
+        };
+        if reported_name == root_package_name {
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "root package `{}` lists itself in `[ffi] dependencies`; remove the stale entry from `{}` because the root package's own FFI use is authorized by `[package] allow_ffi = true`",
+                    root_package_name,
+                    root_manifest_path.display()
+                ),
+            ));
+        }
+        if !reported.allow_ffi {
+            let path = dependency_path(packages, root_package_name, reported_name)
+                .expect("reported dependencies should be reachable from the root package");
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "root package `{}` lists `{}` in `[ffi] dependencies`, but dependency `{}` does not enable FFI; remove the stale entry or add `allow_ffi = true` to `[package]` in `{}` (dependency path: {})",
+                    root_package_name,
+                    reported_name,
+                    reported_name,
+                    reported.manifest_dir.join(MANIFEST_NAME).display(),
+                    path.join(" -> ")
+                ),
+            ));
+        }
+    }
+
+    for (package_name, package) in packages {
+        if package_name == root_package_name || !package.allow_ffi {
+            continue;
+        }
+        let path = dependency_path(packages, root_package_name, package_name)
+            .expect("resolved dependency packages should be reachable from the root package");
+        if !root.allow_ffi {
+            let report_instruction = if root.ffi_dependencies.contains(package_name) {
+                format!("keep `\"{}\"` listed in `[ffi] dependencies`", package_name)
+            } else {
+                format!("also add `\"{}\"` to `[ffi] dependencies`", package_name)
+            };
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "root package `{}` includes FFI-enabled dependency `{}` but does not opt in; add `allow_ffi = true` to `[package]` in `{}` and {} (dependency path: {})",
+                    root_package_name,
+                    package_name,
+                    root_manifest_path.display(),
+                    report_instruction,
+                    path.join(" -> ")
+                ),
+            ));
+        }
+        if root.ffi_dependencies.contains(package_name) {
+            continue;
+        }
+        return Err(Diagnostic::coded(
+            "AU2999",
+            format!(
+                "dependency package `{}` enables FFI but is missing from root package `{}`'s `[ffi] dependencies` report; add `\"{}\"` to `[ffi] dependencies` in `{}` (dependency path: {})",
+                package_name,
+                root_package_name,
+                package_name,
+                root_manifest_path.display(),
+                path.join(" -> ")
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn dependency_path(
+    packages: &BTreeMap<String, PackageSource>,
+    root_package_name: &str,
+    target_package_name: &str,
+) -> Option<Vec<String>> {
+    fn visit(
+        packages: &BTreeMap<String, PackageSource>,
+        current: &str,
+        target: &str,
+        visiting: &mut BTreeSet<String>,
+        path: &mut Vec<String>,
+    ) -> bool {
+        if !visiting.insert(current.to_string()) {
+            return false;
+        }
+        path.push(current.to_string());
+        if current == target {
+            return true;
+        }
+        let found = packages
+            .get(current)
+            .map(|package| {
+                package
+                    .dependencies
+                    .values()
+                    .any(|dependency| visit(packages, dependency, target, visiting, path))
+            })
+            .unwrap_or(false);
+        if !found {
+            path.pop();
+        }
+        visiting.remove(current);
+        found
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut path = Vec::new();
+    visit(
+        packages,
+        root_package_name,
+        target_package_name,
+        &mut visiting,
+        &mut path,
+    )
+    .then_some(path)
 }
 
 pub fn update_git_dependencies_in_working_dir(
@@ -550,11 +734,13 @@ impl PackageResolver {
         let package = PackageSource {
             name: manifest.package.name.clone(),
             version: manifest.package.version,
+            allow_ffi: manifest.package.allow_ffi,
             manifest_dir: manifest_dir.clone(),
             source_root,
             canonical_source_root,
             external_prefix: None,
             dependencies,
+            ffi_dependencies: manifest.ffi_dependencies,
             origin,
         };
         self.packages.insert(package.name.clone(), package);
@@ -576,6 +762,7 @@ struct RawManifest {
     package: Option<RawPackageSection>,
     #[serde(default)]
     dependencies: BTreeMap<String, RawDependency>,
+    ffi: Option<RawFfiSection>,
     workspace: Option<RawWorkspaceSection>,
 }
 
@@ -584,6 +771,14 @@ struct RawPackageSection {
     name: String,
     version: String,
     edition: String,
+    #[serde(default)]
+    allow_ffi: bool,
+}
+
+#[derive(Deserialize)]
+struct RawFfiSection {
+    #[serde(default)]
+    dependencies: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -629,6 +824,7 @@ struct RawLockPackage {
 struct ParsedPackageManifest {
     package: RawPackageSection,
     dependencies: BTreeMap<String, RawDependency>,
+    ffi_dependencies: BTreeSet<String>,
 }
 
 fn find_enclosing_package_manifest_dir(entry_path: &Path) -> Result<Option<PathBuf>> {
@@ -850,9 +1046,35 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
             SUPPORTED_PACKAGE_EDITION
         )));
     }
+    let mut ffi_dependencies = BTreeSet::new();
+    if let Some(ffi) = raw.ffi {
+        for dependency in ffi.dependencies {
+            if !is_valid_package_name(&dependency) {
+                return Err(Diagnostic::coded(
+                    "AU2999",
+                    format!(
+                        "manifest `{}` has invalid FFI dependency report entry `{}`; entries in `[ffi] dependencies` must be package names matching `[A-Za-z_][A-Za-z0-9_]*`",
+                        manifest_path.display(),
+                        dependency
+                    ),
+                ));
+            }
+            if !ffi_dependencies.insert(dependency.clone()) {
+                return Err(Diagnostic::coded(
+                    "AU2999",
+                    format!(
+                        "manifest `{}` lists dependency `{}` more than once in `[ffi] dependencies`",
+                        manifest_path.display(),
+                        dependency
+                    ),
+                ));
+            }
+        }
+    }
     Ok(ParsedPackageManifest {
         package,
         dependencies: raw.dependencies,
+        ffi_dependencies,
     })
 }
 

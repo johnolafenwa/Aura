@@ -16,8 +16,8 @@ use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
     builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, ClassInfo,
-    ClosureInfo, EnumInfo, FunctionInfo, FunctionParamContract, MethodInfo, Program, TraitBound,
-    Type,
+    ClosureInfo, EnumInfo, ExternFunctionInfo, FunctionInfo, FunctionParamContract, MethodInfo,
+    OpaqueHandleInfo, Program, TraitBound, Type,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -275,7 +275,11 @@ impl<'a> AnalysisBuilder<'a> {
                         self.visit_stmts(&method.body, &mut scope);
                     }
                 }
-                Item::Enum(_) | Item::Trait(_) | Item::Impl(_) => {}
+                Item::Enum(_)
+                | Item::ExternFunction(_)
+                | Item::ExternOpaqueClass(_)
+                | Item::Trait(_)
+                | Item::Impl(_) => {}
             }
         }
 
@@ -940,6 +944,20 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: format_function_detail(&function_info.decl),
             });
         }
+        for function_info in self.program.extern_functions.values() {
+            completions.push(AnalysisCompletion {
+                name: function_info.decl.name.clone(),
+                kind: "function".to_string(),
+                detail: format_extern_function_detail(&function_info.decl),
+            });
+        }
+        for handle_info in self.program.opaque_handles.values() {
+            completions.push(AnalysisCompletion {
+                name: handle_info.decl.name.clone(),
+                kind: "class".to_string(),
+                detail: format_extern_opaque_detail(&handle_info.decl),
+            });
+        }
         for builtin in ALL_BUILTIN_FUNCTIONS {
             completions.push(AnalysisCompletion {
                 name: builtin.name().to_string(),
@@ -973,6 +991,20 @@ impl<'a> AnalysisBuilder<'a> {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
                         detail: format_function_detail(&function.decl),
+                    });
+                }
+                for function in namespace.extern_functions.values() {
+                    completions.push(AnalysisCompletion {
+                        name: function.decl.name.clone(),
+                        kind: "function".to_string(),
+                        detail: format_extern_function_detail(&function.decl),
+                    });
+                }
+                for handle in namespace.opaque_handles.values() {
+                    completions.push(AnalysisCompletion {
+                        name: handle.decl.name.clone(),
+                        kind: "class".to_string(),
+                        detail: format_extern_opaque_detail(&handle.decl),
                     });
                 }
                 for class_info in namespace.classes.values() {
@@ -1242,6 +1274,22 @@ impl<'a> AnalysisBuilder<'a> {
             &function.module_name,
             function.decl.span,
             function.decl.name.len(),
+        )
+    }
+
+    fn extern_function_definition(&self, function: &ExternFunctionInfo) -> AnalysisRange {
+        self.definition_range(
+            &function.module_name,
+            function.decl.name_span,
+            function.decl.name.len(),
+        )
+    }
+
+    fn opaque_handle_definition(&self, handle: &OpaqueHandleInfo) -> AnalysisRange {
+        self.definition_range(
+            &handle.module_name,
+            handle.decl.name_span,
+            handle.decl.name.len(),
         )
     }
 
@@ -1906,6 +1954,20 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
+        if let Some(function) = self.program.extern_functions.get(name) {
+            return Some(ResolvedSymbol {
+                hover: format_extern_function_hover(&function.decl),
+                definition: Some(self.extern_function_definition(function)),
+            });
+        }
+
+        if let Some(handle) = self.program.opaque_handles.get(name) {
+            return Some(ResolvedSymbol {
+                hover: format_extern_opaque_hover(&handle.decl),
+                definition: Some(self.opaque_handle_definition(handle)),
+            });
+        }
+
         if let Some(class_info) = self.program.classes.get(name) {
             return Some(ResolvedSymbol {
                 hover: format_class_hover(class_info),
@@ -2028,6 +2090,39 @@ impl<'a> AnalysisBuilder<'a> {
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
                     }),
+                });
+            }
+            if let Some(function) = namespace.extern_functions.get(field) {
+                return Some(ResolvedMember {
+                    hover: format_extern_function_hover(&function.decl),
+                    definition: Some(self.extern_function_definition(function)),
+                    ty: Some(Type::Function {
+                        params: function
+                            .decl
+                            .params
+                            .iter()
+                            .zip(&function.signature.params)
+                            .zip(&function.signature.param_passings)
+                            .map(|((decl, ty), passing)| FunctionParamContract {
+                                name: decl.name.clone(),
+                                ty: ty.clone(),
+                                passing: *passing,
+                                has_default: false,
+                                default_erased: false,
+                            })
+                            .collect(),
+                        return_type: Box::new(function.signature.return_type.clone()),
+                    }),
+                });
+            }
+            if let Some(handle) = namespace.opaque_handles.get(field) {
+                return Some(ResolvedMember {
+                    hover: format_extern_opaque_hover(&handle.decl),
+                    definition: Some(self.opaque_handle_definition(handle)),
+                    ty: Some(Type::named(format!(
+                        "{}.{}",
+                        namespace.path, handle.decl.name
+                    ))),
                 });
             }
             if let Some(class_info) = namespace.classes.get(field) {
@@ -3221,6 +3316,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(function) = self.program.functions.get(name) {
                     return Some(function.signature.return_type.clone());
                 }
+                if let Some(function) = self.program.extern_functions.get(name) {
+                    return Some(function.signature.return_type.clone());
+                }
                 if name == "TaskGroup" {
                     return Some(Type::named("TaskGroup"));
                 }
@@ -3755,6 +3853,34 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
                     children: Vec::new(),
                 });
             }
+            Item::ExternFunction(function_decl) => {
+                symbols.push(AnalysisSymbol {
+                    name: function_decl.name.clone(),
+                    kind: "function".to_string(),
+                    detail: format!(
+                        "extern \"{}\" -> {}",
+                        function_decl.abi,
+                        lower_type_ref(&function_decl.return_type)
+                    ),
+                    line: function_decl.name_span.line.saturating_sub(1),
+                    start_character: function_decl.name_span.column.saturating_sub(1),
+                    end_character: function_decl.name_span.column.saturating_sub(1)
+                        + function_decl.name.len(),
+                    children: Vec::new(),
+                });
+            }
+            Item::ExternOpaqueClass(class_decl) => {
+                symbols.push(AnalysisSymbol {
+                    name: class_decl.name.clone(),
+                    kind: "class".to_string(),
+                    detail: format!("extern \"{}\" opaque", class_decl.abi),
+                    line: class_decl.name_span.line.saturating_sub(1),
+                    start_character: class_decl.name_span.column.saturating_sub(1),
+                    end_character: class_decl.name_span.column.saturating_sub(1)
+                        + class_decl.name.len(),
+                    children: Vec::new(),
+                });
+            }
             Item::Trait(trait_decl) => {
                 symbols.push(AnalysisSymbol {
                     name: trait_decl.name.clone(),
@@ -4169,6 +4295,29 @@ fn format_function_hover(function_decl: &FunctionDecl) -> String {
         function_decl.name,
         params,
         lower_type_ref(&function_decl.return_type)
+    )
+}
+
+fn format_extern_function_hover(function_decl: &crate::ast::ExternFunctionDecl) -> String {
+    let params = function_decl
+        .params
+        .iter()
+        .map(format_param_decl)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "```aurora\nextern \"{}\" function {}({}) -> {}\n```",
+        function_decl.abi,
+        function_decl.name,
+        params,
+        lower_type_ref(&function_decl.return_type)
+    )
+}
+
+fn format_extern_opaque_hover(handle_decl: &crate::ast::ExternOpaqueClassDecl) -> String {
+    format!(
+        "```aurora\nextern \"{}\" opaque class {}\n```",
+        handle_decl.abi, handle_decl.name
     )
 }
 
@@ -4899,6 +5048,26 @@ fn format_function_detail(function_decl: &FunctionDecl) -> String {
         params,
         lower_type_ref(&function_decl.return_type)
     )
+}
+
+fn format_extern_function_detail(function_decl: &crate::ast::ExternFunctionDecl) -> String {
+    let params = function_decl
+        .params
+        .iter()
+        .map(format_param_decl)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "extern \"{}\" {}({}) -> {}",
+        function_decl.abi,
+        function_decl.name,
+        params,
+        lower_type_ref(&function_decl.return_type)
+    )
+}
+
+fn format_extern_opaque_detail(handle_decl: &crate::ast::ExternOpaqueClassDecl) -> String {
+    format!("extern \"{}\" opaque class", handle_decl.abi)
 }
 
 fn canonical_receiver_spelling(receiver: ReceiverKind) -> &'static str {

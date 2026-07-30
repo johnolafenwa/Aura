@@ -1,0 +1,5 @@
+[package]
+name = "ffi_getpid"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true

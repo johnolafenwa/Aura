@@ -20,6 +20,8 @@ Current compiler-backed analysis covers:
 - go-to-definition
 - contextual lambda parameter scope, captured-name navigation, callable hover,
   and closure ownership diagnostics
+- extern C and opaque-handle symbols, hover, definitions, completions, and
+  package-authorization diagnostics
 
 The server starts one persistent compiler service:
 
@@ -54,7 +56,8 @@ editor workflows that present runtime diagnostics.
 
 If the compiler process cannot be started, the lexical recovery layer provides only:
 
-- recovered top-level declarations and nested method declarations
+- recovered top-level declarations, extern C functions, opaque handles, and
+  nested method declarations
 - top-level keywords, builtins, and recovered declaration completions
 - same-file hover and definition for recovered declarations
 

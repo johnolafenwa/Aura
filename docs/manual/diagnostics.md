@@ -57,6 +57,19 @@ adapted. The same code reports a `control.retry` worker that is not exactly a
 zero-parameter `def() -> Result[T, E]`. `AU2002` also reports a `sort` element
 or `sort_by` key type without the required natural ordering.
 
+At the FFI boundary, `AU1101` provides dedicated parser guidance for malformed
+extern bodies, defaults, type parameters, callbacks, variadics, and raw-pointer
+syntax. `AU2002` rejects types outside the FFI v0 scalar/view/opaque table;
+`AU2005` rejects reserved raw-pointer/callback contracts or opaque
+construction; `AU2999` covers package authorization, root dependency reports,
+and direct-call-only policy; and `AU3004` reports an invalid FFI capability.
+Opaque handle moves and task/Queue boundaries retain `AU3001` and `AU3008`.
+A non-canonical C boolean result (a returned byte other than `0` or `1`) traps
+with `AU4001`. `AU4005` reports a missing process-global symbol, null
+opaque-handle result, or runtime marshalling failure. Native aborts, signals,
+memory faults, and foreign unwinds may terminate the process and are not
+Aurora diagnostics. See [FFI v0](/manual/ffi).
+
 `AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
 For collections its guidance is clone-safety aware, classified exactly as the
