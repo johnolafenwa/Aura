@@ -16,6 +16,11 @@ import sys
 import tempfile
 import time
 
+try:
+    from scripts import benchmark_process
+except ImportError:
+    import benchmark_process
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIDTHS = ("int32", "int64")
 
@@ -31,7 +36,13 @@ def measure(binary: pathlib.Path, repeats: int) -> float:
     best = None
     for _ in range(repeats):
         started = time.perf_counter()
-        subprocess.run([str(binary)], stdout=subprocess.DEVNULL, check=True)
+        result = benchmark_process.run_process_group(
+            [str(binary)],
+            "direct integer-loop workload",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        result.check_returncode()
         elapsed = time.perf_counter() - started
         best = elapsed if best is None else min(best, elapsed)
     assert best is not None
@@ -50,12 +61,21 @@ def main() -> int:
         for width in WIDTHS:
             program = ROOT / f"benchmarks/direct_integer_loops/{width}_loop.au"
             binary = work / f"{width}_loop"
-            subprocess.run(
-                [str(aura), "build", "--backend", "direct", "-o", str(binary), str(program)],
+            build = benchmark_process.run_process_group(
+                [
+                    str(aura),
+                    "build",
+                    "--backend",
+                    "direct",
+                    "-o",
+                    str(binary),
+                    str(program),
+                ],
+                "direct integer-loop build",
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
+                stderr=subprocess.PIPE,
             )
+            build.check_returncode()
             results[width] = measure(binary, args.repeats)
 
     print(f"{'width':<8}{'best_s':>10}")

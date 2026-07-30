@@ -42,6 +42,14 @@ the sample invalid. The host runner waits for natural process completion and
 requires the exact `DONE` line, zero exit status, and empty standard error;
 nominal sleepers and idle runs are never terminated by the runner.
 
+Every measured binary is nevertheless launched as the leader of a fresh,
+runner-owned POSIX process group. On success, protocol failure, timeout, or
+interrupt, the runner checks that whole group, sends `SIGTERM` to any remaining
+members, escalates to `SIGKILL`, verifies that the group disappeared, and
+reaps the leader. A failed or silently ineffective cleanup invalidates the
+benchmark. This also covers a descendant that survives after its original
+benchmark leader exits.
+
 `10k-sleepers` first emits and flushes a pre-spawn observation point:
 
 ```text

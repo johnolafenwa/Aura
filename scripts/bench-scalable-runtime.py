@@ -28,7 +28,24 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from typing import BinaryIO, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import (
+    BinaryIO,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
+
+try:
+    from scripts import benchmark_process
+except ImportError:
+    # Direct script execution places scripts/ rather than the repository root
+    # on sys.path.
+    import benchmark_process
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -1121,15 +1138,66 @@ def controlled_runtime_environment(
     return environment
 
 
+def owned_process_group_exists(process_group_id: int) -> bool:
+    return benchmark_process.process_group_exists(process_group_id)
+
+
+def reap_owned_process_group(
+    process: subprocess.Popen,
+    benchmark: str,
+    *,
+    terminate_timeout_seconds: float = benchmark_process.TERMINATE_TIMEOUT_SECONDS,
+    kill_timeout_seconds: float = benchmark_process.KILL_TIMEOUT_SECONDS,
+) -> None:
+    try:
+        benchmark_process.reap_process_group(
+            process,
+            benchmark,
+            terminate_timeout_seconds=terminate_timeout_seconds,
+            kill_timeout_seconds=kill_timeout_seconds,
+        )
+    except benchmark_process.ProcessGroupCleanupError as error:
+        raise BenchmarkError(str(error)) from error
+
+
+def launch_owned_process(
+    command: Sequence[str],
+    **kwargs: object,
+) -> subprocess.Popen:
+    try:
+        return benchmark_process.launch_process_group(command, **kwargs)
+    except ValueError as error:
+        raise BenchmarkError(str(error)) from error
+
+
+def run_owned_process(
+    command: Sequence[str],
+    benchmark: str,
+    *,
+    timeout: Optional[float] = None,
+    **kwargs: object,
+) -> subprocess.CompletedProcess:
+    """Run one workload while retaining descendant cleanup ownership."""
+
+    process = launch_owned_process(command, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        result = subprocess.CompletedProcess(
+            list(command), process.returncode, stdout, stderr
+        )
+    finally:
+        reap_owned_process_group(process, benchmark)
+    return result
+
+
 def launch_binary(binary: pathlib.Path) -> subprocess.Popen:
-    return subprocess.Popen(
+    return launch_owned_process(
         [str(binary)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
         env=controlled_runtime_environment(),
-        shell=False,
     )
 
 
@@ -1155,8 +1223,6 @@ def collect_exact_completion(
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as error:
-        process.kill()
-        process.communicate(timeout=3.0)
         raise BenchmarkError(
             benchmark + " did not complete naturally before the timeout"
         ) from error
@@ -1216,10 +1282,10 @@ def run_sleepers(binary: pathlib.Path, stable_seconds: float) -> Dict[str, objec
                 + f"{stable_seconds:.6f}s stable window"
             )
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        monitor.stop()
+        try:
+            monitor.stop()
+        finally:
+            reap_owned_process_group(process, "sleepers")
     require_monitor_evidence(monitor, "sleepers")
     peak_rss_bytes = max(monitor.peak_rss_bytes, ready_stats.rss_bytes)
     return {
@@ -1259,10 +1325,10 @@ def run_idle(binary: pathlib.Path, stable_seconds: float) -> Dict[str, object]:
         monitor.stop()
         completion = collect_exact_completion(process, "idle", b"DONE idle 10\n")
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        monitor.stop()
+        try:
+            monitor.stop()
+        finally:
+            reap_owned_process_group(process, "idle")
     require_monitor_evidence(monitor, "idle")
     cpu_delta = max(0.0, finished_stats.cpu_seconds - started_stats.cpu_seconds)
     return {
@@ -1299,11 +1365,12 @@ def run_timers(binary: pathlib.Path) -> Dict[str, object]:
         try:
             stdout, stderr = process.communicate(timeout=TIMER_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.communicate()
             raise BenchmarkError("timer benchmark timed out") from error
     finally:
-        monitor.stop()
+        try:
+            monitor.stop()
+        finally:
+            reap_owned_process_group(process, "timers")
     require_monitor_evidence(monitor, "timers")
     if process.returncode != 0:
         raise BenchmarkError(
@@ -1374,14 +1441,12 @@ def run_massive(binary: pathlib.Path) -> Dict[str, object]:
                 timeout=MASSIVE_COMPLETION_TIMEOUT_SECONDS
             )
         except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.communicate(timeout=3.0)
             raise BenchmarkError("massive benchmark timed out after READY") from error
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        monitor.stop()
+        try:
+            monitor.stop()
+        finally:
+            reap_owned_process_group(process, "massive")
     require_monitor_evidence(monitor, "massive")
     if process.returncode != 0:
         raise BenchmarkError(
@@ -1428,15 +1493,14 @@ def run_v6_probe_once(
     binary: pathlib.Path, expected_stdout: bytes
 ) -> Dict[str, object]:
     started = time.perf_counter()
-    result = subprocess.run(
+    result = run_owned_process(
         [str(binary)],
+        binary.name,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
         env=controlled_runtime_environment(),
-        shell=False,
-        check=False,
     )
     elapsed = time.perf_counter() - started
     if result.returncode != 0:
@@ -1470,15 +1534,14 @@ def run_v6_startup_once(binary: pathlib.Path) -> Dict[str, object]:
 def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
     started = time.perf_counter()
     try:
-        result = subprocess.run(
+        result = run_owned_process(
             [str(binary)],
+            "starvation",
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=ROOT,
             env=controlled_runtime_environment(worker_count=1),
-            shell=False,
-            check=False,
             timeout=STARVATION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as error:
@@ -1514,14 +1577,13 @@ def run_multicore_once(
     environment = controlled_runtime_environment(
         worker_count=MULTICORE_WORKERS
     )
-    process = subprocess.Popen(
+    process = launch_owned_process(
         [str(binary), str(tasks)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
         env=environment,
-        shell=False,
     )
     monitor = ProcessMonitor(
         process.pid,
@@ -1576,19 +1638,14 @@ def run_multicore_once(
         try:
             stdout, stderr = process.communicate(timeout=5.0)
         except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.communicate(timeout=3.0)
             raise BenchmarkError(
                 "multicore benchmark did not exit after ACK"
             ) from error
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None and not stream.closed:
-                stream.close()
-        monitor.stop()
+        try:
+            monitor.stop()
+        finally:
+            reap_owned_process_group(process, "multicore")
     require_monitor_evidence(monitor, "multicore")
     if process.returncode != 0:
         raise BenchmarkError(

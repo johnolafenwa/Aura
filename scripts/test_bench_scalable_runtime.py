@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import os
+import signal
 import stat
 import struct
 import tempfile
@@ -21,6 +22,14 @@ SPEC = importlib.util.spec_from_file_location("bench_scalable_runtime", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 bench = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bench)
+
+DIRECT_SCRIPT = Path(__file__).with_name("bench-direct-integer-loops.py")
+DIRECT_SPEC = importlib.util.spec_from_file_location(
+    "bench_direct_integer_loops", DIRECT_SCRIPT
+)
+assert DIRECT_SPEC is not None and DIRECT_SPEC.loader is not None
+direct_bench = importlib.util.module_from_spec(DIRECT_SPEC)
+DIRECT_SPEC.loader.exec_module(direct_bench)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -570,6 +579,121 @@ class ProcessUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.BenchmarkError, "no process samples"):
             bench.require_monitor_evidence(monitor, "massive")
 
+    @unittest.skipUnless(hasattr(os, "killpg"), "requires POSIX process groups")
+    def test_owned_process_group_reaps_a_term_resistant_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "child.pid"
+            helper = root / "process-tree.py"
+            helper.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "import signal\n"
+                "import time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                f"    open({str(child_pid_path)!r}, 'w').write(str(os.getpid()))\n"
+                "    while True:\n"
+                "        time.sleep(1)\n"
+                "os._exit(0)\n",
+                encoding="utf-8",
+            )
+            helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
+
+            process = bench.launch_owned_process(
+                [str(helper)],
+                stdin=bench.subprocess.DEVNULL,
+                stdout=bench.subprocess.PIPE,
+                stderr=bench.subprocess.PIPE,
+            )
+            process.wait(timeout=2.0)
+            deadline = time.monotonic() + 2.0
+            while not child_pid_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            child_pid = int(child_pid_path.read_text(encoding="ascii"))
+            self.assertEqual(os.getpgid(child_pid), process.pid)
+
+            bench.reap_owned_process_group(
+                process,
+                "test process tree",
+                terminate_timeout_seconds=0.05,
+                kill_timeout_seconds=2.0,
+            )
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "requires POSIX process groups")
+    def test_owned_group_cleanup_detects_a_silently_ignored_kill(self) -> None:
+        process = mock.Mock()
+        process.pid = 424242
+        process.stdin = None
+        process.stdout = None
+        process.stderr = None
+        process.poll.return_value = None
+        process.wait.side_effect = bench.subprocess.TimeoutExpired(
+            ["fake-burner"], 0
+        )
+
+        with mock.patch.object(
+            bench.benchmark_process, "process_group_exists", return_value=True
+        ):
+            with mock.patch.object(bench.benchmark_process.os, "killpg") as killpg:
+                with mock.patch.object(process, "kill"):
+                    with self.assertRaisesRegex(
+                        bench.BenchmarkError, "still alive after SIGKILL"
+                    ):
+                        bench.reap_owned_process_group(
+                            process,
+                            "fake burner",
+                            terminate_timeout_seconds=0.0,
+                            kill_timeout_seconds=0.0,
+                        )
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(process.pid, signal.SIGTERM),
+                mock.call(process.pid, signal.SIGKILL),
+            ],
+        )
+
+    def test_owned_process_cleanup_runs_when_communicate_is_interrupted(self) -> None:
+        process = mock.Mock()
+        process.communicate.side_effect = KeyboardInterrupt()
+        with mock.patch.object(
+            bench, "launch_owned_process", return_value=process
+        ):
+            with mock.patch.object(bench, "reap_owned_process_group") as reap:
+                with self.assertRaises(KeyboardInterrupt):
+                    bench.run_owned_process(
+                        ["/tmp/fake-benchmark"],
+                        "interrupt probe",
+                    )
+        reap.assert_called_once_with(process, "interrupt probe")
+
+    def test_legacy_integer_loop_helper_uses_the_shared_group_guard(self) -> None:
+        completed = bench.subprocess.CompletedProcess(
+            ["/tmp/int64-loop"], 0, b"", b""
+        )
+        with mock.patch.object(
+            direct_bench.benchmark_process,
+            "run_process_group",
+            return_value=completed,
+        ) as run:
+            elapsed = direct_bench.measure(Path("/tmp/int64-loop"), 2)
+        self.assertGreaterEqual(elapsed, 0.0)
+        self.assertEqual(run.call_count, 2)
+        self.assertTrue(
+            all(
+                call.args[:2]
+                == (
+                    ["/tmp/int64-loop"],
+                    "direct integer-loop workload",
+                )
+                for call in run.call_args_list
+            )
+        )
+
 
 class ValidationAndExecutionTests(unittest.TestCase):
     def make_executable(self, root: Path, name: str, body: str) -> Path:
@@ -736,6 +860,59 @@ class ValidationAndExecutionTests(unittest.TestCase):
             self.assertGreaterEqual(result["elapsed_s"], 0.0)
             with self.assertRaisesRegex(bench.BenchmarkError, "stdout"):
                 bench.run_v6_startup_once(noisy)
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "requires POSIX process groups")
+    def test_v6_probe_reaps_descendants_on_success_and_validation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, stdout in enumerate(("10000000", "wrong")):
+                child_pid_path = root / ("child-" + str(index) + ".pid")
+                helper = root / ("v6-tree-" + str(index) + ".py")
+                helper.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import os\n"
+                    "import signal\n"
+                    "import sys\n"
+                    "import time\n"
+                    "child = os.fork()\n"
+                    "if child == 0:\n"
+                    "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    "    sink = os.open(os.devnull, os.O_RDWR)\n"
+                    "    os.dup2(sink, 0)\n"
+                    "    os.dup2(sink, 1)\n"
+                    "    os.dup2(sink, 2)\n"
+                    f"    open({str(child_pid_path)!r}, 'w').write(str(os.getpid()))\n"
+                    "    while True:\n"
+                    "        time.sleep(1)\n"
+                    f"print({stdout!r}, flush=True)\n",
+                    encoding="utf-8",
+                )
+                helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
+                try:
+                    if stdout == "10000000":
+                        result = bench.run_v6_once(helper)
+                        self.assertEqual(result["stdout"], "10000000\n")
+                    else:
+                        with self.assertRaisesRegex(
+                            bench.BenchmarkError, "stdout"
+                        ):
+                            bench.run_v6_once(helper)
+                    deadline = time.monotonic() + 2.0
+                    while (
+                        not child_pid_path.exists()
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.01)
+                    child_pid = int(child_pid_path.read_text(encoding="ascii"))
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)
+                finally:
+                    if child_pid_path.exists():
+                        child_pid = int(child_pid_path.read_text(encoding="ascii"))
+                        try:
+                            os.kill(child_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
 
     def test_v6_benchmark_rotates_paired_startup_and_loop_order(self) -> None:
         startup = Path("/bench/startup")

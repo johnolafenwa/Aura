@@ -2,6 +2,39 @@
 
 Last updated: 2026-07-30
 
+## Batch 6 of 6 (active)
+
+- Authorized target: close B6.0-a through B6.0-d, then implement Phase 7
+  comprehensions, owned Vec/String slices, and contiguous numeric arrays;
+  conduct the final fresh-eyes, performance, claims, and positioning audits;
+  prepare and locally verify the 0.2.0 technical-preview release; and stop
+  after the final report without pushing or publishing.
+- Entry state: Batch 5 is accepted at `8131ebe`. ADR-0037 is Accepted.
+  ADR-0038 is Accepted as a design whose implementation targets Aurora 0.3
+  and is not authorized in the 0.2 cycle; all ten ratification questions are
+  answered yes as recommended. Compiler coverage floors are frozen at
+  `96.18/96.97/94.62` until the one-time final downward-truncated re-ratchet.
+- Current stage: B6.0-b/c/d are implemented. Dedicated `AU2008` rejects
+  equality and inequality over named functions and both closure kinds before
+  backend selection; exact semantic, fixture, registry, and forced-backend
+  parity checks pass. ADR-0037 is recorded as Accepted, ADR-0038 has its exact
+  design-only 0.3 status plus ten yes answers, and the retry, Vec callback, and
+  nested-lambda documentation is synchronized. Every benchmark workload now
+  uses a verified owned process-group cleanup guard; all 54 harness tests pass
+  across success and abnormal exits. The baseline Mac last booted at
+  `2026-07-27 06:44:44 +0100`, so B6.0-a's required post-issue reboot and
+  schema-4 V6 replay are still pending; no current measurement will be
+  represented as post-reboot evidence. Integrated focused Rust tests,
+  reference integrity, docs, formatting, the 54-test benchmark harness, and
+  whitespace checks pass; full CI waits for the baseline replay. Phase 7 has
+  not started.
+- Work note: `work/2026-07-30-batch6-phase7-release.md`.
+- Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
+  reference pages land with each feature; behavior-focused coverage only;
+  post-reboot provenance for release performance; user-owned
+  `personal/file_ops.au` and the untracked ADR-0022 draft remain outside
+  Batch 6; no push and no publication.
+
 ## Batch 5 of 6 (completed)
 
 - Authorized target: close B5.0-a through B5.0-f before Phase 6, then implement
@@ -155,7 +188,7 @@ Last updated: 2026-07-30
   capture until implementation, does not revive `borrow` or return labels,
   keeps proposed syntax out of the normative Manual, and recommends Aurora
   0.3 rather than 0.2. No compiler or tooling implementation was added. The
-  The final checkpoint gate is green through formatting, 49 benchmark-harness
+  final checkpoint gate is green through formatting, 49 benchmark-harness
   tests, all Rust targets (320 CLI, 1,385 compiler, 6 retry, 4 FFI acceptance,
   and 2 closure acceptance tests), forced MIR/direct parity, 97 LSP tests, 15
   extension tests, both coverage gates, executable reference integrity, docs,

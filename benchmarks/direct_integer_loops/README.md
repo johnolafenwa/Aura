@@ -15,7 +15,9 @@ npm run bench:direct-integer-loops
 
 The reported figure is the best of several runs, which is the right statistic
 for a CPU-bound loop: the minimum is the run least disturbed by unrelated
-system activity.
+system activity. Both this helper and the scalable-runtime runner launch each
+measured binary in a dedicated process group and verify that the complete
+group is reaped on success, error, timeout, or interrupt.
 
 The contractual scalable-runtime runner also reports a startup split:
 
