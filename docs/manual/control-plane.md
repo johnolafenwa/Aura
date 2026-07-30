@@ -103,10 +103,12 @@ uses twice the preceding delay. A zero delay skips sleeping. Once the final perm
 attempt returns `Err`, that exact error is returned without another sleep or
 delay multiplication.
 
-The worker is an ordinary capture-free function value. Traps from the worker,
-delay overflow, and invalid runtime operations are not converted to `E`.
-Current-task cancellation propagates through the retry operation instead of
-returning the most recent `Err`.
+The worker may be a capture-free function value or a repeatable
+value-capturing closure. A consuming closure is rejected because retry may
+invoke the worker more than once. Traps from the worker, delay overflow, and
+invalid runtime operations are not converted to `E`. Current-task
+cancellation propagates through the retry operation instead of returning the
+most recent `Err`.
 
 ```aurora
 import control
@@ -182,10 +184,14 @@ Call arguments are evaluated left to right. Inputs to these host helpers are sha
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric map. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
-The retry helper reads the Copy function value and invokes it under ordinary
-call rules. Each `Result.Ok` or `Result.Err` owns its payload. Intermediate
-errors are consumed by the retry decision; the final error is returned without
-cloning. Attempt calls and delay waits occur in the stated sequence.
+The retry helper reads a capture-free function value or repeatable capturing
+closure and invokes it under ordinary call rules.
+The helper can therefore reuse one repeatable capturing closure across all
+attempts without consuming its environment. Each `Result.Ok` or `Result.Err`
+owns its payload.
+Intermediate errors are consumed by the retry decision; the final error is
+returned without cloning. Attempt calls and delay waits occur in the stated
+sequence.
 
 ## Diagnostics
 

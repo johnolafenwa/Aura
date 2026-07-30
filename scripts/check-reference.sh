@@ -731,7 +731,7 @@ for accepted_adr in \
     exit 1
   fi
 done
-if rg -n 'Provisional ADR-003(2|3|4|5|6)' \
+if rg -U -n 'Provisional\s+ADR-003(2|3|4|5|6)' \
   architecture_docs \
   docs/manual \
   docs/learn \
@@ -740,6 +740,50 @@ if rg -n 'Provisional ADR-003(2|3|4|5|6)' \
   echo "maintained reference still describes an accepted ADR as provisional" >&2
   exit 1
 fi
+
+# Batch 6 opens by accepting the completed value-capture design and accepting
+# the place-loan design for Aurora 0.3 without authorizing its implementation
+# in the 0.2 release family.
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0037-expression-closures-and-value-capture.md
+grep -Fq '0037-expression-closures-and-value-capture.md) — Accepted at the Batch 6 opening checkpoint' architecture_docs/decisions/README.md
+grep -Fq 'Accepted ADR-0037 expression closures' docs/manual/conformance.md
+grep -Fq 'implemented under Accepted ADR-0037' docs/manual/closures.md
+
+grep -Fq -- '- Status: Accepted (design; implementation targets 0.3; not authorized in the 0.2 cycle)' architecture_docs/decisions/0038-place-based-loans-and-views.md
+grep -Fq -- '- Implementation: Not started; no 0.2 implementation is authorized' architecture_docs/decisions/0038-place-based-loans-and-views.md
+grep -Fq -- '- Version target: 0.3' architecture_docs/decisions/0038-place-based-loans-and-views.md
+test "$(grep -Ec '^[0-9]+\. \*\*Answer: Yes\.\*\*' architecture_docs/decisions/0038-place-based-loans-and-views.md)" -eq 10
+grep -Fq '0038-place-based-loans-and-views.md) — Accepted design for 0.3; unimplemented and not authorized in the 0.2 cycle' architecture_docs/decisions/README.md
+rg -U -q 'accepted ADR-0038 design(?:\s|>\s)*specifies in-loan captures for Aurora 0\.3' architecture_docs/decisions/0013-callable-sequencing-and-ownership.md
+grep -Fq -- '- Future design amendment: ADR-0038 (accepted for 0.3; not implemented in 0.2)' architecture_docs/decisions/0037-expression-closures-and-value-capture.md
+
+if rg -U -n 'Provisional\s+ADR-0037|under Provisional\s+ADR-0037|ADR-0037[^.\n]*Provisional' \
+  architecture_docs/decisions/0037-expression-closures-and-value-capture.md \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  README.md; then
+  echo "maintained reference still describes accepted ADR-0037 as provisional" >&2
+  exit 1
+fi
+
+if rg -n 'post-ratification loan/view design|future first-class loan or view design must specify|pending the separate loan/view design|waits for the separate loan/view design|Any future loan or view design will be' \
+  architecture_docs/decisions/0013-callable-sequencing-and-ownership.md \
+  architecture_docs/decisions/0037-expression-closures-and-value-capture.md \
+  docs/manual \
+  docs/learn \
+  tutorials \
+  README.md; then
+  echo "maintained reference still describes accepted ADR-0038 as an undecided future design" >&2
+  exit 1
+fi
+
+# Batch 6 B6.0-c keeps the callable documentation aligned with the implemented
+# repeatable-closure contract at the two compiler-known callback families.
+rg -U -q 'The worker may be a capture-free function value or a repeatable\s+value-capturing closure\.' docs/manual/control-plane.md
+rg -U -q 'The helper can therefore reuse one repeatable capturing closure across all\s+attempts without consuming its environment\.' docs/manual/control-plane.md
+grep -Fq 'Every Vec algorithm callback must be repeatable.' docs/manual/collections.md
+rg -U -q 'An inner lambda cannot capture a bare parameter of its enclosing lambda,\s+even\s+when the parameter type is Copy\.' docs/manual/closures.md
 
 # Phase 5.8: Accepted ADR-0034 is an implemented builtin call, not the
 # historical statement form. Keep the normative reference, teaching track,

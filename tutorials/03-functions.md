@@ -194,8 +194,9 @@ The legacy-named
 [borrowed_returns.au](../examples/basics/borrowed_returns.au) and
 [borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au)
 examples now demonstrate ordinary owned copy results. Aurora has no
-borrow-source or return-label syntax. Any future loan or view design will be
-specified from scratch rather than inferred from today's `-> T`.
+borrow-source or return-label syntax. Accepted ADR-0038 designs explicit
+place-based loans and views for Aurora 0.3; it does not change the 0.2 meaning
+of `-> T`, and no implementation is authorized in the 0.2 cycle.
 
 ## Generic Functions
 

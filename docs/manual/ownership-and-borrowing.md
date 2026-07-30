@@ -220,10 +220,10 @@ returning that field directly is rejected as an invalid move through access
 the function does not own.
 
 There are no return-source labels or mutable-return capabilities in Aurora
-0.1, and current syntax reserves no hidden lifetime contract. A future
-first-class loan or view design must specify its representation and lifetime
-rules from scratch. The detailed return rules are in
-[Functions](/manual/functions#owned-returns).
+0.2, and current syntax reserves no hidden lifetime contract. Accepted
+ADR-0038 specifies a first-class loan/view design for Aurora 0.3, but that
+surface is not implemented or authorized in the 0.2 cycle. The detailed
+current return rules are in [Functions](/manual/functions#owned-returns).
 
 ## Borrowed Pattern Matching
 
@@ -321,10 +321,11 @@ non-Copy capture is itself consumed by the call and is single-use under
 `AU3001`. Capturing closures are non-Copy. Their environment is Transfer only
 when every captured value is Transfer.
 
-Enclosing bare and `mut` parameters are borrowed capabilities rather than
-owned values and cannot be captured. Captured state is read-only in Phase 6.3;
-in-loan and mutable capture wait for the separate loan/view design. See
-[Closures](/manual/closures) and Provisional ADR-0037.
+Enclosing bare and `mut` parameters are shared and mutable capabilities rather
+than owned values and cannot be captured. Captured state is read-only in Phase
+6.3; accepted ADR-0038 designs in-loan and mutable capture for Aurora 0.3, but
+the feature is unavailable in 0.2. See [Closures](/manual/closures) and
+Accepted ADR-0037.
 
 ## FFI Views And Opaque Handles
 

@@ -52,15 +52,15 @@ capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
 Phase 6.3 adds contextually typed `lambda parameters: expression` closures
-under Provisional ADR-0037. Captures are by value: Copy values are copied,
+under Accepted ADR-0037. Captures are by value: Copy values are copied,
 owned non-Copy values move at creation, read-only capture use is repeatable,
 and consuming capture use makes the closure single-use. A closure is Transfer
 only when every capture is Transfer. Shared or mutable capability capture and
-mutable captured state remain unavailable pending the separate loan/view
-design. Zero-parameter lambdas may infer their result without a contextual
-callable type. Capturing closures retain compiler metadata and therefore do
-not cross arbitrary written-`def` parameter, field, collection, or annotated
-return boundaries.
+mutable captured state remain unavailable in 0.2; accepted ADR-0038 designs
+that surface for Aurora 0.3. Zero-parameter lambdas may infer their result
+without a contextual callable type. Capturing closures retain compiler
+metadata and therefore do not cross arbitrary written-`def` parameter, field,
+collection, or annotated return boundaries.
 
 Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
 `extern "C"` functions call process-global symbols synchronously through

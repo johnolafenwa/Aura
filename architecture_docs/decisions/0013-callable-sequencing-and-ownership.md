@@ -4,11 +4,12 @@
 - Date: 2026-07-13
 - Roadmap decision: D13
 
-> **Amended by ADR-0022 (2026-07-27) and ADR-0037 (2026-07-30).** Amended,
-> not superseded. ADR-0037 implements value-capturing expression closures:
-> Copy values copy, non-Copy owned values move at creation, read-only closures
-> are repeatable, and consuming closures are single-use. In-loan capture still
-> waits for the separate loan/view design.
+> **Amended by ADR-0022, ADR-0037, and ADR-0038.** Amended, not superseded.
+> ADR-0037 implements value-capturing expression closures: Copy values copy,
+> non-Copy owned values move at creation, read-only closures are repeatable,
+> and consuming closures are single-use. The accepted ADR-0038 design
+> specifies in-loan captures for Aurora 0.3; no implementation is authorized
+> in the 0.2 cycle.
 
 ## Decision
 

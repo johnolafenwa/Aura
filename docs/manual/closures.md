@@ -139,6 +139,14 @@ data, and cannot be captured. Take it as `own`, or clone the data into an
 owned local before building the closure. A `mut` enclosing parameter is also
 caller-owned capability and cannot be captured.
 
+An inner lambda cannot capture a bare parameter of its enclosing lambda, even
+when the parameter type is Copy. When the surrounding callable contract
+allows it, make that outer parameter `own`; passing a Copy argument to the
+owned position duplicates the value, and the inner lambda may capture that
+owned parameter. When the outer contract must remain bare, pass the Copy value
+to a named helper with an `own` parameter and create or invoke the inner
+closure there.
+
 Phase 6.3 closure environments are read-only. A body cannot pass a capture to
 a `mut` parameter, call a `mut self` method on a capture, or otherwise request
 mutable access to it. This does not restrict the lambda's own `mut` parameter,
@@ -181,7 +189,8 @@ Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, capture lists,
 implicit reference capture, mutable captured state, method values, trait
 objects, FFI callbacks, asynchronous syntax, or comprehensions. In-loan
-capture waits for the separate loan/view design.
+capture is designed by accepted ADR-0038 for Aurora 0.3 but is not implemented
+or authorized in the 0.2 cycle.
 
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code
@@ -198,9 +207,8 @@ the implementation does not choose a reference-versus-value capture mode.
 
 ## Status
 
-Expression closures and by-value capture are implemented under Provisional
-ADR-0037
+Expression closures and by-value capture are implemented under Accepted ADR-0037
 (`architecture_docs/decisions/0037-expression-closures-and-value-capture.md`)
-through the Batch 5 checkpoint. Capture-free function values remain governed
-by [Functions](/manual/functions), and task-boundary Transfer remains governed
-by Accepted ADR-0033.
+after ratification at the Batch 6 opening checkpoint. Capture-free function
+values remain governed by [Functions](/manual/functions), and task-boundary
+Transfer remains governed by Accepted ADR-0033.

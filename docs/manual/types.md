@@ -127,7 +127,7 @@ Move values can still be shared through a bare parameter, accessed mutably
 through a `mut` parameter, or duplicated explicitly through methods such as
 `.clone()` when the type supports cloning.
 
-`Queue[T]` is a copy handle to shared runtime state. Under Provisional
+`Queue[T]` is a copy handle to shared runtime state. Under Accepted
 ADR-0033, a `Task[T]` handle is conditionally copyable so aliases cannot
 duplicate a single-consumer result right. Copying an allowed handle never
 copies queued values or task results; it gives another reference to the same

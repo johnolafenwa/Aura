@@ -167,9 +167,13 @@ the returned `Vec[U]`. `filter` must clone each accepted source element, so its
 `T` must be clone-safe. A filter over `Vec[random.Rng]`, including through a
 wrapper, is rejected with `AU3007`.
 
-Every callback position has the exact shared capability shown by `def(T)`.
-A `def(mut T) -> ...` or `def(own T) -> ...` function is not substituted for
-it: algorithms neither grant element mutation nor consume source elements.
+Every Vec algorithm callback must be repeatable. Named function values,
+capture-free lambdas, and repeatable value-capturing closures are accepted;
+a consuming closure is rejected with `AU2002` because the algorithm may call
+it once per visited element. Every callback position has the exact shared
+capability shown by `def(T)`. A `def(mut T) -> ...` or
+`def(own T) -> ...` function is not substituted for it: algorithms neither
+grant element mutation nor consume source elements.
 
 ## Map[K, V]
 
@@ -357,6 +361,8 @@ rejected with `AU3007`. `filter` establishes that obligation for `T`.
 requires a mutable `Vec[T]` place, exact callback type `def(T) -> K`, and an
 orderable result type `K`. `map` requires exact callback type
 `def(T) -> U`; `filter` requires exact callback type `def(T) -> bool`.
+All four callback positions require a repeatable callable; consuming closures
+are rejected with `AU2002`.
 The bare callback parameters are logical shared capabilities even when `T` is
 copy. A callback with a `mut` or `own` parameter is a different function type
 and is rejected with `AU2002`.

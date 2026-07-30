@@ -174,7 +174,7 @@ propagates through generic-to-generic calls and imports, and an unsafe concrete
 specialization is rejected with `AU3007`.
 
 Task and Queue handles are clone barriers: an allowed handle copy does not
-clone its stored payload. This is a clone-safety statement. Provisional
+clone its stored payload. This is a clone-safety statement. Accepted
 ADR-0033 separately forbids
 `random.Rng` at task-result and Queue-payload boundaries with `AU3008`, and a
 Task carrying a non-repeatable result is not copyable. Operations that

@@ -1,28 +1,28 @@
 # ADR-0038: Place-based loans and views
 
-- Status: Proposed
+- Status: Accepted (design; implementation targets 0.3; not authorized in the 0.2 cycle)
 - Date: 2026-07-30
-- Review checkpoint: Batch 5
+- Accepted at: Batch 6 opening checkpoint
 - Roadmap decision: Batch 5, Phase 6.5
-- Implementation: Not started
-- Recommended version target: 0.3, subject to ratification
+- Implementation: Not started; no 0.2 implementation is authorized
+- Version target: 0.3
 - Related: ADR-0009, ADR-0013, ADR-0016, ADR-0022, ADR-0033, ADR-0037
 
 ## Status boundary
 
-This is a proposal, not an implemented language feature. It changes no Aurora
-0.1 grammar, type, ownership, closure, backend, or FFI behavior.
+This is an accepted design, not an implemented language feature. It changes
+no Aurora 0.2 grammar, type, ownership, closure, backend, or FFI behavior.
 
-If accepted, this ADR supersedes ADR-0009's deferred live-alias reservation
-and becomes the designed-from-scratch successor to borrowed returns. It does
-not restore `borrow`, return labels, or `-> mut T`. ADR-0009's current
+This ADR supersedes ADR-0009's deferred live-alias reservation at the design
+level and is the designed-from-scratch successor to borrowed returns. It does
+not restore `borrow`, return labels, or `-> mut T`. ADR-0009's implemented
 containment rule remains binding until a later implementation of this ADR
 lands. ADR-0016's retained-expression sequencing remains binding and becomes
 an input to the broader loan analysis rather than being silently replaced.
 
-Ratification would amend ADR-0013 and ADR-0037 only for explicitly requested
-in-loan closure captures. Their implemented by-value capture rules remain
-unchanged.
+This accepted design amends ADR-0013 and ADR-0037 only for the future,
+explicitly requested in-loan closure captures. Their implemented by-value
+capture rules remain unchanged.
 
 ## Context
 
@@ -86,7 +86,7 @@ Public documentation continues to use *shared access*, *mutable access*, and
 *ownership transfer*. Compiler internals may use borrow/loan terminology where
 it accurately names the implementation.
 
-## Proposed source syntax
+## Accepted source design
 
 ### Local views
 
@@ -310,7 +310,7 @@ view's region.
 
 ## Escape and storage matrix
 
-| Destination | Proposed first-implementation rule |
+| Destination | First-implementation design |
 | --- | --- |
 | inferred `view` local | allowed within the owner's region |
 | direct synchronous argument | allowed by contained reborrow |
@@ -598,7 +598,7 @@ renders the view kind and declared `from` origin; definitions trace a view to
 its source place when unambiguous. The source feature cannot ship without both
 backend and editor parity.
 
-`view` is contextual only in the proposed binding, return-type, and
+`view` is contextual only in the accepted binding, return-type, and
 return-expression positions. It has no keyword role inside a lambda capture
 list: `[view]` captures an ordinary identifier named `view`.
 
@@ -610,33 +610,34 @@ may remain an ordinary type identifier. After `return`, `view` introduces a
 view result only inside a function already declared with a view result;
 otherwise `return view` returns the identifier named `view`. These
 context-sensitive choices take precedence only in their complete productions.
-This proposal does not reserve `view` as a general identifier. The retired
+This accepted design does not reserve `view` as a general identifier. The retired
 `borrow` compatibility diagnostic remains unchanged.
 
 ## Implementation and compatibility strategy
 
-The recommendation is to target Aurora 0.3, not 0.2. The source feature
+Implementation targets Aurora 0.3, not 0.2. The source feature
 requires a stable-slot model, typed places, region dataflow, a unified
 exit-action stack, new MIR/runtime operations, callable metadata, and a cache
 schema change. Compressing that storage-model work into 0.2 would put
 correctness and backend parity at risk.
 
-After ratification, internal stable-place and exit-action infrastructure may
-land in separately gated commits. No parser-only or one-backend view feature
-should be accepted. The user-facing syntax flips on atomically only when
+Internal stable-place and exit-action infrastructure may land in separately
+gated 0.3 commits. No parser-only or one-backend view feature should be
+accepted. The user-facing syntax flips on atomically only when
 static checking, MIR, direct execution, malformed-MIR defense, LSP, extension,
 reference, tutorials, examples, migration diagnostics, and parity tests are
 all ready.
 
-The normative Manual remains unchanged while this ADR is Proposed. On
-implementation, ordinary owned-return wording remains and gains an explicit
-view-return exception; the grammar, ownership, functions, closures, execution,
-diagnostic, tooling, conformance, and status chapters update in the same
-change family.
+The normative Manual remains unchanged until implementation. Accepted status
+binds the future 0.3 design; it does not advertise an implemented 0.2 surface.
+On implementation, ordinary owned-return wording remains and gains an
+explicit view-return exception; the grammar, ownership, functions, closures,
+execution, diagnostic, tooling, conformance, and status chapters update in
+the same change family.
 
 ## Consequences
 
-The proposal makes aliasing visible at local creation, returned-view
+The accepted design makes aliasing visible at local creation, returned-view
 declaration, and closure capture. It supports owner methods that expose
 internal state without cloning while retaining Aurora's no-hidden-cost and
 task-isolation principles.
@@ -646,29 +647,33 @@ narrow initial place/storage surface. Indexed and aggregate views remain
 future work rather than receiving semantics that cannot be made identical
 across backends.
 
-## Ratification questions
+## Ratification result
 
-1. Are `view name = place`, `view mut name = place`,
-   `-> view [mut] T from source`, and `return view [mut] place` accepted?
-2. Is `view` contextual only in the listed positions?
-3. Is one explicit receiver/parameter origin per returned view sufficient for
-   the first implementation?
-4. Is the initial place set limited to roots, fixed fields, tuple positions,
-   scoped enum payloads, and reborrows, with all indexed/keyed places deferred?
-5. Are inferred last-use regions, same-task suspension, and categorical
-   cross-task rejection accepted?
-6. Are shared views explicitly reborrowable, mutable views affine, both
-   non-Transfer, and all view-bearing owned aggregates deferred?
-7. Is the exhaustive `lambda [value, mut value, own value] ...` capture list
-   accepted without changing ordinary lambda capture?
-8. Is the mutable-repeatable closure call kind accepted, while user-defined
-   non-retaining callback types and mutable standard-library callbacks remain
-   deferred?
-9. Is one unified exit-action model required before user-facing
-   implementation?
-10. Should implementation target 0.3 as recommended rather than 0.2?
+Batch 6 answered all ten questions yes as recommended:
 
-## Post-ratification completion tests
+1. **Answer: Yes.** Accept `view name = place`, `view mut name = place`,
+   `-> view [mut] T from source`, and `return view [mut] place`.
+2. **Answer: Yes.** Keep `view` contextual only in the listed positions.
+3. **Answer: Yes.** Use one explicit receiver/parameter origin per returned
+   view in the first implementation.
+4. **Answer: Yes.** Limit the initial place set to roots, fixed fields, tuple
+   positions, scoped enum payloads, and reborrows; defer all indexed/keyed
+   places.
+5. **Answer: Yes.** Use inferred last-use regions, permit same-task
+   suspension, and categorically reject cross-task loans.
+6. **Answer: Yes.** Make shared views explicitly reborrowable, mutable views
+   affine, both non-Transfer, and defer every view-bearing owned aggregate.
+7. **Answer: Yes.** Accept the exhaustive
+   `lambda [value, mut value, own value] ...` capture list without changing
+   ordinary lambda capture.
+8. **Answer: Yes.** Accept the mutable-repeatable closure call kind while
+   deferring user-defined non-retaining callback types and mutable
+   standard-library callbacks.
+9. **Answer: Yes.** Require one unified exit-action model before any
+   user-facing implementation.
+10. **Answer: Yes.** Target implementation at 0.3 rather than 0.2.
+
+## Implementation completion tests
 
 Tests must pin observable semantics, diagnostics, or backend parity rather than
 execute lines only.

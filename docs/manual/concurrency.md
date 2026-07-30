@@ -130,7 +130,7 @@ dependent queue/task waits.
 
 ## Task[T]
 
-`Task[T]` is a transferable handle to a child task result. Under Provisional
+`Task[T]` is a transferable handle to a child task result. Under Accepted
 ADR-0033 it is copyable only when `T` is repeatable, so aliases cannot
 duplicate one result right.
 
@@ -382,7 +382,7 @@ and the relevant statement and call productions are in
 
 ## Typing Rules
 
-`Queue[T]` is a copy handle; `Task[T]` is conditionally Copy under Provisional
+`Queue[T]` is a copy handle; `Task[T]` is conditionally Copy under Accepted
 ADR-0033; `TaskGroup` is a managed move resource. Queue sends, fallback values,
 task captures, and returned outcome payloads use the exact owned positions
 shown in the API tables above. Task targets may be capture-free function or

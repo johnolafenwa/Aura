@@ -1,10 +1,11 @@
 # ADR-0037: Expression closures and value capture
 
-- Status: Provisional
+- Status: Accepted
 - Date: 2026-07-30
-- Review checkpoint: Batch 5
+- Accepted at: Batch 6 opening checkpoint
 - Roadmap decision: Batch 5, Phase 6.3
 - Amends: ADR-0013
+- Future design amendment: ADR-0038 (accepted for 0.3; not implemented in 0.2)
 
 ## Context
 
@@ -70,7 +71,7 @@ A bare shared parameter is a capability, not an owned value, so capturing it
 is rejected. The diagnostic recommends taking owned input or cloning to an
 owned local before closure creation. A `mut` parameter is likewise a
 caller-owned capability and cannot be captured. In-loan capture remains
-deferred to the post-ratification loan/view design.
+deferred to implementation of accepted ADR-0038 in Aurora 0.3.
 
 ### Callability
 
@@ -156,6 +157,7 @@ across FFI, async closure syntax, comprehensions, or statement bodies.
 
 ## Ratification
 
-This decision is Provisional through the Batch 5 checkpoint. Ratification
-requires the complete semantic, ownership, Transfer, backend-parity, editor,
-reference, tutorial, and example matrix above.
+Batch 6 accepts this decision. The Batch 5 implementation completed the
+semantic, ownership, Transfer, backend-parity, editor, reference, tutorial,
+and example matrix above. Expression closures and value capture are therefore
+part of the binding Aurora 0.2 language design.

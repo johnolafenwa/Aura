@@ -460,7 +460,7 @@ helpers remain bounded caller-side compatibility operations and do not use
 this service. Codec workers are process-lifetime and have no Aurora 0.1
 shutdown or configuration surface.
 
-`Queue[T]` is a copy handle to shared runtime state. Under Provisional
+`Queue[T]` is a copy handle to shared runtime state. Under Accepted
 ADR-0033, a `Task[T]` handle is copyable only when its result is repeatable;
 every task handle remains transferable. Copying an allowed handle does not
 duplicate the underlying task or queue.

@@ -43,5 +43,5 @@ test locations that must prove completion.
 34. [ADR-0034: Typed heterogeneous `select`](0034-typed-heterogeneous-select.md) — Accepted after the Batch 5 nested-payload closure
 35. [ADR-0035: Configurable blocking-I/O pool](0035-configurable-blocking-io-pool.md) — Accepted after the Batch 5 default-parallel watchdog closure
 36. [ADR-0036: Native structured runtime frames](0036-native-structured-runtime-frames.md) — Accepted at the Batch 4 checkpoint
-37. [ADR-0037: Expression closures and value capture](0037-expression-closures-and-value-capture.md) — Provisional through the Batch 5 checkpoint
-38. [ADR-0038: Place-based loans and views](0038-place-based-loans-and-views.md) — Proposed, unimplemented, and awaiting Batch 5 checkpoint ratification
+37. [ADR-0037: Expression closures and value capture](0037-expression-closures-and-value-capture.md) — Accepted at the Batch 6 opening checkpoint
+38. [ADR-0038: Place-based loans and views](0038-place-based-loans-and-views.md) — Accepted design for 0.3; unimplemented and not authorized in the 0.2 cycle

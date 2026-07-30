@@ -447,7 +447,7 @@ which is **Accepted**. The rules are pinned
 by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends. Return values are owned; no return-source or label contract
-is reserved. By-value expression closures are implemented under Provisional
+is reserved. By-value expression closures are implemented under Accepted
 ADR-0037. First-class loan/view values are unavailable. FFI v0 adds bodyless
 direct-call-only `extern "C" def` declarations; they are not function values
 and their restricted signatures are specified by [FFI v0](/manual/ffi).
