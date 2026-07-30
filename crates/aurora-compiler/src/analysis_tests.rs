@@ -625,6 +625,41 @@ def main() -> int32:
 }
 
 #[test]
+fn phase6_analysis_specializes_vec_map_and_explicit_generic_module_results() {
+    let source = r#"import control
+
+def render(value: int64) -> String:
+    return str(value)
+
+def worker() -> Result[int32, String]:
+    return Result.Ok(7)
+
+def main():
+    values = [1, 2]
+    mapped = values.map(render)
+    retried = control.retry[int32, String](worker)
+    print(mapped)
+    print(retried)
+"#;
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+
+    for expected_hover in [
+        "binding mapped: Vec[String]",
+        "binding retried: Result[int32, String]",
+    ] {
+        assert!(
+            output
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing hover `{expected_hover}` in {:?}",
+            output.occurrences
+        );
+    }
+}
+
+#[test]
 fn machine_readable_analysis_covers_symbols_and_occurrences() {
     let source = include_str!("../../../examples/point.au");
     let analysis = analyze_source(source);
@@ -4441,6 +4476,18 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         builtin_member_completions(&Type::Named("Vec".to_string(), vec![Type::named("int32")]));
     assert!(vec_completions.iter().any(|item| item.name == "push"));
     assert!(vec_completions.iter().any(|item| item.name == "reverse"));
+    for (name, detail) in [
+        ("sort", "sort() -> None"),
+        ("sort_by", "sort_by(key: def(T) -> K) -> None"),
+        ("map", "map(f: def(T) -> U) -> Vec[U]"),
+        ("filter", "filter(f: def(T) -> bool) -> Vec[T]"),
+    ] {
+        let completion = vec_completions
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("Vec.{name} completion should exist"));
+        assert_eq!(completion.detail, detail);
+    }
 
     let map_entry_completions = builtin_member_completions(&Type::Named(
         "MapEntry".to_string(),
@@ -4490,6 +4537,21 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             .ty,
         Some(vec_receiver.clone())
     );
+    for (name, signature) in [
+        ("sort", "sort() -> None"),
+        ("sort_by", "sort_by(key: def(T) -> K) -> None"),
+        ("map", "map(f: def(T) -> U) -> Vec[U]"),
+        ("filter", "filter(f: def(T) -> bool) -> Vec[T]"),
+    ] {
+        let member = builder
+            .resolve_member_type(&vec_receiver, name)
+            .unwrap_or_else(|| panic!("Vec.{name} should resolve for hover"));
+        assert!(
+            member.hover.contains(signature),
+            "Vec.{name} hover should contain `{signature}`, got `{}`",
+            member.hover
+        );
+    }
     let map_receiver = Type::Named(
         "Map".to_string(),
         vec![Type::named("String"), Type::named("int32")],

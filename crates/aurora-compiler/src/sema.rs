@@ -4196,6 +4196,77 @@ impl<'a> FunctionChecker<'a> {
             .ok_or_else(|| Diagnostic::at(span, format!("internal error: {}", message.into())))
     }
 
+    fn vec_callback_return_type(
+        &self,
+        method_name: &str,
+        callback: &Argument,
+        element_ty: &Type,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let callback_ty = self.type_of_expr(&callback.value, locals)?;
+        let Type::Function {
+            params,
+            return_type,
+        } = callback_ty
+        else {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                callback.span,
+                format!("`Vec.{method_name}` expects a function value, found `{callback_ty}`"),
+            ));
+        };
+        if params.len() != 1 || params[0].passing != ReceiverKind::Borrow {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                callback.span,
+                format!(
+                    "`Vec.{method_name}` callback must take exactly one shared parameter of type `{element_ty}`, found `{}`",
+                    Type::Function {
+                        params,
+                        return_type,
+                    }
+                ),
+            )
+            .with_help(
+                "declare the callback parameter with the bare type spelling; `mut` and `own` callbacks are not accepted",
+            ));
+        }
+        if params[0].ty != *element_ty {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                callback.span,
+                format!(
+                    "`Vec.{method_name}` callback expects shared `{element_ty}`, found shared `{}`",
+                    params[0].ty
+                ),
+            ));
+        }
+        Ok(*return_type)
+    }
+
+    fn require_vec_orderable(
+        &self,
+        method_name: &str,
+        subject: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        if self
+            .type_of_binary(span, BinaryOp::Less, ty.clone(), ty.clone())
+            .is_ok()
+        {
+            return Ok(());
+        }
+        Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!("`Vec.{method_name}` cannot order {subject} `{ty}`"),
+        )
+        .with_help(
+            "use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`",
+        ))
+    }
+
     fn is_copy_type(&self, ty: &Type) -> bool {
         type_is_copy_in_context_with_modules(
             ty,
@@ -12432,6 +12503,100 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::VecClear | BuiltinMember::VecReverse => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Unit)
+                                }
+                                BuiltinMember::VecSort => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    self.require_vec_orderable(
+                                        "sort",
+                                        "Vec element type",
+                                        &receiver_args[0],
+                                        span,
+                                    )?;
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::VecSortBy => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    let key_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`sort_by` requires a `key` argument",
+                                    )?;
+                                    let key_ty = self.vec_callback_return_type(
+                                        "sort_by",
+                                        key_arg,
+                                        &receiver_args[0],
+                                        locals,
+                                    )?;
+                                    self.require_vec_orderable(
+                                        "sort_by",
+                                        "key type",
+                                        &key_ty,
+                                        key_arg.span,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        key_arg,
+                                        locals,
+                                    )?;
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::VecMap => {
+                                    let callback = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`map` requires an `f` argument",
+                                    )?;
+                                    let output_ty = self.vec_callback_return_type(
+                                        "map",
+                                        callback,
+                                        &receiver_args[0],
+                                        locals,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        callback,
+                                        locals,
+                                    )?;
+                                    Ok(Type::Named("Vec".to_string(), vec![output_ty]))
+                                }
+                                BuiltinMember::VecFilter => {
+                                    let callback = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`filter` requires an `f` argument",
+                                    )?;
+                                    let output_ty = self.vec_callback_return_type(
+                                        "filter",
+                                        callback,
+                                        &receiver_args[0],
+                                        locals,
+                                    )?;
+                                    if output_ty != Type::named("bool") {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            callback.span,
+                                            format!(
+                                                "`Vec.filter` callback must return `bool`, found `{output_ty}`"
+                                            ),
+                                        ));
+                                    }
+                                    self.reject_rng_duplication(
+                                        "Vec.filter",
+                                        &receiver_args[0],
+                                        span,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        callback,
+                                        locals,
+                                    )?;
+                                    Ok(receiver_ty.clone())
                                 }
                                 _ => unreachable!("unexpected vector builtin member"),
                             };

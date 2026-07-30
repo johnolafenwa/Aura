@@ -86,6 +86,55 @@ def main():
 
 See `examples/agents/control_plane_foundations.au` for path operations, JSON/TOML metadata, counters, and structured events.
 
+## Retry
+
+Import `control` for the eager retry helper:
+
+| API | Signature |
+| --- | --- |
+| `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
+
+The first attempt runs immediately. Every `Result.Err` is retryable while an
+attempt remains. `max_attempts` must be at least one and counts the immediate
+attempt. `initial_backoff` must be non-negative and representable by the host
+timer. Both arguments are validated before the worker is invoked. Before the
+second attempt the current task waits for `initial_backoff`; each later retry
+uses twice the preceding delay. A zero delay skips sleeping. Once the final permitted
+attempt returns `Err`, that exact error is returned without another sleep or
+delay multiplication.
+
+The worker is an ordinary capture-free function value. Traps from the worker,
+delay overflow, and invalid runtime operations are not converted to `E`.
+Current-task cancellation propagates through the retry operation instead of
+returning the most recent `Err`.
+
+```aurora
+import control
+import metrics
+
+def eventually_succeeds() -> Result[int32, String]:
+    metrics.increment("attempts", 1)
+    if metrics.get("attempts") < 3:
+        return Result.Err("not ready")
+    return Result.Ok(42)
+
+def main():
+    metrics.reset()
+    match control.retry(
+        eventually_succeeds,
+        max_attempts=3,
+        initial_backoff=0ms
+    ):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(error):
+            print(error)
+    print(metrics.get("attempts"))
+```
+
+See `examples/agents/retry_with_backoff.au` for both eventual success and exact
+last-error behavior.
+
 ## Grammar
 
 These modules add no source-language grammar. They are imported and called with the ordinary import, call, member-access, named-argument, collection, `Result`, and `Option` forms defined elsewhere in this reference. Module and member names are case-sensitive. The `--` separator that supplies `sys.args()` belongs to the CLI protocol, not Aurora syntax.
@@ -101,6 +150,11 @@ retain their `Result[..., String]` contracts.
 
 Telemetry fields are `Map[String, String]`. Metric names are `String`, increments and results are signed `int64`, and reset returns `None`. Passing any other type, using an unknown member, or binding an unsupported argument shape is rejected statically.
 
+`control.retry` infers `T` and `E` from the exact shared callback type
+`def() -> Result[T, E]`. A callback with parameters, a non-`Result` return
+type, or a different function-value contract is rejected with `AU2002`.
+`max_attempts` is exactly `int32`; `initial_backoff` is exactly `Duration`.
+
 ## Runtime Semantics
 
 `sys.args()` returns program arguments without the executable name. `aura run` uses arguments after the CLI `--`; a built program uses its host argument vector. Environment lookup returns `None` for a missing or non-Unicode value. Path operations use host path rules, and their string results use the lossy Unicode policy stated above.
@@ -114,15 +168,33 @@ compact JSON record to standard error. Metric operations address one
 process-global, task-shared map; a missing counter is zero, reset clears the
 map, and checked overflow leaves the attempted increment unapplied.
 
+`control.retry` invokes its worker sequentially. It never overlaps attempts.
+An immediate first attempt is followed only as needed by the current delay and
+the next attempt. Every `Err` has the same retry policy. On exhaustion the
+helper returns the final worker's exact `Err`; it performs no terminal sleep
+and does not compute an unused next delay. A zero current delay skips the
+scheduler sleep. A worker trap, backoff overflow, or current-task cancellation
+propagates through the helper.
+
 ## Ownership And Evaluation Order
 
 Call arguments are evaluated left to right. Inputs to these host helpers are shared for the duration of the call and are not retained as Aurora values after it returns. Returned vectors, maps, strings, options, and results are fresh owned values. The metrics implementation copies the metric name into process-global host state; it does not keep an Aurora borrow alive.
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric map. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
+The retry helper reads the Copy function value and invokes it under ordinary
+call rules. Each `Result.Ok` or `Result.Err` owns its payload. Intermediate
+errors are consumed by the retry decision; the final error is returned without
+cloning. Attempt calls and delay waits occur in the stated sequence.
+
 ## Diagnostics
 
-Unknown modules or members use `AU2001`; type mismatches use `AU2002`; invalid argument binding uses `AU2004`; remaining static rejections use `AU2999`. Incrementing a metric beyond either `int64` bound produces `AU4002` and does not wrap.
+Unknown modules or members use `AU2001`; type and callback-contract mismatches
+use `AU2002`; invalid argument binding uses `AU2004`; remaining static
+rejections use `AU2999`. Incrementing a metric beyond either `int64` bound, or
+doubling a retry delay beyond the exact `Duration` range, produces `AU4002` and
+does not wrap. A retry attempt budget below one uses `AU4003`; a negative
+or host-unrepresentable initial backoff uses `AU4001`.
 
 Invalid JSON or TOML data is ordinary program data: validation returns
 `false`, dynamic JSON parsing returns `Result.Err(json.Error)`, and legacy
@@ -138,7 +210,9 @@ All APIs on this page are implemented by both the MIR runtime used by `aura
 run` and the direct native backend. Argument injection differs only at the host
 boundary described above. Recursive JSON parse/dump behavior, JSON/TOML
 ordering, time units, telemetry record shape, and checked metric arithmetic
-are backend-parity contracts.
+are backend-parity contracts. Retry attempt order, backoff, exact final-error
+return, trap propagation, and cancellation are also MIR/direct parity
+contracts.
 
 The HTTP client summarized here has the same MIR/direct support as the full [Network Module](/manual/network). Host-dependent path and environment results may differ with the host while preserving their Aurora types and error policy.
 
@@ -157,12 +231,19 @@ follows scheduling. HTTP limits are the 16 MiB incoming wire-message cap,
 64-header cap, framing checks, and repeated-header loss described above and in
 [Current Limits](/manual/current-limits).
 
+`control.retry` is an eager sequential helper, not a policy engine: it has no
+error classifier, jitter, attempt callback, retry budget shared between calls,
+or detached execution. Every `Err` is retryable. Applications that need
+status-specific retry policy or jitter must express it explicitly. Its
+`Duration` delays remain bounded by the host timer range described in
+[Current Limits](/manual/current-limits).
+
 ## Status
 
-The system, path, JSON, TOML, logging, trace-event, metrics, and summarized HTTP
-contracts on this page are implemented and maintained in Aurora 0.1. Recursive
-JSON gap-fill semantics are accepted under ADR-0021. The summarized fixed HTTP
-cap is Accepted under ADR-0018.
+The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
+summarized HTTP contracts on this page are implemented and maintained in
+Aurora 0.1. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
+summarized fixed HTTP cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,
 scoped tracing spans, and richer HTTP header representations are unavailable.

@@ -677,6 +677,35 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         BuiltinMember::VecLen.receiver_passing(),
         ReceiverKind::Borrow
     );
+    for member in [BuiltinMember::VecSort, BuiltinMember::VecSortBy] {
+        assert_eq!(
+            member.receiver_passing(),
+            ReceiverKind::BorrowMut,
+            "{} must mutate its vector receiver",
+            member.name()
+        );
+    }
+    for member in [BuiltinMember::VecMap, BuiltinMember::VecFilter] {
+        assert_eq!(
+            member.receiver_passing(),
+            ReceiverKind::Borrow,
+            "{} must retain its vector receiver",
+            member.name()
+        );
+        assert_eq!(
+            member.argument_passing(0),
+            Some(ReceiverKind::Borrow),
+            "{} receives a shared function value",
+            member.name()
+        );
+    }
+    assert_eq!(
+        BuiltinMember::VecSortBy.argument_passing(0),
+        Some(ReceiverKind::Borrow)
+    );
+    assert_eq!(BuiltinMember::VecSortBy.argument_name(0), Some("key"));
+    assert_eq!(BuiltinMember::VecMap.argument_name(0), Some("f"));
+    assert_eq!(BuiltinMember::VecFilter.argument_name(0), Some("f"));
     assert_eq!(
         BuiltinMember::VecGet.argument_passing(0),
         Some(ReceiverKind::Borrow),
@@ -763,6 +792,10 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("Vec", "insert", BuiltinMember::VecInsert),
         ("Vec", "clear", BuiltinMember::VecClear),
         ("Vec", "reverse", BuiltinMember::VecReverse),
+        ("Vec", "sort", BuiltinMember::VecSort),
+        ("Vec", "sort_by", BuiltinMember::VecSortBy),
+        ("Vec", "map", BuiltinMember::VecMap),
+        ("Vec", "filter", BuiltinMember::VecFilter),
         ("Map", "len", BuiltinMember::MapLen),
         ("Map", "is_empty", BuiltinMember::MapIsEmpty),
         ("Map", "clone", BuiltinMember::MapClone),
@@ -816,6 +849,19 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
     assert!(BuiltinMember::StringByteLen.docs().contains("UTF-8 bytes"));
     assert!(BuiltinMember::StringByteLen.docs().contains("O(1)"));
     assert_eq!(BuiltinMember::VecLen.detail(), "len() -> int64");
+    assert_eq!(BuiltinMember::VecSort.detail(), "sort() -> None");
+    assert_eq!(
+        BuiltinMember::VecSortBy.detail(),
+        "sort_by(key: def(T) -> K) -> None"
+    );
+    assert_eq!(
+        BuiltinMember::VecMap.detail(),
+        "map(f: def(T) -> U) -> Vec[U]"
+    );
+    assert_eq!(
+        BuiltinMember::VecFilter.detail(),
+        "filter(f: def(T) -> bool) -> Vec[T]"
+    );
     assert_eq!(BuiltinMember::MapLen.detail(), "len() -> int64");
     assert_eq!(BuiltinMember::SetLen.detail(), "len() -> int64");
 

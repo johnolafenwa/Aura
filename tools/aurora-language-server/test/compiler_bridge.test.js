@@ -3205,12 +3205,71 @@ test("compiler bridge includes Vec collection members in completions", async () 
     assert.ok(names.has("insert"));
     assert.ok(names.has("clear"));
     assert.ok(names.has("reverse"));
+    assert.ok(names.has("sort"));
+    assert.ok(names.has("sort_by"));
+    assert.ok(names.has("map"));
+    assert.ok(names.has("filter"));
     const details = new Map(completions.map((item) => [item.name, item.detail]));
     assert.equal(details.get("len"), "len() -> int64");
     assert.equal(details.get("push"), "push(value: own T) -> None");
     assert.equal(details.get("set"), "set(index: int32, value: own T) -> Option[T]");
     assert.equal(details.get("extend"), "extend(other: own Vec[T]) -> None");
     assert.equal(details.get("insert"), "insert(index: int32, value: own T) -> bool");
+    assert.equal(details.get("sort"), "sort() -> None");
+    assert.equal(details.get("sort_by"), "sort_by(key: def(T) -> K) -> None");
+    assert.equal(details.get("map"), "map(f: def(T) -> U) -> Vec[U]");
+    assert.equal(details.get("filter"), "filter(f: def(T) -> bool) -> Vec[T]");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes Vec algorithm hover contracts", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-vec-algorithms-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "def key(value: int64) -> int64:",
+      "    return value",
+      "def render(value: int64) -> String:",
+      "    return str(value)",
+      "def keep(value: int64) -> bool:",
+      "    return value > 0",
+      "def main():",
+      "    mut values = [3, 1, 2]",
+      "    values.sort()",
+      "    values.sort_by(key)",
+      "    mapped = values.map(render)",
+      "    filtered = values.filter(keep)",
+      "    print(mapped)",
+      "    print(filtered)"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    for (const [line, signature] of [
+      [8, "sort() -> None"],
+      [9, "sort_by(key: def(T) -> K) -> None"],
+      [10, "map(f: def(T) -> U) -> Vec[U]"],
+      [11, "filter(f: def(T) -> bool) -> Vec[T]"]
+    ]) {
+      const methodStart = source.split("\n")[line].indexOf(".") + 1;
+      const hover = compilerHoverAtPosition(analysis, line, methodStart);
+      assert.ok(hover, `Vec algorithm on line ${line + 1} should expose hover`);
+      assert.ok(
+        hover.value.includes(signature),
+        `Vec algorithm hover should contain \`${signature}\`, found ${hover.value}`
+      );
+    }
+    const mappedUse = source.split("\n")[12].indexOf("mapped");
+    assert.equal(
+      compilerHoverAtPosition(analysis, 12, mappedUse)?.value,
+      "```aurora\nbinding mapped: Vec[String]\n```"
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -3845,7 +3904,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace"];
+    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control"];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
       const line = `    ${moduleName}.`;
@@ -3859,16 +3918,56 @@ test("compiler bridge exposes control-plane module completions", async () => {
         "."
       );
       assert.ok(items);
-      return new Set(items.map((item) => item.name));
+      return items;
     };
+    const completionNames = async (moduleName) =>
+      new Set((await completions(moduleName)).map((item) => item.name));
     setWorkspaceRoots([repoRoot, tempRoot]);
-    assert.ok((await completions("sys")).has("args"));
-    assert.ok((await completions("path")).has("join"));
-    assert.ok((await completions("json")).has("parse_string_map"));
-    assert.ok((await completions("toml")).has("stringify_map"));
-    assert.ok((await completions("log")).has("info"));
-    assert.ok((await completions("metrics")).has("increment"));
-    assert.ok((await completions("trace")).has("event"));
+    assert.ok((await completionNames("sys")).has("args"));
+    assert.ok((await completionNames("path")).has("join"));
+    assert.ok((await completionNames("json")).has("parse_string_map"));
+    assert.ok((await completionNames("toml")).has("stringify_map"));
+    assert.ok((await completionNames("log")).has("info"));
+    assert.ok((await completionNames("metrics")).has("increment"));
+    assert.ok((await completionNames("trace")).has("event"));
+
+    const retryCompletion = (await completions("control")).find(
+      (completion) => completion.name === "retry"
+    );
+    assert.deepEqual(retryCompletion, {
+      name: "retry",
+      kind: "function",
+      detail:
+        "retry(worker: def() -> Result[T, E], max_attempts: int32 = ..., initial_backoff: Duration = ...) -> Result[T, E]"
+    });
+
+    const analysisSource = [
+      "import control",
+      "",
+      "def worker() -> Result[int32, String]:",
+      "    return Result.Ok(7)",
+      "",
+      "def main():",
+      "    result = control.retry[int32, String](worker)",
+      "    print(result)"
+    ].join("\n");
+    const analysis = await analyzeWithCompiler(mainUri, analysisSource);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const retryStart = analysisSource.split("\n")[6].indexOf("retry");
+    const retryHover = compilerHoverAtPosition(analysis, 6, retryStart);
+    assert.ok(retryHover, "control.retry should expose hover");
+    assert.ok(
+      retryHover.value.includes(
+        "function retry(worker: def() -> Result[T, E], max_attempts: int32 = ..., initial_backoff: Duration = ...) -> Result[T, E]"
+      ),
+      `control.retry hover should expose its generic callable contract, found ${retryHover.value}`
+    );
+    const resultUse = analysisSource.split("\n")[7].indexOf("result");
+    assert.equal(
+      compilerHoverAtPosition(analysis, 7, resultUse)?.value,
+      "```aurora\nbinding result: Result[int32, String]\n```"
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

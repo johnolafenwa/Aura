@@ -235,6 +235,24 @@ The structural type does retain each parameter's capability: bare is shared,
 transfers a non-copy argument. Function-type assignment and substitution
 require those modes, parameter types, and the return type to match.
 
+Callable-powered Vec methods use exact structural callback types. `map`
+requires `f: def(T) -> U`; `filter` requires
+`f: def(T) -> bool`; and `sort_by` requires
+`key: def(T) -> K`. Bare callback parameters are shared capabilities. A
+callback with `mut T` or `own T` is not substitutable. `filter` is
+clone-producing and adds the ordinary clone-safety obligation for `T`.
+`sort` requires `T` to support the existing natural `<` ordering, while
+`sort_by` requires that ordering for `K`. Both require a mutable Vec place.
+`map` and `filter` retain a shared receiver.
+
+`control.retry` requires
+`worker: def() -> Result[T, E]`, `max_attempts: int32`, and
+`initial_backoff: Duration`. The worker function type, including its empty
+parameter list and `Result` return identity, must match exactly. `T` and `E`
+are inferred from that return specialization or may be supplied through
+ordinary explicit generic specialization. The callback is not widened from a
+function with parameters or a different return type.
+
 ## Class Construction
 
 Calling a class name constructs a value. Constructor fields may be supplied

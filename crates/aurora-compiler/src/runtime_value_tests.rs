@@ -1,9 +1,9 @@
 use super::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
     create_dir_once, decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
-    float_floor_divmod, io_decode_utf8, io_error, lock_mutex, non_unix_tls_listener_wait_timeout,
-    option_none, option_some, process_error_cancelled, process_error_no_command,
-    process_error_other, process_error_spawn, process_error_timed_out,
+    float_floor_divmod, io_decode_utf8, io_error, lock_mutex, next_retry_runtime_backoff,
+    non_unix_tls_listener_wait_timeout, option_none, option_some, process_error_cancelled,
+    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
     process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -15,19 +15,43 @@ use super::{
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
-    validate_requested_read_size, wait_all_cancelled, wait_all_error, wait_all_ready,
-    wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, BlockingIoPool,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, FunctionValue,
-    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
-    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
-    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    validate_requested_read_size, validate_retry_runtime_policy, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
+    wait_timeout_condvar, BlockingIoPool, CancellationContext, ChannelValue, EnumVariantValue,
+    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal,
+    MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription, RecvValueResult, RngValue,
+    SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+
+#[test]
+fn retry_runtime_policy_validates_host_limits_and_checked_doubling() {
+    for (attempts, backoff, code) in [(0, 0, "AU4003"), (1, -1, "AU4001")] {
+        let error = validate_retry_runtime_policy(attempts, backoff)
+            .expect_err("invalid retry policy should be rejected");
+        assert_eq!(error.code, code);
+    }
+    let unrepresentable = validate_retry_runtime_policy(1, i128::MAX)
+        .expect_err("initial backoff must fit the host timer");
+    assert_eq!(unrepresentable.code, "AU4001");
+    validate_retry_runtime_policy(1, 0).expect("zero backoff is valid");
+
+    assert_eq!(
+        next_retry_runtime_backoff(10).expect("small backoff should double"),
+        20
+    );
+    let duration_overflow = next_retry_runtime_backoff(i128::MAX)
+        .expect_err("Duration arithmetic overflow must be diagnosed");
+    assert_eq!(duration_overflow.code, "AU4002");
+    let host_overflow = next_retry_runtime_backoff(i128::MAX / 2)
+        .expect_err("host timer overflow must be diagnosed");
+    assert_eq!(host_overflow.code, "AU4002");
+}
 use crate::ast::ReceiverKind;
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;

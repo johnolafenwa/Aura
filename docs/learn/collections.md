@@ -103,6 +103,49 @@ for index in range(values.len() as int32):
     print(values[index])
 ```
 
+## Eager Vec Algorithms
+
+Function values let a vector apply named callbacks without introducing a lazy
+iterator type:
+
+```python
+def doubled(value: int32) -> int32:
+    return value * 2
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+values: Vec[int32] = [3, 1, 2, 4]
+mapped = values.map(doubled)       # [6, 2, 4, 8]
+filtered = values.filter(is_even)  # [2, 4]
+```
+
+Both methods read the vector through shared access and return a fresh owned
+result, so `values` remains available. `filter` clones each accepted element;
+its element type must therefore be clone-safe.
+
+Sorting is stable and mutates the receiver:
+
+```python
+def descending(value: int32) -> int32:
+    return -value
+
+mut ascending: Vec[int32] = [3, 1, 2]
+ascending.sort()
+
+mut reverse_order: Vec[int32] = [3, 1, 2]
+reverse_order.sort_by(descending)
+```
+
+`sort_by` calls its key function once for each element from left to right
+before it reorders anything. If a key call fails at runtime, the vector remains
+unchanged. The callback parameter must be bare/shared. A callback declared
+with `mut` or `own` is intentionally a different contract.
+
+See
+[`examples/collections/vec_algorithms.au`](../../examples/collections/vec_algorithms.au)
+for stable key ordering and the complete output.
+
 ## Lengths Are `int64`
 
 All five maintained length members return `int64`:

@@ -53,10 +53,10 @@ use crate::runtime_value::{
     HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
     ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
-    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
     NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
@@ -2884,6 +2884,14 @@ impl MirRuntime {
     ) -> Result<Value> {
         match callee {
             CallTarget::Name(name) => {
+                if name == "control::__retry_cancel_if_requested" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    if poll_cancellation(&self.cancellation) {
+                        panic::panic_any(TaskCancelledSignal);
+                    }
+                    return Ok(Value::Unit);
+                }
                 if name == "print" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;

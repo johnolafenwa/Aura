@@ -193,6 +193,19 @@ uses an insertion-oriented runtime representation, but its public order is not
 promised. Algorithms should rely on ordering only where the relevant API
 promises it.
 
+`Vec.map` and `Vec.filter` traverse from first element to last and produce
+their eager result in that order. Their shared receiver remains unchanged.
+`map` invokes its callback once per source element and owns each returned value
+in the new vector. `filter` invokes its predicate once per source element and
+clones accepted elements into the new vector.
+
+`Vec.sort` and `Vec.sort_by` mutate their receiver into a stable order: equal
+elements or keys retain their prior relative order. `sort_by` evaluates its key
+function exactly once for every element, from first to last, and stores all
+keys before moving any receiver element. A trap during key evaluation
+therefore propagates before mutation and leaves the complete source order
+unchanged.
+
 Bare iteration over a `Vec` or `Set` retains and freezes the selected collection
 for the loop and yields shared element access. `own` iteration moves the
 collection into a loop-private source once at entry and yields owned elements;
@@ -341,6 +354,16 @@ consumer before the selecting task resumes does not create a false outcome.
 Winner commit consumes at most one Queue item or selected Task result and
 removes every losing registration. All Duration sources share one base instant
 established after evaluation and validation.
+
+`control.retry` invokes its worker immediately for the first attempt. An `Ok`
+returns immediately. An `Err` is retained only until the helper determines
+whether another attempt exists. When one does, the helper waits for the current
+backoff unless it is zero, invokes the next attempt, and doubles the delay only
+when another retry could still use it. Every `Err` is retryable. The final
+permitted `Err` is returned exactly, without an extra sleep or multiplication.
+Worker traps and checked Duration overflow propagate as runtime diagnostics.
+Cancellation of the current task propagates through the helper and its
+scheduler-aware delay instead of being represented as the most recent `Err`.
 
 Queue and Task handles are the maintained cross-worker communication surface.
 Every other capture and result is owned `Transfer` data, preserving the

@@ -390,8 +390,11 @@ See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 
 ### Application-Level Retries
 
-Aurora's HTTP helpers perform one request; retry classification and backoff are
-an application concern. The maintained
+Aurora's HTTP helpers perform one request. The generic
+`control.retry` helper can repeat a capture-free `def() -> Result[T, E]`
+worker when every `Err` is retryable, using a fixed attempt budget and
+exponential `Duration` backoff. HTTP status classification, jitter, and richer
+policy remain an application concern. The maintained
 [retrying network worker](../examples/agents/retrying_network_worker.au)
 retries only `503`, returns other statuses such as `429` unchanged, and returns
 the last `503` when its attempt budget is exhausted.

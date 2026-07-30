@@ -1,0 +1,8 @@
+import random
+
+def keep(value: random.Rng) -> bool:
+    return true
+
+def main():
+    values = [random.Rng(seed=1)]
+    print(values.filter(keep))

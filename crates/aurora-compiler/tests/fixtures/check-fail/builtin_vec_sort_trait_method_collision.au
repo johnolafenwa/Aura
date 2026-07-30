@@ -1,0 +1,6 @@
+trait Sortable:
+    def sort(mut self)
+
+impl Sortable for Vec[int64]:
+    def sort(mut self):
+        pass

@@ -1,0 +1,6 @@
+error[AU2002]: `Vec.sort` cannot order Vec element type `Vec[int64]`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/vec_sort_rejects_non_orderable.au:3:12
+  |
+3 |     values.sort()
+  |            ^
+  = help: use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`

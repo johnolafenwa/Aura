@@ -42,6 +42,15 @@ consume it; tuple ordering remains rejected. See
 [Tuples](/manual/tuples) and
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
+Phase 6.1 capture-free function values make named functions Copy and Transfer
+values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
+the maintained eager `Vec.sort`, `sort_by`, `map`, and `filter` algorithms and
+for `control.retry`. These are compatible API additions to the technical
+preview, but `control` now resolves as a builtin module namespace and the four
+Vec member names are part of the builtin no-shadowing surface. Callback
+capabilities are exact: code must pass bare/shared element callbacks rather
+than relying on adaptation from `mut` or `own`.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

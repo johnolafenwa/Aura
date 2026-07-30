@@ -1836,9 +1836,13 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::VecLen => Some(Type::named("int64")),
                 BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::VecClone => Some(receiver_type.clone()),
-                BuiltinMember::VecPush | BuiltinMember::VecClear | BuiltinMember::VecReverse => {
-                    Some(Type::Unit)
-                }
+                BuiltinMember::VecPush
+                | BuiltinMember::VecClear
+                | BuiltinMember::VecReverse
+                | BuiltinMember::VecSort
+                | BuiltinMember::VecSortBy => Some(Type::Unit),
+                BuiltinMember::VecMap => None,
+                BuiltinMember::VecFilter => Some(receiver_type.clone()),
                 BuiltinMember::VecInsert => Some(Type::named("bool")),
                 BuiltinMember::VecSwap | BuiltinMember::VecContains => Some(Type::named("bool")),
                 BuiltinMember::VecExtend => Some(Type::Unit),
@@ -2997,6 +3001,18 @@ impl<'a> AnalysisBuilder<'a> {
                         return Some(Type::named(enum_name));
                     }
                 }
+                let receiver_type = self.infer_expr_type(object, scope)?;
+                if BuiltinMember::resolve(base_type_name(&receiver_type), field)
+                    == Some(BuiltinMember::VecMap)
+                {
+                    let callback_type = args
+                        .first()
+                        .and_then(|argument| self.infer_expr_type(&argument.value, scope))?;
+                    let Type::Function { return_type, .. } = callback_type else {
+                        return None;
+                    };
+                    return Some(Type::Named("Vec".to_string(), vec![*return_type]));
+                }
                 self.resolve_member_expr(object, field, scope)
                     .and_then(|member| member.ty)
                     .map(|ty| match ty {
@@ -3023,10 +3039,45 @@ impl<'a> AnalysisBuilder<'a> {
                             .unwrap_or_else(|| Type::Named(name.clone(), args)),
                     )
                 }
-                _ => self.infer_call_type(expr, args, scope),
+                _ => self
+                    .infer_specialized_function_return_type(expr, type_args, scope)
+                    .or_else(|| self.infer_call_type(expr, args, scope)),
             },
             _ => None,
         }
+    }
+
+    fn infer_specialized_function_return_type(
+        &self,
+        expr: &Expr,
+        type_args: &[TypeRef],
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        let function = match &expr.kind {
+            ExprKind::Name(name) => self.program.functions.get(name)?,
+            ExprKind::Member { object, field } => {
+                let Type::Module(module_path) = self.infer_expr_type(object, scope)? else {
+                    return None;
+                };
+                self.module_namespace(&module_path)?.functions.get(field)?
+            }
+            _ => return None,
+        };
+        if function.decl.type_params.len() != type_args.len() {
+            return None;
+        }
+        let concrete_args = type_args
+            .iter()
+            .map(|ty| self.lower_analysis_type_ref(ty))
+            .collect::<Vec<_>>();
+        let substitutions = crate::sema::substitutions_from_decl_type_args(
+            &function.decl.type_params,
+            &concrete_args,
+        );
+        Some(crate::sema::substitute_type(
+            &function.signature.return_type,
+            &substitutions,
+        ))
     }
 
     fn infer_iterable_binding_type(
@@ -4068,6 +4119,26 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecExtend.detail().to_string(),
                 },
+                AnalysisCompletion {
+                    name: "sort".to_string(),
+                    kind: "method".to_string(),
+                    detail: BuiltinMember::VecSort.detail().to_string(),
+                },
+                AnalysisCompletion {
+                    name: "sort_by".to_string(),
+                    kind: "method".to_string(),
+                    detail: BuiltinMember::VecSortBy.detail().to_string(),
+                },
+                AnalysisCompletion {
+                    name: "map".to_string(),
+                    kind: "method".to_string(),
+                    detail: BuiltinMember::VecMap.detail().to_string(),
+                },
+                AnalysisCompletion {
+                    name: "filter".to_string(),
+                    kind: "method".to_string(),
+                    detail: BuiltinMember::VecFilter.detail().to_string(),
+                },
             ]);
         }
         "Map" => {
@@ -4254,6 +4325,10 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::VecInsert,
         BuiltinMember::VecClear,
         BuiltinMember::VecReverse,
+        BuiltinMember::VecSort,
+        BuiltinMember::VecSortBy,
+        BuiltinMember::VecMap,
+        BuiltinMember::VecFilter,
         BuiltinMember::MapLen,
         BuiltinMember::MapIsEmpty,
         BuiltinMember::MapClone,

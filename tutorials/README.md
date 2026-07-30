@@ -56,7 +56,8 @@ The current tutorial set covers:
 - ownership, declaration-stable parameter defaults, explicit `own`, move
   semantics, copy types, and the exclusivity rule for mutable borrows
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals,
-  storing APIs, bare-shared/`own` iteration, and mutable Vec iteration
+  storing APIs, bare-shared/`own` iteration, mutable Vec iteration, stable
+  sorting, and eager callback-powered `map`/`filter`
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
@@ -86,6 +87,8 @@ The current tutorial set covers:
 - arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons
 - deterministic seeded randomness, unbiased ranges, mutable-Vec shuffle, and
   the separate OS-secure integer/byte boundary
+- `control.retry` for eager `Result` workers with an attempt budget and
+  exponential `Duration` backoff
 - recursive `json.Value` trees, typed parse errors, exact accessors, consuming
   payload extraction, and deterministic compact or pretty dumping
 - `Vec[uint8]` bytes, strict UTF-8 conversion, canonical hex/base64 codecs,

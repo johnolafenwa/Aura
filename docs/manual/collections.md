@@ -101,6 +101,10 @@ normalization, each operation keeps its normal bounds contract.
 | `insert` | `insert(index: int32, value: own T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
+| `sort` | `sort() -> None` | Stably sorts an orderable vector in place through a mutable receiver. |
+| `sort_by` | `sort_by[K](key: def(T) -> K) -> None` | Evaluates `key` once per element from left to right, then stably sorts in place by the orderable produced keys. |
+| `map` | `map[U](f: def(T) -> U) -> Vec[U]` | Calls `f` once per element in order and returns a fresh owned vector; the source is retained. |
+| `filter` | `filter(f: def(T) -> bool) -> Vec[T]` | Calls `f` once per element in order and returns a fresh owned vector of accepted cloned elements; requires clone-safe `T`. |
 
 `get` is the safe lookup primitive when absence is a normal condition and `T`
 is clone-safe. Use `remove` when the stored value must be transferred instead.
@@ -142,6 +146,30 @@ an index that remains out of range after normalization. For example,
 `values.insert(-999, value)` raises a runtime error instead of silently placing
 `value` at the wrong position. `get(-999)` follows its existing optional
 contract and returns `None`.
+
+### Vec Algorithms And Callbacks
+
+`sort` and `sort_by` are stable, in-place mutations. Equal elements or equal
+keys retain their relative source order. `sort` uses the element's natural
+ordering. `sort_by` first evaluates the shared `key` callback exactly once for
+each element, from the first element to the last, and records every key before
+reordering the vector. If a key call traps, the receiver has not been mutated.
+
+Orderable values use Aurora's existing `<` relation: integers, floating-point
+values under their ordinary partial-order behavior, `Duration`, and user types
+with an applicable `Ord` implementation. `sort_by` requires the produced `K`,
+not necessarily the stored `T`, to be orderable.
+
+`map` and `filter` are eager. They visit the source from left to right and
+return a fresh owned vector rather than a lazy iterator. Their shared receiver
+leaves the source available after the call. `map` owns each callback result in
+the returned `Vec[U]`. `filter` must clone each accepted source element, so its
+`T` must be clone-safe. A filter over `Vec[random.Rng]`, including through a
+wrapper, is rejected with `AU3007`.
+
+Every callback position has the exact shared capability shown by `def(T)`.
+A `def(mut T) -> ...` or `def(own T) -> ...` function is not substituted for
+it: algorithms neither grant element mutation nor consume source elements.
 
 ## Map[K, V]
 
@@ -252,7 +280,40 @@ Collection methods return owned values. Non-removing reads such as `get`,
 `keys`, `values`, `items`, and `entries` explicitly clone move values so the
 collection retains its contents. `pop` and `remove` transfer the removed stored
 value, and `set` transfers the displaced previous value while storing its new
-owned replacement.
+owned replacement. `map` owns the callback-produced result values. `filter`
+clones accepted source elements into its fresh result and therefore has the
+same clone-safety boundary as other clone-producing collection operations.
+
+This executable example demonstrates eager transformation, filtering, natural
+ordering, keyed ordering, and source retention:
+
+```aurora
+def doubled(value: int32) -> int32:
+    return value * 2
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+def descending_key(value: int32) -> int32:
+    return -value
+
+def main():
+    values: Vec[int32] = [3, 1, 2, 4]
+    mapped = values.map(doubled)
+    filtered = values.filter(is_even)
+
+    mut ascending = values.clone()
+    ascending.sort()
+
+    mut descending = values.clone()
+    descending.sort_by(descending_key)
+
+    print(mapped)
+    print(filtered)
+    print(ascending)
+    print(descending)
+    print(values)
+```
 
 ## Choosing The Right Collection
 
@@ -290,7 +351,15 @@ copy `T` for Vec and copy `V` for Map.
 Clone-producing APIs infer obligations when their relevant element, key, or
 value types are unresolved. The obligation is checked after specialization and
 propagates through generic callers; a produced type containing `random.Rng` is
-rejected with `AU3007`.
+rejected with `AU3007`. `filter` establishes that obligation for `T`.
+
+`sort` requires a mutable `Vec[T]` place and an orderable `T`. `sort_by`
+requires a mutable `Vec[T]` place, exact callback type `def(T) -> K`, and an
+orderable result type `K`. `map` requires exact callback type
+`def(T) -> U`; `filter` requires exact callback type `def(T) -> bool`.
+The bare callback parameters are logical shared capabilities even when `T` is
+copy. A callback with a `mut` or `own` parameter is a different function type
+and is rejected with `AU2002`.
 
 ## Runtime Semantics
 
@@ -308,6 +377,12 @@ missing direct Map index traps with `AU4003`; simple indexed assignment inserts
 or replaces for any `V`; compound indexed assignment requires a copy Vec
 element or Map value and traps with `AU4003` when a Map key is absent.
 
+Vec algorithms visit elements from left to right. `map` and `filter` append
+their eager results in visit order. Natural and keyed sorts are stable.
+`sort_by` computes and stores all keys before its first receiver mutation; a
+trap during key computation propagates unchanged and leaves the receiver
+unchanged.
+
 ## Ownership And Evaluation Order
 
 Collection literals, storing methods, and simple Map indexed assignment own
@@ -323,14 +398,19 @@ iteration writes through its exclusive borrow. Reinitializing an own-iteration
 source binding does not change the active loop. Non-copy Vec/Map elements are
 rejected as direct compound targets rather than implicitly cloned or moved.
 Collection and argument expressions retain the language-wide left-to-right
-order.
+order. Algorithm callbacks receive shared element access. `map` moves each
+callback result into the returned vector; `filter` retains the source and
+clones each accepted element into the result.
 
 ## Diagnostics
 
 `AU1101` reports malformed literal, index, method-call, or loop syntax.
 `AU2001` reports unknown collection types and members. `AU2002` covers literal
 element/key/value mismatch, missing empty-literal context, generic arity,
-index/key type mismatch, and method argument type mismatch. `AU2004` reports
+index/key type mismatch, method argument type mismatch, and a collection
+callback whose parameter capability or return type does not match the exact
+shared callback contract, or an unavailable natural or key ordering. `AU2004`
+reports
 invalid constructor or method argument binding. `AU2005` supplies the focused
 Python-migration guidance for `len(...)`, `.append(...)`, `in`, and
 comprehensions. `AU2999` covers unsupported collection methods, non-indexable
@@ -340,8 +420,9 @@ reports mutation/move while a collection or element is borrowed and invalid
 mutable iteration. `AU3003` reports mutation through an immutable collection
 place. `AU3005` rejects a non-copy direct Vec/Map indexed read, and `AU3006`
 rejects a non-copy Vec/Map indexed compound assignment. `AU3007` rejects a
-clone-producing collection operation whose result contains or may contain
-non-cloneable `random.Rng` state. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
+clone-producing collection operation, including `filter`, whose result
+contains or may contain non-cloneable `random.Rng` state. `AU4003` (`bounds or
+lookup violation`) reports an out-of-range Vec
 index or a missing direct Map key.
 Optional absence from `get` and Boolean absence from Set/Map membership or
 removal are typed values, not diagnostics.
@@ -349,8 +430,9 @@ removal are typed values, not diagnostics.
 ## Backend Support
 
 Vec, Map, and Set literals, equality, cloning, iteration, indexing, mutation,
-and the complete method tables above are implemented for MIR execution and
-direct native generation. Both backends use the same static collection types
+eager callback algorithms, stable sorting, and the complete method tables
+above are implemented for MIR execution and direct native generation. Both
+backends use the same static collection types
 and are parity-tested for duplicate-key replacement, key-before-value effects,
 indexed reads and writes, missing-key traps, and maintained observable
 behavior. Compiler analysis and the LSP consume those same builtin signatures.
@@ -373,8 +455,9 @@ implementation-defined permission for backend divergence.
 ## Status
 
 Vec, Map, and Set typing, literals, constructors, equality, cloning, Vec/Set
-iteration modes, negative Vec indexing, and the documented method surfaces are
-implemented for the post-Phase 1.5 surface. The duplicate-key, direct-read,
+iteration modes, negative Vec indexing, and the documented method surfaces,
+including callable-powered Vec algorithms, are implemented for the post-Phase
+1.5 surface. The duplicate-key, direct-read,
 simple-assignment, and compound-assignment Map rules are implemented under
 `architecture_docs/decisions/0014-map-literals-and-indexing.md`, whose status is
 **Accepted**. They are pinned by

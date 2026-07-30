@@ -312,6 +312,12 @@
       "stdout": "ok\n",
       "stderr": ""
     },
+    "docs/manual/collections.md#aurora-11": {
+      "sha256": "973610701f25a9b029a4e28cda0761597ef8b2552e077cf8ed004fe4ae224f42",
+      "mode": "run",
+      "stdout": "[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n",
+      "stderr": ""
+    },
     "docs/manual/collections.md#aurora-2": {
       "sha256": "5836222a180ddea5a127020b4d9e1991829ffe44290b020248ceb9c291220a67",
       "mode": "check",
@@ -399,6 +405,12 @@
       "sha256": "f922a7e249d57595aeea20195dc11da43ea32bff90f0e70da4be260c9f824dd5",
       "mode": "run",
       "stdout": "true\n",
+      "stderr": ""
+    },
+    "docs/manual/control-plane.md#aurora-2": {
+      "sha256": "501be2219fbd4037c37bbf4e1696507a890c5a4831dc7fbecbfab54613650373",
+      "mode": "run",
+      "stdout": "42\n3\n",
       "stderr": ""
     },
     "docs/manual/control-plane.md#bash-1": {

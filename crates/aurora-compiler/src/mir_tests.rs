@@ -5900,3 +5900,323 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         "function operands must expose their concrete specialized signature"
     );
 }
+
+#[test]
+fn vec_algorithms_lower_callbacks_to_ordinary_indirect_calls_before_mutation() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def key(value: int32) -> int32:
+    return 10 - value
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def even(value: int32) -> bool:
+    return value % 2 == 0
+
+def main():
+    mut values: Vec[int32] = [3, 1, 2]
+    values.sort_by(key)
+    mapped = values.map(double)
+    filtered = values.filter(even)
+    print(mapped)
+    print(filtered)
+"#,
+    )
+    .expect("Vec algorithms should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    let callback_calls = instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        args,
+                    },
+                    ..
+                } if args.len() == 1
+            )
+        })
+        .count();
+    assert_eq!(
+        callback_calls, 3,
+        "sort_by, map, and filter should each have one ordinary dynamic call site"
+    );
+    assert!(
+        instructions.iter().all(|instruction| {
+            !matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+                    ..
+                } if matches!(field.as_str(), "sort_by" | "map" | "filter")
+            )
+        }),
+        "Vec algorithms should not introduce a second host-only callback ABI"
+    );
+
+    let callback_blocks = main
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::Call {
+                                callee: CallTarget::Value(_),
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                })
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let first_source_swap = main
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(index, block)| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::Call {
+                                callee:
+                                    CallTarget::Member {
+                                        field,
+                                        receiver_place: Some(place),
+                                        ..
+                                    },
+                                ..
+                            },
+                            ..
+                        } if field == "swap" && place == "values"
+                    )
+                })
+                .then_some(index)
+        })
+        .expect("sort_by should mutate its source only in the sorting phase");
+    assert!(
+        callback_blocks
+            .first()
+            .is_some_and(|callback| *callback < first_source_swap),
+        "sort_by key extraction must precede the first source mutation"
+    );
+}
+
+#[test]
+fn vec_algorithms_execute_stably_in_order_and_preserve_their_shared_source() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Box:
+    value: int32
+
+def descending_key(value: int32) -> int32:
+    print(value)
+    return 10 - value
+
+def box_double(value: int32) -> Box:
+    return Box(value=value * 2)
+
+def even(value: int32) -> bool:
+    print(value)
+    return value % 2 == 0
+
+def main():
+    mut plain: Vec[int32] = [3, 1, 2, 2]
+    plain.sort()
+    print(plain)
+
+    mut keyed: Vec[int32] = [3, 1, 2, 2]
+    keyed.sort_by(descending_key)
+    print(keyed)
+
+    boxes = plain.map(box_double)
+    for box in own boxes:
+        print(box.value)
+
+    filtered = plain.filter(even)
+    print(plain)
+    print(filtered)
+"#,
+    )
+    .expect("Vec algorithms should lower");
+    let output = crate::run_mir(&module).expect("Vec algorithms should execute through MIR");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "[1, 2, 2, 3]\n",
+            "3\n1\n2\n2\n",
+            "[3, 2, 2, 1]\n",
+            "2\n4\n4\n6\n",
+            "1\n2\n2\n3\n",
+            "[1, 2, 2, 3]\n",
+            "[2, 2]\n",
+        )
+    );
+}
+
+#[test]
+fn control_retry_lowers_to_shared_indirect_calls_and_runtime_policy_adapters() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import control
+
+def worker() -> Result[Vec[String], String]:
+    return Result.Ok(["ready"])
+
+def main():
+    print(control.retry[Vec[String], String](
+        initial_backoff=0ms,
+        worker=worker,
+        max_attempts=2
+    ))
+"#,
+    )
+    .expect("control.retry should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let calls = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => Some(callee),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(calls.iter().any(|callee| {
+        matches!(
+            callee,
+            CallTarget::Value(Operand::Function { signature, .. })
+                if matches!(
+                    &**signature,
+                    Type::Function { params, return_type }
+                        if params.is_empty()
+                            && **return_type
+                                == Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("String")],
+                                        ),
+                                        Type::named("String"),
+                                    ],
+                                )
+                )
+        )
+    }));
+    for internal in [
+        "control::__retry_validate",
+        "control::__retry_cancel_if_requested",
+        "control::__retry_next_backoff",
+        "sleep",
+    ] {
+        assert!(
+            calls
+                .iter()
+                .any(|callee| matches!(callee, CallTarget::Name(name) if name == internal)),
+            "retry MIR should contain `{internal}`"
+        );
+    }
+    assert!(!calls
+        .iter()
+        .any(|callee| matches!(callee, CallTarget::Name(name) if name == "control::retry")));
+}
+
+#[test]
+fn control_retry_is_materialized_only_when_imported_and_has_a_real_callable_body() {
+    let plain = crate::lower_source_to_mir(
+        r#"
+def main() -> int32:
+    return 0
+"#,
+    )
+    .expect("plain source should lower");
+    assert!(
+        plain
+            .functions
+            .iter()
+            .all(|function| function.name != "control::retry"),
+        "the checker-wide builtin registry must not inject retry into unrelated MIR"
+    );
+
+    let imported = crate::lower_source_to_mir(
+        r#"
+import control
+
+def main() -> int32:
+    return 0
+"#,
+    )
+    .expect("control import should lower");
+    let retry = imported
+        .functions
+        .iter()
+        .find(|function| function.name == "control::retry")
+        .expect("an imported control module should materialize its callable retry target");
+    let calls = retry
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => Some(callee),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        calls
+            .iter()
+            .any(|callee| matches!(callee, CallTarget::Value(Operand::Place(worker)) if worker == "worker")),
+        "the named retry target must invoke its worker through ordinary indirect-call MIR"
+    );
+    for adapter in [
+        "control::__retry_validate",
+        "control::__retry_cancel_if_requested",
+        "control::__retry_next_backoff",
+        "sleep",
+    ] {
+        assert!(
+            calls
+                .iter()
+                .any(|callee| matches!(callee, CallTarget::Name(name) if name == adapter)),
+            "the named retry target should contain `{adapter}`"
+        );
+    }
+}

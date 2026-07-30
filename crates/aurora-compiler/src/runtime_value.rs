@@ -67,6 +67,58 @@ pub(crate) const NANOS_PER_MILLISECOND: i128 = 1_000_000;
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
 pub(crate) const NANOS_PER_MINUTE: i128 = 60 * NANOS_PER_SECOND;
 
+pub(crate) fn validate_retry_runtime_policy(
+    max_attempts: i32,
+    initial_backoff: i128,
+) -> Result<()> {
+    if max_attempts < 1 {
+        return Err(
+            Diagnostic::coded("AU4003", "control.retry max_attempts must be at least 1")
+                .with_help("pass max_attempts=1 to run the worker exactly once"),
+        );
+    }
+    if initial_backoff < 0 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "control.retry initial_backoff cannot be negative",
+        )
+        .with_help("pass a zero or positive Duration"));
+    }
+    duration_to_host_timer(initial_backoff, "control.retry initial_backoff").map_err(|error| {
+        Diagnostic::coded(
+            "AU4001",
+            format!(
+                "control.retry initial_backoff is outside the host timer range: {}",
+                error
+            ),
+        )
+        .with_help("pass an initial_backoff representable by the current host timer")
+    })?;
+    Ok(())
+}
+
+pub(crate) fn next_retry_runtime_backoff(backoff: i128) -> Result<i128> {
+    let next = backoff.checked_mul(2).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4002",
+            "control.retry backoff overflowed the Duration range",
+        )
+    })?;
+    duration_to_host_timer(next, "control.retry backoff").map_err(|error| {
+        Diagnostic::coded(
+            "AU4002",
+            format!("control.retry backoff exceeded the host timer range: {error}"),
+        )
+    })?;
+    Ok(next)
+}
+
+pub(crate) fn propagate_retry_task_cancellation() {
+    if current_lightweight_task_cancellation().is_some_and(|context| context.is_cancelled()) {
+        panic::panic_any(TaskCancelledSignal);
+    }
+}
+
 pub(crate) fn render_duration(nanoseconds: i128) -> String {
     let negative = nanoseconds.is_negative();
     let magnitude = nanoseconds.unsigned_abs();
@@ -12811,6 +12863,52 @@ fn evaluate_host_builtin_with_args(
     }
 
     match name {
+        "control::__retry_validate" => {
+            host_expect_arity(name, &args, 2)?;
+            let max_attempts = match &args[0] {
+                Value::Int(value) => value
+                    .as_i128()
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(|| {
+                        Diagnostic::coded("AU4001", "control.retry max_attempts must be an int32")
+                    })?,
+                _ => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "control.retry max_attempts must be an int32",
+                    ))
+                }
+            };
+            let initial_backoff = match args[1] {
+                Value::Duration(value) => value,
+                _ => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "control.retry initial_backoff must be a Duration",
+                    ))
+                }
+            };
+            validate_retry_runtime_policy(max_attempts, initial_backoff)?;
+            Ok(Value::Unit)
+        }
+        "control::__retry_next_backoff" => {
+            host_expect_arity(name, &args, 1)?;
+            let backoff = match args[0] {
+                Value::Duration(value) => value,
+                _ => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "control.retry backoff must be a Duration",
+                    ))
+                }
+            };
+            next_retry_runtime_backoff(backoff).map(Value::Duration)
+        }
+        "control::__retry_cancel_if_requested" => {
+            host_expect_arity(name, &args, 0)?;
+            propagate_retry_task_cancellation();
+            Ok(Value::Unit)
+        }
         "sys::args" => {
             host_expect_arity(name, &args, 0)?;
             Ok(Value::Vec(VecValue {

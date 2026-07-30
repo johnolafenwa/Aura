@@ -174,7 +174,33 @@ result is still out of range; direct access and the mutating methods raise a
 runtime error. Unlike Python, `insert` does not clamp an extremely negative
 index to zero, because silently inserting at the wrong position hides bugs.
 
-The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`, `get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`, and `reverse`.
+The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`,
+`get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`,
+`reverse`, `sort`, `sort_by`, `map`, and `filter`.
+
+The four callable-powered algorithms use named function values:
+
+```python
+def doubled(value: int32) -> int32:
+    return value * 2
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+values: Vec[int32] = [3, 1, 2, 4]
+mapped = values.map(doubled)
+filtered = values.filter(is_even)
+
+mut ordered = values.clone()
+ordered.sort()
+```
+
+`map` and `filter` are eager shared reads that return fresh owned vectors and
+retain `values`. `filter` clones accepted elements, so the element type must be
+clone-safe. `sort` and `sort_by` are stable in-place mutations. The `sort_by`
+key callback runs once per element from left to right before mutation; a key
+trap leaves the vector unchanged. Algorithm callbacks take their element with
+the exact bare/shared capability shown above, not `mut` or `own`.
 
 `Vec.len()` returns `int64`, while `range(...)` and Vec indexes remain
 `int32`. Narrow explicitly at the consumer; integer casts are checked, so an
@@ -213,7 +239,11 @@ match names.get(0):
         pass
 ```
 
-See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au), [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au), and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
+See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
+[examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au),
+[examples/collections/vec_polish.au](../examples/collections/vec_polish.au),
+and
+[examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
 
 For integer types, the runtime enforces the annotated width. A binding like `value: int8 = 127` is valid, but exceeding that range at runtime produces an error instead of silently widening the value.
 

@@ -1,0 +1,41 @@
+class Job:
+    label: String
+    priority: int32
+
+def doubled(value: int32) -> int32:
+    return value * 2
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+def descending_key(value: int32) -> int32:
+    return -value
+
+def job_priority(job: Job) -> int32:
+    return job.priority
+
+def main():
+    values: Vec[int32] = [3, 1, 2, 4]
+    mapped = values.map(doubled)
+    filtered = values.filter(is_even)
+
+    mut ascending = values.clone()
+    ascending.sort()
+
+    mut descending = values.clone()
+    descending.sort_by(descending_key)
+
+    mut jobs = [
+        Job(label="first", priority=2),
+        Job(label="second", priority=1),
+        Job(label="third", priority=2)
+    ]
+    jobs.sort_by(job_priority)
+
+    print(mapped)
+    print(filtered)
+    print(ascending)
+    print(descending)
+    for job in own jobs:
+        print(job.label)
+    print(values)

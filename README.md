@@ -74,6 +74,9 @@ Current compiler workflow:
   - execute negative Vec indexing, checked `int64`-length to `int32`-index
     narrowing, non-copy cloned reads, mutable Vec iteration, `insert(...)`,
     `swap(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
+- `cargo run -p aura -- run examples/collections/vec_algorithms.au`
+  - execute stable natural/key sorting plus eager, source-retaining
+    `Vec.map(...)` and `Vec.filter(...)`
 - `cargo run -p aura -- run examples/collections/map_basics.au`
   - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
@@ -155,6 +158,9 @@ Current compiler workflow:
   - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
 - `cargo run -p aura -- run examples/agents/control_plane_foundations.au`
   - execute typed JSON/TOML metadata, path helpers, counters, and structured log/trace events
+- `cargo run -p aura -- run examples/agents/retry_with_backoff.au`
+  - execute `control.retry(...)` through eventual success and exact
+    last-error exhaustion with a zero-delay backoff
 - `cargo run -p aura -- run examples/agents/retrying_network_worker.au`
   - execute an application-level HTTP retry worker that retries only `503`,
     uses deterministic seed-42 jitter with exponential `Duration` backoff,

@@ -172,6 +172,18 @@ printed-output order unless they explicitly coordinate that order.
     - `100`
     - `true`
     - `true`
+- `vec_algorithms.au`
+  - eager shared `map`/`filter`, stable natural sorting, stable once-per-element
+    key sorting, and source retention
+  - prints:
+    - `[6, 2, 4, 8]`
+    - `[2, 4]`
+    - `[1, 2, 3, 4]`
+    - `[4, 3, 2, 1]`
+    - `second`
+    - `first`
+    - `third`
+    - `[3, 1, 2, 4]`
 - `map_basics.au`
   - `Map[K, V]` literals, `extend(...)`, `items()` / `entries()`, indexed writes, copy-value indexed reads, and the maintained map method surface (`get`/`remove` make non-copy reads explicit)
   - prints:
@@ -241,6 +253,14 @@ printed-output order unless they explicitly coordinate that order.
 - `control_plane_foundations.au`
   - typed JSON/TOML metadata, path operations, process-local counters, and structured log/trace events
   - prints the artifact path, deterministic JSON, TOML validity, and counter value
+- `retry_with_backoff.au`
+  - `control.retry` with an immediate first attempt, zero-delay retries,
+    eventual success, and exact final-error exhaustion
+  - prints:
+    - `42`
+    - `attempt 2`
+    - `3`
+    - `2`
 - `retrying_network_worker.au`
   - application-level HTTP retry policy over a loopback server: retry only
     `503`, preserve terminal `429`, and return the final `503` without drawing

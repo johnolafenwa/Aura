@@ -95,6 +95,81 @@ fn builtin_imported_binding_reports_unknown_builtin_module_paths() {
 }
 
 #[test]
+fn control_namespace_exposes_generic_retry_contract_and_defaults() {
+    let namespace = builtin_module_namespace(&["control".to_string()])
+        .expect("control should be a builtin module");
+    let retry = namespace
+        .functions
+        .get("retry")
+        .expect("control.retry should be available");
+
+    assert_eq!(retry.decl.type_params, vec!["T", "E"]);
+    assert_eq!(
+        retry.signature.params,
+        vec![
+            Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::TypeParam("T".to_string()),
+                        Type::TypeParam("E".to_string())
+                    ],
+                )),
+            },
+            Type::named("int32"),
+            Type::named("Duration"),
+        ]
+    );
+    assert_eq!(
+        retry.signature.param_passings,
+        vec![
+            ReceiverKind::Borrow,
+            ReceiverKind::Borrow,
+            ReceiverKind::Borrow
+        ]
+    );
+    assert_eq!(
+        retry.signature.return_type,
+        Type::Named(
+            "Result".to_string(),
+            vec![
+                Type::TypeParam("T".to_string()),
+                Type::TypeParam("E".to_string())
+            ],
+        )
+    );
+    assert_eq!(
+        retry
+            .decl
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["worker", "max_attempts", "initial_backoff"]
+    );
+    assert!(retry.decl.params[0].default.is_none());
+    assert!(matches!(
+        retry.decl.params[1]
+            .default
+            .as_ref()
+            .map(|default| &default.kind),
+        Some(ExprKind::Int(3))
+    ));
+    assert!(matches!(
+        retry.decl.params[2]
+            .default
+            .as_ref()
+            .map(|default| &default.kind),
+        Some(ExprKind::DurationNanos(0))
+    ));
+    assert!(
+        host_builtin_metadata("control::retry").is_none(),
+        "generic retry must not use fixed host-builtin metadata"
+    );
+}
+
+#[test]
 fn builtin_imported_binding_resolves_exports_and_reports_missing_names() {
     let fs_path = ["fs".to_string()];
     let exists = builtin_imported_binding(&fs_path, "exists", Span::new(1, 1))

@@ -1,0 +1,56 @@
+import control
+
+enum RetryError:
+    Failed(String)
+
+def first_success() -> Result[int32, RetryError]:
+    print("first-success")
+    return Result.Ok(41)
+
+def always_fails() -> Result[int32, RetryError]:
+    print("default-attempt")
+    return Result.Err(RetryError.Failed("last-error"))
+
+def vector_success() -> Result[Vec[String], RetryError]:
+    return Result.Ok(["owned", "payload"])
+
+def main() -> int32:
+    shared_worker: def() -> Result[int32, RetryError] = first_success
+
+    match control.retry(shared_worker):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(_):
+            print("unexpected")
+
+    match control.retry(shared_worker):
+        case Result.Ok(value):
+            print(value + 1)
+        case Result.Err(_):
+            print("unexpected")
+
+    match own control.retry[Vec[String], RetryError](worker=vector_success):
+        case Result.Ok(values):
+            print(values.len())
+            for value in own values:
+                print(value)
+        case Result.Err(_):
+            print("unexpected")
+
+    match own control.retry[int32, RetryError](always_fails):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(RetryError.Failed(message)):
+            print(message)
+
+    match own control.retry[int32, RetryError](
+        worker=always_fails,
+        initial_backoff=Duration.seconds(12614400000),
+        max_attempts=1
+    ):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(RetryError.Failed(message)):
+            print(f"single-{message}")
+
+    return 0

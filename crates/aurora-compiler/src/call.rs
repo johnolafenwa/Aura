@@ -292,6 +292,9 @@ const VEC_INSERT_PARAMS: [BuiltinParam; 2] = [
 ];
 const VEC_EXTEND_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "other", ReceiverKind::Value)];
+const VEC_KEY_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "key", ReceiverKind::Borrow)];
+const VEC_CALLBACK_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const STRING_TEXT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const STRING_REPLACE_PARAMS: [BuiltinParam; 2] = [
@@ -833,6 +836,10 @@ pub enum BuiltinMember {
     VecInsert,
     VecClear,
     VecReverse,
+    VecSort,
+    VecSortBy,
+    VecMap,
+    VecFilter,
     MapLen,
     MapIsEmpty,
     MapClone,
@@ -1015,6 +1022,10 @@ impl BuiltinMember {
             ("Vec", "insert") => Some(Self::VecInsert),
             ("Vec", "clear") => Some(Self::VecClear),
             ("Vec", "reverse") => Some(Self::VecReverse),
+            ("Vec", "sort") => Some(Self::VecSort),
+            ("Vec", "sort_by") => Some(Self::VecSortBy),
+            ("Vec", "map") => Some(Self::VecMap),
+            ("Vec", "filter") => Some(Self::VecFilter),
             ("Map", "len") => Some(Self::MapLen),
             ("Map", "is_empty") => Some(Self::MapIsEmpty),
             ("Map", "clone") => Some(Self::MapClone),
@@ -1201,6 +1212,10 @@ impl BuiltinMember {
             Self::VecInsert => "insert",
             Self::VecClear => "clear",
             Self::VecReverse => "reverse",
+            Self::VecSort => "sort",
+            Self::VecSortBy => "sort_by",
+            Self::VecMap => "map",
+            Self::VecFilter => "filter",
             Self::MapLen => "len",
             Self::MapIsEmpty => "is_empty",
             Self::MapGet => "get",
@@ -1370,6 +1385,10 @@ impl BuiltinMember {
             Self::VecInsert => "insert(index: int32, value: own T) -> bool",
             Self::VecClear => "clear() -> None",
             Self::VecReverse => "reverse() -> None",
+            Self::VecSort => "sort() -> None",
+            Self::VecSortBy => "sort_by(key: def(T) -> K) -> None",
+            Self::VecMap => "map(f: def(T) -> U) -> Vec[U]",
+            Self::VecFilter => "filter(f: def(T) -> bool) -> Vec[T]",
             Self::MapLen => "len() -> int64",
             Self::MapIsEmpty => "is_empty() -> bool",
             Self::MapClone => "clone() -> Map[K, V]",
@@ -1615,6 +1634,18 @@ impl BuiltinMember {
             }
             Self::VecClear => "Removes all elements from the vector.",
             Self::VecReverse => "Reverses the vector elements in place.",
+            Self::VecSort => {
+                "Stably sorts the vector in place using the element type's natural ordering."
+            }
+            Self::VecSortBy => {
+                "Evaluates `key` once for each element from left to right, then stably sorts the vector in place by those keys."
+            }
+            Self::VecMap => {
+                "Calls `f` with shared access to each element and eagerly returns the owned results as a new vector."
+            }
+            Self::VecFilter => {
+                "Calls `f` with shared access to each element and eagerly clones retained elements into a new vector."
+            }
             Self::MapLen => "Returns the current number of entries in the map.",
             Self::MapIsEmpty => "Returns true when the map contains no entries.",
             Self::MapClone => "Creates a new owned `Map[K, V]` with cloned keys and values.",
@@ -1815,6 +1846,7 @@ impl BuiltinMember {
             | Self::VecClone
             | Self::VecClear
             | Self::VecReverse
+            | Self::VecSort
             | Self::MapLen
             | Self::MapIsEmpty
             | Self::MapClone
@@ -1945,6 +1977,12 @@ impl BuiltinMember {
             Self::VecInsert => {
                 BuiltinCallShape::fixed(&VEC_INSERT_PARAMS, CallConvention::PositionalOrNamed)
             }
+            Self::VecSortBy => {
+                BuiltinCallShape::fixed(&VEC_KEY_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecMap | Self::VecFilter => {
+                BuiltinCallShape::fixed(&VEC_CALLBACK_PARAMS, CallConvention::PositionalOrNamed)
+            }
             Self::StringContains
             | Self::StringStartsWith
             | Self::StringEndsWith
@@ -2073,6 +2111,8 @@ impl BuiltinMember {
                 | Self::VecInsert
                 | Self::VecClear
                 | Self::VecReverse
+                | Self::VecSort
+                | Self::VecSortBy
                 | Self::MapSet
                 | Self::MapRemove
                 | Self::MapClear

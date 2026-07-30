@@ -114,6 +114,36 @@ def process(input: String) -> Result[int32, String]:
 
 For simpler cases, Aurora provides `try expr` to reduce the nesting. See [12-error-propagation.md](12-error-propagation.md).
 
+## Retrying A Result Worker
+
+`control.retry` handles the common policy where every `Err` is retryable:
+
+```python
+import control
+
+def attempt() -> Result[int32, String]:
+    return Result.Err("not ready")
+
+result = control.retry(
+    attempt,
+    max_attempts=3,
+    initial_backoff=10ms
+)
+```
+
+The first attempt runs immediately. Later attempts wait for the initial
+backoff and then twice the previous delay. A zero delay skips sleeping. The
+last permitted `Err` is returned exactly, with no final sleep or unused
+multiply. Worker traps, backoff overflow, and task cancellation propagate
+rather than becoming `Err`.
+
+This helper does not classify errors or add jitter. Write an explicit policy
+loop when only selected failures should retry. See
+[examples/agents/retry_with_backoff.au](../examples/agents/retry_with_backoff.au)
+for the helper and
+[examples/agents/retrying_network_worker.au](../examples/agents/retrying_network_worker.au)
+for a status-aware network policy.
+
 ## Current Limits
 
 The bootstrap compiler supports:

@@ -363,6 +363,7 @@ Current builtin module namespaces:
 - `log`
 - `metrics`
 - `trace`
+- `control`
 
 Current builtin `range(...)` notes:
 
@@ -576,6 +577,10 @@ Current builtin member methods include:
 - `Vec.extend(...)`
 - `Vec.clear()`
 - `Vec.reverse()`
+- `Vec.sort()`
+- `Vec.sort_by(key)`
+- `Vec.map(f)`
+- `Vec.filter(f)`
 - `Map.len() -> int64`
 - `Map.is_empty()`
 - `Map.clone()`
@@ -785,6 +790,13 @@ Current collection notes:
 - bare Vec iteration is shared; `for value in own vec:`
   consumes; `for value in mut vec:` supports writeback
 - `for value in mut vec:` requires the iterable place itself to be mutable
+- `Vec.sort()` and `Vec.sort_by(key)` are stable in-place mutations;
+  `sort_by` evaluates one shared key per element from left to right before
+  mutating, so a key trap leaves the source unchanged
+- `Vec.map(f)` and `Vec.filter(f)` are eager shared traversals that retain the
+  source and return fresh owned vectors; `filter` requires clone-safe `T`
+- Vec algorithm callbacks have exact bare/shared element parameters; `mut` and
+  `own` callback capabilities are rejected rather than adapted
 - indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
@@ -894,6 +906,12 @@ Current expression/ergonomics limitations:
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,
   `TaskGroup()`, its four start methods, `yield_now()`, `wait_any(...)`, and
   `wait_all(...)` surface
+- `control.retry(worker, max_attempts=3, initial_backoff=0ms)` runs a
+  `def() -> Result[T, E]` worker immediately, retries every `Err` with doubling
+  delays, skips zero sleeps, and returns the exact final error without a
+  post-final wait or multiply; it validates a positive attempt budget and a
+  non-negative, host-representable backoff before the worker runs, and traps
+  and cancellation propagate
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
   use the pinned-worker evented runtime scheduler
 - Aurora tasks are pinned-worker scheduler-backed lightweight tasks, and

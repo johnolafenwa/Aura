@@ -133,6 +133,10 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Vec.insert` | `insert(index: int32, value: own T) -> bool` | Normalizes a negative index, inserts before it, and returns `true`; valid range is `0..=len`, without clamping. |
 | `Vec.clear` | `clear() -> None` | Removes all elements. |
 | `Vec.reverse` | `reverse() -> None` | Reverses in place. |
+| `Vec.sort` | `sort() -> None` | Stable in-place natural ordering; mutable receiver and orderable `T`. |
+| `Vec.sort_by` | `sort_by[K](key: def(T) -> K) -> None` | Stable in-place key ordering; evaluates the shared key callback once per element left-to-right before mutation and requires orderable `K`. |
+| `Vec.map` | `map[U](f: def(T) -> U) -> Vec[U]` | Eager shared traversal into a fresh owned result; retains the source. |
+| `Vec.filter` | `filter(f: def(T) -> bool) -> Vec[T]` | Eager shared traversal into a fresh owned result; retains the source and requires clone-safe `T`. |
 
 ### Map[K, V]
 
@@ -252,12 +256,20 @@ See [Control-Plane Modules](/manual/control-plane).
 | `metrics.increment` | `(name: String, value: int64) -> None` |
 | `metrics.get` | `(name: String) -> int64` |
 | `metrics.reset` | `() -> None` |
+| `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters; missing names read as zero and
 overflow is a runtime diagnostic. Dynamic JSON object dumps and legacy
 JSON/TOML string maps serialize in sorted key order. See [JSON
 Module](/manual/json) and the control-plane chapter for exact value, limit,
 host-string/path, and telemetry-record rules.
+
+`control.retry` validates at least one attempt and a non-negative,
+host-representable backoff before invoking the worker. It runs its first
+attempt immediately, retries every `Err` with doubling delays, skips zero
+sleeps, returns the exact last `Err`, and performs no sleep or multiplication
+after the final attempt. Worker traps, backoff overflow, and current-task
+cancellation propagate.
 
 ## Network Constructors And HTTP Client Helpers
 

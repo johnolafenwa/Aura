@@ -47,6 +47,45 @@ fn lower_type_ref(type_ref: &TypeRef) -> Type {
     }
 }
 
+fn lower_generic_type_ref(type_ref: &TypeRef, type_params: &BTreeSet<String>) -> Type {
+    match &type_ref.kind {
+        crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| lower_generic_type_ref(element, type_params))
+                .collect(),
+        ),
+        crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
+        crate::ast::TypeRefKind::Named { name, args }
+            if args.is_empty() && type_params.contains(name) =>
+        {
+            Type::TypeParam(name.clone())
+        }
+        crate::ast::TypeRefKind::Named { name, args } => Type::Named(
+            name.clone(),
+            args.iter()
+                .map(|arg| lower_generic_type_ref(arg, type_params))
+                .collect(),
+        ),
+        crate::ast::TypeRefKind::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    name: String::new(),
+                    ty: lower_generic_type_ref(&param.ty, type_params),
+                    passing: resolve_param_passing(param.mode),
+                    has_default: false,
+                    default_erased: true,
+                })
+                .collect(),
+            return_type: Box::new(lower_generic_type_ref(return_type, type_params)),
+        },
+    }
+}
+
 fn value_param(name: &str, ty: TypeRef) -> Param {
     Param {
         name: name.to_string(),
@@ -108,6 +147,20 @@ fn bool_expr(value: bool) -> Expr {
     }
 }
 
+fn int_expr(value: u128) -> Expr {
+    Expr {
+        kind: ExprKind::Int(value),
+        span: builtin_span(),
+    }
+}
+
+fn duration_expr(value: i128) -> Expr {
+    Expr {
+        kind: ExprKind::DurationNanos(value),
+        span: builtin_span(),
+    }
+}
+
 fn empty_map_expr() -> Expr {
     Expr {
         kind: ExprKind::Map(Vec::new()),
@@ -162,6 +215,49 @@ fn function_info(
             params: lowered_params,
             param_passings,
             return_type: lower_type_ref(&return_type),
+            rng_clone_safe_type_params: BTreeSet::new(),
+        },
+        type_param_bounds: BTreeMap::new(),
+    }
+}
+
+fn generic_function_info(
+    module_name: &str,
+    name: &str,
+    type_params: Vec<&str>,
+    params: Vec<Param>,
+    return_type: TypeRef,
+) -> FunctionInfo {
+    let type_params = type_params
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let type_param_set = type_params.iter().cloned().collect::<BTreeSet<_>>();
+    let lowered_params = params
+        .iter()
+        .map(|param| lower_generic_type_ref(&param.ty, &type_param_set))
+        .collect::<Vec<_>>();
+    let param_passings = params
+        .iter()
+        .map(|param| resolve_param_passing(param.mode))
+        .collect();
+    FunctionInfo {
+        module_name: module_name.to_string(),
+        decl: FunctionDecl {
+            public: true,
+            name: name.to_string(),
+            type_params,
+            type_param_bounds: BTreeMap::new(),
+            receiver: None,
+            params: params.clone(),
+            return_type: return_type.clone(),
+            body: Vec::new(),
+            span: builtin_span(),
+        },
+        signature: FunctionSignature {
+            params: lowered_params,
+            param_passings,
+            return_type: lower_generic_type_ref(&return_type, &type_param_set),
             rng_clone_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),
@@ -1384,6 +1480,38 @@ fn random_namespace() -> ModuleNamespace {
     }
 }
 
+fn control_namespace() -> ModuleNamespace {
+    let result_type = type_ref(
+        "Result",
+        vec![type_ref("T", Vec::new()), type_ref("E", Vec::new())],
+    );
+    function_only_namespace(
+        "control",
+        vec![generic_function_info(
+            "control",
+            "retry",
+            vec!["T", "E"],
+            vec![
+                borrow_param(
+                    "worker",
+                    TypeRef::function(Vec::new(), result_type.clone(), builtin_span()),
+                ),
+                value_param_with_default(
+                    "max_attempts",
+                    type_ref("int32", Vec::new()),
+                    int_expr(3),
+                ),
+                value_param_with_default(
+                    "initial_backoff",
+                    type_ref("Duration", Vec::new()),
+                    duration_expr(0),
+                ),
+            ],
+            result_type,
+        )],
+    )
+}
+
 fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNamespace {
     let functions = functions
         .into_iter()
@@ -1916,6 +2044,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "net" => Some(net_namespace()),
         "process" => Some(process_namespace()),
         "random" => Some(random_namespace()),
+        "control" => Some(control_namespace()),
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
         "bytes" => Some(bytes_namespace()),
@@ -1971,6 +2100,43 @@ fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
     ] {
         metadata.insert(associated.qualified_name.clone(), associated);
     }
+    for internal in [
+        HostBuiltinMetadata {
+            qualified_name: "control::__retry_validate".to_string(),
+            params: vec![
+                HostBuiltinParamMetadata {
+                    name: "max_attempts".to_string(),
+                    ty: Type::named("int32"),
+                    passing: ReceiverKind::Borrow,
+                    required: true,
+                },
+                HostBuiltinParamMetadata {
+                    name: "initial_backoff".to_string(),
+                    ty: Type::named("Duration"),
+                    passing: ReceiverKind::Borrow,
+                    required: true,
+                },
+            ],
+            return_type: Type::Unit,
+        },
+        HostBuiltinMetadata {
+            qualified_name: "control::__retry_next_backoff".to_string(),
+            params: vec![HostBuiltinParamMetadata {
+                name: "backoff".to_string(),
+                ty: Type::named("Duration"),
+                passing: ReceiverKind::Borrow,
+                required: true,
+            }],
+            return_type: Type::named("Duration"),
+        },
+        HostBuiltinMetadata {
+            qualified_name: "control::__retry_cancel_if_requested".to_string(),
+            params: Vec::new(),
+            return_type: Type::Unit,
+        },
+    ] {
+        metadata.insert(internal.qualified_name.clone(), internal);
+    }
     metadata
 }
 
@@ -1988,8 +2154,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "sys", "path", "bytes", "json", "toml", "log",
-        "metrics", "trace",
+        "io", "fs", "net", "process", "random", "control", "sys", "path", "bytes", "json", "toml",
+        "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

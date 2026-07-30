@@ -744,6 +744,38 @@ fn push_imported_module_functions(
     }
 }
 
+fn namespace_imports_control_retry(namespace: &ModuleNamespace) -> bool {
+    namespace.path == "control"
+        || namespace
+            .all_functions
+            .values()
+            .any(|function| function.module_name == "control" && function.decl.name == "retry")
+        || namespace
+            .modules
+            .values()
+            .any(namespace_imports_control_retry)
+        || namespace
+            .imported_modules
+            .values()
+            .any(namespace_imports_control_retry)
+}
+
+fn program_imports_control_retry(program: &Program) -> bool {
+    program
+        .functions
+        .values()
+        .any(|function| function.module_name == "control" && function.decl.name == "retry")
+        || program
+            .imported_modules
+            .values()
+            .any(namespace_imports_control_retry)
+        || program
+            .module_registry
+            .values()
+            .filter(|namespace| namespace.path != "control")
+            .any(namespace_imports_control_retry)
+}
+
 fn push_imported_module_classes(
     program: &Program,
     classes: &mut Vec<MirClass>,
@@ -942,6 +974,15 @@ fn push_imported_module_functions_from_namespace(
 ) {
     for (name, function) in &namespace.functions {
         let qualified_name = imported_module_function_name(&namespace.path, name);
+        if qualified_name == "control::retry" && !program_imports_control_retry(program) {
+            // The builtin registry is checker-wide, but `control.retry` owns a
+            // generated Aurora state machine rather than a zero-cost host
+            // declaration. Do not inject that implementation into programs
+            // which cannot name it; besides keeping the MIR honest, this
+            // prevents its runtime adapters from leaking into unrelated
+            // native objects.
+            continue;
+        }
         if seen.insert(qualified_name.clone()) {
             functions.extend(lower_function(
                 program,
@@ -1049,7 +1090,23 @@ fn lower_function(
             lowerer.non_owning_roots.insert(param.name.clone());
         }
     }
-    if function.body.is_empty() && has_runtime_named_function(name) {
+    if function.body.is_empty() && name == "control::retry" {
+        // `control.retry[T, E]` is a concrete first-class function value after
+        // specialization, so its named MIR target must implement the same
+        // state machine as a direct source call. Keeping that implementation
+        // here also means both direct calls and indirect calls share ordinary
+        // MIR control flow and callback dispatch.
+        let result = lowerer.new_typed_temp(return_type.clone());
+        lowerer.lower_control_retry_state_machine(
+            Operand::Place("worker".to_string()),
+            Operand::Place("max_attempts".to_string()),
+            Operand::Place("initial_backoff".to_string()),
+            return_type.clone(),
+            function.span,
+            &result,
+        );
+        lowerer.terminate(Terminator::Return(Operand::MovePlace(result)));
+    } else if function.body.is_empty() && has_runtime_named_function(name) {
         // Builtin declarations have signatures but no Aurora body. Materialize
         // a tiny ordinary MIR wrapper so their first-class thunk follows the
         // same named-call implementation as a direct source call instead of
@@ -1143,6 +1200,11 @@ struct MirFunctionSpec {
     params: Vec<MirParam>,
     return_type: Type,
     default_return: Operand,
+}
+
+struct VecTransformOutput<'a> {
+    place: &'a str,
+    element_type: &'a Type,
 }
 
 struct Lowerer<'a> {
@@ -3992,6 +4054,929 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Lowers the higher-order Vec surface to the ordinary MIR operations both
+    /// execution backends already share. In particular, callbacks remain
+    /// `CallTarget::Value` calls instead of acquiring a second host callback
+    /// ABI. `sort_by` materializes every key before entering the mutation
+    /// phase, so a trapping key function cannot leave the source half-sorted.
+    fn lower_vec_algorithm_call(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        args: &[Argument],
+        result: &str,
+    ) -> bool {
+        let Some(Type::Named(receiver_name, receiver_args)) = self.infer_expr_type(object) else {
+            return false;
+        };
+        if receiver_name != "Vec" || receiver_args.len() != 1 {
+            return false;
+        }
+        let element_ty = receiver_args[0].clone();
+        let Some(member) = BuiltinMember::resolve("Vec", field) else {
+            return false;
+        };
+        if !matches!(
+            member,
+            BuiltinMember::VecSort
+                | BuiltinMember::VecSortBy
+                | BuiltinMember::VecMap
+                | BuiltinMember::VecFilter
+        ) {
+            return false;
+        }
+
+        match member {
+            BuiltinMember::VecSort => {
+                let receiver_place = self
+                    .render_place_expr_option(object)
+                    .expect("checked Vec.sort receiver should be a mutable place");
+                self.lower_stable_vec_sort(
+                    Operand::Place(receiver_place.clone()),
+                    &receiver_place,
+                    &element_ty,
+                    None,
+                    expr.span,
+                    result,
+                );
+            }
+            BuiltinMember::VecSortBy => {
+                let receiver_place = self
+                    .render_place_expr_option(object)
+                    .expect("checked Vec.sort_by receiver should be a mutable place");
+                let ordered = member
+                    .bind_args(args, expr.span)
+                    .expect("checked Vec.sort_by arguments should bind during MIR lowering");
+                let callback_arg =
+                    ordered[0].expect("checked Vec.sort_by call should provide a key function");
+                let callback_ty = self
+                    .infer_expr_type(&callback_arg.value)
+                    .expect("checked Vec.sort_by key should have a function type");
+                let callback =
+                    self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
+                let Type::Function {
+                    return_type: key_ty,
+                    ..
+                } = callback_ty
+                else {
+                    unreachable!("checked Vec.sort_by key should have a function type");
+                };
+                let key_ty = *key_ty;
+                let keys =
+                    self.new_typed_temp(Type::Named("Vec".to_string(), vec![key_ty.clone()]));
+                self.emit(Instruction::Assign {
+                    target: keys.clone(),
+                    value: Rvalue::VecLiteral {
+                        elements: Vec::new(),
+                        element_type: key_ty.clone(),
+                    },
+                });
+                let source = Operand::Place(receiver_place.clone());
+                self.lower_vec_key_collection_loop(
+                    source.clone(),
+                    &element_ty,
+                    callback,
+                    &keys,
+                    &key_ty,
+                    expr.span,
+                );
+                self.lower_stable_vec_sort(
+                    source,
+                    &receiver_place,
+                    &key_ty,
+                    Some((&keys, &key_ty)),
+                    expr.span,
+                    result,
+                );
+            }
+            BuiltinMember::VecMap | BuiltinMember::VecFilter => {
+                let source = self.lower_shared_vec_source(object);
+                let ordered = member
+                    .bind_args(args, expr.span)
+                    .expect("checked Vec callback arguments should bind during MIR lowering");
+                let callback_arg =
+                    ordered[0].expect("checked Vec callback call should provide a function");
+                let callback_ty = self
+                    .infer_expr_type(&callback_arg.value)
+                    .expect("checked Vec callback should have a function type");
+                let callback =
+                    self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
+                let output_ty = if member == BuiltinMember::VecMap {
+                    let Type::Named(name, output_args) = self
+                        .infer_expr_type(expr)
+                        .expect("checked Vec.map call should have a result type")
+                    else {
+                        unreachable!("checked Vec.map result should be Vec[U]");
+                    };
+                    assert_eq!(name, "Vec");
+                    output_args
+                        .into_iter()
+                        .next()
+                        .expect("checked Vec.map result should retain its element type")
+                } else {
+                    element_ty.clone()
+                };
+                self.emit(Instruction::Assign {
+                    target: result.to_string(),
+                    value: Rvalue::VecLiteral {
+                        elements: Vec::new(),
+                        element_type: output_ty.clone(),
+                    },
+                });
+                self.lower_vec_transform_loop(
+                    source,
+                    &element_ty,
+                    callback,
+                    VecTransformOutput {
+                        place: result,
+                        element_type: &output_ty,
+                    },
+                    member == BuiltinMember::VecFilter,
+                    expr.span,
+                );
+            }
+            _ => unreachable!("Vec algorithm variants were filtered above"),
+        }
+        true
+    }
+
+    /// Lowers `control.retry` to the same ordinary indirect call, branching,
+    /// and scheduler operations used by handwritten Aurora code. The runtime
+    /// adapters here validate only the host timer boundary and checked
+    /// backoff doubling; callbacks never cross a second host ABI.
+    fn lower_control_retry_call(
+        &mut self,
+        expr: &Expr,
+        function: &crate::sema::FunctionInfo,
+        args: &[Argument],
+        explicit_type_args: Option<&[crate::ast::TypeRef]>,
+        result: &str,
+    ) {
+        let mut substitutions = explicit_type_args
+            .map(|type_args| {
+                substitutions_from_decl_type_args(
+                    &function.decl.type_params,
+                    &type_args
+                        .iter()
+                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default();
+        if explicit_type_args.is_none() {
+            let ordered = bind_call_arguments(
+                "function `retry`",
+                &callable_params_from_decl(&function.decl.params),
+                args,
+                expr.span,
+                CallConvention::PositionalOrNamed,
+            )
+            .expect("checked control.retry arguments should bind during MIR lowering");
+            let type_params = function
+                .decl
+                .type_params
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for (argument, param) in ordered.iter().zip(&function.signature.params) {
+                let Some(argument) = argument else {
+                    continue;
+                };
+                let Some(actual) = self.infer_expr_type(&argument.value) else {
+                    continue;
+                };
+                let _ = crate::sema::type_pattern_matches(
+                    param,
+                    &actual,
+                    &type_params,
+                    &mut substitutions,
+                );
+            }
+        }
+        let result_ty = substitute_type(&function.signature.return_type, &substitutions);
+        let worker_ty = substitute_type(&function.signature.params[0], &substitutions);
+        let expected_params = vec![
+            worker_ty,
+            substitute_type(&function.signature.params[1], &substitutions),
+            substitute_type(&function.signature.params[2], &substitutions),
+        ];
+        debug_assert!(matches!(
+            &result_ty,
+            Type::Named(name, args) if name == "Result" && args.len() == 2
+        ));
+        let lowered = self.lower_user_args_with_types(
+            "function `retry`",
+            &function.decl.params,
+            args,
+            expr.span,
+            Some(&expected_params),
+            Some(&function.signature.param_passings),
+        );
+        let [worker, max_attempts, initial_backoff]: [MirArg; 3] = lowered
+            .try_into()
+            .expect("control.retry has exactly three maintained parameters");
+
+        self.lower_control_retry_state_machine(
+            worker.value,
+            max_attempts.value,
+            initial_backoff.value,
+            result_ty,
+            expr.span,
+            result,
+        );
+    }
+
+    fn lower_control_retry_state_machine(
+        &mut self,
+        worker: Operand,
+        max_attempts: Operand,
+        initial_backoff: Operand,
+        result_ty: Type,
+        span: Span,
+        result: &str,
+    ) {
+        let max_attempts_place = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: max_attempts_place.clone(),
+            value: Rvalue::Use(max_attempts),
+        });
+        let backoff = self.new_typed_temp(Type::named("Duration"));
+        self.emit(Instruction::Assign {
+            target: backoff.clone(),
+            value: Rvalue::Use(initial_backoff),
+        });
+        let validated = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: validated,
+            value: Rvalue::Call {
+                callee: CallTarget::Name("control::__retry_validate".to_string()),
+                args: vec![
+                    MirArg {
+                        name: None,
+                        value: Operand::Place(max_attempts_place.clone()),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Place(backoff.clone()),
+                        writeback_place: None,
+                    },
+                ],
+            },
+        });
+
+        let attempt = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: attempt.clone(),
+            value: Rvalue::Use(Operand::Int(1)),
+        });
+        let worker_result = self.new_typed_temp(result_ty.clone());
+        let dispatch = self.new_block("retry_dispatch");
+        let success = self.new_block("retry_success");
+        let error = self.new_block("retry_error");
+        let exhausted = self.new_block("retry_exhausted");
+        let prepare_delay = self.new_block("retry_prepare_delay");
+        let double_delay = self.new_block("retry_double_delay");
+        let delay_ready = self.new_block("retry_delay_ready");
+        let sleep = self.new_block("retry_sleep");
+        let advance = self.new_block("retry_advance");
+        let done = self.new_block("retry_done");
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+
+        self.switch_to(dispatch);
+        let cancellation_checked = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: cancellation_checked,
+            value: Rvalue::Call {
+                callee: CallTarget::Name("control::__retry_cancel_if_requested".to_string()),
+                args: Vec::new(),
+            },
+        });
+        self.emit(Instruction::Assign {
+            target: worker_result.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Value(worker),
+                args: Vec::new(),
+            },
+        });
+        let cancellation_checked = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: cancellation_checked,
+            value: Rvalue::Call {
+                callee: CallTarget::Name("control::__retry_cancel_if_requested".to_string()),
+                args: Vec::new(),
+            },
+        });
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(worker_result.clone()),
+            arms: vec![
+                MirMatchArm {
+                    enum_name: Some("Result".to_string()),
+                    variant_name: Some("Ok".to_string()),
+                    wildcard: false,
+                    label: self.label(success),
+                },
+                MirMatchArm {
+                    enum_name: Some("Result".to_string()),
+                    variant_name: Some("Err".to_string()),
+                    wildcard: false,
+                    label: self.label(error),
+                },
+            ],
+            otherwise: self.label(error),
+        });
+
+        self.switch_to(success);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Use(Operand::MovePlace(worker_result.clone())),
+        });
+        self.terminate(Terminator::Goto(self.label(done)));
+
+        self.switch_to(error);
+        let is_exhausted = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: is_exhausted.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Eq,
+                left: Operand::Place(attempt.clone()),
+                right: Operand::Place(max_attempts_place),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(is_exhausted),
+            then_label: self.label(exhausted),
+            else_label: self.label(prepare_delay),
+        });
+
+        self.switch_to(exhausted);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Use(Operand::MovePlace(worker_result)),
+        });
+        self.terminate(Terminator::Goto(self.label(done)));
+
+        self.switch_to(prepare_delay);
+        let first_retry = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: first_retry.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Eq,
+                left: Operand::Place(attempt.clone()),
+                right: Operand::Int(1),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(first_retry),
+            then_label: self.label(delay_ready),
+            else_label: self.label(double_delay),
+        });
+
+        self.switch_to(double_delay);
+        self.emit(Instruction::Assign {
+            target: backoff.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name("control::__retry_next_backoff".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(backoff.clone()),
+                    writeback_place: None,
+                }],
+            },
+        });
+        self.terminate(Terminator::Goto(self.label(delay_ready)));
+
+        self.switch_to(delay_ready);
+        let delay_is_zero = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: delay_is_zero.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Eq,
+                left: Operand::Place(backoff.clone()),
+                right: Operand::Duration(0),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(delay_is_zero),
+            then_label: self.label(advance),
+            else_label: self.label(sleep),
+        });
+
+        self.switch_to(sleep);
+        let slept = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: slept,
+            value: Rvalue::Call {
+                callee: CallTarget::Name("sleep".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(backoff),
+                    writeback_place: None,
+                }],
+            },
+        });
+        self.terminate(Terminator::Goto(self.label(advance)));
+
+        self.switch_to(advance);
+        self.emit(Instruction::Assign {
+            target: attempt.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(attempt),
+                right: Operand::Int(1),
+                span,
+            },
+        });
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+        self.switch_to(done);
+    }
+
+    fn lower_shared_vec_source(&mut self, object: &Expr) -> Operand {
+        match self.render_place_expr_option(object) {
+            Some(place) => Operand::Place(place),
+            None => {
+                let expected = self.infer_expr_type(object);
+                self.lower_expr_at_sequence_point(object, expected.as_ref())
+            }
+        }
+    }
+
+    fn lower_vec_key_collection_loop(
+        &mut self,
+        source: Operand,
+        element_ty: &Type,
+        callback: Operand,
+        keys: &str,
+        key_ty: &Type,
+        span: Span,
+    ) {
+        let index = self.new_typed_temp(Type::named("int32"));
+        let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+        let element = self.new_typed_temp(element_ty.clone());
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+
+        let dispatch = self.new_block("vec_key_dispatch");
+        let body = self.new_block("vec_key_body");
+        let done = self.new_block("vec_key_done");
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+
+        self.switch_to(dispatch);
+        self.emit_vec_optional_read(&next, source.clone(), &index);
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(next.clone()),
+            arms: vec![
+                MirMatchArm {
+                    enum_name: Some("Option".to_string()),
+                    variant_name: Some("Some".to_string()),
+                    wildcard: false,
+                    label: self.label(body),
+                },
+                MirMatchArm {
+                    enum_name: Some("Option".to_string()),
+                    variant_name: Some("None".to_string()),
+                    wildcard: false,
+                    label: self.label(done),
+                },
+            ],
+            otherwise: self.label(done),
+        });
+
+        self.switch_to(body);
+        self.emit(Instruction::Assign {
+            target: element.clone(),
+            value: Rvalue::VariantPayload {
+                scrutinee: Operand::MovePlace(next),
+                variant_name: "Some".to_string(),
+                index: 0,
+            },
+        });
+        let key = self.new_typed_temp(key_ty.clone());
+        self.emit(Instruction::Assign {
+            target: key.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Value(callback),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(element),
+                    writeback_place: None,
+                }],
+            },
+        });
+        self.emit_vec_push(
+            Operand::Place(keys.to_string()),
+            keys,
+            self.move_place_for_type(key, key_ty),
+        );
+        self.emit_vec_index_increment(&index, span);
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+        self.switch_to(done);
+    }
+
+    fn lower_vec_transform_loop(
+        &mut self,
+        source: Operand,
+        element_ty: &Type,
+        callback: Operand,
+        output: VecTransformOutput<'_>,
+        filter: bool,
+        span: Span,
+    ) {
+        let index = self.new_typed_temp(Type::named("int32"));
+        let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+        let element = self.new_typed_temp(element_ty.clone());
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+
+        let dispatch = self.new_block(if filter {
+            "vec_filter_dispatch"
+        } else {
+            "vec_map_dispatch"
+        });
+        let body = self.new_block(if filter {
+            "vec_filter_body"
+        } else {
+            "vec_map_body"
+        });
+        let advance = self.new_block(if filter {
+            "vec_filter_advance"
+        } else {
+            "vec_map_advance"
+        });
+        let done = self.new_block(if filter {
+            "vec_filter_done"
+        } else {
+            "vec_map_done"
+        });
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+
+        self.switch_to(dispatch);
+        self.emit_vec_optional_read(&next, source.clone(), &index);
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(next.clone()),
+            arms: vec![
+                MirMatchArm {
+                    enum_name: Some("Option".to_string()),
+                    variant_name: Some("Some".to_string()),
+                    wildcard: false,
+                    label: self.label(body),
+                },
+                MirMatchArm {
+                    enum_name: Some("Option".to_string()),
+                    variant_name: Some("None".to_string()),
+                    wildcard: false,
+                    label: self.label(done),
+                },
+            ],
+            otherwise: self.label(done),
+        });
+
+        self.switch_to(body);
+        self.emit(Instruction::Assign {
+            target: element.clone(),
+            value: Rvalue::VariantPayload {
+                scrutinee: Operand::MovePlace(next),
+                variant_name: "Some".to_string(),
+                index: 0,
+            },
+        });
+        let callback_result = self.new_typed_temp(if filter {
+            Type::named("bool")
+        } else {
+            output.element_type.clone()
+        });
+        self.emit(Instruction::Assign {
+            target: callback_result.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Value(callback),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(element.clone()),
+                    writeback_place: None,
+                }],
+            },
+        });
+        if filter {
+            let keep = self.new_block("vec_filter_keep");
+            self.terminate(Terminator::Branch {
+                condition: Operand::Place(callback_result),
+                then_label: self.label(keep),
+                else_label: self.label(advance),
+            });
+            self.switch_to(keep);
+            self.emit_vec_push(
+                Operand::Place(output.place.to_string()),
+                output.place,
+                self.move_place_for_type(element, element_ty),
+            );
+            self.terminate(Terminator::Goto(self.label(advance)));
+        } else {
+            self.emit_vec_push(
+                Operand::Place(output.place.to_string()),
+                output.place,
+                self.move_place_for_type(callback_result, output.element_type),
+            );
+            self.terminate(Terminator::Goto(self.label(advance)));
+        }
+
+        self.switch_to(advance);
+        self.emit_vec_index_increment(&index, span);
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+        self.switch_to(done);
+    }
+
+    fn lower_stable_vec_sort(
+        &mut self,
+        source: Operand,
+        source_place: &str,
+        ordering_ty: &Type,
+        keys: Option<(&str, &Type)>,
+        span: Span,
+        result: &str,
+    ) {
+        let ordering_source = keys
+            .map(|(keys, _)| Operand::Place(keys.to_string()))
+            .unwrap_or_else(|| source.clone());
+        let length64 = self.new_typed_temp(Type::named("int64"));
+        self.emit(Instruction::Assign {
+            target: length64.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: ordering_source.clone(),
+                    field: "len".to_string(),
+                    receiver_place: None,
+                },
+                args: Vec::new(),
+            },
+        });
+        let length = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: length.clone(),
+            value: Rvalue::Cast {
+                value: Operand::Place(length64),
+                ty: Type::named("int32"),
+                span,
+            },
+        });
+        let outer_index = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: outer_index.clone(),
+            value: Rvalue::Use(Operand::Int(1)),
+        });
+
+        let outer_condition = self.new_block("vec_sort_outer_condition");
+        let outer_body = self.new_block("vec_sort_outer_body");
+        let outer_advance = self.new_block("vec_sort_outer_advance");
+        let inner_condition = self.new_block("vec_sort_inner_condition");
+        let inner_compare = self.new_block("vec_sort_inner_compare");
+        let swap = self.new_block("vec_sort_swap");
+        let done = self.new_block("vec_sort_done");
+        self.terminate(Terminator::Goto(self.label(outer_condition)));
+
+        self.switch_to(outer_condition);
+        let has_element = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: has_element.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(outer_index.clone()),
+                right: Operand::Place(length),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(has_element),
+            then_label: self.label(outer_body),
+            else_label: self.label(done),
+        });
+
+        let inner_index = self.new_typed_temp(Type::named("int32"));
+        self.switch_to(outer_body);
+        self.emit(Instruction::Assign {
+            target: inner_index.clone(),
+            value: Rvalue::Use(Operand::Place(outer_index.clone())),
+        });
+        self.terminate(Terminator::Goto(self.label(inner_condition)));
+
+        self.switch_to(inner_condition);
+        let can_compare = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: can_compare.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Greater,
+                left: Operand::Place(inner_index.clone()),
+                right: Operand::Int(0),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(can_compare),
+            then_label: self.label(inner_compare),
+            else_label: self.label(outer_advance),
+        });
+
+        self.switch_to(inner_compare);
+        let previous_index = self.new_typed_temp(Type::named("int32"));
+        self.emit(Instruction::Assign {
+            target: previous_index.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Sub,
+                left: Operand::Place(inner_index.clone()),
+                right: Operand::Int(1),
+                span,
+            },
+        });
+        let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
+        let previous =
+            self.emit_vec_read(ordering_source.clone(), &previous_index, ordering_ty, span);
+        let comes_before = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(comes_before),
+            then_label: self.label(swap),
+            else_label: self.label(outer_advance),
+        });
+
+        self.switch_to(swap);
+        self.emit_vec_swap(source.clone(), source_place, &inner_index, &previous_index);
+        if let Some((keys, _)) = keys {
+            self.emit_vec_swap(
+                Operand::Place(keys.to_string()),
+                keys,
+                &inner_index,
+                &previous_index,
+            );
+        }
+        self.emit(Instruction::Assign {
+            target: inner_index.clone(),
+            value: Rvalue::Use(Operand::Place(previous_index)),
+        });
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(inner_condition)));
+
+        self.switch_to(outer_advance);
+        self.emit_vec_index_increment(&outer_index, span);
+        self.terminate(Terminator::Goto(self.label(outer_condition)));
+
+        self.switch_to(done);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Use(Operand::Unit),
+        });
+    }
+
+    fn emit_vec_optional_read(&mut self, target: &str, source: Operand, index: &str) {
+        self.emit(Instruction::Assign {
+            target: target.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: source,
+                    field: INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
+                    receiver_place: None,
+                },
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(index.to_string()),
+                    writeback_place: None,
+                }],
+            },
+        });
+    }
+
+    fn emit_vec_read(
+        &mut self,
+        source: Operand,
+        index: &str,
+        element_ty: &Type,
+        span: Span,
+    ) -> String {
+        let target = self.new_typed_temp(element_ty.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: source,
+                    field: INTERNAL_VEC_INDEX_FIELD.to_string(),
+                    receiver_place: None,
+                },
+                args: vec![
+                    MirArg {
+                        name: None,
+                        value: Operand::Place(index.to_string()),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(span.line as u128),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(span.column as u128),
+                        writeback_place: None,
+                    },
+                ],
+            },
+        });
+        target
+    }
+
+    fn emit_vec_ordering_less(&mut self, left: &str, right: &str, ty: &Type, span: Span) -> String {
+        let result = self.new_typed_temp(Type::named("bool"));
+        let value = if is_builtin_binary_operator(BinaryOp::Less, ty, ty) {
+            Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(left.to_string()),
+                right: Operand::Place(right.to_string()),
+                span,
+            }
+        } else {
+            Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place(left.to_string()),
+                    field: "lt".to_string(),
+                    receiver_place: None,
+                },
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(right.to_string()),
+                    writeback_place: None,
+                }],
+            }
+        };
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value,
+        });
+        result
+    }
+
+    fn emit_vec_push(&mut self, vector: Operand, vector_place: &str, value: Operand) {
+        let ignored = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: ignored,
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: vector,
+                    field: "push".to_string(),
+                    receiver_place: Some(vector_place.to_string()),
+                },
+                args: vec![MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                }],
+            },
+        });
+    }
+
+    fn emit_vec_swap(&mut self, vector: Operand, vector_place: &str, first: &str, second: &str) {
+        let ignored = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: ignored,
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: vector,
+                    field: "swap".to_string(),
+                    receiver_place: Some(vector_place.to_string()),
+                },
+                args: vec![
+                    MirArg {
+                        name: None,
+                        value: Operand::Place(first.to_string()),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Place(second.to_string()),
+                        writeback_place: None,
+                    },
+                ],
+            },
+        });
+    }
+
+    fn emit_vec_index_increment(&mut self, index: &str, span: Span) {
+        self.emit(Instruction::Assign {
+            target: index.to_string(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(index.to_string()),
+                right: Operand::Int(1),
+                span,
+            },
+        });
+        self.emit(Instruction::Safepoint);
+    }
+
     /// Lowers `value in container` to the builtin membership member the
     /// container supplies, so both backends reuse one dispatch path.
     fn lower_membership_expr(
@@ -5429,6 +6414,16 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(function) = namespace.functions.get(field).cloned() {
+                            if module_path == "control" && field == "retry" {
+                                self.lower_control_retry_call(
+                                    expr,
+                                    &function,
+                                    args,
+                                    explicit_type_args,
+                                    &temp,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let lowered_args = self.lower_user_args(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -5736,6 +6731,10 @@ impl<'a> Lowerer<'a> {
                         });
                         return Operand::Place(temp);
                     }
+                }
+
+                if self.lower_vec_algorithm_call(expr, object, field, args, &temp) {
+                    return Operand::Place(temp);
                 }
 
                 let receiver_place = self.render_place_expr_option(object);
@@ -6826,7 +7825,57 @@ impl<'a> Lowerer<'a> {
                                     return Some(Type::Module(child.path.clone()));
                                 }
                                 if let Some(function) = namespace.functions.get(field) {
-                                    return Some(function.signature.return_type.clone());
+                                    let substitutions = if let Some(type_args) = explicit_type_args
+                                    {
+                                        substitutions_from_decl_type_args(
+                                            &function.decl.type_params,
+                                            &type_args
+                                                .iter()
+                                                .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                                .collect::<Vec<_>>(),
+                                        )
+                                    } else {
+                                        let ordered = bind_call_arguments(
+                                            &format!("function `{field}`"),
+                                            &callable_params_from_decl(&function.decl.params),
+                                            args,
+                                            callee.span,
+                                            CallConvention::PositionalOrNamed,
+                                        )
+                                        .ok();
+                                        let type_params = function
+                                            .decl
+                                            .type_params
+                                            .iter()
+                                            .cloned()
+                                            .collect::<BTreeSet<_>>();
+                                        let mut substitutions = std::collections::HashMap::new();
+                                        if let Some(ordered) = ordered {
+                                            for (argument, param) in
+                                                ordered.iter().zip(&function.signature.params)
+                                            {
+                                                let Some(argument) = argument else {
+                                                    continue;
+                                                };
+                                                let Some(actual) =
+                                                    self.infer_expr_type(&argument.value)
+                                                else {
+                                                    continue;
+                                                };
+                                                let _ = crate::sema::type_pattern_matches(
+                                                    param,
+                                                    &actual,
+                                                    &type_params,
+                                                    &mut substitutions,
+                                                );
+                                            }
+                                        }
+                                        substitutions
+                                    };
+                                    return Some(substitute_type(
+                                        &function.signature.return_type,
+                                        &substitutions,
+                                    ));
                                 }
                                 if namespace.classes.contains_key(field) {
                                     return self.infer_class_constructor_type(
@@ -6910,6 +7959,31 @@ impl<'a> Lowerer<'a> {
                                         })
                                 })
                             };
+                        }
+                        if let Type::Named(name, receiver_args) = &receiver_type {
+                            if name == "Vec" && receiver_args.len() == 1 {
+                                match field.as_str() {
+                                    "sort" | "sort_by" => return Some(Type::Unit),
+                                    "filter" => return Some(receiver_type.clone()),
+                                    "map" => {
+                                        let callback = BuiltinMember::VecMap
+                                            .bind_args(args, callee.span)
+                                            .ok()
+                                            .and_then(|ordered| ordered[0]);
+                                        if let Some(Type::Function { return_type, .. }) = callback
+                                            .and_then(|argument| {
+                                                self.infer_expr_type(&argument.value)
+                                            })
+                                        {
+                                            return Some(Type::Named(
+                                                "Vec".to_string(),
+                                                vec![*return_type],
+                                            ));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                         if let Some(runtime_ty) =
                             self.builtin_runtime_member_return_type(&receiver_type, field)
@@ -7620,9 +8694,13 @@ impl<'a> Lowerer<'a> {
             ("Vec", "len") => Some(Type::named("int64")),
             ("Vec", "is_empty") => Some(Type::named("bool")),
             ("Vec", "clone") => Some(Type::Named("Vec".to_string(), args.clone())),
-            ("Vec", "push") | ("Vec", "extend") | ("Vec", "clear") | ("Vec", "reverse") => {
-                Some(Type::Unit)
-            }
+            ("Vec", "push")
+            | ("Vec", "extend")
+            | ("Vec", "clear")
+            | ("Vec", "reverse")
+            | ("Vec", "sort")
+            | ("Vec", "sort_by") => Some(Type::Unit),
+            ("Vec", "filter") => Some(Type::Named("Vec".to_string(), args.clone())),
             ("Vec", "swap") | ("Vec", "contains") | ("Vec", "insert") => Some(Type::named("bool")),
             ("Vec", "pop") | ("Vec", "get") | ("Vec", "set") | ("Vec", "remove") => {
                 Some(Type::Named(

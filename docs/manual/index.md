@@ -35,7 +35,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 
 ## Runtime And Library Reference
 
-- [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`, literals, iteration, mutation, and method contracts.
+- [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`,
+  literals, iteration, mutation, and eager callable-powered Vec algorithms.
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `Vec[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.
@@ -46,6 +47,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, scoped file cleanup, byte and text limits.
 - [Network Module](/manual/network): TCP, UDP, HTTP, WebSocket, Unix sockets, TLS, and HTTP client helpers.
 - [Process Module](/manual/process): subprocess spawning, pipes, completed processes, process groups, supervisors, and restart policy.
+- [Control-Plane Modules](/manual/control-plane): system/path helpers, JSON and
+  TOML compatibility APIs, telemetry, and `control.retry`.
 - [Packages](/manual/packages): manifests, package roots, import resolution, lockfiles, and editor analysis behavior.
 - [CLI And Tooling](/manual/cli-and-tooling): `aura` commands, diagnostics, analysis JSON, completions, and build modes.
 - [API Index](/manual/api-index): every maintained builtin function, method, enum, and module type in one place.

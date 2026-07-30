@@ -1,0 +1,13 @@
+import control
+
+def worker() -> Result[int32, String]:
+    return Result.Ok(1)
+
+def main() -> int32:
+    result = control.retry[int32, String](
+        worker=worker,
+        max_attempts=3,
+        initial_backoff=5ms
+    )
+    print(result)
+    return 0

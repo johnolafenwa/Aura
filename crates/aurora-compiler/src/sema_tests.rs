@@ -21443,6 +21443,159 @@ def main():
 }
 
 #[test]
+fn vec_algorithm_methods_infer_callback_results_and_accept_existing_order_surface() {
+    crate::check_source(
+        r#"
+trait Ord[Rhs]:
+    def lt(self, rhs: Rhs) -> bool
+
+class Score:
+    value: int32
+
+impl Ord[Score] for Score:
+    def lt(self, rhs: Score) -> bool:
+        return self.value < rhs.value
+
+def label(value: int64) -> String:
+    return value.to_string()
+
+def positive(value: int64) -> bool:
+    return value > 0
+
+def score_key(value: Score) -> int32:
+    return value.value
+
+def ratio_key(value: int64) -> float64:
+    return value.to_float()
+
+def identity(value: int64) -> int64:
+    return value
+
+def map_values[T, U](values: Vec[T], f: def(T) -> U) -> Vec[U]:
+    return values.map(f)
+
+def sort_values[T: Ord[T]](values: mut Vec[T]):
+    values.sort()
+
+def main():
+    mut numbers = [3, 1, 2]
+    numbers.sort()
+    numbers.sort_by(identity)
+    numbers.sort_by(ratio_key)
+    labels: Vec[String] = numbers.map(label)
+    generic_labels: Vec[String] = map_values(numbers, label)
+    kept: Vec[int64] = numbers.filter(positive)
+
+    mut durations = [2ms, 1ms]
+    durations.sort()
+
+    mut ratios = [2.0, 1.0]
+    ratios.sort()
+
+    mut scores = [Score(value=2), Score(value=1)]
+    scores.sort()
+    scores.sort_by(score_key)
+    sort_values(scores)
+"#,
+    )
+    .expect("Vec algorithms should infer callback output and use the existing ordering surface");
+}
+
+#[test]
+fn vec_algorithm_methods_enforce_arity_capability_returns_mutability_and_orderability() {
+    for (source, expected) in [
+        (
+            "def main():\n    values = [2, 1]\n    values.sort()\n",
+            "requires a mutable receiver",
+        ),
+        (
+            "def own_key(value: own int64) -> int64:\n    return value\n\ndef main():\n    mut values = [2, 1]\n    values.sort_by(own_key)\n",
+            "must take exactly one shared parameter",
+        ),
+        (
+            "def mut_map(value: mut int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    print(values.map(mut_map))\n",
+            "must take exactly one shared parameter",
+        ),
+        (
+            "def no_args() -> int64:\n    return 1\n\ndef main():\n    values = [1]\n    print(values.map(no_args))\n",
+            "must take exactly one shared parameter",
+        ),
+        (
+            "def number(value: int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    print(values.filter(number))\n",
+            "must return `bool`",
+        ),
+        (
+            "def main():\n    mut values = [[1], [2]]\n    values.sort()\n",
+            "cannot order Vec element type",
+        ),
+        (
+            "def key(value: int64) -> Vec[int64]:\n    return [value]\n\ndef main():\n    mut values = [2, 1]\n    values.sort_by(key)\n",
+            "cannot order key type",
+        ),
+    ] {
+        let rejected =
+            crate::check_source(source).expect_err("invalid Vec algorithm call should fail");
+        assert!(
+            rejected.message.contains(expected),
+            "{source}: expected `{expected}`, got {rejected:?}"
+        );
+    }
+
+    for source in [
+        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    mut values = [1]\n    values.sort_by()\n",
+        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    mut values = [1]\n    values.sort_by(key, key)\n",
+        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    values.map()\n",
+        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    values.filter(key, key)\n",
+    ] {
+        let rejected =
+            crate::check_source(source).expect_err("Vec callbacks have exactly one argument");
+        assert!(
+            rejected.message.contains("argument"),
+            "{source}: {rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn vec_filter_requires_clone_safe_retained_elements() {
+    let rejected = crate::check_source(
+        r#"
+import random
+
+def keep(value: random.Rng) -> bool:
+    return true
+
+def main():
+    values = [random.Rng(seed=1)]
+    print(values.filter(keep))
+"#,
+    )
+    .expect_err("filter must clone retained elements rather than transfer them");
+    assert_eq!(rejected.code, "AU3007");
+    assert!(rejected.message.contains("Vec.filter"));
+    assert!(rejected.message.contains("non-cloneable `random.Rng`"));
+
+    let generic = crate::check_source(
+        r#"
+import random
+
+def retain[T](values: Vec[T], predicate: def(T) -> bool) -> Vec[T]:
+    return values.filter(predicate)
+
+def keep(value: random.Rng) -> bool:
+    return true
+
+def main():
+    values = [random.Rng(seed=1)]
+    print(retain(values, keep))
+"#,
+    )
+    .expect_err("filter clone safety should propagate through a generic helper");
+    assert_eq!(generic.code, "AU3007");
+    assert!(generic.message.contains("function `retain`"));
+}
+
+#[test]
 fn class_field_default_calls_keep_the_callable_boundary_diagnostic() {
     let rejected = crate::check_source(
         r#"

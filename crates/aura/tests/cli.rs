@@ -6326,6 +6326,15 @@ fn run_and_direct_backends_preserve_the_dynamic_json_surface() {
 }
 
 #[test]
+fn run_and_direct_backends_preserve_vec_algorithm_order_stability_and_ownership() {
+    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/vec_algorithms.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/vec_algorithms.stdout");
+
+    assert_run_and_direct_source_stdout("aurora-vec-algorithms-parity", source, expected);
+}
+
+#[test]
 fn run_and_direct_backends_transfer_json_task_results_and_clean_up_unobserved_values() {
     let source =
         include_str!("../../aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.au");

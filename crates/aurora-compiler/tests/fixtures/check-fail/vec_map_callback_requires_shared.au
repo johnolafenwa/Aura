@@ -1,0 +1,6 @@
+def transfer(value: own int64) -> int64:
+    return value
+
+def main():
+    values = [1]
+    print(values.map(transfer))

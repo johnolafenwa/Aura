@@ -158,6 +158,63 @@ and outside this commit. `git diff --check` over the complete Phase 6.1 change
 set is green, and every remaining artifact, tracked-executable, scheduler
 pointer, and historical-commit hygiene rule passes independently.
 
+## Phase 6.2 maintained surface
+
+The callable-powered standard-library reference, examples, and teaching
+surface now specify:
+
+- stable mutable `Vec.sort()` and `Vec.sort_by(key)`, including one
+  left-to-right key evaluation per element before mutation and unchanged
+  receiver state when a key call traps
+- eager shared `Vec.map(f)` and clone-producing `Vec.filter(f)`, fresh owned
+  results, source retention, and exact bare/shared callback capabilities
+- `control.retry[T, E]` over a capture-free
+  `def() -> Result[T, E]` worker, with an immediate first attempt, every-Err
+  retry policy, doubling `Duration` delays, zero-delay sleep elision, exact
+  final-error return, no post-final sleep/multiply, and trap/overflow/task-
+  cancellation propagation
+
+The normative Collections, Control-Plane, API Index, Static Semantics,
+Execution Model, Diagnostics, Current Limits, Status, and Conformance pages
+are aligned. Two new executable Manual blocks are source-hash pinned.
+`examples/collections/vec_algorithms.au` and
+`examples/agents/retry_with_backoff.au` are indexed from the repository,
+compiler-package, and examples READMEs; the Learn and tutorial tracks teach the
+same eager ownership and failure contracts.
+
+Both maintained examples execute with their documented output. The complete
+`npm run check:reference` gate is green across 34 Manual pages, 118 verified
+Aurora blocks, all 59 capability-migration tests, and the maintained-source
+retired-syntax check. `npm run docs:build`, the reference-inventory unit tests,
+and scoped whitespace checks are also green.
+
+Phase 6.2 is now fully integrated and gated. The implementation uses ordinary
+MIR callable targets for Vec callbacks and the retry worker. A generated Aurora
+retry state machine also backs specialized `control.retry[T, E]` function
+values, so direct calls and indirect calls have identical semantics. During the
+full gate, two existing unboxed-int64 native regressions exposed that the
+checker-wide builtin registry was injecting an unused empty retry declaration
+into programs that did not import `control`. The fix both limits that generated
+function to programs which can name it and gives imported retry function values
+the real state-machine body. Focused regressions pin unrelated native-object
+isolation and specialized retry function values on both backends.
+
+The full Phase 6.2 gate passed 49 scalable-runtime benchmark checks, 318 CLI
+tests, 6 retry integration tests, 1,231 compiler tests, the forced-backend
+parity matrix, 92 LSP tests, 13 extension tests, reference integrity, docs
+build, both dependency audits, and Clippy with warnings denied. LSP coverage
+remains 100% for statements, branches, functions, and lines. Compiler coverage
+is 75,389/78,414 lines (96.14%), 5,019/5,176 functions (96.97%), and
+110,433/116,803 regions (94.55%), above the frozen 96.13/96.90/94.46 Phase 6
+floors. Every added coverage test pins observable behavior; no synthetic
+coverage test or exclusion was added.
+
+The global hygiene command reaches only the excluded user-owned
+`personal/file_ops.au`, where it reports pre-existing trailing whitespace.
+That file and the untracked user-owned ADR-0022 draft remain outside this
+change. The complete maintained Phase 6.2 change set passes `git diff --check`
+and every other hygiene rule.
+
 ## Verification policy
 
 Each behavior change starts with a failing regression and receives focused

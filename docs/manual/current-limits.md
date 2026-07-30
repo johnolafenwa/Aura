@@ -42,6 +42,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   targets; bare function-type parameters are shared.
   Instance, associated, and trait method values remain unavailable; the task
   API retains its direct associated-method-without-`self` target carve-out.
+- Callable-powered Vec algorithms are eager. `map` and `filter` return owned
+  vectors rather than iterators; `filter` requires clone-safe elements.
+  `sort_by`, `map`, and `filter` accept only their exact bare/shared callback
+  parameter capabilities. There is no comparator-form sort, lazy map/filter,
+  parallel traversal, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.
@@ -189,6 +194,12 @@ This page documents known current limits of the Aurora compiler and runtime.
   Within that request ceiling, unsatisfied allocation or OS entropy requests
   also trap with `AU4005`.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
+- `control.retry` is a sequential eager helper for a capture-free
+  `def() -> Result[T, E]` worker. Every `Err` is retryable. It has no error
+  classifier, jitter, attempt hook, shared retry budget, or detached/parallel
+  mode. Attempt budgets below one and negative or host-unrepresentable
+  backoffs trap before the worker runs. Backoff overflow traps, worker traps
+  propagate, and task cancellation is not converted to the worker's `E`.
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may currently become infinity; prefer `float64` when large literal validation matters.
 - Unix domain sockets require a Unix host.

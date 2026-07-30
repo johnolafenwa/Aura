@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## Batch 5 of 6 (active)
 
@@ -54,7 +54,28 @@ Last updated: 2026-07-29
   global hygiene command reports only whitespace in the excluded user-owned
   `personal/file_ops.au`; the complete Phase 6.1 diff and every remaining
   hygiene rule pass independently. The isolated Phase 6.1 commit is now the
-  active stage.
+  settled `8a6dbd9` stage.
+
+  Phase 6.2 callable-powered standard-library work is complete. The maintained
+  reference, Learn/tutorial track, README indexes, source-hash-pinned Manual
+  examples, `examples/collections/vec_algorithms.au`, and
+  `examples/agents/retry_with_backoff.au` now describe stable mutable
+  `sort`/`sort_by`, eager shared `map`/clone-producing `filter`, exact shared
+  callback capabilities, and `control.retry` attempt/backoff/final-error/trap/
+  cancellation semantics. The full gate passed 49 benchmark checks, 318 CLI
+  tests, 6 retry integration tests, 1,231 compiler tests, forced-backend
+  parity, 92 LSP tests, 13 extension tests, reference integrity, docs, audits,
+  Clippy, and all maintained hygiene checks. Compiler coverage is
+  75,389/78,414 lines (96.14%), 5,019/5,176 functions (96.97%), and
+  110,433/116,803 regions (94.55%); LSP coverage remains 100% in every metric.
+  No synthetic coverage test or exclusion was added. The global hygiene
+  command reports only the excluded user-owned `personal/file_ops.au`.
+
+  Phase 6.3 lambda and closure work is the next active stage. It must settle
+  contextual parameter inference, capture-by-value ownership, repeatable versus
+  consuming callability, Transfer derivation, mutable/shared-capture
+  diagnostics, backend parity, LSP, ADR, reference, examples, and coverage
+  before its isolated decision commit.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the

@@ -1,0 +1,26 @@
+import control
+
+enum RetryError:
+    Temporary(String)
+
+def int_worker() -> Result[int32, String]:
+    return Result.Ok(1)
+
+def owned_worker() -> Result[Vec[String], RetryError]:
+    return Result.Err(RetryError.Temporary("retry"))
+
+def accepts_worker(worker: def() -> Result[int32, String]) -> Result[int32, String]:
+    return control.retry(worker)
+
+def main() -> int32:
+    inferred = control.retry(int_worker)
+    explicit = control.retry[int32, String](
+        worker=int_worker,
+        max_attempts=4,
+        initial_backoff=2ms
+    )
+    noncopy = control.retry[Vec[String], RetryError](owned_worker)
+    print(inferred)
+    print(explicit)
+    print(noncopy)
+    return 0

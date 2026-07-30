@@ -1,0 +1,38 @@
+import control
+import metrics
+
+def eventually_succeeds() -> Result[int32, String]:
+    metrics.increment("success-attempts", 1)
+    if metrics.get("success-attempts") < 3:
+        return Result.Err("not ready")
+    return Result.Ok(42)
+
+def always_fails() -> Result[int32, String]:
+    metrics.increment("failure-attempts", 1)
+    return Result.Err(f"attempt {metrics.get('failure-attempts')}")
+
+def main():
+    metrics.reset()
+
+    match control.retry(
+        eventually_succeeds,
+        max_attempts=3,
+        initial_backoff=0ms
+    ):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(error):
+            print(error)
+
+    match control.retry(
+        always_fails,
+        max_attempts=2,
+        initial_backoff=0ms
+    ):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(error):
+            print(error)
+
+    print(metrics.get("success-attempts"))
+    print(metrics.get("failure-attempts"))

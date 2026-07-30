@@ -130,6 +130,38 @@ def read_config(path: String) -> String:
 
 "File not found" is a normal condition for a config file with a default value. Every other I/O error is reported and falls back to the same default. Policy is local, specific, and visible.
 
+## Retrying A Result Worker
+
+When every `Err` should be retried under one simple attempt budget, pass a
+capture-free worker to `control.retry`:
+
+```python
+import control
+
+def fetch_once() -> Result[String, String]:
+    return Result.Err("service unavailable")
+
+result = control.retry(
+    fetch_once,
+    max_attempts=3,
+    initial_backoff=10ms
+)
+```
+
+The first attempt runs immediately. Later attempts wait for `10ms`, then
+`20ms`, and so on. There is no delay after the final attempt, and the helper
+returns that final attempt's exact `Err`. A zero backoff skips sleeping.
+Worker traps and task cancellation propagate; they do not masquerade as the
+worker's error type.
+
+This helper retries every error. Keep an explicit loop when the application
+must classify errors, add jitter, or stop on a status such as an HTTP `429`.
+The maintained
+[`retrying_network_worker.au`](../../examples/agents/retrying_network_worker.au)
+shows that policy-rich form, while
+[`retry_with_backoff.au`](../../examples/agents/retry_with_backoff.au)
+demonstrates the generic helper.
+
 ## Choosing Between Them
 
 A rule of thumb for day-to-day code:

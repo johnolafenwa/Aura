@@ -50,6 +50,13 @@ surface is closed, so the declaration must be renamed. This rejection is
 distinct from the `AU2006` method collision: it covers free functions rather
 than trait methods on a builtin target.
 
+`AU2002` reports an exact callback-contract mismatch for callable-powered
+builtins. Vec `map`, `filter`, and `sort_by` require the documented shared
+`def(T) -> ...` parameter capability; a `mut` or `own` callback is not silently
+adapted. The same code reports a `control.retry` worker that is not exactly a
+zero-parameter `def() -> Result[T, E]`. `AU2002` also reports a `sort` element
+or `sort_by` key type without the required natural ordering.
+
 `AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
 For collections its guidance is clone-safety aware, classified exactly as the
@@ -69,7 +76,10 @@ collections, user classes, enum payloads, and other value wrappers. A generic
 definition over unresolved types records an inferred clone-safety obligation;
 `AU3007` is emitted at an unsafe concrete specialization, when a concrete
 requirement cannot be proved, or when an implementation would strengthen its
-trait method's contract. Under Accepted ADR-0033, `random.Rng` is not
+trait method's contract. Because `Vec.filter` clones accepted source elements
+into a fresh result, it establishes the same obligation and rejects
+`Vec[random.Rng]` or a transitive wrapper. Under Accepted ADR-0033,
+`random.Rng` is not
 Transfer: a task returning it and a Queue carrying it are rejected with
 `AU3008`, and the task handle is not copyable. Moving or removing a generator
 within one owning task remains valid because it leaves one owner.
@@ -352,6 +362,15 @@ negative, host-unrepresentable, or deadline-overflowing Duration returns the
 documented `InvalidInput`/process error when that API has a compatible typed
 carrier. A timer API without one traps with `AU4001`; deadline overflow never
 means an unlimited wait. This classification is accepted under ADR-0019.
+
+`control.retry` doubles a `Duration` backoff only when a later attempt can use
+the doubled value. If that required doubling exceeds the exact signed
+`Duration` range, it traps with `AU4002`; it does not wrap, clamp, return the
+most recent `Err`, or compute an unused post-final delay. Worker traps and
+current-task cancellation likewise propagate instead of being converted to
+the worker's `E`. `AU4003` rejects `max_attempts < 1`; `AU4001` rejects a
+negative or host-unrepresentable `initial_backoff`. These inputs are validated
+before the worker runs.
 
 The random module returns plain values rather than a `random.Error` enum.
 `AU4003` reports an empty or reversed `next_int`/`secure_int` interval and a
