@@ -29,10 +29,17 @@ Last updated: 2026-07-30
   V6 whole-process medians of `36.691666 ms` / `14.837417 ms`, reproducing the
   accepted reactor-era baseline within `1.99%` / `1.12%`. The slower dirty
   pair is not a HEAD regression. All maintained runtime gates pass; only the
-  already-withdrawn massive-concurrency RSS claim remains red. Integrated
-  focused Rust tests, reference integrity, docs, formatting, the 54-test
-  benchmark harness, and whitespace checks pass. Full repository CI is the
-  remaining B6.0 gate; Phase 7 has not started.
+  already-withdrawn massive-concurrency RSS claim remains red. The first exact
+  clean full-CI replay passed all behavior, parity, LSP, extension, and
+  instrumented-test stages, then missed only the frozen compiler line/function
+  floors at 80,456/83,656 lines (96.174811%), 5,345/5,513 functions
+  (96.952657%), and 117,328/123,996 regions (94.622407%). Coverage inspection
+  found one now-unreachable closure-capture recursion after callable equality
+  gained precedence; it is replaced by an explicit non-structural `Closure`
+  case rather than a synthetic test. Two exact malformed-lambda parameter
+  diagnostics now provide observable parser coverage. Focused parser and FFI
+  equality tests pass. The exact clean full-CI replay and final coverage
+  numbers are the remaining B6.0 gate; Phase 7 has not started.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

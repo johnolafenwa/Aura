@@ -56,12 +56,28 @@ B6.0 is active in strict-order entry closure:
   RSS claim remains red. The contractual raw report SHA-256 is
   `134efcc894742ed73b16e07f1e31845c83d19930d5894b4dc39f01533a9be2fd`,
   and no benchmark workload survived the process-group cleanup.
-- Integrated verification passes the 54-test benchmark harness, Python
-  compilation, shell parsing, Rust formatting, the focused B6.0-b
-  semantic/fixture/registry/forced-parity tests, the complete executable
-  reference gate (9 integrity tests, 59 migration tests, and all 683
-  manifests), the VitePress build, and scoped whitespace checks. The full
-  repository CI gate is now the only remaining B6.0 checkpoint requirement.
+- The first exact clean full-CI replay at `5a6a77e` passed every behavior gate
+  before the frozen compiler coverage ratchet: 54 benchmark tests, 320 CLI
+  tests, 1,386 compiler tests and every integration target, 6 retry tests,
+  4 FFI acceptance tests, 2 closure acceptance tests, the 665.73-second
+  forced-backend parity matrix, 97 LSP tests, and 15 extension tests. All
+  instrumented compiler tests then passed, but the report reached
+  80,456/83,656 lines (96.174811%), 5,345/5,513 functions (96.952657%), and
+  117,328/123,996 regions (94.622407%): the frozen line and function floors
+  missed while regions passed. The retained log is
+  `/private/tmp/aurora-b60-ci-5a6a77e.log` with SHA-256
+  `2afb2b7b99de4a21a729569f2de8d4f0d91722d7be588a9fe16b56a75b7af236`.
+  Per the standing rule this is a coverage-only closure, not an escalation.
+- Coverage inspection found that the new callable-equality precedence made
+  the `opaque_handle_in_type_inner` closure-capture recursion unreachable:
+  callable comparison now rejects before structural inspection, closures
+  cannot be cloned, and closure environments cannot enter collection
+  cloning. That branch is restructured to an explicit non-structural
+  `Closure` case instead of adding a synthetic test. The behavior-focused
+  closure also pins both malformed lambda-parameter diagnostics: a capability
+  marker without a name, and a trailing comma without a following name.
+  Focused parser and FFI equality tests pass. The exact clean full-CI replay
+  and final coverage numbers remain pending.
 - Phase 7 must not start until B6.0-a and the combined gate are complete.
 
 ## Authorized sequence
@@ -86,7 +102,9 @@ Each language or tooling behavior change begins with a failing regression.
 Every Phase 7 stage lands its compiler, backend, LSP, examples, tutorials, and
 normative reference surface together. Coverage-closing tests must pin
 observable behavior, diagnostics, or parity; no synthetic execution-only
-tests or unjustified exclusions are permitted.
+tests or unjustified exclusions are permitted. The B6.0 coverage closure adds
+no synthetic test; one unreachable structural closure branch was replaced by
+an explicit non-structural case.
 
 The unrelated modified `personal/file_ops.au` and untracked
 `architecture_docs/decisions/0022-implicit-shared-capability-syntax.md` remain

@@ -6253,9 +6253,6 @@ impl<'a> FunctionChecker<'a> {
             Type::Tuple(elements) => elements
                 .iter()
                 .find_map(|element| self.opaque_handle_in_type_inner(element, visiting)),
-            Type::Closure { captures, .. } => captures
-                .iter()
-                .find_map(|capture| self.opaque_handle_in_type_inner(&capture.ty, visiting)),
             Type::Named(name, args) => {
                 if let Some(handle) = args
                     .iter()
@@ -6306,9 +6303,15 @@ impl<'a> FunctionChecker<'a> {
 
                 None
             }
-            // Function parameter and result types are call contracts, not
-            // values retained inside the capture-free code pointer.
-            Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+            // Callable comparison is rejected before structural opaque-handle
+            // inspection, and closures are not cloneable values. Function
+            // parameter and result types are call contracts, not values
+            // retained inside a capture-free code pointer.
+            Type::Closure { .. }
+            | Type::Function { .. }
+            | Type::TypeParam(_)
+            | Type::Module(_)
+            | Type::Unit => None,
         }
     }
 

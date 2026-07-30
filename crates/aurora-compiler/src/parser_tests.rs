@@ -296,6 +296,20 @@ fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics(
         retired_borrow.message,
         "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access"
     );
+
+    let missing_owned_name = parse_expression("lambda own: 1")
+        .expect_err("an ownership marker must be followed by a parameter name");
+    assert_eq!(
+        missing_owned_name.message,
+        "expected a parameter name in lambda parameter list"
+    );
+
+    let missing_name_after_comma = parse_expression("lambda value,: value")
+        .expect_err("a comma must be followed by another parameter name");
+    assert_eq!(
+        missing_name_after_comma.message,
+        "expected a parameter name after `,` in lambda parameter list"
+    );
 }
 
 #[test]
