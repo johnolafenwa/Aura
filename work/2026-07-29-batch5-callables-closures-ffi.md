@@ -474,6 +474,45 @@ checks all pass independently. Neither user-owned file was changed for or
 included in Phase 6.4. No synthetic coverage test, production coverage edit,
 or coverage exclusion was added.
 
+## Phase 6.5 place-based loan/view proposal
+
+Proposed ADR-0038 is complete as a design artifact only. No parser, type
+checker, MIR, runtime, backend, Manual, tutorial, example, LSP, or extension
+implementation was added. Four read-only design lanes independently audited
+place/lifetime semantics, backend lowering, closure integration, and
+decision/reference consistency before synthesis.
+
+The proposal settles a coherent candidate design for checkpoint review:
+
+- `view name = place` and `view mut name = place` create explicit,
+  non-rebindable shared and write-through mutable aliases
+- `-> view T from source` and `-> view mut T from source` declare one exact
+  receiver/parameter origin; `return view ...` selects the returned place
+- the first place set is addressable roots plus fixed class-field, tuple, and
+  scoped enum-payload projections; indexed/keyed views remain rejected
+- inferred last-use regions, explicit reborrows, shared/shared compatibility,
+  mutable uniqueness, disjoint-field proof, and source locking define the
+  static model
+- every view and loan-capturing closure is non-Transfer; same-task suspension
+  is allowed, while task/Queue/supervisor/detached/FFI retention is rejected
+- ordinary lambdas retain by-value behavior. In-loan capture uses an explicit
+  exhaustive `lambda [value, mut value, own value] ...` list and adds a
+  mutable-repeatable callable category without erasing it into structural
+  `def(...) -> R`
+- MIR must gain typed PlaceId/LoanId/RegionId operations and both backends must
+  use stable storage plus direct write-through. One ordered exit-action stack
+  handles loan end, closure drop, mutable reconstruction/writeback, and
+  resource cleanup on every exit
+
+The proposal deliberately does not revive `borrow`, return labels, or
+`-> mut T`; it preserves ADR-0009 containment until an implementation lands,
+extends rather than replaces ADR-0016 sequencing, and leaves ADR-0037's
+implemented value capture unchanged. ADR-0038 is Proposed and explicitly
+unimplemented. The recommendation is Aurora 0.3 rather than 0.2 because stable
+place storage and a unified backend exit model are correctness prerequisites,
+not surface polish. The normative Manual remains unchanged until ratification
+and implementation.
+
 ## Verification policy
 
 Each behavior change starts with a failing regression and receives focused

@@ -144,6 +144,19 @@ Last updated: 2026-07-30
   `personal/file_ops.au`; the Phase 6.4 diff and every other hygiene rule pass
   independently. Obsolete coverage artifacts were cleaned at the
   disk-hygiene threshold before the replay.
+
+  Phase 6.5 is complete at its proposal-only boundary. Proposed,
+  explicitly-unimplemented ADR-0038 defines place-based shared/mutable views,
+  one-origin returned-view contracts, inferred last-use regions, exclusivity
+  and escape rules, explicit in-loan lambda capture lists, mutable-repeatable
+  closure calls, non-Transfer/task containment, typed MIR loan operations,
+  stable backend storage, immediate write-through, and a unified exit-action
+  model. It preserves current ADR-0009 containment and ADR-0037 by-value
+  capture until implementation, does not revive `borrow` or return labels,
+  keeps proposed syntax out of the normative Manual, and recommends Aurora
+  0.3 rather than 0.2. No compiler or tooling implementation was added. The
+  remaining Batch 5 work is the final checkpoint gate, one-time coverage
+  re-ratchet, checkpoint report, and stop before Phase 7.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the
