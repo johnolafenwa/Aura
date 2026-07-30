@@ -1,0 +1,13 @@
+import random
+
+class Holder:
+    generator: random.Rng
+    code: int64
+
+def main() -> int32:
+    holder = Holder(generator=random.Rng(seed=7), code=9)
+    worker: def() -> int64 = lambda: holder.code
+    with TaskGroup() as group:
+        task = group.start(worker)
+        print(task.result_or(-1, timeout=1s))
+    return 0

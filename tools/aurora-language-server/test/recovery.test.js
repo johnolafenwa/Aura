@@ -42,6 +42,7 @@ test("recovery completion exposes keywords builtins and declarations but no memb
   const names = completionsForDocument(source, 8, 4, null).map((item) => item.name);
   assert.ok(names.includes("class"));
   assert.ok(names.includes("assert"));
+  assert.ok(names.includes("lambda"));
   assert.ok(names.includes("int"));
   assert.ok(names.includes("int32"));
   assert.ok(names.includes("int64"));

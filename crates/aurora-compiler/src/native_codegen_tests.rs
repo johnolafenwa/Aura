@@ -5561,8 +5561,8 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
         object_function_referenced_symbols(&defaults_object, "aurora_fn_main");
     for runtime_symbol in [
         "aurora_direct_function_value",
-        "aurora_direct_function_thunk",
-        "aurora_direct_function_default_binder",
+        "aurora_direct_function_bind_defaults",
+        "aurora_direct_function_call",
     ] {
         assert!(
             default_main_references
@@ -5570,6 +5570,38 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
                 .any(|symbol| symbol.contains(runtime_symbol)),
             "indirect calls must use `{runtime_symbol}`: {default_main_references:?}"
         );
+    }
+    for selected in ["first_default", "second_default"] {
+        let function = defaults_mir
+            .functions
+            .iter()
+            .find(|function| function.name == selected)
+            .unwrap_or_else(|| panic!("selected default function `{selected}` should lower"));
+        let default_function = function.params[0]
+            .default_function
+            .as_deref()
+            .unwrap_or_else(|| panic!("`{selected}` should retain its concrete default thunk"));
+        let binder_references = object_function_referenced_symbols(
+            &defaults_object,
+            &mangle_default_binder_symbol(selected),
+        );
+        assert!(
+            binder_references
+                .iter()
+                .any(|symbol| symbol.contains(&mangle_symbol(default_function))),
+            "the `{selected}` binder must call its own default thunk: {binder_references:?}"
+        );
+        for callable_symbol in [
+            mangle_thunk_symbol(selected),
+            mangle_default_binder_symbol(selected),
+        ] {
+            assert!(
+                default_main_references
+                    .iter()
+                    .any(|symbol| symbol.contains(&callable_symbol)),
+                "runtime selection must retain `{callable_symbol}` in main: {default_main_references:?}"
+            );
+        }
     }
 
     let capabilities_path = fixtures.join("function_value_inferred_capabilities.au");
@@ -5613,7 +5645,7 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
     let task_main_references = object_function_referenced_symbols(&task_object, "aurora_fn_main");
     for runtime_symbol in [
         "aurora_direct_task_arg_buffer_guard",
-        "aurora_direct_function_default_binder",
+        "aurora_direct_function_bind_defaults",
         "aurora_direct_task_arg_buffer_disarm",
         "aurora_direct_start_task_function_with_frames",
     ] {
@@ -5623,6 +5655,38 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
                 .any(|symbol| symbol.contains(runtime_symbol)),
             "callable Task lowering must use `{runtime_symbol}`: {task_main_references:?}"
         );
+    }
+    for selected in ["first_default", "second_default"] {
+        let function = task_mir
+            .functions
+            .iter()
+            .find(|function| function.name == selected)
+            .unwrap_or_else(|| panic!("selected task function `{selected}` should lower"));
+        let default_function = function.params[0]
+            .default_function
+            .as_deref()
+            .unwrap_or_else(|| panic!("`{selected}` should retain its task default thunk"));
+        let binder_references = object_function_referenced_symbols(
+            &task_object,
+            &mangle_default_binder_symbol(selected),
+        );
+        assert!(
+            binder_references
+                .iter()
+                .any(|symbol| symbol.contains(&mangle_symbol(default_function))),
+            "task selection must keep `{selected}` bound to its concrete default: {binder_references:?}"
+        );
+        for callable_symbol in [
+            mangle_thunk_symbol(selected),
+            mangle_default_binder_symbol(selected),
+        ] {
+            assert!(
+                task_main_references
+                    .iter()
+                    .any(|symbol| symbol.contains(&callable_symbol)),
+                "the selected task callable must carry `{callable_symbol}`: {task_main_references:?}"
+            );
+        }
     }
     for legacy_symbol in [
         "aurora_direct_start_task_call_with_frames",
@@ -5635,6 +5699,264 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
             "function-value task lowering must not fall back to `{legacy_symbol}`"
         );
     }
+}
+
+#[test]
+fn direct_closure_objects_pin_environment_call_default_binding_and_task_abis() {
+    let source = r#"
+def main() -> int32:
+    offset: int64 = 5
+    factor: int64 = 2
+    worker: def(int64) -> int64 = lambda value: value * factor + offset
+    direct: int64 = worker(3)
+    values: Vec[int64] = [1, 2]
+    mapped: Vec[int64] = values.map(worker)
+    with TaskGroup() as group:
+        task: Task[int64] = group.start(worker, 7)
+    return 0
+"#;
+    let module = lower_source_to_mir(source)
+        .expect("a capturing closure should lower across call, callback, and task contexts");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let (lifted_name, captures) = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Closure {
+                        function, captures, ..
+                    },
+                ..
+            } => Some((function, captures)),
+            _ => None,
+        })
+        .expect("worker should construct a closure environment");
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| capture.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["factor", "offset"],
+        "native environment slots must retain MIR lexical-first-use order"
+    );
+    let lifted = module
+        .functions
+        .iter()
+        .find(|function| function.name == *lifted_name)
+        .expect("the closure body should be emitted as a direct-callable MIR function");
+    assert_eq!(
+        lifted
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["factor", "offset", "value"],
+        "the native thunk ABI must receive hidden captures before public parameters"
+    );
+
+    let object =
+        emit_host_object(&module).expect("closure calls, callbacks, and task handoff should emit");
+    let main_references = object_function_referenced_symbols(&object, "aurora_fn_main");
+    for runtime_symbol in [
+        "aurora_direct_function_value",
+        "aurora_direct_arg_buffer_new",
+        "aurora_direct_arg_buffer_store_owned",
+        "aurora_direct_closure_value",
+        "aurora_direct_function_bind_defaults",
+        "aurora_direct_function_call",
+        "aurora_direct_task_arg_buffer_guard",
+        "aurora_direct_task_arg_buffer_disarm",
+        "aurora_direct_start_task_function_with_frames",
+    ] {
+        assert!(
+            main_references
+                .iter()
+                .any(|symbol| symbol.contains(runtime_symbol)),
+            "closure lowering must use `{runtime_symbol}`: {main_references:?}"
+        );
+    }
+    for callable_symbol in [
+        mangle_thunk_symbol(lifted_name),
+        mangle_default_binder_symbol(lifted_name),
+    ] {
+        assert!(
+            main_references
+                .iter()
+                .any(|symbol| symbol.contains(&callable_symbol)),
+            "closure construction must retain `{callable_symbol}`: {main_references:?}"
+        );
+    }
+    let thunk_references =
+        object_function_referenced_symbols(&object, &mangle_thunk_symbol(lifted_name));
+    assert!(
+        thunk_references
+            .iter()
+            .any(|symbol| symbol.contains(&mangle_symbol(lifted_name))),
+        "the closure thunk must call its lifted implementation: {thunk_references:?}"
+    );
+    for legacy_symbol in [
+        "aurora_direct_function_thunk",
+        "aurora_direct_function_default_binder",
+        "aurora_direct_start_task_call_with_frames",
+    ] {
+        assert!(
+            !main_references
+                .iter()
+                .any(|symbol| symbol.contains(legacy_symbol)),
+            "closure objects must not regress to legacy ABI `{legacy_symbol}`"
+        );
+    }
+}
+
+#[test]
+fn direct_closure_invalid_mir_reports_thunk_binder_call_and_task_contracts() {
+    let source = r#"
+def main() -> int32:
+    offset: int32 = 5
+    worker: def(int32) -> int32 = lambda value: value + offset
+    direct: int32 = worker(1)
+    with TaskGroup() as group:
+        task: Task[int32] = group.start(worker, 2)
+    return direct
+"#;
+    let module =
+        lower_source_to_mir(source).expect("closure call and task source should lower to MIR");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .cloned()
+        .expect("main should lower");
+    let lifted_name = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Closure { function, .. },
+                ..
+            } => Some(function.clone()),
+            _ => None,
+        })
+        .expect("worker should retain its lifted implementation");
+
+    let mut missing_thunk =
+        NativeCodegen::new(&module, "/tmp/direct_closure_missing_thunk.au", source)
+            .expect("codegen should initialize");
+    missing_thunk.function_thunks.remove(&lifted_name);
+    let thunk_error = missing_thunk
+        .define_function(&main)
+        .expect_err("closure construction must require the lifted thunk");
+    assert!(
+        thunk_error.contains(&format!("does not know function thunk for `{lifted_name}`")),
+        "{thunk_error}"
+    );
+
+    let mut missing_binder =
+        NativeCodegen::new(&module, "/tmp/direct_closure_missing_binder.au", source)
+            .expect("codegen should initialize");
+    missing_binder.function_default_binders.remove(&lifted_name);
+    let binder_error = missing_binder
+        .define_function(&main)
+        .expect_err("closure construction must require the lifted default binder");
+    assert!(
+        binder_error.contains(&format!(
+            "does not know function default binder for `{lifted_name}`"
+        )),
+        "{binder_error}"
+    );
+
+    let mut invalid_call = module.clone();
+    let invalid_call_main = invalid_call
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let call_args = invalid_call_main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Value(Operand::Place(place)),
+                        args,
+                    },
+                ..
+            } if place == "worker" => Some(args),
+            _ => None,
+        })
+        .expect("worker invocation should use value-call MIR");
+    call_args[0].name = Some("missing".to_string());
+    let call_error =
+        emit_host_object(&invalid_call).expect_err("unknown closure call parameters must fail");
+    assert!(
+        call_error.contains("direct backend function value has no parameter named `missing`"),
+        "{call_error}"
+    );
+
+    let mut invalid_task = module.clone();
+    let invalid_task_main = invalid_task
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let task_args = invalid_task_main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::StartTask { function, args, .. },
+                ..
+            } if matches!(&*function, Operand::Place(place) if place == "worker") => Some(args),
+            _ => None,
+        })
+        .expect("worker task start should retain function-value arguments");
+    task_args[0].name = Some("missing".to_string());
+    let task_error =
+        emit_host_object(&invalid_task).expect_err("unknown closure task parameters must fail");
+    assert!(
+        task_error.contains("task function value has no parameter named `missing`"),
+        "{task_error}"
+    );
+
+    let mut consuming_target = module.clone();
+    let consuming_main = consuming_target
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let call_target = consuming_main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } if matches!(&*callee, CallTarget::Value(Operand::Place(place)) if place == "worker") => {
+                Some(callee)
+            }
+            _ => None,
+        })
+        .expect("worker invocation should use a non-consuming call target");
+    *call_target = CallTarget::Value(Operand::MovePlace("worker".to_string()));
+    let consuming_error = emit_host_object(&consuming_target)
+        .expect_err("indirect call targets must not consume their callable place");
+    assert!(
+        consuming_error.contains(
+            "only permits `MovePlace` in consuming contexts, not in an indirect-call target"
+        ),
+        "{consuming_error}"
+    );
 }
 
 #[test]
@@ -5824,8 +6146,8 @@ def main() -> int32:
         .expect("a positional argument after a named slot should bind the next free parameter");
     let main_references = object_function_referenced_symbols(&object, "aurora_fn_main");
     for runtime_symbol in [
-        "aurora_direct_function_thunk",
-        "aurora_direct_function_default_binder",
+        "aurora_direct_function_bind_defaults",
+        "aurora_direct_function_call",
     ] {
         assert!(
             main_references

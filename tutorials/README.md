@@ -52,6 +52,8 @@ The current tutorial set covers:
 - capture-free named function values with `def(T1, mut T2, own T3) -> R`
   types, copy and `Transfer` semantics, indirect calls, storage, and task
   targets
+- contextually typed expression lambdas with by-value Copy/non-Copy capture,
+  repeatable reads, consuming single-use calls, and structural Transfer
 - classes with fields, default values, receiver forms, mutating methods, and `public` field syntax
 - ownership, declaration-stable parameter defaults, explicit `own`, move
   semantics, copy types, and the exclusivity rule for mutable borrows

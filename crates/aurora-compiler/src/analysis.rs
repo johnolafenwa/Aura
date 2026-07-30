@@ -4,8 +4,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::ast::{
-    AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
-    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef, VariantPattern,
+    AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item,
+    LambdaParam, MatchArm, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef,
+    VariantPattern,
 };
 use crate::call::{
     BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
@@ -15,7 +16,8 @@ use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
     builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, ClassInfo,
-    EnumInfo, FunctionInfo, FunctionParamContract, MethodInfo, Program, TraitBound, Type,
+    ClosureInfo, EnumInfo, FunctionInfo, FunctionParamContract, MethodInfo, Program, TraitBound,
+    Type,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -293,7 +295,7 @@ impl<'a> AnalysisBuilder<'a> {
                 return Ok(Vec::new());
             };
             let receiver_expr = parser::parse_expression(&receiver_text)?;
-            let scope = self.scope_for_line(line);
+            let scope = self.scope_for_position(line, character);
             if let ExprKind::Name(name) = &receiver_expr.kind {
                 if let Some(binding) = scope.get(name) {
                     if !binding.trait_bounds.is_empty() {
@@ -313,7 +315,22 @@ impl<'a> AnalysisBuilder<'a> {
             return Ok(self.member_completions(&receiver_type));
         }
 
-        Ok(self.top_level_completions())
+        let scope = self.scope_for_position(line, character);
+        let mut completions = self.top_level_completions();
+        let mut names = completions
+            .iter()
+            .map(|completion| completion.name.clone())
+            .collect::<BTreeSet<_>>();
+        for (name, binding) in scope {
+            if names.insert(name.clone()) {
+                completions.push(AnalysisCompletion {
+                    name,
+                    kind: "variable".to_string(),
+                    detail: binding.ty.to_string(),
+                });
+            }
+        }
+        Ok(completions)
     }
 
     fn function_scope(
@@ -400,6 +417,310 @@ impl<'a> AnalysisBuilder<'a> {
         let mut scope = BTreeMap::new();
         self.accumulate_scope_from_stmts(&self.program.top_level_stmts, target_line, &mut scope);
         scope
+    }
+
+    fn scope_for_position(&self, line: usize, character: usize) -> BTreeMap<String, BindingInfo> {
+        let mut scope = self.scope_for_line(line);
+        let target_line = line + 1;
+
+        if let Some((function_decl, _)) = self.enclosing_function(target_line) {
+            self.extend_lambda_scope_from_stmts(
+                &function_decl.body,
+                target_line,
+                character,
+                &mut scope,
+            );
+        } else if let Some((_, method_decl, _)) = self.enclosing_method(target_line) {
+            self.extend_lambda_scope_from_stmts(
+                &method_decl.body,
+                target_line,
+                character,
+                &mut scope,
+            );
+        } else {
+            self.extend_lambda_scope_from_stmts(
+                &self.program.top_level_stmts,
+                target_line,
+                character,
+                &mut scope,
+            );
+        }
+
+        scope
+    }
+
+    fn closure_info(&self, expr: &Expr) -> Option<&ClosureInfo> {
+        self.program.closures.values().find(|info| {
+            info.span.line == expr.span.line
+                && info.span.column == expr.span.column
+                && info.id.module_name == self.program.module_name
+        })
+    }
+
+    fn extend_lambda_scope_from_stmts(
+        &self,
+        stmts: &[Stmt],
+        target_line: usize,
+        character: usize,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Assign(assign) => {
+                    self.extend_lambda_scope_from_expr(
+                        &assign.value,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    match &assign.target {
+                        AssignTarget::Member { object, .. } => self.extend_lambda_scope_from_expr(
+                            object,
+                            target_line,
+                            character,
+                            scope,
+                        ),
+                        AssignTarget::Index { object, index } => {
+                            self.extend_lambda_scope_from_expr(
+                                object,
+                                target_line,
+                                character,
+                                scope,
+                            );
+                            self.extend_lambda_scope_from_expr(
+                                index,
+                                target_line,
+                                character,
+                                scope,
+                            );
+                        }
+                        AssignTarget::Name(_) => {}
+                    }
+                }
+                Stmt::Destructure(destructure) => self.extend_lambda_scope_from_expr(
+                    &destructure.value,
+                    target_line,
+                    character,
+                    scope,
+                ),
+                Stmt::Return(ret) => {
+                    if let Some(value) = &ret.value {
+                        self.extend_lambda_scope_from_expr(value, target_line, character, scope);
+                    }
+                }
+                Stmt::Assert(assert_stmt) => {
+                    self.extend_lambda_scope_from_expr(
+                        &assert_stmt.condition,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    if let Some(message) = &assert_stmt.message {
+                        self.extend_lambda_scope_from_expr(message, target_line, character, scope);
+                    }
+                }
+                Stmt::If(if_stmt) => {
+                    for branch in &if_stmt.branches {
+                        self.extend_lambda_scope_from_expr(
+                            &branch.condition,
+                            target_line,
+                            character,
+                            scope,
+                        );
+                        self.extend_lambda_scope_from_stmts(
+                            &branch.body,
+                            target_line,
+                            character,
+                            scope,
+                        );
+                    }
+                    if let Some(body) = &if_stmt.else_body {
+                        self.extend_lambda_scope_from_stmts(body, target_line, character, scope);
+                    }
+                }
+                Stmt::Match(match_stmt) => {
+                    self.extend_lambda_scope_from_expr(
+                        &match_stmt.scrutinee,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    for arm in &match_stmt.arms {
+                        self.extend_lambda_scope_from_stmts(
+                            &arm.body,
+                            target_line,
+                            character,
+                            scope,
+                        );
+                    }
+                }
+                Stmt::For(for_stmt) => {
+                    self.extend_lambda_scope_from_expr(
+                        &for_stmt.iterable,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    self.extend_lambda_scope_from_stmts(
+                        &for_stmt.body,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                }
+                Stmt::With(with_stmt) => {
+                    self.extend_lambda_scope_from_expr(
+                        &with_stmt.value,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    self.extend_lambda_scope_from_stmts(
+                        &with_stmt.body,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                }
+                Stmt::While(while_stmt) => {
+                    self.extend_lambda_scope_from_expr(
+                        &while_stmt.condition,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                    self.extend_lambda_scope_from_stmts(
+                        &while_stmt.body,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                }
+                Stmt::Expr(expr_stmt) => self.extend_lambda_scope_from_expr(
+                    &expr_stmt.expr,
+                    target_line,
+                    character,
+                    scope,
+                ),
+                Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+            }
+        }
+    }
+
+    fn extend_lambda_scope_from_expr(
+        &self,
+        expr: &Expr,
+        target_line: usize,
+        character: usize,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match &expr.kind {
+            ExprKind::Lambda { params, body } => {
+                if expression_contains_position(body, target_line, character) {
+                    if let Some(info) = self.closure_info(expr) {
+                        for (param, contract) in params.iter().zip(&info.params) {
+                            let definition = range_from_span(param.span, param.name.len());
+                            scope.insert(
+                                param.name.clone(),
+                                BindingInfo {
+                                    ty: contract.ty.clone(),
+                                    trait_bounds: Vec::new(),
+                                    definition,
+                                    hover: format_lambda_param_hover(param, &contract.ty),
+                                },
+                            );
+                        }
+                    }
+                    self.extend_lambda_scope_from_expr(body, target_line, character, scope);
+                }
+            }
+            ExprKind::Membership {
+                value, container, ..
+            } => {
+                self.extend_lambda_scope_from_expr(value, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(container, target_line, character, scope);
+            }
+            ExprKind::CompareChain { first, links } => {
+                self.extend_lambda_scope_from_expr(first, target_line, character, scope);
+                for link in links {
+                    self.extend_lambda_scope_from_expr(
+                        &link.operand,
+                        target_line,
+                        character,
+                        scope,
+                    );
+                }
+            }
+            ExprKind::Member { object, .. }
+            | ExprKind::Specialize { expr: object, .. }
+            | ExprKind::Cast { expr: object, .. }
+            | ExprKind::Unary { expr: object, .. }
+            | ExprKind::Try(object)
+            | ExprKind::Group(object) => {
+                self.extend_lambda_scope_from_expr(object, target_line, character, scope);
+            }
+            ExprKind::Call { callee, args } => {
+                self.extend_lambda_scope_from_expr(callee, target_line, character, scope);
+                for arg in args {
+                    self.extend_lambda_scope_from_expr(&arg.value, target_line, character, scope);
+                }
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FormatPart::Expr(part_expr) = part {
+                        self.extend_lambda_scope_from_expr(
+                            part_expr,
+                            target_line,
+                            character,
+                            scope,
+                        );
+                    }
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.extend_lambda_scope_from_expr(left, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(right, target_line, character, scope);
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                self.extend_lambda_scope_from_expr(then_expr, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(condition, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(else_expr, target_line, character, scope);
+            }
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    self.extend_lambda_scope_from_expr(element, target_line, character, scope);
+                }
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.extend_lambda_scope_from_expr(&entry.key, target_line, character, scope);
+                    self.extend_lambda_scope_from_expr(&entry.value, target_line, character, scope);
+                }
+            }
+            ExprKind::Index { object, index } => {
+                self.extend_lambda_scope_from_expr(object, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(index, target_line, character, scope);
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                self.extend_lambda_scope_from_expr(scrutinee, target_line, character, scope);
+                for arm in arms {
+                    self.extend_lambda_scope_from_expr(&arm.value, target_line, character, scope);
+                }
+            }
+            ExprKind::Name(_)
+            | ExprKind::Int(_)
+            | ExprKind::DurationNanos(_)
+            | ExprKind::BuiltinOmitted
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::String(_) => {}
+        }
     }
 
     fn enclosing_function(&self, line: usize) -> Option<(&FunctionDecl, &FunctionInfo)> {
@@ -551,12 +872,16 @@ impl<'a> AnalysisBuilder<'a> {
         if scope.contains_key(name) {
             return;
         }
-        let binding_ty = assign
-            .annotation
-            .as_ref()
-            .map(|ty| self.lower_analysis_type_ref(ty))
-            .or_else(|| self.infer_expr_type(&assign.value, scope))
-            .unwrap_or(Type::Unit);
+        let inferred_ty = self.infer_expr_type(&assign.value, scope);
+        let binding_ty = match inferred_ty {
+            Some(ty @ Type::Closure { .. }) => ty,
+            inferred_ty => assign
+                .annotation
+                .as_ref()
+                .map(|ty| self.lower_analysis_type_ref(ty))
+                .or(inferred_ty)
+                .unwrap_or(Type::Unit),
+        };
         let definition = self
             .find_identifier_range(assign.span.line, name)
             .unwrap_or_else(|| range_from_span(assign.span, name.len()));
@@ -1250,12 +1575,16 @@ impl<'a> AnalysisBuilder<'a> {
                     return;
                 }
 
-                let binding_ty = assign
-                    .annotation
-                    .as_ref()
-                    .map(lower_type_ref)
-                    .or_else(|| self.infer_expr_type(&assign.value, scope))
-                    .unwrap_or(Type::Unit);
+                let inferred_ty = self.infer_expr_type(&assign.value, scope);
+                let binding_ty = match inferred_ty {
+                    Some(ty @ Type::Closure { .. }) => ty,
+                    inferred_ty => assign
+                        .annotation
+                        .as_ref()
+                        .map(lower_type_ref)
+                        .or(inferred_ty)
+                        .unwrap_or(Type::Unit),
+                };
                 self.bind_named_value(name, binding_ty, assign.span.line, "binding", scope);
             }
             AssignTarget::Member { object, field } => {
@@ -1501,6 +1830,27 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(then_expr, scope);
                 self.visit_expr(condition, scope);
                 self.visit_expr(else_expr, scope);
+            }
+            ExprKind::Lambda { params, body } => {
+                let mut lambda_scope = scope.clone();
+                if let Some(contracts) = self.closure_info(expr).map(|info| info.params.clone()) {
+                    for (param, contract) in params.iter().zip(&contracts) {
+                        let definition = range_from_span(param.span, param.name.len());
+                        let binding = BindingInfo {
+                            ty: contract.ty.clone(),
+                            trait_bounds: Vec::new(),
+                            definition: definition.clone(),
+                            hover: format_lambda_param_hover(param, &contract.ty),
+                        };
+                        self.push_occurrence(
+                            definition,
+                            binding.hover.clone(),
+                            Some(binding.definition.clone()),
+                        );
+                        lambda_scope.insert(param.name.clone(), binding);
+                    }
+                }
+                self.visit_expr(body, &lambda_scope);
             }
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
@@ -2593,6 +2943,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::Lambda { .. } => self.closure_info(expr).map(ClosureInfo::ty),
             ExprKind::Tuple(elements) => Some(Type::Tuple(
                 elements
                     .iter()
@@ -2859,10 +3210,13 @@ impl<'a> AnalysisBuilder<'a> {
     ) -> Option<Type> {
         match &callee.kind {
             ExprKind::Name(name) => {
-                if let Some(Type::Function { return_type, .. }) =
-                    scope.get(name).map(|binding| &binding.ty)
-                {
-                    return Some((**return_type).clone());
+                if let Some(binding) = scope.get(name) {
+                    match &binding.ty {
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                            return Some((**return_type).clone());
+                        }
+                        _ => {}
+                    }
                 }
                 if let Some(function) = self.program.functions.get(name) {
                     return Some(function.signature.return_type.clone());
@@ -3008,15 +3362,20 @@ impl<'a> AnalysisBuilder<'a> {
                     let callback_type = args
                         .first()
                         .and_then(|argument| self.infer_expr_type(&argument.value, scope))?;
-                    let Type::Function { return_type, .. } = callback_type else {
-                        return None;
+                    let return_type = match callback_type {
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                            return_type
+                        }
+                        _ => return None,
                     };
                     return Some(Type::Named("Vec".to_string(), vec![*return_type]));
                 }
                 self.resolve_member_expr(object, field, scope)
                     .and_then(|member| member.ty)
                     .map(|ty| match ty {
-                        Type::Function { return_type, .. } => *return_type,
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                            *return_type
+                        }
                         ty => ty,
                     })
             }
@@ -3577,8 +3936,80 @@ fn base_type_name(ty: &Type) -> &str {
         Type::TypeParam(name) => name.as_str(),
         Type::Tuple(_) => "tuple",
         Type::Function { .. } => "function",
+        Type::Closure { .. } => "closure",
         Type::Named(name, _) => name.as_str(),
     }
+}
+
+fn expression_contains_position(expr: &Expr, line: usize, character: usize) -> bool {
+    let starts_before_position =
+        expr.span.line < line || (expr.span.line == line && expr.span.column <= character + 1);
+    starts_before_position && line <= expression_end_line(expr)
+}
+
+fn expression_end_line(expr: &Expr) -> usize {
+    let child_end = match &expr.kind {
+        ExprKind::Membership {
+            value, container, ..
+        } => expression_end_line(value).max(expression_end_line(container)),
+        ExprKind::CompareChain { first, links } => links
+            .iter()
+            .map(|link| expression_end_line(&link.operand))
+            .fold(expression_end_line(first), usize::max),
+        ExprKind::Member { object, .. }
+        | ExprKind::Specialize { expr: object, .. }
+        | ExprKind::Cast { expr: object, .. }
+        | ExprKind::Unary { expr: object, .. }
+        | ExprKind::Try(object)
+        | ExprKind::Group(object) => expression_end_line(object),
+        ExprKind::Lambda { body, .. } => expression_end_line(body),
+        ExprKind::Call { callee, args } => args
+            .iter()
+            .map(|arg| expression_end_line(&arg.value))
+            .fold(expression_end_line(callee), usize::max),
+        ExprKind::FString(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                crate::ast::FormatPart::Expr(part_expr) => Some(expression_end_line(part_expr)),
+                crate::ast::FormatPart::Literal(_) => None,
+            })
+            .fold(expr.span.line, usize::max),
+        ExprKind::Binary { left, right, .. } => {
+            expression_end_line(left).max(expression_end_line(right))
+        }
+        ExprKind::Conditional {
+            then_expr,
+            condition,
+            else_expr,
+        } => expression_end_line(then_expr)
+            .max(expression_end_line(condition))
+            .max(expression_end_line(else_expr)),
+        ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => elements
+            .iter()
+            .map(expression_end_line)
+            .fold(expr.span.line, usize::max),
+        ExprKind::Map(entries) => entries
+            .iter()
+            .map(|entry| expression_end_line(&entry.key).max(expression_end_line(&entry.value)))
+            .fold(expr.span.line, usize::max),
+        ExprKind::Index { object, index } => {
+            expression_end_line(object).max(expression_end_line(index))
+        }
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => arms
+            .iter()
+            .map(|arm| expression_end_line(&arm.value))
+            .fold(expression_end_line(scrutinee), usize::max),
+        ExprKind::Name(_)
+        | ExprKind::Int(_)
+        | ExprKind::DurationNanos(_)
+        | ExprKind::BuiltinOmitted
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_) => expr.span.line,
+    };
+    expr.span.line.max(child_end)
 }
 
 fn analysis_is_integer_literal(expr: &Expr) -> bool {
@@ -3615,6 +4046,21 @@ fn analysis_type_contains_unknown(ty: &Type) -> bool {
                 .iter()
                 .any(|param| analysis_type_contains_unknown(&param.ty))
                 || analysis_type_contains_unknown(return_type)
+        )
+        || matches!(
+            ty,
+            Type::Closure {
+                params,
+                return_type,
+                captures,
+                ..
+            } if params
+                .iter()
+                .any(|param| analysis_type_contains_unknown(&param.ty))
+                || analysis_type_contains_unknown(return_type)
+                || captures
+                    .iter()
+                    .any(|capture| analysis_type_contains_unknown(&capture.ty))
         )
 }
 
@@ -3663,6 +4109,7 @@ impl TypeExt for Type {
             Type::TypeParam(_) => &[],
             Type::Tuple(elements) => elements.as_slice(),
             Type::Function { .. } => &[],
+            Type::Closure { .. } => &[],
             Type::Named(_, args) => args.as_slice(),
         }
     }
@@ -3673,6 +4120,15 @@ fn format_value_hover(kind: &str, name: &str, ty: &Type) -> String {
 }
 
 fn format_param_hover(param: &Param, ty: &Type) -> String {
+    let mode = match param.mode {
+        ParamMode::Default => "",
+        ParamMode::Own => "own ",
+        ParamMode::BorrowMut => "mut ",
+    };
+    format!("```aurora\nparam {}: {}{}\n```", param.name, mode, ty)
+}
+
+fn format_lambda_param_hover(param: &LambdaParam, ty: &Type) -> String {
     let mode = match param.mode {
         ParamMode::Default => "",
         ParamMode::Own => "own ",
@@ -3838,8 +4294,8 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
-    "with", "return", "assert", "try", "public", "mut", "own", "indirect", "copy", "break",
-    "continue", "pass",
+    "with", "return", "assert", "try", "lambda", "public", "mut", "own", "indirect", "copy",
+    "break", "continue", "pass",
 ];
 
 struct CompletionMeta {

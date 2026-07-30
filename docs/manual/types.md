@@ -457,11 +457,15 @@ contains a backend surface that cannot preserve the same behavior.
 ## Limits And Implementation-Defined Behavior
 
 `str` is currently an alias rather than a distinct view; first-class loan or
-view values are unavailable; method and closure types, user-defined numeric
-casts, and non-numeric casts are unavailable; and recursive value fields
+view values are unavailable; method-value types, user-defined numeric casts,
+and non-numeric casts are unavailable; and recursive value fields
 require `indirect`. Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
-`mut`/`own` modes are part of the type. `intsize` and
+`mut`/`own` modes are part of the type. Contextually typed lambdas use that
+same source-level callable signature; a capturing closure additionally owns
+its hidden environment. Arbitrary stored and parameter `def` types describe
+capture-free code pointers; compiler-known callback and task-start sites
+preserve the additional closure metadata. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aurora returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined.
@@ -471,8 +475,8 @@ behavior are language-defined rather than implementation-defined.
 The scalar, collection, enum, class, trait-bound, resource, optional, result,
 and indirect types described by this Manual are implemented for the post-Phase
 1.5 surface. Return values are owned, and current syntax reserves no future
-loan or view contract. Capture-free function types are implemented.
-Method-value, closure, and FFI types are unavailable.
+loan or view contract. Capture-free function types and by-value expression
+closures are implemented. Method-value and FFI types are unavailable.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the implemented compatibility alias for `String`; a distinct borrowed

@@ -842,6 +842,38 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                 .collect(),
             return_type: Box::new(qualify_export_type(program, return_type)),
         },
+        sema::Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => sema::Type::Closure {
+            params: Box::new(
+                params
+                    .iter()
+                    .map(|param| sema::FunctionParamContract {
+                        name: param.name.clone(),
+                        ty: qualify_export_type(program, &param.ty),
+                        passing: param.passing,
+                        has_default: param.has_default,
+                        default_erased: param.default_erased,
+                    })
+                    .collect(),
+            ),
+            return_type: Box::new(qualify_export_type(program, return_type)),
+            captures: Box::new(
+                captures
+                    .iter()
+                    .map(|capture| sema::ClosureCapture {
+                        name: capture.name.clone(),
+                        ty: qualify_export_type(program, &capture.ty),
+                        mode: capture.mode,
+                        span: capture.span,
+                    })
+                    .collect(),
+            ),
+            call_kind: *call_kind,
+        },
         sema::Type::TypeParam(name) => sema::Type::TypeParam(name.clone()),
         sema::Type::Module(path) => sema::Type::Module(path.clone()),
         sema::Type::Unit => sema::Type::Unit,
@@ -1174,6 +1206,36 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
             .map(|(name, info)| (name.clone(), qualify_trait_info_for_export(program, info)))
             .collect(),
         imported_modules: program.imported_modules.clone(),
+        closures: program
+            .closures
+            .iter()
+            .map(|(id, info)| {
+                let mut qualified = info.clone();
+                qualified.params = qualified
+                    .params
+                    .iter()
+                    .map(|param| sema::FunctionParamContract {
+                        name: param.name.clone(),
+                        ty: qualify_export_type(program, &param.ty),
+                        passing: param.passing,
+                        has_default: param.has_default,
+                        default_erased: param.default_erased,
+                    })
+                    .collect();
+                qualified.return_type = qualify_export_type(program, &qualified.return_type);
+                qualified.captures = qualified
+                    .captures
+                    .iter()
+                    .map(|capture| sema::ClosureCapture {
+                        name: capture.name.clone(),
+                        ty: qualify_export_type(program, &capture.ty),
+                        mode: capture.mode,
+                        span: capture.span,
+                    })
+                    .collect();
+                (id.clone(), qualified)
+            })
+            .collect(),
     };
 
     for item in &program.module.items {
@@ -1243,6 +1305,7 @@ fn insert_namespace_import(
             all_enums: BTreeMap::new(),
             all_traits: BTreeMap::new(),
             imported_modules: BTreeMap::new(),
+            closures: BTreeMap::new(),
         })
     });
     let ImportedBinding::Module(root_namespace) = root else {
@@ -1279,6 +1342,7 @@ fn insert_namespace_import(
                 all_enums: BTreeMap::new(),
                 all_traits: BTreeMap::new(),
                 imported_modules: BTreeMap::new(),
+                closures: BTreeMap::new(),
             });
     }
     let last = path[path.len() - 1].clone();

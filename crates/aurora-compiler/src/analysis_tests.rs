@@ -1,10 +1,11 @@
 use super::{
-    analysis_diagnostic, analyze_path_source, analyze_source, base_type_name, block_contains_line,
-    builtin_enum_hover, builtin_enum_variant_completions, builtin_function_hover,
-    builtin_function_return_type, builtin_member_completions, callable_contains_line,
-    complete_path_source, complete_source, enclosing_function_return_placeholder,
-    extract_receiver_before_dot, extract_receiver_ending_before, find_identifier_in_line,
-    find_receiver_start, first_dangling_member_line, format_class_hover, format_enum_hover_named,
+    analysis_diagnostic, analysis_type_contains_unknown, analyze_path_source, analyze_source,
+    base_type_name, block_contains_line, builtin_enum_hover, builtin_enum_variant_completions,
+    builtin_function_hover, builtin_function_return_type, builtin_member_completions,
+    callable_contains_line, complete_path_source, complete_source,
+    enclosing_function_return_placeholder, expression_end_line, extract_receiver_before_dot,
+    extract_receiver_ending_before, find_identifier_in_line, find_receiver_start,
+    first_dangling_member_line, format_class_hover, format_enum_hover_named,
     format_function_detail, format_function_hover, format_method_hover, format_value_hover,
     format_variant_hover, infer_builtin_variant_call, lower_type_ref,
     placeholder_stmt_for_return_type, range_from_span, range_from_span_with_path,
@@ -47,6 +48,7 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
             name: "json".to_string(),
             path: "json".to_string(),
             source_path: None,
+            closures: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
             classes: Default::default(),
@@ -1889,6 +1891,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
+        closures: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
         classes: remote_program.classes.clone(),
@@ -1907,6 +1910,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             name: "inner".to_string(),
             path: "pkg.tools.inner".to_string(),
             source_path: None,
+            closures: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
             classes: Default::default(),
@@ -1926,6 +1930,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
+            closures: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "tools".to_string(),
                 tools_namespace.clone(),
@@ -2859,12 +2864,14 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
+            closures: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
                     name: "types".to_string(),
                     path: "pkg.types".to_string(),
                     source_path: None,
+                    closures: Default::default(),
                     modules: Default::default(),
                     functions: Default::default(),
                     classes: Default::default(),
@@ -3070,6 +3077,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
+        closures: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
         classes: remote_program.classes.clone(),
@@ -3088,6 +3096,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
+            closures: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "tools".to_string(),
                 tools_namespace.clone(),
@@ -5368,6 +5377,577 @@ fn written_function_type_aliases_are_canonical_in_completion_scope() {
             .to_string(),
         "def(String, int64) -> None"
     );
+}
+
+#[test]
+fn lambda_analysis_resolves_parameters_captures_and_closure_bindings() {
+    let source = [
+        "def main():",
+        "    offset: int32 = 40",
+        "    add: def(int32) -> int32 = lambda value: value + offset",
+        "    print(add(2))",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "valid lambda analysis should not report diagnostics: {:?}",
+        analysis.diagnostics
+    );
+
+    let parameter_use = source.lines().nth(2).unwrap().rfind("value").unwrap();
+    let parameter = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 2 && occurrence.start_character == parameter_use)
+        .expect("the lambda parameter use should be analyzed");
+    assert!(parameter.hover.contains("param value: int32"));
+    let parameter_declaration = source.lines().nth(2).unwrap().find("value").unwrap();
+    assert_eq!(
+        parameter.definition.as_ref().map(|range| (
+            range.line,
+            range.start_character,
+            range.end_character
+        )),
+        Some((
+            2,
+            parameter_declaration,
+            parameter_declaration + "value".len()
+        ))
+    );
+
+    let capture_use = source.lines().nth(2).unwrap().rfind("offset").unwrap();
+    let capture = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 2 && occurrence.start_character == capture_use)
+        .expect("the captured outer binding should be analyzed");
+    assert!(capture.hover.contains("binding offset: int32"));
+    assert_eq!(
+        capture.definition.as_ref().map(|range| (
+            range.line,
+            range.start_character,
+            range.end_character
+        )),
+        Some((1, 4, 10))
+    );
+
+    assert!(
+        analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 3
+                && occurrence
+                    .hover
+                    .contains("binding add: closure def(int32) -> int32")
+        }),
+        "capturing lambda bindings should retain their closure type"
+    );
+
+    let completions =
+        complete_source(&source, 2, source.lines().nth(2).unwrap().len(), None).unwrap();
+    assert!(completions.iter().any(|item| item.name == "value"));
+    assert!(completions.iter().any(|item| item.name == "offset"));
+    assert!(completions.iter().any(|item| item.name == "lambda"));
+}
+
+#[test]
+fn lambda_analysis_displays_consuming_closure_bindings() {
+    let source = [
+        "def main():",
+        "    text = \"captured\"",
+        "    take: def() -> String = lambda: text",
+        "    print(take())",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "single-use closure analysis should succeed: {:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 3
+                && occurrence
+                    .hover
+                    .contains("binding take: consuming closure def() -> String")
+        }),
+        "a moved non-Copy capture should display its consuming call contract"
+    );
+}
+
+#[test]
+fn lambda_scope_navigation_follows_every_expression_container_to_its_structural_end() {
+    let source = [
+        "def main():",
+        "    callback: def(int64) -> int64 = lambda value: value",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let Item::Function(main) = &program.module.items[0] else {
+        panic!("expected main function");
+    };
+    let crate::ast::Stmt::Assign(assign) = &main.body[0] else {
+        panic!("expected callback assignment");
+    };
+    let mut lambda = assign.value.clone();
+    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+        panic!("expected checked lambda expression");
+    };
+    body.span = Span::new(9, 1);
+
+    let leaf = |line| Expr {
+        kind: ExprKind::Name("outside".to_string()),
+        span: Span::new(line, 1),
+    };
+    let wrapper_span = Span::new(1, 1);
+    let wrappers = vec![
+        ("lambda", lambda.clone()),
+        (
+            "membership",
+            Expr {
+                kind: ExprKind::Membership {
+                    value: Box::new(leaf(4)),
+                    container: Box::new(lambda.clone()),
+                    negated: false,
+                    operator_span: wrapper_span,
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "comparison chain",
+            Expr {
+                kind: ExprKind::CompareChain {
+                    first: Box::new(leaf(4)),
+                    links: vec![crate::ast::CompareLink {
+                        op: crate::ast::CompareOp::Eq,
+                        op_span: wrapper_span,
+                        operand: lambda.clone(),
+                    }],
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "member",
+            Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(lambda.clone()),
+                    field: "field".to_string(),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "specialization",
+            Expr {
+                kind: ExprKind::Specialize {
+                    expr: Box::new(lambda.clone()),
+                    type_args: vec![type_ref("int64")],
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "cast",
+            Expr {
+                kind: ExprKind::Cast {
+                    expr: Box::new(lambda.clone()),
+                    ty: type_ref("int64"),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "unary",
+            Expr {
+                kind: ExprKind::Unary {
+                    op: crate::ast::UnaryOp::Not,
+                    expr: Box::new(lambda.clone()),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "try",
+            Expr {
+                kind: ExprKind::Try(Box::new(lambda.clone())),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "group",
+            Expr {
+                kind: ExprKind::Group(Box::new(lambda.clone())),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "call argument",
+            Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(leaf(3)),
+                    args: vec![arg(lambda.clone())],
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "formatted expression",
+            Expr {
+                kind: ExprKind::FString(vec![
+                    crate::ast::FormatPart::Literal("value=".to_string()),
+                    crate::ast::FormatPart::Expr(lambda.clone()),
+                ]),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "binary",
+            Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(leaf(4)),
+                    right: Box::new(lambda.clone()),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "conditional",
+            Expr {
+                kind: ExprKind::Conditional {
+                    then_expr: Box::new(leaf(4)),
+                    condition: Box::new(expr(ExprKind::Bool(true))),
+                    else_expr: Box::new(lambda.clone()),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "tuple",
+            Expr {
+                kind: ExprKind::Tuple(vec![leaf(4), lambda.clone()]),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "list",
+            Expr {
+                kind: ExprKind::List(vec![leaf(4), lambda.clone()]),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "set",
+            Expr {
+                kind: ExprKind::Set(vec![leaf(4), lambda.clone()]),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "map",
+            Expr {
+                kind: ExprKind::Map(vec![crate::ast::MapEntryExpr {
+                    key: leaf(4),
+                    value: lambda.clone(),
+                }]),
+                span: wrapper_span,
+            },
+        ),
+        (
+            "index",
+            Expr {
+                kind: ExprKind::Index {
+                    object: Box::new(leaf(4)),
+                    index: Box::new(lambda.clone()),
+                },
+                span: wrapper_span,
+            },
+        ),
+        (
+            "match arm",
+            Expr {
+                kind: ExprKind::Match {
+                    scrutinee: Box::new(leaf(4)),
+                    capability: ReceiverKind::Borrow,
+                    arms: vec![crate::ast::MatchExprArm {
+                        pattern: crate::ast::Pattern::Wildcard(wrapper_span),
+                        value: lambda.clone(),
+                        span: wrapper_span,
+                    }],
+                },
+                span: wrapper_span,
+            },
+        ),
+    ];
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+
+    for (shape, wrapped) in wrappers {
+        assert_eq!(
+            expression_end_line(&wrapped),
+            9,
+            "{shape} must retain the final line of a nested lambda body"
+        );
+        let mut scope = BTreeMap::new();
+        builder.extend_lambda_scope_from_expr(&wrapped, 9, 100, &mut scope);
+        let parameter = scope
+            .get("value")
+            .unwrap_or_else(|| panic!("{shape} must expose the nested lambda parameter"));
+        assert_eq!(parameter.ty, Type::named("int64"));
+        assert_eq!(parameter.definition.line, 1);
+    }
+
+    let plain_name = leaf(7);
+    assert_eq!(expression_end_line(&plain_name), 7);
+    let mut scope = BTreeMap::new();
+    builder.extend_lambda_scope_from_expr(&plain_name, 7, 100, &mut scope);
+    assert!(
+        !scope.contains_key("value"),
+        "lambda parameters must not leak into unrelated expressions"
+    );
+}
+
+#[test]
+fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
+    let source = [
+        "def main():",
+        "    callback: def(int64) -> int64 = lambda value: value",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let Item::Function(main) = &program.module.items[0] else {
+        panic!("expected main function");
+    };
+    let crate::ast::Stmt::Assign(assign) = &main.body[0] else {
+        panic!("expected callback assignment");
+    };
+    let mut lambda = assign.value.clone();
+    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+        panic!("expected checked lambda expression");
+    };
+    body.span = Span::new(9, 1);
+    let leaf = || expr(ExprKind::Name("outside".to_string()));
+    let span = Span::new(1, 1);
+    let statements = vec![
+        (
+            "member assignment object",
+            crate::ast::Stmt::Assign(AssignStmt {
+                mutable: false,
+                target: AssignTarget::Member {
+                    object: Box::new(lambda.clone()),
+                    field: "field".to_string(),
+                },
+                annotation: None,
+                op: None,
+                value: leaf(),
+                span,
+            }),
+        ),
+        (
+            "indexed assignment index",
+            crate::ast::Stmt::Assign(AssignStmt {
+                mutable: false,
+                target: AssignTarget::Index {
+                    object: Box::new(leaf()),
+                    index: Box::new(lambda.clone()),
+                },
+                annotation: None,
+                op: None,
+                value: leaf(),
+                span,
+            }),
+        ),
+        (
+            "assert condition",
+            crate::ast::Stmt::Assert(crate::ast::AssertStmt {
+                condition: lambda.clone(),
+                message: Some(leaf()),
+                span,
+            }),
+        ),
+        (
+            "assert message",
+            crate::ast::Stmt::Assert(crate::ast::AssertStmt {
+                condition: expr(ExprKind::Bool(true)),
+                message: Some(lambda),
+                span,
+            }),
+        ),
+    ];
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+
+    for (shape, statement) in statements {
+        let mut scope = BTreeMap::new();
+        builder.extend_lambda_scope_from_stmts(&[statement], 9, 100, &mut scope);
+        let parameter = scope
+            .get("value")
+            .unwrap_or_else(|| panic!("{shape} must expose the nested lambda parameter"));
+        assert_eq!(parameter.ty, Type::named("int64"));
+        assert_eq!(parameter.definition.line, 1);
+    }
+}
+
+#[test]
+fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
+    let closure_type = |param_ty: Type, return_ty: Type, capture_ty: Type| Type::Closure {
+        params: Box::new(vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: param_ty,
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }]),
+        return_type: Box::new(return_ty),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "offset".to_string(),
+            ty: capture_ty,
+            mode: crate::sema::ClosureCaptureMode::Copy,
+            span: Span::new(4, 31),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+    };
+    let concrete = closure_type(
+        Type::named("int64"),
+        Type::named("String"),
+        Type::named("int64"),
+    );
+    let unknown_param = closure_type(
+        Type::named("Unknown"),
+        Type::named("String"),
+        Type::named("int64"),
+    );
+    let unknown_return = closure_type(
+        Type::named("int64"),
+        Type::named("Unknown"),
+        Type::named("int64"),
+    );
+    let unknown_capture = closure_type(
+        Type::named("int64"),
+        Type::named("String"),
+        Type::named("Unknown"),
+    );
+
+    assert_eq!(base_type_name(&concrete), "closure");
+    assert!(concrete.type_arguments().is_empty());
+    assert_eq!(
+        concrete.to_string(),
+        "closure def(int64) -> String",
+        "analysis hovers should expose the closure call contract without capture internals"
+    );
+    assert!(!analysis_type_contains_unknown(&concrete));
+    for unknown in [&unknown_param, &unknown_return, &unknown_capture] {
+        assert!(
+            analysis_type_contains_unknown(unknown),
+            "Unknown nested anywhere in a closure contract must remain observable to inference"
+        );
+    }
+
+    let serialized = serde_json::to_value(&concrete).expect("closure type should serialize");
+    assert_eq!(
+        serialized["Closure"]["captures"][0]["name"],
+        serde_json::json!("offset")
+    );
+    assert_eq!(
+        serialized["Closure"]["call_kind"],
+        serde_json::json!("Repeatable")
+    );
+
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let binding = |ty: Type| super::BindingInfo {
+        ty,
+        trait_bounds: Vec::new(),
+        definition: super::AnalysisRange {
+            file_path: None,
+            line: 0,
+            start_character: 0,
+            end_character: 1,
+        },
+        hover: String::new(),
+    };
+    let scope = BTreeMap::from([
+        ("concrete".to_string(), binding(concrete.clone())),
+        ("unknown".to_string(), binding(unknown_capture)),
+    ]);
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("concrete".to_string())),
+            &[arg(expr(ExprKind::Int(1)))],
+            &scope,
+        ),
+        Some(Type::named("String"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Conditional {
+                then_expr: Box::new(expr(ExprKind::Name("unknown".to_string()))),
+                condition: Box::new(expr(ExprKind::Bool(true))),
+                else_expr: Box::new(expr(ExprKind::Name("concrete".to_string()))),
+            }),
+            &scope,
+        ),
+        Some(concrete.clone()),
+        "a concrete closure contract must win over a structurally unknown alternative"
+    );
+    assert!(
+        builder.member_completions(&concrete).is_empty(),
+        "closure capture metadata must not masquerade as generic member surface"
+    );
+}
+
+#[test]
+fn lambda_analysis_preserves_parameter_modes_and_vec_map_result_types() {
+    let source = [
+        "def main():",
+        "    offset: int64 = 2",
+        "    mut values: Vec[int64] = [1, 2]",
+        "    consume: def(own String) -> String = lambda own text: text",
+        "    measure: def(mut Vec[int64]) -> int64 = lambda mut items: items.len()",
+        "    mapped = values.map(lambda value: value + offset)",
+        "    print(mapped)",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "valid contextual lambda modes should analyze cleanly: {:?}",
+        analysis.diagnostics
+    );
+    for expected in [
+        "param text: own String",
+        "param items: mut Vec[int64]",
+        "binding mapped: Vec[int64]",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected)),
+            "missing semantic hover `{expected}`"
+        );
+    }
+
+    let mapped_line = source
+        .lines()
+        .position(|line| line.contains("values.map"))
+        .expect("mapped assignment should exist");
+    let completions = complete_source(
+        &source,
+        mapped_line,
+        source.lines().nth(mapped_line).unwrap().len(),
+        None,
+    )
+    .expect("completion inside Vec.map lambda should succeed");
+    for name in ["value", "offset"] {
+        assert!(
+            completions.iter().any(|completion| completion.name == name),
+            "`{name}` should be visible inside the Vec.map lambda"
+        );
+    }
 }
 
 #[test]

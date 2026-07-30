@@ -103,6 +103,15 @@ are shared; written or inferred `mut`/`own` modes are part of the contract.
 Instance, associated, and trait method values remain
 outside the implemented surface.
 
+Contextually typed expression lambdas use `lambda parameters: expression`.
+The expected `def(...) -> ...` type supplies parameter types and constrains
+the result; `lambda: expression` may infer `def() -> R` without context.
+Captures are by value: Copy values are snapshotted and owned non-Copy values
+move at creation. A read-only closure is repeatable, a closure that consumes a
+non-Copy capture is single-use, and a closure is Transfer exactly when every
+capture is Transfer. Captured environments are read-only in Phase 6.3 and
+cannot be erased through arbitrary stored or parameter `def` types.
+
 These built-in type names are reserved and cannot be reused for user-defined classes, enums, or traits.
 
 ## Packages And Workspaces
@@ -877,7 +886,8 @@ Not yet implemented:
 - direct recursive fields without `indirect`
 - first-class loan or view values; the current return syntax reserves no future
   aliasing contract
-- method values, lambdas, and capturing closures
+- method values, statement-bodied closures, mutable captures, and in-loan
+  captures
 
 Current module/import limitations:
 
@@ -897,10 +907,10 @@ Current expression/ergonomics limitations:
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
 - `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, and their explicit-stack
-  variants support capture-free named function values plus the existing direct
-  named-function and associated-method-without-`self` targets, using task-owned
-  captures; every capture and target result must be structurally `Transfer`
-  after specialization
+  variants support capture-free function values, Transfer closure values, and
+  the existing direct named-function and associated-method-without-`self`
+  targets, using task-owned captures; every capture and target result must be
+  structurally `Transfer` after specialization
 - `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,

@@ -932,6 +932,7 @@ fn io_namespace() -> ModuleNamespace {
         all_enums: enums,
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1072,6 +1073,7 @@ fn fs_namespace() -> ModuleNamespace {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1289,6 +1291,7 @@ fn net_namespace() -> ModuleNamespace {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1435,6 +1438,7 @@ fn process_namespace() -> ModuleNamespace {
         all_enums: enums,
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1477,6 +1481,7 @@ fn random_namespace() -> ModuleNamespace {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1532,6 +1537,7 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1877,6 +1883,7 @@ fn json_namespace() -> ModuleNamespace {
         all_enums: enums,
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -1986,6 +1993,7 @@ fn bytes_namespace() -> ModuleNamespace {
         all_enums: enums,
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 

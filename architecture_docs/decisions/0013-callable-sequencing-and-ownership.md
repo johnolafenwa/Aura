@@ -4,14 +4,15 @@
 - Date: 2026-07-13
 - Roadmap decision: D13
 
-> **Amended by ADR-0022 (2026-07-27).** Amended, not superseded. Future
-> in-loan closure captures use the implicit bare shared capability; move-only
-> `FnOnce` captures and every non-copy task-crossing capture remain explicit
-> ownership transfers. The full capture design is settled in Batch 5.
+> **Amended by ADR-0022 (2026-07-27) and ADR-0037 (2026-07-30).** Amended,
+> not superseded. ADR-0037 implements value-capturing expression closures:
+> Copy values copy, non-Copy owned values move at creation, read-only closures
+> are repeatable, and consuming closures are single-use. In-loan capture still
+> waits for the separate loan/view design.
 
 ## Decision
 
-Aurora adds capture-free function values first, move-only `FnOnce` closures
+Aurora adds capture-free function values first, by-value expression closures
 next, and borrowed captures only after live-loan tracking. Captures crossing
 task boundaries must satisfy transfer rules.
 

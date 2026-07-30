@@ -309,11 +309,61 @@ pub struct FunctionValue {
     pub entry_span: Span,
     pub direct_thunk: Option<i64>,
     pub direct_default_binder: Option<i64>,
+    /// Present only for capturing lambdas. Clones share this state so the
+    /// interpreter's internal value snapshots cannot accidentally duplicate a
+    /// single-use closure environment.
+    pub closure_environment: Option<Arc<ClosureEnvironment>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClosureCaptureValue {
+    pub name: String,
+    pub ty: Type,
+    pub value: Value,
+}
+
+#[derive(Debug)]
+pub struct ClosureEnvironment {
+    captures: Mutex<Option<Vec<ClosureCaptureValue>>>,
+    consuming: bool,
+}
+
+impl ClosureEnvironment {
+    pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
+        Self {
+            captures: Mutex::new(Some(captures)),
+            consuming,
+        }
+    }
+
+    pub(crate) fn arguments(&self, function_name: &str) -> Result<Vec<ClosureCaptureValue>> {
+        let mut captures = self
+            .captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.consuming {
+            return captures.take().ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "closure `{function_name}` has already consumed its captured environment"
+                ))
+            });
+        }
+        Ok(captures
+            .as_ref()
+            .expect("repeatable closure environments remain initialized")
+            .clone())
+    }
 }
 
 impl PartialEq for FunctionValue {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.signature == other.signature
+        self.name == other.name
+            && self.signature == other.signature
+            && match (&self.closure_environment, &other.closure_environment) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
     }
 }
 

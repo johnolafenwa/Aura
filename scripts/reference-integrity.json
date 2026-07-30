@@ -24,6 +24,9 @@
     "docs/manual/classes.md": {
       "kind": "feature"
     },
+    "docs/manual/closures.md": {
+      "kind": "feature"
+    },
     "docs/manual/cli-and-tooling.md": {
       "kind": "feature"
     },
@@ -231,6 +234,29 @@
       "sha256": "96edeaf49d13345acdf0405f0612520d13bc1c4f9eea94218f8479c754c85ffd",
       "mode": "illustrative",
       "reason": "Mutation fragment: Counter is declared in the preceding class example."
+    },
+    "docs/manual/closures.md#aurora-1": {
+          "sha256": "7fef7b3624eaed6172517f6bfa729b77d0ee3385663602495b6f558289883930",
+      "mode": "run",
+      "stdout": "42\n12\n6\n6\nowned\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#aurora-2": {
+      "sha256": "5ce936871688d5ce2bd04e9dca68babc057193d75ead8d2cb9fb95bbed6d42b6",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#aurora-3": {
+      "sha256": "79fd63f466269e94dd66f874f77b99bb81685c99a51a17f6d5e07708fb1675b2",
+      "mode": "run",
+      "stdout": "Aurora\n6\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#ebnf-1": {
+      "sha256": "82f928fdaab5e9899e07335b68a7580cec908caceee4f16ec4a7ecb2c4ace246",
+      "mode": "illustrative",
+      "reason": "Normative expression-lambda EBNF interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/cli-and-tooling.md#bash-1": {
       "sha256": "d7959d60b7759bee5a0a61107828cf4c97f6e16d6d5a5a436997aa4ac4d3fd44",
@@ -918,7 +944,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "bc185690b0c60ce04dc18cd3479daf83431347811fc58c5db5a23452a0825248",
+      "sha256": "4967192d5b5ae874635a2a32dddcba2ec7d273111edf6358c17a1602442bb7d9",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aurora program."
     },

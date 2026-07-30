@@ -1,0 +1,7 @@
+error[AU3002]: lambda cannot capture shared parameter `value` by value
+ --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_shared_parameter_capture.au:5:27
+  |
+5 |     return invoke(lambda: value.len())
+  |                           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/lambda_shared_parameter_capture.au:4:13: shared parameter `value` is declared here
+  = help: clone `value` into an owned local before creating the lambda, or declare the enclosing parameter as `own String`

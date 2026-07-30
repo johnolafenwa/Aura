@@ -49,12 +49,13 @@ use crate::runtime_value::{
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
-    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FileValue,
+    FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -1313,6 +1314,30 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
                     .collect(),
                 return_type: Box::new(decode_pattern(*return_type)),
             },
+            Type::Closure {
+                params,
+                return_type,
+                mut captures,
+                call_kind,
+            } => {
+                for capture in captures.iter_mut() {
+                    capture.ty = decode_pattern(capture.ty.clone());
+                }
+                Type::Closure {
+                    params: Box::new(
+                        params
+                            .into_iter()
+                            .map(|mut param| {
+                                param.ty = decode_pattern(param.ty);
+                                param
+                            })
+                            .collect(),
+                    ),
+                    return_type: Box::new(decode_pattern(*return_type)),
+                    captures,
+                    call_kind,
+                }
+            }
             Type::Unit | Type::Module(_) | Type::TypeParam(_) => ty,
         }
     }
@@ -1369,17 +1394,56 @@ fn runtime_type_pattern_matches(
                 return false;
             };
             pattern_params.len() == actual_params.len()
-                && pattern_params
-                    .iter()
-                    .zip(actual_params)
-                    .all(|(pattern_param, actual_param)| {
+                && pattern_params.iter().zip(actual_params.iter()).all(
+                    |(pattern_param, actual_param)| {
                         pattern_param.passing == actual_param.passing
                             && runtime_type_pattern_matches(
                                 &pattern_param.ty,
                                 &actual_param.ty,
                                 substitutions,
                             )
-                    })
+                    },
+                )
+                && runtime_type_pattern_matches(pattern_return, actual_return, substitutions)
+        }
+        Type::Closure {
+            params: pattern_params,
+            return_type: pattern_return,
+            captures: pattern_captures,
+            call_kind: pattern_call_kind,
+        } => {
+            let Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                captures: actual_captures,
+                call_kind: actual_call_kind,
+            } = actual
+            else {
+                return false;
+            };
+            pattern_call_kind == actual_call_kind
+                && pattern_params.len() == actual_params.len()
+                && pattern_captures.len() == actual_captures.len()
+                && pattern_params.iter().zip(actual_params.iter()).all(
+                    |(pattern_param, actual_param)| {
+                        pattern_param.passing == actual_param.passing
+                            && runtime_type_pattern_matches(
+                                &pattern_param.ty,
+                                &actual_param.ty,
+                                substitutions,
+                            )
+                    },
+                )
+                && pattern_captures.iter().zip(actual_captures.iter()).all(
+                    |(pattern_capture, actual_capture)| {
+                        pattern_capture.mode == actual_capture.mode
+                            && runtime_type_pattern_matches(
+                                &pattern_capture.ty,
+                                &actual_capture.ty,
+                                substitutions,
+                            )
+                    },
+                )
                 && runtime_type_pattern_matches(pattern_return, actual_return, substitutions)
         }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if path == actual_path),
@@ -1450,7 +1514,7 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
             Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.clone()),
             Value::Task(task) => task.set_runtime_type_name(runtime_type_name.clone()),
             Value::Function(function) => {
-                if matches!(parsed, Type::Function { .. }) {
+                if matches!(parsed, Type::Function { .. } | Type::Closure { .. }) {
                     function.signature = parsed.clone();
                 }
             }
@@ -3128,7 +3192,163 @@ pub extern "C-unwind" fn aurora_direct_function_value(
             ),
             direct_thunk: Some(thunk_ptr),
             direct_default_binder: Some(default_binder_ptr),
+            closure_environment: None,
         })))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_closure_value(
+    function: *mut OpaqueValue,
+    captures_ptr: *mut i64,
+    capture_count: i64,
+    consuming: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let capture_count = usize::try_from(capture_count)
+            .unwrap_or_else(|_| runtime_error("invalid closure capture count"));
+        let captures = if capture_count == 0 {
+            Vec::new()
+        } else {
+            unsafe {
+                consume_owned_opaque_buffer_for(captures_ptr, capture_count, "closure capture")
+            }
+        };
+        let function = unsafe { consume_owned_value(function) };
+        let Value::Function(mut function) = function else {
+            runtime_error("direct closure construction expected a function value");
+        };
+        function.closure_environment = Some(Arc::new(ClosureEnvironment::new(
+            captures
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| ClosureCaptureValue {
+                    name: format!("__capture_{index}"),
+                    ty: Type::named("Unknown"),
+                    value,
+                })
+                .collect(),
+            consuming != 0,
+        )));
+        boxed_value(Value::Function(function))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_function_bind_defaults(
+    function: *mut OpaqueValue,
+    args: *mut i64,
+    arg_count: i64,
+    transfer_defaults: i64,
+) {
+    task_runtime_boundary(|| {
+        let function = match unsafe { value_ref(function) } {
+            Value::Function(function) => function,
+            other => runtime_error(format!(
+                "indirect call expected a function value, found `{}`",
+                value_type_name(&other)
+            )),
+        };
+        // Lambda parameters cannot declare defaults. Hidden captures belong to
+        // the closure environment and must never be exposed to the ordinary
+        // declaration binder.
+        if function.closure_environment.is_some() {
+            return;
+        }
+        let binder_ptr = function
+            .direct_default_binder
+            .unwrap_or_else(|| runtime_error("direct function value has no native default binder"));
+        let binder: unsafe extern "C-unwind" fn(*mut i64, usize, i64) =
+            unsafe { std::mem::transmute(binder_ptr as usize) };
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
+        unsafe { binder(args, arg_count, transfer_defaults) };
+    })
+}
+
+struct DirectClosureCallBuffer {
+    handles: Vec<i64>,
+    public_args: *mut i64,
+    capture_count: usize,
+    public_count: usize,
+    copy_writebacks: bool,
+}
+
+impl DirectClosureCallBuffer {
+    fn copy_public_writebacks(&mut self) {
+        self.copy_writebacks = true;
+    }
+}
+
+impl Drop for DirectClosureCallBuffer {
+    fn drop(&mut self) {
+        if self.copy_writebacks {
+            for index in 0..self.public_count {
+                unsafe {
+                    *self.public_args.add(index) = self.handles[self.capture_count + index];
+                }
+                self.handles[self.capture_count + index] = 0;
+            }
+        }
+        // On an unwind every still-live public argument is released here and
+        // no mutable writeback is installed. On normal return the thunk has
+        // cleared consumed slots, while the loop above transferred only its
+        // public writebacks back to the caller.
+        for handle in self.handles.drain(..).filter(|handle| *handle != 0) {
+            let value = handle as *mut OpaqueValue;
+            unregister_direct_owned_value(value);
+            unsafe { release_untracked_value(value) };
+        }
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_function_call(
+    function: *mut OpaqueValue,
+    args: *mut i64,
+    arg_count: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let function = match unsafe { value_ref(function) } {
+            Value::Function(function) => function,
+            other => runtime_error(format!(
+                "indirect call expected a function value, found `{}`",
+                value_type_name(&other)
+            )),
+        };
+        let thunk_ptr = function
+            .direct_thunk
+            .unwrap_or_else(|| runtime_error("direct function value has no native thunk"));
+        let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
+        let Some(environment) = &function.closure_environment else {
+            return unsafe { thunk(args, arg_count) };
+        };
+        let captures = environment
+            .arguments(&function.name)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let capture_count = captures.len();
+        let mut buffer = DirectClosureCallBuffer {
+            handles: Vec::with_capacity(capture_count + arg_count),
+            public_args: args,
+            capture_count,
+            public_count: arg_count,
+            copy_writebacks: false,
+        };
+        buffer.handles.extend(
+            captures
+                .into_iter()
+                .map(|capture| boxed_value(capture.value) as i64),
+        );
+        for index in 0..arg_count {
+            let value = unsafe { *args.add(index) };
+            buffer.handles.push(value);
+            unsafe { *args.add(index) = 0 };
+        }
+        let result = unsafe { thunk(buffer.handles.as_mut_ptr(), buffer.handles.len()) };
+        buffer.copy_public_writebacks();
+        result
     })
 }
 
@@ -5049,7 +5269,11 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
                     ),
                     _ => false,
                 },
-                Type::Function { .. } | Type::Unit | Type::Module(_) | Type::TypeParam(_) => false,
+                Type::Function { .. }
+                | Type::Closure { .. }
+                | Type::Unit
+                | Type::Module(_)
+                | Type::TypeParam(_) => false,
             };
             return i64::from(untagged_outer_wildcard);
         }
@@ -9829,16 +10053,28 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_function_with_frames(
     spawn_line: i64,
     spawn_column: i64,
 ) -> *mut OpaqueValue {
-    let (thunk_ptr, task_function, task_path, task_entry_span) =
+    let (thunk_ptr, task_function, task_path, task_entry_span, closure_captures) =
         match unsafe { value_ref(function) } {
-            Value::Function(function) => (
-                function
-                    .direct_thunk
-                    .unwrap_or_else(|| runtime_error("direct function value has no native thunk")),
-                DirectFrameText::shared(function.name.clone()),
-                function.source_path.clone().map(DirectFrameText::shared),
-                function.entry_span,
-            ),
+            Value::Function(function) => {
+                let captures = function
+                    .closure_environment
+                    .as_ref()
+                    .map(|environment| {
+                        environment
+                            .arguments(&function.name)
+                            .unwrap_or_else(|error| runtime_diagnostic_error(error))
+                    })
+                    .unwrap_or_default();
+                (
+                    function.direct_thunk.unwrap_or_else(|| {
+                        runtime_error("direct function value has no native thunk")
+                    }),
+                    DirectFrameText::shared(function.name.clone()),
+                    function.source_path.clone().map(DirectFrameText::shared),
+                    function.entry_span,
+                    captures,
+                )
+            }
             other => runtime_error(format!(
                 "task starting expected a function value, found `{}`",
                 value_type_name(other)
@@ -9870,6 +10106,28 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_function_with_frames(
             ),
         ),
     });
+    let (args_ptr, arg_count) = if closure_captures.is_empty() {
+        (args_ptr, arg_count)
+    } else {
+        let public_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid task-start arg count"));
+        let public = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                args_ptr as *mut i64,
+                public_count,
+            ))
+            .into_vec()
+        };
+        let mut combined = PendingDirectTaskArgs::default();
+        for capture in closure_captures {
+            combined.push_value(capture.value);
+        }
+        combined.extend_raw(public);
+        let combined_count = i64::try_from(combined.len())
+            .unwrap_or_else(|_| runtime_error("closure task argument count exceeds i64"));
+        let combined_ptr = combined.into_raw_buffer();
+        (combined_ptr as *const i64, combined_count)
+    };
     unsafe {
         start_direct_task_call(DirectTaskCall {
             thunk_ptr,
@@ -9882,6 +10140,46 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_function_with_frames(
             stack_size,
             task_ancestry,
         })
+    }
+}
+
+#[derive(Default)]
+struct PendingDirectTaskArgs {
+    handles: Vec<i64>,
+}
+
+impl PendingDirectTaskArgs {
+    fn push_value(&mut self, value: Value) {
+        let handle = boxed_value(value);
+        // The raw task buffer, not the spawning task's generated-frame
+        // ownership ledger, owns this reference from this point onward. The
+        // child claims it in its own ledger immediately before entering the
+        // generated thunk.
+        unregister_direct_owned_value(handle);
+        self.handles.push(handle as i64);
+    }
+
+    fn extend_raw(&mut self, handles: Vec<i64>) {
+        self.handles.extend(handles);
+    }
+
+    fn len(&self) -> usize {
+        self.handles.len()
+    }
+
+    fn into_raw_buffer(mut self) -> *mut i64 {
+        let handles = std::mem::take(&mut self.handles).into_boxed_slice();
+        Box::into_raw(handles) as *mut i64
+    }
+}
+
+impl Drop for PendingDirectTaskArgs {
+    fn drop(&mut self) {
+        for handle in self.handles.drain(..).filter(|handle| *handle != 0) {
+            unsafe {
+                release_untracked_value(handle as *mut OpaqueValue);
+            }
+        }
     }
 }
 

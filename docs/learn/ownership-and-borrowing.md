@@ -77,6 +77,38 @@ requirement and rejects only a specialization that would duplicate an `Rng`.
 
 Clone close to the reason for cloning. A clone at the call site tells the reader that the program is deliberately keeping both values.
 
+## Closures Own Their Captures
+
+A closure takes its captured values when the lambda expression is evaluated:
+
+```python
+label = "compile"
+length: def() -> int64 = lambda: label.len()
+
+print(length())
+print(length())
+```
+
+`label` is non-Copy, so it moves into `length`. The closure can still be
+called repeatedly because its body only reads the captured string. If the body
+returned `label` directly, the call would consume the capture and therefore
+the complete closure; a second call would be a moved-value error.
+
+To keep both owners, clone before creation:
+
+```python
+label = "compile"
+captured = label.clone()
+length: def() -> int64 = lambda: captured.len()
+
+print(label)
+print(length())
+```
+
+Copy captures are snapshots and leave the source usable. Shared and mutable
+enclosing parameters are capabilities rather than owned values and cannot be
+captured. Captured environments are read-only in the current phase.
+
 ## Shared Borrows
 
 When a helper should read a value without owning it, the parameter uses `T`:

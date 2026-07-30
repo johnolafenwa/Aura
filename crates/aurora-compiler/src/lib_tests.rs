@@ -2038,6 +2038,75 @@ fn imported_tuple_signatures_qualify_each_element_across_modules() {
 }
 
 #[test]
+fn imported_nested_closures_preserve_qualified_capture_types_on_both_runtimes() {
+    let temp = TempDir::new("aurora-compiler-imported-nested-closure-captures");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/token.au"),
+        [
+            "public class Token:",
+            "    public value: int32",
+            "",
+            "public def nested_value(value: int32) -> int32:",
+            "    token = Token(value=value)",
+            "    inner: def(int32) -> int32 = lambda delta: token.value + delta",
+            "    outer: def(int32) -> int32 = lambda extra: inner(extra) + 1",
+            "    return outer(0)",
+            "",
+        ]
+        .join("\n"),
+    )
+    .expect("failed to write closure helper module");
+    let main_path = temp.path().join("main.au");
+    fs::write(
+        &main_path,
+        [
+            "from helpers.token import nested_value",
+            "",
+            "def main() -> int32:",
+            "    print(nested_value(value=41))",
+            "    return 0",
+            "",
+        ]
+        .join("\n"),
+    )
+    .expect("failed to write closure consumer");
+
+    let checked = check_path(&main_path)
+        .expect("nested closure capture metadata should remain valid across module qualification");
+    assert!(
+        checked
+            .module_registry
+            .values()
+            .flat_map(|module| module.closures.values())
+            .any(|closure| {
+                closure.captures.iter().any(|capture| {
+                    matches!(
+                        &capture.ty,
+                        crate::sema::Type::Closure { captures, .. }
+                            if captures.iter().any(|nested| {
+                                nested.ty
+                                    == crate::sema::Type::named("helpers.token.Token")
+                            })
+                    )
+                })
+            }),
+        "the exported outer closure should retain the fully qualified nested capture type"
+    );
+
+    let direct = run_path(&main_path).expect("nested imported closures should run directly");
+    assert_eq!(direct.stdout, "42\n");
+    assert_eq!(direct.value, zero_exit_value());
+
+    let mir = lower_path_to_mir(&main_path)
+        .expect("nested imported closures should lower through module boundaries");
+    let mir_output =
+        run_mir(&mir).expect("nested imported closures should run through the MIR runtime");
+    assert_eq!(mir_output.stdout, "42\n");
+    assert_eq!(mir_output.value, zero_exit_value());
+}
+
+#[test]
 fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
     run_with_large_stack(|| {
         let repo_root = repo_root();

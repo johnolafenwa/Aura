@@ -12,7 +12,8 @@ use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::sema::{
     binary_operator_trait, resolve_param_passing, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
-    FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
+    ClosureCallKind, ClosureCaptureMode, ClosureInfo, FunctionParamContract, ModuleNamespace,
+    Program, TraitBound, Type,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -192,6 +193,18 @@ fn type_contains_unknown(ty: &Type) -> bool {
             params.iter().any(|param| type_contains_unknown(&param.ty))
                 || type_contains_unknown(return_type.as_ref())
         }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            params.iter().any(|param| type_contains_unknown(&param.ty))
+                || captures
+                    .iter()
+                    .any(|capture| type_contains_unknown(&capture.ty))
+                || type_contains_unknown(return_type.as_ref())
+        }
         Type::TypeParam(_) | Type::Unit | Type::Module(_) => false,
     }
 }
@@ -235,8 +248,22 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             return_type,
             ..
         } => {
-            for param in params {
+            for param in params.iter() {
                 collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            for param in params.iter() {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            for capture in captures.iter() {
+                collect_type_params_from_type(&capture.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
         }
@@ -436,6 +463,15 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    /// Constructs a first-class closure around an ordinary synthesized MIR
+    /// function. Captures are evaluated exactly once, in source order, and
+    /// become hidden leading arguments whenever the function is invoked.
+    Closure {
+        function: String,
+        signature: Type,
+        captures: Vec<MirClosureCapture>,
+        consuming: bool,
+    },
     FormatString {
         parts: Vec<MirFormatPart>,
     },
@@ -516,6 +552,13 @@ pub enum Rvalue {
         object: Operand,
         field: String,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirClosureCapture {
+    pub name: String,
+    pub value: Operand,
+    pub ty: Type,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -723,7 +766,10 @@ pub fn lower(program: &Program) -> MirModule {
     let top_level = if program.top_level_stmts.is_empty() {
         None
     } else {
-        Some(lower_top_level(program))
+        let mut lowered = lower_top_level(program);
+        let top_level = lowered.remove(0);
+        functions.extend(lowered);
+        Some(top_level)
     };
 
     MirModule {
@@ -1050,8 +1096,8 @@ fn lower_function(
         .iter()
         .zip(param_types.iter())
         .enumerate()
-        .filter_map(|(index, (param, ty))| {
-            param.default.as_ref().map(|default| {
+        .flat_map(|(index, (param, ty))| {
+            param.default.as_ref().map_or_else(Vec::new, |default| {
                 lower_default_function(
                     program,
                     &format!("{name}::__default_{index}_{}", param.name),
@@ -1136,7 +1182,7 @@ fn lower_function(
     } else {
         lowerer.lower_stmts(&function.body);
     }
-    let function = lowerer.finish(MirFunctionSpec {
+    let functions = lowerer.finish_with_generated(MirFunctionSpec {
         name: name.to_string(),
         span: function.span,
         receiver: receiver.map(lower_receiver_kind),
@@ -1144,7 +1190,7 @@ fn lower_function(
         return_type: return_type.clone(),
         default_return: default_return_operand(return_type),
     });
-    std::iter::once(function).chain(default_functions).collect()
+    functions.into_iter().chain(default_functions).collect()
 }
 
 fn lower_default_function(
@@ -1154,7 +1200,7 @@ fn lower_default_function(
     default: &Expr,
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
-) -> MirFunction {
+) -> Vec<MirFunction> {
     let mut lowerer = Lowerer::new(
         program,
         name,
@@ -1164,7 +1210,7 @@ fn lower_default_function(
     );
     let value = lowerer.lower_expr_for_owned_value(default, Some(return_type));
     lowerer.terminate(Terminator::Return(value));
-    lowerer.finish(MirFunctionSpec {
+    lowerer.finish_with_generated(MirFunctionSpec {
         name: name.to_string(),
         span: default.span,
         receiver: None,
@@ -1174,7 +1220,7 @@ fn lower_default_function(
     })
 }
 
-fn lower_top_level(program: &Program) -> MirFunction {
+fn lower_top_level(program: &Program) -> Vec<MirFunction> {
     let mut lowerer = Lowerer::new(
         program,
         "__script",
@@ -1183,7 +1229,7 @@ fn lower_top_level(program: &Program) -> MirFunction {
         BTreeMap::new(),
     );
     lowerer.lower_stmts(&program.top_level_stmts);
-    lowerer.finish(MirFunctionSpec {
+    lowerer.finish_with_generated(MirFunctionSpec {
         name: "__script".to_string(),
         span: crate::diag::Span::new(1, 1),
         receiver: None,
@@ -1224,6 +1270,7 @@ struct Lowerer<'a> {
     local_types: std::collections::BTreeMap<String, Type>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    generated_functions: Vec<MirFunction>,
 }
 
 #[derive(Clone, Debug)]
@@ -1380,7 +1427,23 @@ impl<'a> Lowerer<'a> {
             local_types: std::collections::BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            generated_functions: Vec::new(),
         }
+    }
+
+    fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
+        let closures = if self.module_name == self.program.module_name {
+            &self.program.closures
+        } else {
+            &self.module_namespace(self.module_name)?.closures
+        };
+        let mut matching = closures.values().filter(|info| {
+            info.id.module_name == self.module_name
+                && info.span.line == span.line
+                && info.span.column == span.column
+        });
+        let found = matching.next()?;
+        matching.next().is_none().then_some(found)
     }
 
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
@@ -1530,6 +1593,108 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
+    }
+
+    fn lower_lambda(
+        &mut self,
+        expr: &Expr,
+        params: &[crate::ast::LambdaParam],
+        body: &Expr,
+    ) -> Operand {
+        let info = self
+            .closure_info_at(expr.span)
+            .cloned()
+            .expect("checked lambda should retain owner-qualified closure metadata");
+        debug_assert_eq!(params.len(), info.params.len());
+        let name = format!(
+            "{}::__lambda_{}_{}",
+            self.function_name, expr.span.line, expr.span.column
+        );
+        let mut mir_params = info
+            .captures
+            .iter()
+            .map(|capture| MirParam {
+                name: capture.name.clone(),
+                passing: MirReceiverKind::Value,
+                ty: capture.ty.clone(),
+                default_function: None,
+            })
+            .collect::<Vec<_>>();
+        mir_params.extend(info.params.iter().map(|param| MirParam {
+            name: param.name.clone(),
+            passing: lower_receiver_kind(param.passing),
+            ty: param.ty.clone(),
+            default_function: None,
+        }));
+
+        let mut lowerer = Lowerer::new(
+            self.program,
+            &name,
+            self.module_name,
+            info.return_type.clone(),
+            self.type_param_bounds.clone(),
+        );
+        for capture in &info.captures {
+            lowerer
+                .local_types
+                .insert(capture.name.clone(), capture.ty.clone());
+            if info.call_kind == ClosureCallKind::Repeatable {
+                lowerer.non_owning_roots.insert(capture.name.clone());
+            }
+        }
+        for param in &info.params {
+            lowerer
+                .local_types
+                .insert(param.name.clone(), param.ty.clone());
+            if param.passing != ReceiverKind::Value {
+                lowerer.non_owning_roots.insert(param.name.clone());
+            }
+        }
+        let result = lowerer.lower_expr_for_owned_value(body, Some(&info.return_type));
+        lowerer.terminate(Terminator::Return(result));
+        self.generated_functions
+            .extend(lowerer.finish_with_generated(MirFunctionSpec {
+                name: name.clone(),
+                span: expr.span,
+                receiver: None,
+                params: mir_params,
+                return_type: info.return_type.clone(),
+                default_return: default_return_operand(&info.return_type),
+            }));
+
+        let signature = info.ty();
+        if info.captures.is_empty() {
+            return Operand::Function {
+                name,
+                signature: Box::new(signature),
+            };
+        }
+        let captures = info
+            .captures
+            .iter()
+            .map(|capture| {
+                let place = self.render_local_name(&capture.name);
+                MirClosureCapture {
+                    name: capture.name.clone(),
+                    value: match capture.mode {
+                        ClosureCaptureMode::Copy => Operand::Place(place),
+                        ClosureCaptureMode::Move => Operand::MovePlace(place),
+                    },
+                    ty: capture.ty.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let temp = self.new_typed_temp(signature.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Closure {
+                function: name,
+                signature,
+                captures,
+                consuming: info.call_kind == ClosureCallKind::Consuming,
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
@@ -1846,6 +2011,13 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn finish_with_generated(mut self, spec: MirFunctionSpec) -> Vec<MirFunction> {
+        let generated = std::mem::take(&mut self.generated_functions);
+        std::iter::once(self.finish(spec))
+            .chain(generated)
+            .collect()
+    }
+
     fn lower_stmts(&mut self, statements: &[Stmt]) {
         for stmt in statements {
             if !self.lower_stmt(stmt) {
@@ -1997,7 +2169,12 @@ impl<'a> Lowerer<'a> {
     fn lower_assign(&mut self, assign: &AssignStmt) {
         let named_target_type = match (&assign.target, &assign.annotation) {
             (AssignTarget::Name(name), Some(annotation)) => {
-                Some((name, self.lower_type_ref_with_provenance(annotation)))
+                let annotation = self.lower_type_ref_with_provenance(annotation);
+                let storage_type = self
+                    .infer_expr_type(&assign.value)
+                    .filter(|ty| matches!(ty, Type::Closure { .. }))
+                    .unwrap_or(annotation);
+                Some((name, storage_type))
             }
             (AssignTarget::Name(name), None) => {
                 self.infer_expr_type(&assign.value).map(|ty| (name, ty))
@@ -3663,6 +3840,7 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
+            ExprKind::Lambda { params, body } => self.lower_lambda(expr, params, body),
             ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::DurationNanos(value) => Operand::Duration(*value),
@@ -4115,10 +4293,14 @@ impl<'a> Lowerer<'a> {
                     .expect("checked Vec.sort_by key should have a function type");
                 let callback =
                     self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
-                let Type::Function {
+                let (Type::Function {
                     return_type: key_ty,
                     ..
-                } = callback_ty
+                }
+                | Type::Closure {
+                    return_type: key_ty,
+                    ..
+                }) = callback_ty
                 else {
                     unreachable!("checked Vec.sort_by key should have a function type");
                 };
@@ -5659,6 +5841,21 @@ impl<'a> Lowerer<'a> {
                             substitutions: std::collections::HashMap::new(),
                             display_name: "function value".to_string(),
                         }),
+                        Type::Closure {
+                            params,
+                            return_type,
+                            ..
+                        } => Some(TaskStartTarget {
+                            function_name: None,
+                            params: Vec::new(),
+                            param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                            param_passings: params.iter().map(|param| param.passing).collect(),
+                            param_contracts: *params,
+                            return_type: *return_type,
+                            type_params: Vec::new(),
+                            substitutions: std::collections::HashMap::new(),
+                            display_name: "function value".to_string(),
+                        }),
                         _ => None,
                     })
                 }),
@@ -5793,6 +5990,21 @@ impl<'a> Lowerer<'a> {
                         substitutions: std::collections::HashMap::new(),
                         display_name: "function value".to_string(),
                     }),
+                    Type::Closure {
+                        params,
+                        return_type,
+                        ..
+                    } => Some(TaskStartTarget {
+                        function_name: None,
+                        params: Vec::new(),
+                        param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                        param_passings: params.iter().map(|param| param.passing).collect(),
+                        param_contracts: *params,
+                        return_type: *return_type,
+                        type_params: Vec::new(),
+                        substitutions: std::collections::HashMap::new(),
+                        display_name: "function value".to_string(),
+                    }),
                     _ => None,
                 })
             }
@@ -5806,6 +6018,21 @@ impl<'a> Lowerer<'a> {
                     param_types: params.iter().map(|param| param.ty.clone()).collect(),
                     param_passings: params.iter().map(|param| param.passing).collect(),
                     param_contracts: params,
+                    return_type: *return_type,
+                    type_params: Vec::new(),
+                    substitutions: std::collections::HashMap::new(),
+                    display_name: "function value".to_string(),
+                }),
+                Type::Closure {
+                    params,
+                    return_type,
+                    ..
+                } => Some(TaskStartTarget {
+                    function_name: None,
+                    params: Vec::new(),
+                    param_types: params.iter().map(|param| param.ty.clone()).collect(),
+                    param_passings: params.iter().map(|param| param.passing).collect(),
+                    param_contracts: *params,
                     return_type: *return_type,
                     type_params: Vec::new(),
                     substitutions: std::collections::HashMap::new(),
@@ -5996,7 +6223,11 @@ impl<'a> Lowerer<'a> {
             _ => false,
         };
         if !direct_decl_callee {
-            if let Some(Type::Function { params, .. }) = self.infer_expr_type(callee) {
+            if let Some(params) = self.infer_expr_type(callee).and_then(|ty| match ty {
+                Type::Function { params, .. } => Some(params),
+                Type::Closure { params, .. } => Some(*params),
+                _ => None,
+            }) {
                 let function = self.lower_expr_at_sequence_point(callee, None);
                 let args = self.lower_function_value_args(args, &params, callee.span);
                 self.emit(Instruction::Assign {
@@ -7409,6 +7640,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
                 Some(Type::named("bool"))
             }
+            ExprKind::Lambda { .. } => self.closure_info_at(expr.span).map(ClosureInfo::ty),
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(mapped) = self.scoped_local_name(name) {
@@ -7555,7 +7787,10 @@ impl<'a> Lowerer<'a> {
                     _ => false,
                 };
                 if !direct_decl_callee {
-                    if let Some(Type::Function { return_type, .. }) = self.infer_expr_type(callee) {
+                    if let Some(
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                    ) = self.infer_expr_type(callee)
+                    {
                         return Some(*return_type);
                     }
                 }
@@ -7970,11 +8205,12 @@ impl<'a> Lowerer<'a> {
                                             .bind_args(args, callee.span)
                                             .ok()
                                             .and_then(|ordered| ordered[0]);
-                                        if let Some(Type::Function { return_type, .. }) = callback
-                                            .and_then(|argument| {
-                                                self.infer_expr_type(&argument.value)
-                                            })
-                                        {
+                                        if let Some(
+                                            Type::Function { return_type, .. }
+                                            | Type::Closure { return_type, .. },
+                                        ) = callback.and_then(|argument| {
+                                            self.infer_expr_type(&argument.value)
+                                        }) {
                                             return Some(Type::Named(
                                                 "Vec".to_string(),
                                                 vec![*return_type],

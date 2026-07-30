@@ -77,6 +77,15 @@ printed-output order unless they explicitly coordinate that order.
     - `21`
     - `2`
     - `owned`
+- `closures.au`
+  - contextually typed expression lambdas with a Copy snapshot, a repeatable
+    read-only non-Copy capture, and a consuming single-use capture
+  - prints:
+    - `42`
+    - `12`
+    - `6`
+    - `6`
+    - `owned`
 - `borrow_parameters.au`
   - free-function bare shared and `mut` parameters with caller-visible mutation
   - prints:

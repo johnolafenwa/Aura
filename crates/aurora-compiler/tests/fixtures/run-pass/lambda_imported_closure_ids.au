@@ -1,0 +1,7 @@
+import lambda_imported_closure_ids_support.left
+import lambda_imported_closure_ids_support.right
+
+def main() -> int32:
+    print(lambda_imported_closure_ids_support.left.compute(1))
+    print(lambda_imported_closure_ids_support.right.compute(1))
+    return 0

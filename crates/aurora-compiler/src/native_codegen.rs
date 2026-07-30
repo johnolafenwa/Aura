@@ -322,8 +322,9 @@ struct NativeCodegen<'a> {
     box_f64: FuncId,
     box_bool: FuncId,
     function_value: FuncId,
-    function_thunk: FuncId,
-    function_default_binder: FuncId,
+    closure_value: FuncId,
+    function_call: FuncId,
+    function_bind_defaults: FuncId,
     box_unit: FuncId,
     string_literal: FuncId,
     string_len: FuncId,
@@ -808,8 +809,9 @@ impl<'a> NativeCodegen<'a> {
             box_f64 => ("aurora_direct_box_f64", [types::F64], Some(types::I64)),
             box_bool => ("aurora_direct_box_bool", [types::I64], Some(types::I64)),
             function_value => ("aurora_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            function_thunk => ("aurora_direct_function_thunk", [types::I64], Some(types::I64)),
-            function_default_binder => ("aurora_direct_function_default_binder", [types::I64], Some(types::I64)),
+            closure_value => ("aurora_direct_closure_value", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            function_call => ("aurora_direct_function_call", [types::I64, types::I64, types::I64], Some(types::I64)),
+            function_bind_defaults => ("aurora_direct_function_bind_defaults", [types::I64, types::I64, types::I64, types::I64], None),
             box_unit => ("aurora_direct_box_unit", [], Some(types::I64)),
             string_literal => ("aurora_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
             string_len => ("aurora_direct_string_len", [types::I64], Some(types::I64)),
@@ -1219,8 +1221,9 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
-            function_thunk,
-            function_default_binder,
+            closure_value,
+            function_call,
+            function_bind_defaults,
             box_unit,
             string_literal,
             string_len,
@@ -1861,12 +1864,15 @@ impl<'a> NativeCodegen<'a> {
         let function_value = self
             .object
             .declare_func_in_func(self.function_value, builder.func);
-        let function_thunk = self
+        let closure_value = self
             .object
-            .declare_func_in_func(self.function_thunk, builder.func);
-        let function_default_binder = self
+            .declare_func_in_func(self.closure_value, builder.func);
+        let function_call = self
             .object
-            .declare_func_in_func(self.function_default_binder, builder.func);
+            .declare_func_in_func(self.function_call, builder.func);
+        let function_bind_defaults = self
+            .object
+            .declare_func_in_func(self.function_bind_defaults, builder.func);
         let box_unit = self
             .object
             .declare_func_in_func(self.box_unit, builder.func);
@@ -2765,8 +2771,9 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
-            function_thunk,
-            function_default_binder,
+            closure_value,
+            function_call,
+            function_bind_defaults,
             box_unit,
             string_literal,
             string_len,
@@ -3574,8 +3581,9 @@ struct FunctionCompiler<'a> {
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
     function_value: cranelift_codegen::ir::FuncRef,
-    function_thunk: cranelift_codegen::ir::FuncRef,
-    function_default_binder: cranelift_codegen::ir::FuncRef,
+    closure_value: cranelift_codegen::ir::FuncRef,
+    function_call: cranelift_codegen::ir::FuncRef,
+    function_bind_defaults: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
     string_len: cranelift_codegen::ir::FuncRef,
@@ -4201,6 +4209,12 @@ impl<'a> FunctionCompiler<'a> {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
             }
+            Rvalue::Closure {
+                function,
+                signature,
+                captures,
+                consuming,
+            } => self.compile_closure(function, signature, captures, *consuming),
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
             Rvalue::Unary { op, value, span } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
@@ -4332,6 +4346,50 @@ impl<'a> FunctionCompiler<'a> {
             }),
             Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
+    }
+
+    fn compile_closure(
+        &mut self,
+        function: &str,
+        signature: &Type,
+        captures: &[crate::mir::MirClosureCapture],
+        consuming: bool,
+    ) -> std::result::Result<ValueRef, String> {
+        let function_operand = Operand::Function {
+            name: function.to_string(),
+            signature: Box::new(signature.clone()),
+        };
+        let loaded_function = self.load_operand(&function_operand)?;
+        let function_value = self.ensure_opaque(loaded_function)?;
+        let function_value = self.transfer_owned_opaque_value(&function_value);
+        let count = self.builder.ins().iconst(types::I64, captures.len() as i64);
+        let buffer = if captures.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let call = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            self.builder.inst_results(call)[0]
+        };
+        for (index, capture) in captures.iter().enumerate() {
+            let capture_ty = ensure_direct_type(
+                &capture.ty,
+                &self.classes,
+                &format!("closure capture `{}`", capture.name),
+            )?;
+            let value = self.load_operand_for_target(&capture.value, &capture_ty)?;
+            let value = self.coerce_value(value, &capture_ty)?;
+            let value = self.ensure_opaque(value)?;
+            let value = self.transfer_owned_opaque_value(&value);
+            let index = self.builder.ins().iconst(types::I64, index as i64);
+            self.builder
+                .ins()
+                .call(self.arg_buffer_store_owned, &[buffer, index, value]);
+        }
+        let consuming = self.builder.ins().iconst(types::I64, i64::from(consuming));
+        let call = self.builder.ins().call(
+            self.closure_value,
+            &[function_value, buffer, count, consuming],
+        );
+        Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), signature.clone()))
     }
 
     fn compile_vec_literal_for_target(
@@ -5145,12 +5203,19 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let function_type = infer_operand_type(function, &self.variable_types, &self.classes)
             .ok_or("direct backend could not infer the indirect callee type".to_string())?;
-        let DirectType::Opaque(Type::Function {
-            params,
-            return_type,
-        }) = function_type
-        else {
-            return Err("direct backend expected an indirect function value".to_string());
+        let (params, return_type) = match function_type {
+            DirectType::Opaque(Type::Function {
+                params,
+                return_type,
+            }) => (params, return_type),
+            DirectType::Opaque(Type::Closure {
+                params,
+                return_type,
+                ..
+            }) => (*params, return_type),
+            _ => {
+                return Err("direct backend expected an indirect function value".to_string());
+            }
         };
         if args.len() > params.len() {
             return Err(format!(
@@ -5221,23 +5286,10 @@ impl<'a> FunctionCompiler<'a> {
                 (_, None) => {}
             }
         }
-        let thunk_call = self
-            .builder
-            .ins()
-            .call(self.function_thunk, &[function.values[0]]);
-        let thunk_ptr = self.builder.inst_results(thunk_call)[0];
-        let binder_call = self
-            .builder
-            .ins()
-            .call(self.function_default_binder, &[function.values[0]]);
-        let binder_ptr = self.builder.inst_results(binder_call)[0];
-        let binder_signature = default_binder_signature(self.builder.func.signature.call_conv);
-        let binder_signature_ref = self.builder.import_signature(binder_signature);
         let keep_defaults_owned = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().call_indirect(
-            binder_signature_ref,
-            binder_ptr,
-            &[buffer, count, keep_defaults_owned],
+        self.builder.ins().call(
+            self.function_bind_defaults,
+            &[function.values[0], buffer, count, keep_defaults_owned],
         );
         for (index, supplied) in binding.slots.iter().enumerate() {
             if supplied.is_some() {
@@ -5249,12 +5301,10 @@ impl<'a> FunctionCompiler<'a> {
                     .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
             self.tag_raw_opaque_runtime_type(raw, &param_types[index])?;
         }
-        let thunk_signature = thunk_signature(self.builder.func.signature.call_conv);
-        let signature_ref = self.builder.import_signature(thunk_signature);
         let call = self
             .builder
             .ins()
-            .call_indirect(signature_ref, thunk_ptr, &[buffer, count]);
+            .call(self.function_call, &[function.values[0], buffer, count]);
         let raw_result = self.builder.inst_results(call)[0];
 
         for (index, place, writeback_ty) in writebacks {
@@ -12050,6 +12100,7 @@ impl<'a> FunctionCompiler<'a> {
         let function_params =
             match infer_operand_type(function, &self.variable_types, &self.classes) {
                 Some(DirectType::Opaque(Type::Function { params, .. })) => params,
+                Some(DirectType::Opaque(Type::Closure { params, .. })) => *params,
                 _ => Vec::new(),
             };
         let arg_count_value = self
@@ -12094,18 +12145,15 @@ impl<'a> FunctionCompiler<'a> {
                 &[buffer, index_value, value.values[0]],
             );
         }
-        let binder_call = self
-            .builder
-            .ins()
-            .call(self.function_default_binder, &[function_value.values[0]]);
-        let binder_ptr = self.builder.inst_results(binder_call)[0];
-        let binder_signature = default_binder_signature(self.builder.func.signature.call_conv);
-        let binder_signature_ref = self.builder.import_signature(binder_signature);
         let transfer_defaults = self.builder.ins().iconst(types::I64, 1);
-        self.builder.ins().call_indirect(
-            binder_signature_ref,
-            binder_ptr,
-            &[buffer, arg_count_value, transfer_defaults],
+        self.builder.ins().call(
+            self.function_bind_defaults,
+            &[
+                function_value.values[0],
+                buffer,
+                arg_count_value,
+                transfer_defaults,
+            ],
         );
         for (index, supplied) in binding.slots.iter().enumerate() {
             if supplied.is_some() {
@@ -12227,7 +12275,7 @@ impl<'a> FunctionCompiler<'a> {
                 let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
-            Type::Function { .. } => {
+            Type::Function { .. } | Type::Closure { .. } => {
                 let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
@@ -12685,6 +12733,18 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
                 params.iter().any(|param| type_contains_unknown(&param.ty))
                     || type_contains_unknown(return_type.as_ref())
             }
+            Type::Closure {
+                params,
+                return_type,
+                captures,
+                ..
+            } => {
+                params.iter().any(|param| type_contains_unknown(&param.ty))
+                    || captures
+                        .iter()
+                        .any(|capture| type_contains_unknown(&capture.ty))
+                    || type_contains_unknown(return_type.as_ref())
+            }
             Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
         }
     }
@@ -12813,6 +12873,18 @@ fn validate_rvalue(
 ) -> std::result::Result<(), String> {
     match rvalue {
         Rvalue::Use(operand) => validate_operand(operand),
+        Rvalue::Closure {
+            signature,
+            captures,
+            ..
+        } => {
+            ensure_direct_type(signature, classes, "closure signature")?;
+            for capture in captures.iter() {
+                validate_operand(&capture.value)?;
+                ensure_direct_type(&capture.ty, classes, "closure capture")?;
+            }
+            Ok(())
+        }
         Rvalue::FormatString { parts } => {
             for part in parts {
                 if let MirFormatPart::Value(value) = part {
@@ -13029,7 +13101,7 @@ fn direct_type_inner(
             }
             Some(DirectType::Opaque(Type::Tuple(elements.clone())))
         }
-        Type::Function { .. } => Some(DirectType::Opaque(ty.clone())),
+        Type::Function { .. } | Type::Closure { .. } => Some(DirectType::Opaque(ty.clone())),
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
         }
@@ -13105,8 +13177,22 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             return_type,
             ..
         } => {
-            for param in params {
+            for param in params.iter() {
                 collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            for param in params.iter() {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            for capture in captures.iter() {
+                collect_type_params_from_type(&capture.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
         }
@@ -13125,6 +13211,7 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("String"))),
         Rvalue::Unary { op, value, .. } => {
             match (op, infer_operand_type(value, variable_types, classes)?) {
@@ -13185,8 +13272,9 @@ fn infer_rvalue_type(
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Value(function) => {
-                let DirectType::Opaque(Type::Function { return_type, .. }) =
-                    infer_operand_type(function, variable_types, classes)?
+                let DirectType::Opaque(
+                    Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                ) = infer_operand_type(function, variable_types, classes)?
                 else {
                     return None;
                 };
@@ -13616,9 +13704,12 @@ fn infer_rvalue_type(
         } => {
             if *returns_handle {
                 infer_operand_type(function, variable_types, classes).and_then(|ty| match ty {
-                    DirectType::Opaque(Type::Function { return_type, .. }) => Some(
-                        DirectType::Opaque(Type::Named("Task".to_string(), vec![*return_type])),
-                    ),
+                    DirectType::Opaque(
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                    ) => Some(DirectType::Opaque(Type::Named(
+                        "Task".to_string(),
+                        vec![*return_type],
+                    ))),
                     _ => None,
                 })
             } else {
@@ -14976,6 +15067,44 @@ fn collect_direct_runtime_type_substitutions(
             }
             collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
+        Type::Closure {
+            params: pattern_params,
+            return_type: pattern_return,
+            captures: pattern_captures,
+            ..
+        } => {
+            let Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                captures: actual_captures,
+                ..
+            } = actual
+            else {
+                return;
+            };
+            if pattern_params.len() != actual_params.len()
+                || pattern_captures.len() != actual_captures.len()
+            {
+                return;
+            }
+            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
+                collect_direct_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            for (pattern_capture, actual_capture) in
+                pattern_captures.iter().zip(actual_captures.iter())
+            {
+                collect_direct_runtime_type_substitutions(
+                    &pattern_capture.ty,
+                    &actual_capture.ty,
+                    substitutions,
+                );
+            }
+            collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -15006,6 +15135,20 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
             params
                 .iter()
                 .any(|param| runtime_type_is_wildcard(&param.ty))
+                || runtime_type_is_wildcard(return_type)
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            params
+                .iter()
+                .any(|param| runtime_type_is_wildcard(&param.ty))
+                || captures
+                    .iter()
+                    .any(|capture| runtime_type_is_wildcard(&capture.ty))
                 || runtime_type_is_wildcard(return_type)
         }
         Type::Unit | Type::Module(_) => false,

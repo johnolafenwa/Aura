@@ -2813,6 +2813,7 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         all_enums: program.enums.clone(),
         all_traits: program.traits.clone(),
         imported_modules: program.imported_modules.clone(),
+        closures: program.closures.clone(),
     }
 }
 
@@ -2890,6 +2891,7 @@ def generic_helper[T](value: own T) -> T:
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     pkg.imported_modules
         .insert("helpers".to_string(), helpers.clone());
@@ -2911,6 +2913,7 @@ def generic_helper[T](value: own T) -> T:
         all_enums: program.enums.clone(),
         all_traits: program.traits.clone(),
         imported_modules: BTreeMap::from([("pkg".to_string(), pkg.clone())]),
+        closures: program.closures.clone(),
     };
     current
         .all_classes
@@ -3215,6 +3218,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     imported_only_root.imported_modules.insert(
         "helpers".to_string(),
@@ -5839,6 +5843,31 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         params: Vec::new(),
         return_type: Box::new(Type::named("Unknown")),
     }));
+    let closure_with_unresolved_capture = Type::Closure {
+        params: Box::new(vec![contract(
+            Type::TypeParam("T".to_string()),
+            ReceiverKind::Borrow,
+        )]),
+        return_type: Box::new(Type::TypeParam("U".to_string())),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "environment".to_string(),
+            ty: Type::Named("Option".to_string(), vec![Type::named("Unknown")]),
+            mode: crate::sema::ClosureCaptureMode::Copy,
+            span: Span::new(1, 1),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+    };
+    let mut closure_type_params = BTreeSet::new();
+    collect_type_params_from_type(&closure_with_unresolved_capture, &mut closure_type_params);
+    assert_eq!(
+        closure_type_params,
+        BTreeSet::from(["T".to_string(), "U".to_string()]),
+        "closure type-parameter discovery must traverse parameters, captures, and returns"
+    );
+    assert!(
+        type_contains_unknown(&closure_with_unresolved_capture),
+        "conditional-result inference must not hide unresolved types inside closure environments"
+    );
 
     let source_type = TypeRef::function_with_params(
         vec![
@@ -6219,4 +6248,554 @@ def main() -> int32:
             "the named retry target should contain `{adapter}`"
         );
     }
+}
+
+#[test]
+fn mir_closure_conversion_preserves_capture_metadata_and_uses_value_calls() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    offset: int64 = 10
+    factor: int64 = 3
+    add_snapshot: def(int64) -> int64 = lambda value: value * factor + offset
+    print(add_snapshot(1))
+    identity: def(int64) -> int64 = lambda value: value
+    print(identity(2))
+    payload = "single-use"
+    take_payload: def() -> String = lambda: payload
+    print(take_payload())
+"#,
+    )
+    .expect("capturing and capture-free lambdas should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+
+    let closures = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Closure {
+                        function,
+                        signature,
+                        captures,
+                        consuming,
+                    },
+                ..
+            } => Some((function, signature, captures, consuming)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        closures.len(),
+        2,
+        "only capturing lambdas need environments"
+    );
+
+    let &(repeatable_name, repeatable_signature, repeatable_captures, _) = closures
+        .iter()
+        .find(|entry| !*entry.3)
+        .expect("the Copy capture should produce a repeatable closure");
+    let Type::Closure {
+        captures,
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+        ..
+    } = repeatable_signature
+    else {
+        panic!("the Copy captures should retain a repeatable closure signature");
+    };
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| { (capture.name.as_str(), capture.mode, capture.ty.clone(),) })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "factor",
+                crate::sema::ClosureCaptureMode::Copy,
+                Type::named("int64"),
+            ),
+            (
+                "offset",
+                crate::sema::ClosureCaptureMode::Copy,
+                Type::named("int64"),
+            ),
+        ],
+        "closure metadata must preserve deterministic lexical-first-use order"
+    );
+    assert_eq!(
+        repeatable_captures
+            .iter()
+            .map(|capture| {
+                (
+                    capture.name.as_str(),
+                    capture.value.clone(),
+                    capture.ty.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "factor",
+                Operand::Place("factor".to_string()),
+                Type::named("int64"),
+            ),
+            (
+                "offset",
+                Operand::Place("offset".to_string()),
+                Type::named("int64"),
+            ),
+        ],
+        "the environment payload order must exactly match the closure type metadata"
+    );
+    let repeatable_body = module
+        .functions
+        .iter()
+        .find(|function| function.name == *repeatable_name)
+        .expect("the repeatable lambda body should be an ordinary lifted MIR function");
+    assert_eq!(
+        repeatable_body
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.passing))
+            .collect::<Vec<_>>(),
+        vec![
+            ("factor", MirReceiverKind::Value),
+            ("offset", MirReceiverKind::Value),
+            ("value", MirReceiverKind::Borrow),
+        ],
+        "hidden captures must precede public lambda parameters"
+    );
+
+    let &(_, consuming_signature, consuming_captures, consuming) = closures
+        .iter()
+        .find(|entry| *entry.3)
+        .expect("the moved String capture should produce a consuming closure");
+    assert!(*consuming);
+    assert!(matches!(
+        consuming_signature,
+        Type::Closure {
+            call_kind: crate::sema::ClosureCallKind::Consuming,
+            ..
+        }
+    ));
+    assert!(matches!(
+        consuming_captures.as_slice(),
+        [MirClosureCapture {
+            name,
+            value: Operand::MovePlace(place),
+            ..
+        }] if name == "payload" && place == "payload"
+    ));
+
+    for binding in ["add_snapshot", "take_payload"] {
+        assert!(
+            matches!(
+                main.local_types
+                    .iter()
+                    .find(|local| local.name == binding)
+                    .map(|local| &local.ty),
+                Some(Type::Closure { .. })
+            ),
+            "capturing binding `{binding}` must retain closure metadata in MIR"
+        );
+    }
+    assert!(matches!(
+        main.local_types
+            .iter()
+            .find(|local| local.name == "identity")
+            .map(|local| &local.ty),
+        Some(Type::Function { .. })
+    ));
+    assert!(
+        main.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        ..
+                    },
+                    ..
+                }
+            ))
+            .count()
+            >= 3,
+        "lambda invocation should reuse ordinary MIR function-value dispatch"
+    );
+}
+
+#[test]
+fn nested_closure_conversion_nests_environment_types_and_lifted_call_abis() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main() -> int32:
+    factor: int64 = 2
+    inner: def(int64) -> int64 = lambda value: value * factor
+    offset: int64 = 1
+    outer: def(int64) -> int64 = lambda value: inner(value) + offset
+    print(outer(3))
+    return 0
+"#,
+    )
+    .expect("nested capturing lambdas should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let closures = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Closure {
+                        function,
+                        signature,
+                        captures,
+                        consuming,
+                    },
+            } => Some((target, function, signature, captures, consuming)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(closures.len(), 2);
+
+    let (_, inner_name, inner_signature, inner_captures, inner_consuming) = closures
+        .iter()
+        .find(|(_, _, _, captures, _)| {
+            matches!(
+                captures.as_slice(),
+                [MirClosureCapture { name, .. }] if name == "factor"
+            )
+        })
+        .expect("inner closure should be explicit in MIR");
+    assert!(!**inner_consuming);
+    assert!(matches!(
+        inner_captures.as_slice(),
+        [MirClosureCapture {
+            name,
+            value: Operand::Place(place),
+            ty,
+        }] if name == "factor" && place == "factor" && *ty == Type::named("int64")
+    ));
+    assert!(matches!(
+        inner_signature,
+        Type::Closure {
+            captures,
+            call_kind: crate::sema::ClosureCallKind::Repeatable,
+            ..
+        } if matches!(
+            captures.as_slice(),
+            [crate::sema::ClosureCapture {
+                name,
+                mode: crate::sema::ClosureCaptureMode::Copy,
+                ty,
+                ..
+            }] if name == "factor" && *ty == Type::named("int64")
+        )
+    ));
+
+    let (_, outer_name, outer_signature, outer_captures, outer_consuming) = closures
+        .iter()
+        .find(|(_, _, _, captures, _)| {
+            matches!(
+                captures.as_slice(),
+                [
+                    MirClosureCapture { name: first, .. },
+                    MirClosureCapture { name: second, .. },
+                ] if first == "inner" && second == "offset"
+            )
+        })
+        .expect("outer closure should be explicit in MIR");
+    assert!(!**outer_consuming);
+    assert_eq!(
+        outer_captures
+            .iter()
+            .map(|capture| {
+                (
+                    capture.name.as_str(),
+                    capture.value.clone(),
+                    capture.ty.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "inner",
+                Operand::MovePlace("inner".to_string()),
+                (*inner_signature).clone(),
+            ),
+            (
+                "offset",
+                Operand::Place("offset".to_string()),
+                Type::named("int64"),
+            ),
+        ],
+        "the outer environment must embed the inner closure type before later lexical captures"
+    );
+    let Type::Closure {
+        captures,
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+        ..
+    } = outer_signature
+    else {
+        panic!("capturing a repeatable closure must keep the outer closure repeatable");
+    };
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| (capture.name.as_str(), capture.mode, capture.ty.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "inner",
+                crate::sema::ClosureCaptureMode::Move,
+                (*inner_signature).clone(),
+            ),
+            (
+                "offset",
+                crate::sema::ClosureCaptureMode::Copy,
+                Type::named("int64"),
+            ),
+        ]
+    );
+
+    let inner_lifted = module
+        .functions
+        .iter()
+        .find(|function| function.name == **inner_name)
+        .expect("inner lifted function should be emitted");
+    assert_eq!(
+        inner_lifted
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["factor", "value"]
+    );
+    let outer_lifted = module
+        .functions
+        .iter()
+        .find(|function| function.name == **outer_name)
+        .expect("outer lifted function should be emitted");
+    assert_eq!(
+        outer_lifted
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["inner", "offset", "value"],
+        "nested environments must remain the leading hidden parameters"
+    );
+    assert!(
+        outer_lifted
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(Operand::Place(place)),
+                        ..
+                    },
+                    ..
+                } if place == "inner"
+            )),
+        "the lifted outer body must invoke its captured closure through value-call MIR"
+    );
+}
+
+#[test]
+fn imported_lambdas_resolve_owner_qualified_metadata_and_lifted_function_ids() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/lambda_imported_closure_ids.au");
+    let module = crate::lower_path_to_mir(&path)
+        .expect("same-span lambdas in distinct imported modules should lower");
+
+    let mut lifted_names = Vec::new();
+    for module_name in [
+        "lambda_imported_closure_ids_support.left",
+        "lambda_imported_closure_ids_support.right",
+    ] {
+        let compute_name = format!("{module_name}::compute");
+        let compute = module
+            .functions
+            .iter()
+            .find(|function| function.name == compute_name)
+            .unwrap_or_else(|| panic!("imported function `{compute_name}` should lower"));
+        let (lifted_name, captures) = compute
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Closure {
+                            function, captures, ..
+                        },
+                    ..
+                } => Some((function, captures)),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!("imported function `{compute_name}` should construct its own closure")
+            });
+        assert!(
+            lifted_name.starts_with(&format!("{compute_name}::__lambda_3_")),
+            "lifted lambda identity must be qualified by its owning function: {lifted_name}"
+        );
+        assert!(matches!(
+            captures.as_slice(),
+            [MirClosureCapture {
+                name,
+                value: Operand::Place(place),
+                ty,
+            }] if name == "offset" && place == "offset" && *ty == Type::named("int64")
+        ));
+
+        let lifted = module
+            .functions
+            .iter()
+            .find(|function| function.name == *lifted_name)
+            .unwrap_or_else(|| panic!("lifted lambda `{lifted_name}` should be emitted"));
+        assert_eq!(lifted.module_name, module_name);
+        assert_eq!(
+            lifted
+                .params
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["offset", "item"],
+            "the hidden imported capture must precede the public lambda parameter"
+        );
+        lifted_names.push(lifted_name.clone());
+    }
+
+    assert_ne!(
+        lifted_names[0], lifted_names[1],
+        "equal source spans in different modules must never alias one lifted closure"
+    );
+}
+
+#[test]
+fn closure_callbacks_and_task_targets_lower_through_shared_callable_contracts() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main() -> int32:
+    offset: int64 = 5
+    mut values: Vec[int64] = [3, 1, 2]
+    values.sort_by(lambda value: value + offset)
+    mapped: Vec[int64] = values.map(lambda value: value + offset)
+    worker: def(int64) -> int64 = lambda value: value + offset
+    with TaskGroup() as group:
+        task: Task[int64] = group.start((worker), 7)
+    return 0
+"#,
+    )
+    .expect("capturing Vec callbacks and a capturing task target should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        instructions
+            .iter()
+            .filter(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Closure { .. },
+                    ..
+                }
+            ))
+            .count(),
+        3,
+        "each capturing callback expression must construct one explicit environment"
+    );
+    assert!(
+        instructions
+            .iter()
+            .filter(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        ..
+                    },
+                    ..
+                }
+            ))
+            .count()
+            >= 2,
+        "Vec.sort_by and Vec.map callbacks must use ordinary indirect callable dispatch"
+    );
+
+    let (task_function, task_args, returns_handle) = instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::StartTask {
+                        function,
+                        args,
+                        returns_handle,
+                        ..
+                    },
+                ..
+            } => Some((function, args, returns_handle)),
+            _ => None,
+        })
+        .expect("TaskGroup.start should lower to StartTask");
+    assert!(
+        matches!(task_function, Operand::Place(place) if place == "worker"),
+        "Task lowering must retain the checked closure value as its callable target: {task_function:?}"
+    );
+    let [MirArg {
+        name: None,
+        value: Operand::Place(task_arg_place),
+        writeback_place: None,
+    }] = task_args.as_slice()
+    else {
+        panic!(
+            "task arguments must retain their declaration slot and owned capture contract: {task_args:?}"
+        );
+    };
+    assert!(main
+        .local_types
+        .iter()
+        .any(|local| { local.name == *task_arg_place && local.ty == Type::named("int64") }));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            target,
+            value: Rvalue::Use(Operand::Int(7)),
+        } if target == task_arg_place
+    )));
+    assert!(*returns_handle);
+    assert!(matches!(
+        main.local_types
+            .iter()
+            .find(|local| local.name == "task")
+            .map(|local| &local.ty),
+        Some(Type::Named(name, args))
+            if name == "Task" && args.as_slice() == [Type::named("int64")]
+    ));
 }

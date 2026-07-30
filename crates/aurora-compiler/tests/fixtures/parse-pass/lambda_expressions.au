@@ -1,0 +1,11 @@
+def build():
+    identity = lambda value: value
+    consume = lambda own value: value
+    update = lambda mut value: value
+    combine = lambda left, own right: left + right
+    deferred = lambda: 42
+    nested = lambda left: lambda right: left + right
+    conditional = lambda value: value if true else 0
+    alternative = 0 if true else lambda value: value
+    keyed = {lambda value: value: "identity"}
+    apply(lambda value: value + 1, 41)

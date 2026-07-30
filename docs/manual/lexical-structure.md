@@ -59,6 +59,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 | `Self` | Refers to the current type in supported trait and implementation type positions. |
 | `None` | The unit value, or `Option.None` when an expected option type makes that interpretation unambiguous. |
 | `Set` | Begins the explicit set literal `Set{...}` and names the builtin set type. |
+| `lambda` | Introduces a lambda when it appears at the start of an expression; it remains an identifier token for member and named-argument positions. |
 | `_` | The wildcard in a match pattern; elsewhere it is an identifier spelling subject to static rules. |
 
 ## Comments
@@ -168,7 +169,7 @@ Aurora 0.1 recognizes:
 
 There is no semicolon. Multiple statements cannot share one physical line.
 Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment
-expressions, or lambda arrow. The lexer
+expressions or a lambda arrow; lambdas use `lambda parameters: expression`. The lexer
 chooses the longest operator spelling, so `//=` is one token rather than `//`
 followed by `=`.
 

@@ -82,6 +82,19 @@ The initializer is checked before the new name becomes available. A binding with
 
 Bindings introduced inside an `if` branch, loop body, match arm, or `with` body do not escape that body. Effects on ownership state of an outer binding are merged conservatively at control-flow joins.
 
+## Lambda Scope
+
+Each lambda creates one parameter scope for its expression body. Parameters
+become visible only after the colon, cannot duplicate one another, and follow
+the ordinary no-shadowing rules. The body may resolve outer locals and owned
+parameters. Those resolved owned values become by-value captures; module
+items, builtins, imports, and the lambda's own parameters do not.
+
+A bare or `mut` parameter of an enclosing function is a capability into the
+caller's storage rather than an owned value and cannot be captured. Lambda
+parameters and captured outer names retain hover and definition identity in
+compiler analysis. See [Closures](/manual/closures).
+
 ## No-Shadowing Rules
 
 Aurora deliberately rejects several ambiguous forms of shadowing:
@@ -159,10 +172,11 @@ Imported modules contribute declarations, not executable initialization: their t
 ## Grammar
 
 Identifier spelling is defined by [Lexical Structure](/manual/lexical-structure).
-The binding positions are module declarations and imports, parameters and
-receivers, simple-name assignments, `for` and `with` targets, match payloads,
-and generic parameter lists in the [Grammar](/manual/grammar). Member access
-uses a dot-separated syntactic path; it does not add dynamic lookup syntax.
+The binding positions are module declarations and imports, function and lambda
+parameters, receivers, simple-name assignments, `for` and `with` targets,
+match payloads, and generic parameter lists in the
+[Grammar](/manual/grammar). Member access uses a dot-separated syntactic path;
+it does not add dynamic lookup syntax.
 
 ## Typing Rules
 

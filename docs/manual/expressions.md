@@ -610,23 +610,27 @@ the selected target's own default expression. Conflicting reassignment,
 structural function returns, class-field loads, and mutable-collection loads
 have only the structural function type and therefore require the complete
 positional argument list. Storage preserves each parameter's bare shared,
-`mut`, or `own` ABI capability. Instance and
-associated method values, trait-object interactions, lambdas, and capturing
-closures are not part of this stage.
+`mut`, or `own` ABI capability. Contextually typed
+`lambda parameters: expression` values use the same callable contract and may
+capture owned outer locals by value. See [Closures](/manual/closures).
+Instance and associated method values and trait-object interactions remain
+unavailable.
 
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include comprehensions, lambdas, capturing
-closures, method values, assignment expressions, call-site borrow
-annotations, non-numeric casts, or ordinary trailing commas. The required
-singleton-tuple comma is the one tuple-specific exception. If a form is absent
-from [Grammar](/manual/grammar), it is not part of the implemented expression
-language.
+Aurora 0.1 expressions do not include comprehensions, method values,
+assignment expressions, call-site borrow annotations, non-numeric casts, or
+ordinary trailing commas. Lambdas are expression-bodied and contextually
+typed; they do not add statement-bodied or implicitly reference-capturing
+forms. The required singleton-tuple comma is the one tuple-specific exception.
+If a form is absent from [Grammar](/manual/grammar), it is not part of the
+implemented expression language.
 
 ## Grammar
 
 Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
-conditional, `match`, `try`, collection, constructor, and f-string expression
+conditional, `match`, `try`, lambda, collection, constructor, and f-string
+expression
 productions are normative in [Grammar](/manual/grammar). The comparison
 production covers equality, ordering, and membership at one level and admits a
 chain of two or more operators. The precedence and
@@ -721,8 +725,7 @@ Delimiter continuation is accepted under ADR-0025 and does not add a new
 expression AST form. Conditional expressions are accepted under ADR-0027, and
 membership operators plus comparison chains are accepted under ADR-0028. The
 minimal tuple surface and its Batch 3 B3.0-c equality amendment are Accepted
-under ADR-0026. Capture-free named function values and indirect calls are
-implemented. Lambdas, closures, method values, comprehensions, assignment
-expressions, nonnumeric casts, and call-site ownership modifiers are
-unavailable. Parser migration hints for unavailable spellings do not make them
-language features.
+under ADR-0026. Capture-free named function values, indirect calls, and
+contextually typed by-value expression closures are implemented. Method
+values, comprehensions, assignment expressions, nonnumeric casts, and
+call-site ownership modifiers are unavailable.

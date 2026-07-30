@@ -4297,6 +4297,29 @@ fn type_to_ref(ty: &Type) -> TypeRef {
             type_to_ref(return_type),
             Span::new(1, 1),
         ),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => TypeRef::function_with_params(
+            params
+                .iter()
+                .map(|param| {
+                    let mode = match param.passing {
+                        ReceiverKind::Borrow => ParamMode::Default,
+                        ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                        ReceiverKind::Value => ParamMode::Own,
+                    };
+                    crate::ast::FunctionTypeParam::new(
+                        mode,
+                        type_to_ref(&param.ty),
+                        Span::new(1, 1),
+                    )
+                })
+                .collect(),
+            type_to_ref(return_type),
+            Span::new(1, 1),
+        ),
         Type::TypeParam(name) | Type::Module(name) => type_ref(name),
         Type::Unit => type_ref("None"),
     }
@@ -4493,6 +4516,7 @@ fn namespace(path: &str) -> ModuleNamespace {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     }
 }
 
@@ -4550,6 +4574,7 @@ fn local_binding(
             .collect(),
         frozen_places: BTreeMap::new(),
         shared_match_places: BTreeMap::new(),
+        captured: false,
     }
 }
 
@@ -10969,6 +10994,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            captured: false,
         },
     )]);
     checker
@@ -10999,6 +11025,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            captured: false,
         },
     )]);
     let borrowed_error = checker
@@ -11026,6 +11053,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            captured: false,
         },
     )]);
     let moved_error = checker
@@ -12931,6 +12959,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     };
     checker
         .check_trait_impl_method(
+            "Readable",
             &Type::named("Counter"),
             &[],
             &BTreeMap::new(),
@@ -12959,6 +12988,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     };
     let impl_default_error = checker
         .check_trait_impl_method(
+            "Readable",
             &Type::named("Counter"),
             &[],
             &BTreeMap::new(),
@@ -16181,6 +16211,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ]),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                captured: false,
             },
         ),
         (
@@ -16223,6 +16254,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                captured: false,
             },
         ),
         (
@@ -16243,6 +16275,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                captured: false,
             },
         ),
     ]);
@@ -16390,6 +16423,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            captured: false,
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -16552,6 +16586,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             None,
             HashMap::from([("T".to_string(), Type::TypeParam("T".to_string()))]),
             Vec::new(),
+            ClosureArgumentPolicy::Reject,
         )
         .expect_err("self-referential inferred type parameters should be rejected");
     assert!(infer_unresolved
@@ -16725,6 +16760,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
         all_enums: BTreeMap::from([("RemoteStatus".to_string(), remote_enum.clone())]),
         all_traits: BTreeMap::from([("RemoteShow".to_string(), remote_trait.clone())]),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     let context = ModuleContext {
         module_name: "<main>".to_string(),
@@ -20801,6 +20837,7 @@ fn imported_module_functions_are_first_class_values() {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         "def main():\n    callback = tools.remote_fn\n    result: int32 = callback(1)\n",
@@ -20844,6 +20881,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     let support = ModuleNamespace {
         name: "function_value_imported_support".to_string(),
@@ -20860,6 +20898,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         "def main():\n    callback = function_value_imported_support.helpers.triple\n    result: int32 = callback(4)\n",
@@ -21304,6 +21343,7 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         all_enums: BTreeMap::new(),
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         r#"
@@ -21609,4 +21649,1074 @@ def make_value() -> int32:
     .expect_err("class defaults cannot call a module function before callable registration");
     assert_eq!(rejected.code, "AU2999");
     assert_eq!(rejected.message, "unsupported call target");
+}
+
+#[test]
+fn lambdas_infer_contextual_parameters_and_record_lexical_capture_metadata() {
+    let program = crate::check_source(
+        r#"
+def inspect(prefix: String, value: int32) -> bool:
+    return prefix == "kept" and value > 0
+
+def main():
+    prefix = "kept"
+    offset: int32 = 2
+    render: def(int32) -> bool = lambda value: inspect(prefix, value + offset)
+    print(render(1))
+    print(render(2))
+"#,
+    )
+    .expect("a read-only captured lambda should retain its closure metadata and be reusable");
+
+    let closure = program
+        .closures
+        .values()
+        .find(|closure| closure.span.line == 8)
+        .expect("checked lambda metadata");
+    assert_eq!(
+        closure
+            .captures
+            .iter()
+            .map(|capture| capture.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["prefix", "offset"],
+        "captures are ordered by lexical first use, not map order"
+    );
+    assert_eq!(closure.call_kind, ClosureCallKind::Repeatable);
+    assert_eq!(closure.captures[0].mode, ClosureCaptureMode::Move);
+    assert_eq!(closure.captures[1].mode, ClosureCaptureMode::Copy);
+    assert!(matches!(closure.ty(), Type::Closure { .. }));
+}
+
+#[test]
+fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
+    let closure = Type::Closure {
+        params: Box::new(vec![FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("int32"),
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }]),
+        return_type: Box::new(Type::named("String")),
+        captures: Box::new(vec![ClosureCapture {
+            name: "prefix".to_string(),
+            ty: Type::named("String"),
+            mode: ClosureCaptureMode::Move,
+            span: Span::new(4, 17),
+        }]),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+
+    assert!(
+        std::mem::size_of::<Type>() <= 48,
+        "closure metadata must stay indirectly stored so Type does not inflate every runtime collection; actual Type size is {} bytes",
+        std::mem::size_of::<Type>()
+    );
+    assert!(
+        std::mem::size_of::<crate::runtime_value::Value>() <= 128,
+        "Type growth must not make runtime errors and collection values excessively large; actual Value size is {} bytes",
+        std::mem::size_of::<crate::runtime_value::Value>()
+    );
+
+    let serialized = serde_json::to_value(&closure).expect("closure type should serialize");
+    assert_eq!(
+        serialized,
+        serde_json::json!({
+            "Closure": {
+                "params": [{
+                    "name": "value",
+                    "ty": {"Named": ["int32", []]},
+                    "passing": "Borrow",
+                    "has_default": false,
+                    "default_erased": false
+                }],
+                "return_type": {"Named": ["String", []]},
+                "captures": [{
+                    "name": "prefix",
+                    "ty": {"Named": ["String", []]},
+                    "mode": "Move",
+                    "span": {"line": 4, "column": 17}
+                }],
+                "call_kind": "Repeatable"
+            }
+        }),
+        "boxing closure metadata must remain transparent to the serialized type schema"
+    );
+    let round_trip: Type =
+        serde_json::from_value(serialized).expect("closure type should deserialize");
+    assert_eq!(round_trip, closure);
+}
+
+#[test]
+fn noncopy_capture_moves_at_creation_and_reports_au3001_on_later_use() {
+    let diagnostic = crate::check_source(
+        r#"
+def inspect(value: String) -> bool:
+    return value == "captured"
+
+def main():
+    token = "captured"
+    inspect_later: def() -> bool = lambda: inspect(token)
+    print(token)
+"#,
+    )
+    .expect_err("capturing a non-copy value moves it when the lambda is created");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert_eq!(diagnostic.message, "use of moved value `token`");
+    assert_eq!(diagnostic.secondary_spans.len(), 1);
+    assert_eq!(
+        diagnostic.secondary_spans[0].label,
+        "value moved into closure here"
+    );
+}
+
+#[test]
+fn consuming_capture_makes_the_closure_single_use() {
+    let diagnostic = crate::check_source(
+        r#"
+def take(value: own String) -> int32:
+    return 1
+
+def main():
+    token = "once"
+    take_later: def() -> int32 = lambda: take(token)
+    first = take_later()
+    second = take_later()
+"#,
+    )
+    .expect_err("a closure that consumes a capture must move on its first call");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert_eq!(diagnostic.message, "use of moved value `take_later`");
+}
+
+#[test]
+fn shared_parameter_capture_is_rejected_with_clone_or_own_guidance() {
+    let diagnostic = crate::check_source(
+        r#"
+def build(value: String):
+    inspect: def() -> String = lambda: value
+"#,
+    )
+    .expect_err("a bare parameter is shared capability and cannot be captured by value");
+    assert_eq!(diagnostic.code, "AU3002");
+    assert_eq!(
+        diagnostic.message,
+        "lambda cannot capture shared parameter `value` by value"
+    );
+    assert!(diagnostic.help.iter().any(|help| {
+        help.contains("clone `value` into an owned local") && help.contains("`own String`")
+    }));
+}
+
+#[test]
+fn mutable_access_to_a_capture_is_rejected_until_fnmut_exists() {
+    let diagnostic = crate::check_source(
+        r#"
+def main():
+    mut values = ["kept"]
+    update: def() -> None = lambda: values.push("new")
+"#,
+    )
+    .expect_err("Phase 6.3 does not define mutable closures");
+    assert_eq!(diagnostic.code, "AU3003");
+    assert_eq!(
+        diagnostic.message,
+        "lambda capture `values` cannot be mutably accessed because mutable closures are not supported"
+    );
+}
+
+#[test]
+fn capturing_closure_uses_annotation_as_context_without_erasing_ownership() {
+    let program = crate::check_source(
+        r#"
+def inspect(value: String) -> bool:
+    return value == "kept"
+
+def main():
+    token = "kept"
+    inspect_later: def() -> bool = lambda: inspect(token)
+    print(inspect_later())
+"#,
+    )
+    .expect("an immutable local annotation should contextualize but not erase a closure");
+
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("closure metadata is retained");
+    assert!(matches!(closure.ty(), Type::Closure { .. }));
+
+    let mutable_storage = crate::check_source(
+        r#"
+def main():
+    token = "kept"
+    mut inspect_later: def() -> String = lambda: token
+"#,
+    )
+    .expect_err("mutable def storage cannot erase capture ownership metadata");
+    assert_eq!(mutable_storage.code, "AU2002");
+    assert!(mutable_storage.message.contains("mutable"));
+    assert!(mutable_storage.message.contains("capturing closure"));
+}
+
+#[test]
+fn capture_free_lambda_coerces_to_an_ordinary_copy_function_value() {
+    let program = crate::check_source(
+        r#"
+def main():
+    identity: def(int32) -> int32 = lambda value: value
+    copy = identity
+    print(identity(1))
+    print(copy(2))
+"#,
+    )
+    .expect("capture-free lambdas use the existing Copy function-value type");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("capture-free lambda metadata is available to lowering");
+    assert!(closure.captures.is_empty());
+    assert!(matches!(closure.ty(), Type::Function { .. }));
+}
+
+#[test]
+fn lambda_capture_discovery_respects_match_pattern_shadowing() {
+    let program = crate::check_source(
+        r#"
+def main():
+    outer = "outside"
+    checks: def(Option[String]) -> bool = lambda choice: match choice:
+        case Option.Some(outer): outer == "inside"
+        case Option.None: false
+    print(checks(Option.Some("inside")))
+    print(outer)
+"#,
+    )
+    .expect("match pattern bindings inside a lambda should shadow outer locals");
+
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("lambda metadata is available");
+    assert!(
+        closure.captures.is_empty(),
+        "the match-arm binding named `outer` must not capture the outer local"
+    );
+}
+
+#[test]
+fn inferred_collection_storage_does_not_hide_capturing_closure_metadata() {
+    let diagnostic = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 2
+    callbacks = [lambda: offset]
+"#,
+    )
+    .expect_err("collection inference must not make capturing closures storable");
+    assert_eq!(diagnostic.code, "AU2002");
+    assert_eq!(
+        diagnostic.message,
+        "capturing closures cannot be stored in collection literals in this language version"
+    );
+}
+
+#[test]
+fn task_group_start_moves_a_transfer_closure_target_once() {
+    let diagnostic = crate::check_source(
+        r#"
+def main():
+    payload = "task"
+    worker: def() -> String = lambda: f"{payload}"
+    with TaskGroup() as group:
+        task = group.start(worker)
+        print(task.result_or("missing", timeout=1s))
+    print(worker())
+"#,
+    )
+    .expect_err("starting a task must transfer ownership of its closure environment");
+    assert_eq!(diagnostic.code, "AU3001");
+    assert_eq!(diagnostic.message, "use of moved value `worker`");
+}
+
+#[test]
+fn branch_expressions_reject_capturing_closure_unions_with_teaching_diagnostics() {
+    let conditional = crate::check_source(
+        r#"
+def main():
+    left = "left"
+    right = "right"
+    selected: def() -> String = (lambda: left) if true else (lambda: right)
+"#,
+    )
+    .expect_err("conditional branches cannot erase distinct closure environments");
+    assert_eq!(conditional.code, "AU2002");
+    assert_eq!(
+        conditional.message,
+        "conditional expressions cannot merge capturing closure values in this language version"
+    );
+    assert!(conditional.help.iter().any(|help| {
+        help.contains("call the closure inside each branch")
+            && help.contains("capture-free lambdas or named functions")
+    }));
+
+    let matched = crate::check_source(
+        r#"
+def main():
+    left = "left"
+    right = "right"
+    selected = match true:
+        case true: lambda: left
+        case false: lambda: right
+"#,
+    )
+    .expect_err("match arms cannot erase distinct closure environments");
+    assert_eq!(matched.code, "AU2002");
+    assert_eq!(
+        matched.message,
+        "match expressions cannot merge capturing closure values in this language version"
+    );
+    assert!(matched.help.iter().any(|help| {
+        help.contains("call the closure inside each arm")
+            && help.contains("capture-free lambdas or named functions")
+    }));
+}
+
+#[test]
+fn vec_callbacks_preserve_repeatable_closure_types_and_diagnose_invalid_values() {
+    let program = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 1
+    values = [1, 2]
+    mapped: Vec[int64] = values.map(lambda value: value + offset)
+    kept: Vec[int64] = values.filter(lambda value: value > offset)
+"#,
+    )
+    .expect("Vec callbacks should contextualize repeatable capturing lambdas");
+    let closures = program.closures.values().collect::<Vec<_>>();
+    assert_eq!(closures.len(), 2);
+    assert_eq!(closures[0].return_type, Type::named("int64"));
+    assert_eq!(closures[1].return_type, Type::named("bool"));
+    for closure in closures {
+        assert_eq!(closure.call_kind, ClosureCallKind::Repeatable);
+        assert_eq!(
+            closure
+                .captures
+                .iter()
+                .map(|capture| (capture.name.as_str(), capture.mode))
+                .collect::<Vec<_>>(),
+            vec![("offset", ClosureCaptureMode::Copy)]
+        );
+    }
+
+    let consuming = crate::check_source(
+        r#"
+def take(value: own String) -> int64:
+    return 1
+
+def main():
+    token = "once"
+    values = [1]
+    values.map(lambda value: value + take(token))
+"#,
+    )
+    .expect_err("Vec.map may invoke its callback repeatedly");
+    assert_eq!(consuming.code, "AU2002");
+    assert_eq!(
+        consuming.message,
+        "`Vec.map` callback must be repeatable, found `consuming closure def(int64) -> int64`"
+    );
+
+    let non_callable = crate::check_source("def main():\n    values = [1]\n    values.map(1)\n")
+        .expect_err("Vec.map requires a callable value");
+    assert_eq!(non_callable.code, "AU2002");
+    assert_eq!(
+        non_callable.message,
+        "`Vec.map` expects a function value, found `int64`"
+    );
+
+    let wrong_element = crate::check_source(
+        r#"
+def text_length(value: String) -> int64:
+    return value.length()
+
+def main():
+    values = [1]
+    values.map(text_length)
+"#,
+    )
+    .expect_err("Vec callbacks receive the vector element by shared capability");
+    assert_eq!(wrong_element.code, "AU2002");
+    assert_eq!(
+        wrong_element.message,
+        "`Vec.map` callback expects shared `int64`, found shared `String`"
+    );
+}
+
+#[test]
+fn lambda_context_diagnostics_pin_inference_arity_and_capability_boundaries() {
+    for (source, expected) in [
+        (
+            "def main():\n    callback = lambda value: value\n",
+            "lambda parameter types require an expected `def(...) -> ...` context",
+        ),
+        (
+            "def main():\n    callback: int64 = lambda: 1\n",
+            "lambda requires a callable context, found expected type `int64`",
+        ),
+        (
+            "def main():\n    callback: def(int64) -> int64 = lambda: 1\n",
+            "lambda expects 0 contextual parameters, but its function type provides 1",
+        ),
+        (
+            "def main():\n    callback: def(own String) -> int64 = lambda value: 1\n",
+            "lambda parameter `value` has `shared` capability, but the expected function type requires `own`",
+        ),
+    ] {
+        let diagnostic =
+            crate::check_source(source).expect_err("invalid lambda context should be rejected");
+        assert_eq!(diagnostic.code, "AU2002", "{diagnostic:?}");
+        assert_eq!(diagnostic.message, expected, "{diagnostic:?}");
+    }
+}
+
+#[test]
+fn lambda_capture_discovery_tracks_composite_expressions_in_lexical_order() {
+    let program = crate::check_source(
+        r#"
+class Label:
+    number: int64
+
+def main():
+    prefix = ">"
+    values = [11]
+    index: int32 = 0
+    fallback: int64 = 0
+    label = Label(number=99)
+    render: def(bool) -> String = lambda use_value: f"{prefix}{values[index] if use_value else fallback}{label.number}"
+"#,
+    )
+    .expect("capture discovery should walk formatting, conditionals, indexing, and fields");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("render lambda metadata");
+    assert_eq!(
+        closure
+            .captures
+            .iter()
+            .map(|capture| capture.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["prefix", "values", "index", "fallback", "label"]
+    );
+    assert_eq!(
+        closure
+            .captures
+            .iter()
+            .map(|capture| capture.mode)
+            .collect::<Vec<_>>(),
+        vec![
+            ClosureCaptureMode::Move,
+            ClosureCaptureMode::Move,
+            ClosureCaptureMode::Copy,
+            ClosureCaptureMode::Copy,
+            ClosureCaptureMode::Move,
+        ]
+    );
+    assert_eq!(closure.return_type, Type::named("String"));
+}
+
+#[test]
+fn lambda_capture_rejects_already_moved_partially_moved_and_shared_local_state() {
+    let already_moved = crate::check_source(
+        r#"
+def main():
+    token = "one owner"
+    first: def() -> String = lambda: token
+    second: def() -> String = lambda: token
+"#,
+    )
+    .expect_err("a second closure cannot capture a value moved into the first");
+    assert_eq!(already_moved.code, "AU3001");
+    assert_eq!(already_moved.message, "use of moved value `token`");
+    assert_eq!(
+        already_moved.secondary_spans[0].label,
+        "value moved into closure here"
+    );
+
+    let partially_moved = crate::check_source(
+        r#"
+class Pair:
+    first: String
+    second: String
+
+def take(value: own String):
+    pass
+
+def main():
+    pair = Pair(first="first", second="second")
+    take(pair.first)
+    later: def() -> String = lambda: pair.second
+"#,
+    )
+    .expect_err("a closure cannot hide a prior partial move of its environment");
+    assert_eq!(partially_moved.code, "AU3001");
+    assert_eq!(
+        partially_moved.message,
+        "cannot capture partially moved value `pair`"
+    );
+
+    let shared_local = crate::check_source(
+        r#"
+def build(value: String):
+    alias = value
+    later: def() -> String = lambda: alias
+"#,
+    )
+    .expect_err("a shared local alias cannot become an owned closure capture");
+    assert_eq!(shared_local.code, "AU3002");
+    assert_eq!(
+        shared_local.message,
+        "lambda cannot capture shared value `alias` by value"
+    );
+    assert_eq!(
+        shared_local.secondary_spans[0].label,
+        "shared value `alias` is declared here"
+    );
+}
+
+#[test]
+fn capturing_closure_storage_rejection_is_uniform_across_collection_and_field_surfaces() {
+    for source in [
+        r#"
+def main():
+    offset: int64 = 1
+    callbacks = {lambda: offset}
+"#,
+        r#"
+def main():
+    offset: int64 = 1
+    callbacks = {"offset": lambda: offset}
+"#,
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("set and map literals cannot erase a closure environment");
+        assert_eq!(diagnostic.code, "AU2002", "{diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            "capturing closures cannot be stored in collection literals in this language version",
+            "{diagnostic:?}"
+        );
+    }
+
+    let field = crate::check_source(
+        r#"
+class Holder:
+    callback: def() -> String
+
+def main():
+    token = "field"
+    holder = Holder(callback=lambda: token)
+"#,
+    )
+    .expect_err("written field types cannot erase a closure environment");
+    assert_eq!(field.code, "AU2002");
+    assert_eq!(
+        field.message,
+        "expected `def() -> String`, found `consuming closure def() -> String`"
+    );
+    assert!(field.help.iter().any(|help| {
+        help.contains("capturing closures cannot be stored in fields")
+            && help.contains("named function or a capture-free lambda")
+    }));
+}
+
+#[test]
+fn task_closure_targets_preserve_consuming_types_and_reject_nontransfer_captures() {
+    let program = crate::check_source(
+        r#"
+def take(value: own String) -> String:
+    return value
+
+def main():
+    token = "task"
+    worker: def() -> String = lambda: take(token)
+    with TaskGroup() as group:
+        task: Task[String] = group.start(worker)
+"#,
+    )
+    .expect("a consuming closure may transfer to one child task and run once");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("task closure metadata");
+    assert_eq!(closure.call_kind, ClosureCallKind::Consuming);
+    assert_eq!(closure.return_type, Type::named("String"));
+
+    let rejected = crate::check_source(
+        r#"
+import random
+
+def main():
+    rng = random.Rng(seed=1)
+    with TaskGroup() as group:
+        group.start(lambda: rng)
+"#,
+    )
+    .expect_err("an inline task closure cannot transfer an RNG capability");
+    assert_eq!(rejected.code, "AU3008");
+    assert_eq!(
+        rejected.message,
+        "task closure target cannot cross a task boundary because capture `rng` of `consuming closure def() -> random.Rng` -> `random.Rng` is a stateful generator and is not Transfer"
+    );
+    assert_eq!(
+        rejected.secondary_spans[0].label,
+        "capture `rng` is created here"
+    );
+}
+
+#[test]
+fn lambda_capture_discovery_covers_nested_and_composite_expression_surfaces() {
+    let program = crate::check_source(
+        r#"
+def identity[T](value: own T) -> T:
+    return value
+
+def main():
+    grouped_value: int64 = 1
+    grouped: def() -> int64 = lambda: (grouped_value)
+
+    negative_value: int64 = 2
+    negative: def() -> int64 = lambda: -negative_value
+
+    cast_value: int64 = 3
+    casted: def() -> float64 = lambda: cast_value as float64
+
+    specialized_value: int64 = 4
+    specialized: def() -> int64 = lambda: identity[int64](specialized_value)
+
+    needle: int64 = 5
+    membership_values = [5, 6]
+    contains: def() -> bool = lambda: needle in membership_values
+
+    tuple_left: int64 = 7
+    tuple_right: int64 = 8
+    tupled: def() -> (int64, int64) = lambda: (tuple_left, tuple_right)
+
+    list_left: int64 = 9
+    list_right: int64 = 10
+    listed: def() -> Vec[int64] = lambda: [list_left, list_right]
+
+    set_left: int64 = 11
+    set_right: int64 = 12
+    setted: def() -> Set[int64] = lambda: Set{set_left, set_right}
+
+    map_key: int64 = 13
+    map_value: int64 = 14
+    mapped: def() -> Map[int64, int64] = lambda: {map_key: map_value}
+
+    low: int64 = 15
+    high: int64 = 20
+    bounded: def(int64) -> bool = lambda candidate: low < candidate < high
+
+    outer: int64 = 99
+    tuple_shadow: def((int64, int64)) -> int64 = lambda pair: match pair:
+        case (outer, other): outer + other
+
+    nested_values = [1, 2]
+    nested_offset: int64 = 3
+    nested: def() -> Vec[int64] = lambda: nested_values.map(
+        lambda value: value + nested_offset
+    )
+"#,
+    )
+    .expect("every lambda expression surface should retain source-derived capture metadata");
+
+    assert_eq!(program.closures.len(), 13);
+    let by_captures = program
+        .closures
+        .values()
+        .map(|closure| {
+            (
+                closure
+                    .captures
+                    .iter()
+                    .map(|capture| capture.name.clone())
+                    .collect::<Vec<_>>(),
+                closure,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (captures, return_type) in [
+        (vec!["grouped_value"], Type::named("int64")),
+        (vec!["negative_value"], Type::named("int64")),
+        (vec!["cast_value"], Type::named("float64")),
+        (vec!["specialized_value"], Type::named("int64")),
+        (vec!["needle", "membership_values"], Type::named("bool")),
+        (
+            vec!["tuple_left", "tuple_right"],
+            Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
+        ),
+        (
+            vec!["list_left", "list_right"],
+            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        ),
+        (
+            vec!["set_left", "set_right"],
+            Type::Named("Set".to_string(), vec![Type::named("int64")]),
+        ),
+        (
+            vec!["map_key", "map_value"],
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("int64"), Type::named("int64")],
+            ),
+        ),
+        (vec!["low", "high"], Type::named("bool")),
+        (vec![], Type::named("int64")),
+        (
+            vec!["nested_values", "nested_offset"],
+            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        ),
+        (vec!["nested_offset"], Type::named("int64")),
+    ] {
+        let key = captures.into_iter().map(str::to_string).collect::<Vec<_>>();
+        let closure = by_captures
+            .get(&key)
+            .unwrap_or_else(|| panic!("missing closure with captures {key:?}"));
+        assert_eq!(closure.return_type, return_type, "{key:?}");
+        assert_eq!(closure.call_kind, ClosureCallKind::Repeatable, "{key:?}");
+        assert_eq!(program.closure_info(&closure.id), Some(*closure));
+    }
+
+    let mut missing_id = program
+        .closures
+        .keys()
+        .next()
+        .expect("at least one closure")
+        .clone();
+    missing_id.column += 10_000;
+    assert_eq!(program.closure_info(&missing_id), None);
+
+    let try_program = crate::check_source(
+        r#"
+def unwrap_result() -> Result[int64, String]:
+    outcome: Result[int64, String] = Result.Ok(1)
+    unwrap: def() -> int64 = lambda: try outcome
+    return Result.Ok(unwrap())
+
+def main():
+    result = unwrap_result()
+"#,
+    )
+    .expect("a consuming lambda may propagate a captured Result through `try`");
+    let try_closure = try_program
+        .closures
+        .values()
+        .next()
+        .expect("try lambda metadata");
+    assert_eq!(try_closure.return_type, Type::named("int64"));
+    assert_eq!(try_closure.call_kind, ClosureCallKind::Consuming);
+    assert_eq!(try_closure.captures[0].name, "outcome");
+}
+
+#[test]
+fn source_derived_generic_closure_types_preserve_matching_and_clone_safety() {
+    let generic_program = crate::check_source(
+        r#"
+def hold[T](value: own T):
+    inspect: def() -> None = lambda: print(value)
+    inspect()
+"#,
+    )
+    .expect("a generic owned value can remain borrowed inside its closure environment");
+    let generic_closure = generic_program
+        .closures
+        .values()
+        .next()
+        .expect("generic closure metadata");
+    assert_eq!(generic_closure.call_kind, ClosureCallKind::Repeatable);
+    assert_eq!(
+        generic_closure.captures[0].ty,
+        Type::TypeParam("T".to_string())
+    );
+    let generic_ty = generic_closure.ty();
+    assert_eq!(type_pattern_specificity(&generic_ty), 2);
+    assert!(has_unresolved_type_params(&generic_ty));
+
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&generic_ty, &mut collected);
+    assert_eq!(collected, BTreeSet::from(["T".to_string()]));
+    assert_eq!(
+        rng_clone_obligation_params_in_context_with_modules(
+            &generic_ty,
+            &generic_program.classes,
+            &generic_program.enums,
+            &generic_program.imported_modules,
+            &generic_program.module_registry,
+        ),
+        BTreeSet::from(["T".to_string()])
+    );
+
+    let concrete_ty = substitute_type(
+        &generic_ty,
+        &HashMap::from([("T".to_string(), Type::named("String"))]),
+    );
+    assert!(!has_unresolved_type_params(&concrete_ty));
+    assert_eq!(
+        concrete_ty,
+        Type::Closure {
+            params: Box::new(Vec::new()),
+            return_type: Box::new(Type::Unit),
+            captures: Box::new(vec![ClosureCapture {
+                name: "value".to_string(),
+                ty: Type::named("String"),
+                mode: ClosureCaptureMode::Move,
+                span: generic_closure.captures[0].span,
+            }]),
+            call_kind: ClosureCallKind::Repeatable,
+        }
+    );
+
+    let mut matched = HashMap::new();
+    assert!(type_pattern_matches(
+        &generic_ty,
+        &concrete_ty,
+        &BTreeSet::from(["T".to_string()]),
+        &mut matched,
+    ));
+    assert_eq!(matched.get("T"), Some(&Type::named("String")));
+
+    let mut unified = HashMap::new();
+    unify_type_pattern(&generic_ty, &concrete_ty, &mut unified)
+        .expect("closure unification should infer through capture types");
+    assert_eq!(unified.get("T"), Some(&Type::named("String")));
+
+    let rng_program = crate::check_source(
+        r#"
+import random
+
+def inspect(value: random.Rng) -> bool:
+    return true
+
+def main():
+    rng = random.Rng(seed=1)
+    inspect_later: def() -> bool = lambda: inspect(rng)
+    print(inspect_later())
+"#,
+    )
+    .expect("shared inspection keeps a captured RNG closure repeatable");
+    let rng_ty = rng_program
+        .closures
+        .values()
+        .next()
+        .expect("RNG closure metadata")
+        .ty();
+    assert_eq!(
+        rng_clone_safety_in_context_with_modules(
+            &rng_ty,
+            &rng_program.classes,
+            &rng_program.enums,
+            &rng_program.imported_modules,
+            &rng_program.module_registry,
+        ),
+        RngCloneSafety::ContainsRng
+    );
+}
+
+#[test]
+fn lambda_defaults_respect_parameter_shadowing_and_reject_outer_parameter_capture() {
+    let program = crate::check_source(
+        r#"
+def apply(
+    value: int64,
+    callback: def(int64) -> int64 = lambda value: value
+) -> int64:
+    return callback(value)
+
+def main():
+    print(apply(3))
+"#,
+    )
+    .expect("a lambda parameter shadows an enclosing function parameter in a default");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("default lambda metadata");
+    assert!(closure.captures.is_empty());
+    assert_eq!(closure.ty().to_string(), "def(int64) -> int64");
+
+    let diagnostic = crate::check_source(
+        r#"
+def invalid(
+    value: int64,
+    callback: def() -> int64 = lambda: value
+):
+    pass
+"#,
+    )
+    .expect_err("a lambda default must not hide capture of another parameter");
+    assert_eq!(
+        diagnostic.message,
+        "default argument for parameter `callback` may not reference parameter `value`"
+    );
+}
+
+#[test]
+fn task_closure_targets_forward_owned_arguments_and_reject_mut_writeback() {
+    let program = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 2
+    worker: def(int64) -> int64 = lambda value: value + offset
+    with TaskGroup() as group:
+        task: Task[int64] = group.start(worker, 3)
+"#,
+    )
+    .expect("a repeatable closure may receive an owned child-task argument");
+    let worker = program
+        .closures
+        .values()
+        .next()
+        .expect("task worker closure");
+    assert_eq!(worker.params.len(), 1);
+    assert_eq!(worker.params[0].ty, Type::named("int64"));
+    assert_eq!(worker.params[0].passing, ReceiverKind::Borrow);
+    assert_eq!(worker.return_type, Type::named("int64"));
+    assert_eq!(worker.call_kind, ClosureCallKind::Repeatable);
+
+    let mutating = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 2
+    worker: def(mut int64) -> None = lambda mut value: print(value + offset)
+    with TaskGroup() as group:
+        group.start(worker, 3)
+"#,
+    )
+    .expect_err("a child task cannot write through a closure parameter into its caller");
+    assert_eq!(mutating.code, "AU3002");
+    assert_eq!(
+        mutating.message,
+        "task starting does not support mutable parameter 1 on a function value; child tasks cannot write back through the starting call frame"
+    );
+}
+
+#[test]
+fn closure_diagnostics_reject_map_key_environment_erasure() {
+    let diagnostic = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 7
+    callbacks = {(lambda: offset): "captured"}
+"#,
+    )
+    .expect_err("map keys cannot erase a capturing closure environment");
+    assert_eq!(diagnostic.code, "AU2002");
+    assert_eq!(
+        diagnostic.message,
+        "capturing closures cannot be stored in collection literals in this language version"
+    );
+    assert!(diagnostic.help.iter().any(|help| {
+        help.contains("keep the closure in an immutable local")
+            && help.contains("named function or capture-free lambda")
+    }));
+}
+
+#[test]
+fn closure_diagnostics_reject_explicit_specialization_of_concrete_signatures() {
+    let diagnostic = crate::check_source(
+        r#"
+def main():
+    offset: int64 = 7
+    callback: def() -> int64 = lambda: offset
+    print(callback[int64]())
+"#,
+    )
+    .expect_err("a concrete closure value cannot accept generic type arguments");
+    assert_eq!(diagnostic.code, "AU2005");
+    assert_eq!(
+        diagnostic.message,
+        "closure values have a concrete signature and do not take explicit type arguments"
+    );
+}
+
+#[test]
+fn closure_diagnostics_reject_branch_environment_erasure_against_named_functions() {
+    let conditional = crate::check_source(
+        r#"
+def constant() -> int64:
+    return 1
+
+def main():
+    offset: int64 = 7
+    selected = constant if true else (lambda: offset)
+"#,
+    )
+    .expect_err("a conditional cannot erase one branch's closure environment");
+    assert_eq!(conditional.code, "AU2002");
+    assert_eq!(
+        conditional.message,
+        "conditional expressions cannot merge capturing closure values in this language version"
+    );
+    assert!(conditional.help.iter().any(|help| {
+        help.contains("call the closure inside each branch")
+            && help.contains("capture-free lambdas or named functions")
+    }));
+
+    let matched = crate::check_source(
+        r#"
+def constant() -> int64:
+    return 1
+
+def main():
+    offset: int64 = 7
+    choice: Option[bool] = Option.Some(true)
+    selected = match choice:
+        case Option.Some(value): constant
+        case Option.None: lambda: offset
+"#,
+    )
+    .expect_err("an enum match cannot erase one arm's closure environment");
+    assert_eq!(matched.code, "AU2002");
+    assert_eq!(
+        matched.message,
+        "match expressions cannot merge capturing closure values in this language version"
+    );
+    assert!(matched.help.iter().any(|help| {
+        help.contains("call the closure inside each arm")
+            && help.contains("capture-free lambdas or named functions")
+    }));
+}
+
+#[test]
+fn closure_diagnostics_reject_inferred_generic_field_environment_erasure() {
+    let diagnostic = crate::check_source(
+        r#"
+class Holder[T]:
+    value: T
+
+def main():
+    token = "field"
+    holder = Holder(value=lambda: token)
+"#,
+    )
+    .expect_err("generic inference cannot hide closure environment erasure in a field");
+    assert_eq!(diagnostic.code, "AU2002");
+    assert_eq!(
+        diagnostic.message,
+        "expected `consuming closure def() -> String`, found `consuming closure def() -> String`"
+    );
+    assert!(diagnostic.help.iter().any(|help| {
+        help.contains("capturing closures cannot be stored in fields")
+            && help.contains("named function or a capture-free lambda")
+    }));
 }

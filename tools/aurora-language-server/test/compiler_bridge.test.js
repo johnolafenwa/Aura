@@ -4740,3 +4740,152 @@ test("compiler bridge exposes structural tuple equality and ordering diagnostics
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("compiler bridge exposes contextual lambda scope, hover, definitions, and completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-lambda-scope-"));
+  const sourceLines = [
+    "def main():",
+    "    offset: int32 = 40",
+    "    add: def(int32) -> int32 = lambda value: value + offset",
+    "    print(add(2))",
+    ""
+  ];
+  const source = sourceLines.join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const lambdaParameterDeclaration = sourceLines[2].indexOf("value");
+    const lambdaParameterUse = sourceLines[2].lastIndexOf("value");
+    const parameterOccurrence = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 2 &&
+        occurrence.start_character === lambdaParameterUse &&
+        occurrence.end_character === lambdaParameterUse + "value".length
+    );
+    assert.ok(parameterOccurrence, "the lambda parameter use should be in semantic analysis");
+    assert.match(parameterOccurrence.hover, /value: int32/);
+    assert.deepEqual(parameterOccurrence.definition, {
+      file_path: null,
+      line: 2,
+      start_character: lambdaParameterDeclaration,
+      end_character: lambdaParameterDeclaration + "value".length
+    });
+
+    const captureUse = sourceLines[2].lastIndexOf("offset");
+    const captureOccurrence = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 2 &&
+        occurrence.start_character === captureUse &&
+        occurrence.end_character === captureUse + "offset".length
+    );
+    assert.ok(captureOccurrence, "a captured local should retain hover and navigation");
+    assert.match(captureOccurrence.hover, /offset: int32/);
+    assert.ok(
+      captureOccurrence.definition.file_path.endsWith("/main.au"),
+      "captured locals should navigate within the analyzed file"
+    );
+    assert.deepEqual({
+      ...captureOccurrence.definition,
+      file_path: null
+    }, {
+      file_path: null,
+      line: 1,
+      start_character: sourceLines[1].indexOf("offset"),
+      end_character: sourceLines[1].indexOf("offset") + "offset".length
+    });
+
+    const lambdaBinding = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 3 &&
+        occurrence.hover.includes("add") &&
+        occurrence.hover.includes("def(int32) -> int32")
+    );
+    assert.ok(lambdaBinding, "the closure binding should expose its callable contract");
+
+    const completionLines = [
+      "def main():",
+      "    offset: int32 = 40",
+      "    add: def(int32) -> int32 = lambda value: value + offset",
+      ""
+    ];
+    const completionSource = completionLines.join("\n");
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      2,
+      completionLines[2].length,
+      null
+    );
+    assert.ok(completions);
+    const completionNames = new Set(completions.map((item) => item.name));
+    assert.ok(completionNames.has("value"), "lambda parameters belong to the body scope");
+    assert.ok(completionNames.has("offset"), "outer locals remain visible for capture");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves closure capture ownership diagnostics and guidance", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-lambda-diagnostics-")
+  );
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+
+    const movedCapture = [
+      "def main():",
+      "    text = \"captured\"",
+      "    length: def() -> int64 = lambda: text.len()",
+      "    print(text)",
+      "    print(length())",
+      ""
+    ].join("\n");
+    const movedAnalysis = await analyzeWithCompiler(mainUri, movedCapture);
+    assert.ok(movedAnalysis);
+    assert.equal(movedAnalysis.diagnostics.length, 1);
+    assert.equal(movedAnalysis.diagnostics[0].code, "AU3001");
+    assert.match(movedAnalysis.diagnostics[0].message, /captur|mov/i);
+
+    const sharedCapture = [
+      "def make_length(text: String) -> def() -> int64:",
+      "    return lambda: text.len()",
+      ""
+    ].join("\n");
+    const sharedAnalysis = await analyzeWithCompiler(mainUri, sharedCapture);
+    assert.ok(sharedAnalysis);
+    assert.equal(sharedAnalysis.diagnostics.length, 1);
+    assert.match(sharedAnalysis.diagnostics[0].message, /captur/i);
+    assert.ok(
+      sharedAnalysis.diagnostics[0].help.some(
+        (help) => /clone/i.test(help) || /\bown\b/.test(help)
+      ),
+      `shared-capability capture should suggest cloning or ownership: ${JSON.stringify(
+        sharedAnalysis.diagnostics[0]
+      )}`
+    );
+
+    const mutableCapture = [
+      "def main():",
+      "    mut values = Vec[int32]()",
+      "    push: def(int32) -> None = lambda value: values.push(value)",
+      "    push(1)",
+      ""
+    ].join("\n");
+    const mutableAnalysis = await analyzeWithCompiler(mainUri, mutableCapture);
+    assert.ok(mutableAnalysis);
+    assert.equal(mutableAnalysis.diagnostics.length, 1);
+    assert.match(mutableAnalysis.diagnostics[0].message, /captur|mutable/i);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

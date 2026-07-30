@@ -264,16 +264,62 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Only module-level named functions are first-class at this stage. Bound instance
-methods, associated-method values, trait-method values, lambdas, and capturing
-closures are separate features and remain unavailable. The task API keeps its
-older direct associated-method-without-`self` target form.
+Bound instance methods, associated-method values, and trait-method values
+remain unavailable. The task API keeps its older direct
+associated-method-without-`self` target form.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
+
+## Expression Closures
+
+Use a lambda when the callable is one expression and its parameter types are
+already clear from context:
+
+```python
+offset: int32 = 40
+add: def(int32) -> int32 = lambda value: value + offset
+print(add(2))
+```
+
+The annotation supplies `value: int32` and the `int32` result. A lambda does
+not put types or defaults in its own parameter list. Use `own value` or
+`mut value` only when the expected function type has that same capability.
+Multi-statement logic still belongs in a named `def`.
+
+With no parameters, context is optional: `lambda: 42` can infer
+`def() -> int64` from its body. A lambda with parameters still needs all of
+their types from context.
+
+Captures happen when the lambda is created. Copy values such as `offset` are
+snapshotted. A non-Copy owned value moves into the closure:
+
+```python
+name = "Aurora"
+length: def() -> int64 = lambda: name.len()
+print(length())
+print(length())
+```
+
+This is repeatable because the body only reads `name`. A body that returns or
+otherwise consumes a non-Copy capture makes the closure single-use. Clone
+before creation when the outer code must keep an independent owner.
+
+Shared or mutable enclosing parameters cannot be captured, captured state
+cannot be mutated in this phase, and a closure can cross a task boundary only
+when every captured value is Transfer.
+
+Capture-free lambdas work anywhere a function value works. A capturing
+closure may stay in an immutable local, be called directly, enter a
+compiler-known repeatable callback, or move into a qualifying task start. It
+cannot be stored in a `def` field or collection or returned through an
+annotated `def` result.
+
+See [examples/basics/closures.au](../examples/basics/closures.au) and the
+normative [Closures](../docs/manual/closures.md) page.
 
 ## Current Limits
 
 - return values are always owned; first-class loan or view return values are
   not part of Aurora 0.1
 - clone-based non-copy returns require the returned type to be clone-safe
-- method values, lambdas, and capturing closures are not part of this stage
+- method values and multi-statement closure bodies are not part of this stage

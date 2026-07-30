@@ -1,0 +1,15 @@
+def main():
+    factor: int32 = 2
+    scale: def(int32) -> int32 = lambda value: value * factor
+
+    label = "Aurora"
+    length: def() -> int64 = lambda: label.len()
+
+    token = "owned"
+    take: def() -> String = lambda: token
+
+    print(scale(21))
+    print(scale(6))
+    print(length())
+    print(length())
+    print(take())

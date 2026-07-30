@@ -1,0 +1,10 @@
+import control
+
+def main() -> int32:
+    payload = "once"
+    result = control.retry[String, String](
+        lambda: Result[String, String].Ok(payload),
+        max_attempts=2,
+        initial_backoff=0ms
+    )
+    return 0

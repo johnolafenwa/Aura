@@ -57,7 +57,12 @@ return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
 
-`from` is contextual: it introduces a from-import at module level and may also be used as an identifier where the grammar expects one. `copy`, `self`, `None`, `Set`, `Self`, and `_` are lexed as identifiers and acquire special meaning only in the positions defined below.
+`from` is contextual: it introduces a from-import at module level and may also
+be used as an identifier where the grammar expects one. `lambda` is lexed as
+an identifier but introduces a lambda at the start of an expression; member
+and named-argument positions may still use that spelling. `copy`, `self`,
+`None`, `Set`, `Self`, and `_` are lexed as identifiers and acquire special
+meaning only in the positions defined below.
 
 ## Strings And F-Strings
 
@@ -528,8 +533,15 @@ From lowest to highest precedence:
 | 10 | primary | — |
 
 ```ebnf
-expression           = non-tuple-expression ;
+expression           = lambda-expression | non-tuple-expression ;
 non-tuple-expression = conditional-expression ;
+
+lambda-expression
+    = "lambda", [ lambda-parameter,
+      { ",", lambda-parameter } ], ":", expression ;
+
+lambda-parameter
+    = [ "mut" | "own" ], identifier ;
 
 conditional-expression
     = or-expression,
@@ -635,6 +647,12 @@ tuple-expression
       { ",", expression }, ")" ;
 ```
 
+Lambda parameters receive their types from an expected structural function
+type, whose result also constrains the body. A zero-parameter lambda may infer
+its result from the body. The colon introduces one expression, not a suite.
+Lambda parameters do not accept annotations, defaults, generics, or a trailing
+comma.
+
 `(value)` is grouping and `(value,)` is a singleton tuple. Tuple value
 expressions require parentheses; an unparenthesized comma is accepted only in
 an unpack target. `()` and a trailing comma on a multi-element tuple are
@@ -707,7 +725,7 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline ordinary strings and f-strings
-- lambdas, local item declarations, comprehensions, decorators, and attributes
+- local item declarations, comprehensions, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
 - match guards, alternative patterns, and collection patterns

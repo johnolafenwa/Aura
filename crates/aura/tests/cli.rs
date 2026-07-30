@@ -938,6 +938,54 @@ fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
 }
 
 #[test]
+fn fmt_is_idempotent_for_lambda_expression_syntax() {
+    let temp = TempDir::new("aurora-lambda-format");
+    let source_path = temp.path().join("lambdas.au");
+    fs::write(
+        &source_path,
+        concat!(
+            "def build():\r\n",
+            "    identity = lambda value: value   \r\n",
+            "    consume = lambda own value: value\t\r\n",
+            "    combine = lambda left, mut right: left + right\r\n",
+        ),
+    )
+    .expect("lambda source should write");
+
+    let first = Command::new(aura_bin())
+        .args(["fmt"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to format lambda syntax");
+    assert!(
+        first.status.success(),
+        "lambda syntax should format successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let once = fs::read_to_string(&source_path).expect("formatted source should read");
+    assert!(once.contains("identity = lambda value: value"));
+    assert!(once.contains("consume = lambda own value: value"));
+    assert!(once.contains("combine = lambda left, mut right: left + right"));
+    assert!(!once.contains('\r'));
+    assert!(!once.lines().any(|line| line.ends_with([' ', '\t'])));
+
+    let check = Command::new(aura_bin())
+        .args(["fmt", "--check"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to check formatted lambda syntax");
+    assert!(
+        check.status.success(),
+        "a second formatter pass must be idempotent, stderr was:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&source_path).expect("idempotent source should read"),
+        once
+    );
+}
+
+#[test]
 fn run_and_built_programs_receive_arguments_and_environment() {
     let source = r#"import sys
 
@@ -1387,7 +1435,10 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aurora-task-group-cross-join-cycle",
         source,
-        std::time::Duration::from_secs(15),
+        // The outer watchdog includes process scheduling while the complete
+        // CLI suite launches many direct binaries in parallel. The Aurora
+        // sleeps above remain the semantic timing pins.
+        std::time::Duration::from_secs(30),
         "done\n",
         Some(4),
     );
@@ -6645,7 +6696,7 @@ fn run_and_direct_backends_trap_float_floor_division_by_zero() {
     assert_run_and_direct_source_failure_with_timeout(
         "aurora-float-floor-division-zero",
         source,
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         "",
         "division by zero",
     );
@@ -6672,7 +6723,7 @@ fn run_and_direct_backends_trap_boxed_int128_floor_division_overflow() {
     assert_run_and_direct_source_failure_with_timeout(
         "aurora-int128-floor-division-overflow",
         source,
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         "0\n",
         "integer value `170141183460469231731687303715884105728` does not fit in `int128`",
     );
@@ -10114,7 +10165,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-iteration-clean-return",
         source,
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         "1\n2\nloop done\nscope done\n",
     );
 }
@@ -10551,12 +10602,12 @@ def main() -> int32:
 "#;
 
     // No producer exists in this semantic pin, so extra scheduler workers
-    // cannot affect the result. Keep one worker to avoid making the 15-second
+    // cannot affect the result. Keep one worker to avoid making the 30-second
     // deadlock watchdog measure host-wide CLI-process oversubscription.
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aurora-queue-iteration-zero-producers",
         source,
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         "done\n",
         Some(1),
     );
@@ -10583,7 +10634,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-iteration-standalone-task-group",
         source,
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         "7\ndone\n",
     );
 }

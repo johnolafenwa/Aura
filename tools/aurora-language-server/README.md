@@ -18,6 +18,8 @@ Current compiler-backed analysis covers:
 - document symbols
 - hover
 - go-to-definition
+- contextual lambda parameter scope, captured-name navigation, callable hover,
+  and closure ownership diagnostics
 
 The server starts one persistent compiler service:
 
@@ -25,7 +27,8 @@ The server starts one persistent compiler service:
 
 Requests and responses are newline-delimited JSON and carry compiler-owned
 `semantic_interface_version: 3`. Version 3 adds structural function types and
-function-value operands to compiler-owned semantic data. This identity is distinct from the public
+function-value and closure operands to compiler-owned semantic data. This
+identity is distinct from the public
 diagnostic document's numeric schema version. The transport rejects and
 disposes a compiler with a missing or different semantic identity, invalidates
 all cached document analysis, and uses lexical recovery for the failed request;

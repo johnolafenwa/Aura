@@ -143,12 +143,12 @@ pub enum ReceiverKind {
 /// generic specialization from changing a function's source-level contract.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum ParamMode {
-    /// Bare `name: T`. ADR-0022 makes this shared access everywhere, including
-    /// declaration-known copy types.
+    /// Bare `name: T`, or bare `name` in a contextual lambda. ADR-0022 makes
+    /// this shared access everywhere, including declaration-known copy types.
     Default,
-    /// `name: own T`.
+    /// `name: own T`, or `own name` in a contextual lambda.
     Own,
-    /// `name: mut T`.
+    /// `name: mut T`, or `mut name` in a contextual lambda.
     BorrowMut,
 }
 
@@ -393,6 +393,18 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// One untyped parameter in a `lambda ...: expression`.
+///
+/// Lambda parameter types are supplied by the contextual function type. The
+/// source still records each capability so closure calls obey the same
+/// parameter contract as named functions.
+#[derive(Clone, Debug, Serialize)]
+pub struct LambdaParam {
+    pub name: String,
+    pub mode: ParamMode,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub enum ExprKind {
     Name(String),
@@ -426,6 +438,10 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         condition: Box<Expr>,
         else_expr: Box<Expr>,
+    },
+    Lambda {
+        params: Vec<LambdaParam>,
+        body: Box<Expr>,
     },
     Call {
         callee: Box<Expr>,

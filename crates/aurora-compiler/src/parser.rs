@@ -3,9 +3,9 @@ use crate::ast::{
     BreakStmt, ClassDecl, CompareLink, CompareOp, ContinueStmt, DestructureStmt, EnumDecl,
     EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt,
     FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
-    ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
-    TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    ImportKind, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm,
+    MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt,
+    TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -1380,7 +1380,106 @@ impl Parser {
     }
 
     fn parse_non_tuple_expr_inner(&mut self) -> Result<Expr> {
-        self.parse_conditional()
+        if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "lambda") {
+            self.parse_lambda()
+        } else {
+            self.parse_conditional()
+        }
+    }
+
+    fn parse_lambda(&mut self) -> Result<Expr> {
+        let token = self.bump();
+        debug_assert!(matches!(
+            token.kind,
+            TokenKind::Identifier(ref name) if name == "lambda"
+        ));
+
+        let mut params: Vec<LambdaParam> = Vec::new();
+        if !self.at_simple(&TokenKind::Colon) {
+            loop {
+                if self.at_simple(&TokenKind::KwBorrow) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access",
+                    ));
+                }
+                let mode = if self.eat_simple(&TokenKind::KwOwn).is_some() {
+                    ParamMode::Own
+                } else if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ParamMode::BorrowMut
+                } else {
+                    ParamMode::Default
+                };
+                let param_span = self.current_span();
+                let name = match self.current_kind() {
+                    TokenKind::Identifier(name) if name != "lambda" => name.clone(),
+                    TokenKind::KwFrom => "from".to_string(),
+                    _ => {
+                        return Err(parse_error(
+                            param_span,
+                            "expected a parameter name in lambda parameter list",
+                        ))
+                    }
+                };
+                self.bump();
+
+                if self.at_simple(&TokenKind::Equal) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "lambda parameters cannot have defaults; pass values explicitly when calling the closure",
+                    ));
+                }
+                if params.iter().any(|param| param.name == name) {
+                    return Err(parse_error(
+                        param_span,
+                        format!("duplicate lambda parameter `{name}`"),
+                    ));
+                }
+                params.push(LambdaParam {
+                    name,
+                    mode,
+                    span: param_span,
+                });
+
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+                if self.at_simple(&TokenKind::Colon) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "expected a parameter name after `,` in lambda parameter list",
+                    ));
+                }
+            }
+        }
+
+        if self.eat_simple(&TokenKind::Colon).is_none() {
+            return Err(parse_error(
+                self.current_span(),
+                "expected `:` after lambda parameter list",
+            ));
+        }
+        if self.at_simple(&TokenKind::Newline) || self.at_eof() {
+            return Err(parse_error(
+                self.current_span(),
+                "lambda body must be a single expression after `:`; use a named `def` for multi-statement logic",
+            ));
+        }
+
+        let body = self.parse_non_tuple_expr()?;
+        if self.at_simple(&TokenKind::Colon) && looks_like_lambda_type_annotation(&body) {
+            return Err(parse_error(
+                self.current_span(),
+                "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type",
+            ));
+        }
+        Ok(Expr {
+            kind: ExprKind::Lambda {
+                params,
+                body: Box::new(body),
+            },
+            span: token.span,
+        })
     }
 
     fn parse_conditional(&mut self) -> Result<Expr> {
@@ -1398,7 +1497,7 @@ impl Parser {
                     "conditional expression requires `else` and an alternative value",
                 ));
             }
-            let else_expr = self.parse_conditional()?;
+            let else_expr = self.parse_non_tuple_expr()?;
             let span = then_expr.span;
             Ok(Expr {
                 kind: ExprKind::Conditional {
@@ -1831,13 +1930,7 @@ impl Parser {
 
         match token.kind {
             TokenKind::Identifier(name) => {
-                if name == "lambda" {
-                    Err(Diagnostic::coded_at(
-                        "AU2005",
-                        token.span,
-                        "lambda expressions are not available yet; use a named `def` today",
-                    ))
-                } else if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
+                if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
                     let mut elements = Vec::new();
                     if !self.at_simple(&TokenKind::RBrace) {
                         loop {
@@ -2882,6 +2975,13 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
             offset_expr_span(condition, line, column_offset);
             offset_expr_span(else_expr, line, column_offset);
         }
+        ExprKind::Lambda { params, body } => {
+            for param in params {
+                param.span.line = line;
+                param.span.column += column_offset;
+            }
+            offset_expr_span(body, line, column_offset);
+        }
         ExprKind::Membership {
             value,
             container,
@@ -2963,6 +3063,44 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
                 }
             }
         }
+    }
+}
+
+fn looks_like_lambda_type_annotation(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Name(name) => {
+            name.chars().next().is_some_and(char::is_uppercase)
+                || matches!(
+                    name.as_str(),
+                    "bool"
+                        | "int"
+                        | "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "int128"
+                        | "intsize"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "uint128"
+                        | "uintsize"
+                        | "float32"
+                        | "float64"
+                )
+        }
+        ExprKind::Specialize { expr, .. } | ExprKind::Group(expr) => {
+            looks_like_lambda_type_annotation(expr)
+        }
+        ExprKind::Index { object, index } => {
+            matches!(
+                &object.kind,
+                ExprKind::Name(name) if name.chars().next().is_some_and(char::is_uppercase)
+            ) && looks_like_lambda_type_annotation(index)
+        }
+        ExprKind::Tuple(elements) => elements.iter().all(looks_like_lambda_type_annotation),
+        _ => false,
     }
 }
 

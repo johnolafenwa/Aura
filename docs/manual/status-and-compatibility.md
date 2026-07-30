@@ -51,6 +51,17 @@ Vec member names are part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
+Phase 6.3 adds contextually typed `lambda parameters: expression` closures
+under Provisional ADR-0037. Captures are by value: Copy values are copied,
+owned non-Copy values move at creation, read-only capture use is repeatable,
+and consuming capture use makes the closure single-use. A closure is Transfer
+only when every capture is Transfer. Shared or mutable capability capture and
+mutable captured state remain unavailable pending the separate loan/view
+design. Zero-parameter lambdas may infer their result without a contextual
+callable type. Capturing closures retain compiler metadata and therefore do
+not cross arbitrary written-`def` parameter, field, collection, or annotated
+return boundaries.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

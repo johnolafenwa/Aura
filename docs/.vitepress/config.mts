@@ -70,6 +70,7 @@ export default defineConfig({
             { text: 'Tuples', link: '/manual/tuples' },
             { text: 'Assertions', link: '/manual/assertions' },
             { text: 'Functions', link: '/manual/functions' },
+            { text: 'Closures', link: '/manual/closures' },
             { text: 'Classes', link: '/manual/classes' },
             { text: 'Enums And Pattern Matching', link: '/manual/enums-and-match' },
             { text: 'Generics And Traits', link: '/manual/generics-and-traits' },

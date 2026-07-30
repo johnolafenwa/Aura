@@ -65,6 +65,17 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.match(keywordRule.match, /and\|or\|not/);
   assert.match(keywordRule.match, /pass/);
   assert.match(keywordRule.match, /assert/);
+  assert.match(keywordRule.match, /lambda/);
+});
+
+test("extension packages an expression-lambda snippet", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const snippets = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "snippets", "aurora.json"), "utf8")
+  );
+
+  assert.deepEqual(snippets.Lambda.body, ["lambda ${1:value}: ${2:expression}"]);
+  assert.match(snippets.Lambda.description, /expression/i);
 });
 
 test("syntax grammar treats mut and own as Aurora storage modifiers without retired borrow", () => {

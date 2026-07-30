@@ -215,6 +215,79 @@ That file and the untracked user-owned ADR-0022 draft remain outside this
 change. The complete maintained Phase 6.2 change set passes `git diff --check`
 and every other hygiene rule.
 
+## Phase 6.3 documentation and editor surface
+
+Provisional ADR-0037 and the normative Closure Manual page now define
+expression-only lambdas, contextual parameter types, zero-parameter result
+inference, by-value Copy/move capture, repeatable versus consuming calls,
+read-only environments, and structural Transfer. The maintained limit is
+explicit: arbitrary written `def` storage describes capture-free code
+pointers, while compiler-known callback and task-start sites preserve closure
+environment and call-kind metadata. Conditional and `match` expressions also
+reject merging distinct capturing closure values because Phase 6.3 has no
+closure-union type; the AU2002 diagnostic directs callers to invoke inside
+each branch or use capture-free lambdas or named functions.
+
+The reference index, grammar, semantics, ownership, concurrency, diagnostics,
+status, Learn/tutorial tracks, READMEs, conformance matrix, and
+source-hash-pinned maintained example are synchronized. Compiler analysis and
+the language server resolve lambda parameter scope, captured definitions,
+closure hover types, local completions, and ownership diagnostics. The VS Code
+package recognizes `lambda` and includes an expression-lambda snippet.
+
+Focused verification passes for compiler analysis, LSP/editor regressions,
+reference integrity, and the maintained example on MIR and direct backends.
+Maintained parity additionally covers repeated construction of one lambda site
+with distinct environments and cleanup of an uncalled consuming environment.
+Adversarial MIR/direct probes pass nested Copy and non-Copy capture, shadowing,
+branch-local closure moves, and capture-free storage. The branch-union
+diagnostic and its exact fixture are green.
+
+The combined semantic, ownership, backend, fixture, and instrumented suites are
+green. The exact compiler-coverage replay passes 319 CLI tests, 6 retry tests,
+2 closure-acceptance tests, 1,306 compiler-library tests, and every remaining
+integration target. Coverage is 77,482/80,598 lines (96.133899%),
+5,135/5,298 functions (96.923367%), and 113,378/119,923 regions
+(94.542331%), above the frozen 96.13/96.90/94.46 floors.
+
+The first otherwise-green replay missed only the frozen coverage ratchet. Four
+rounds of focused tests closed it by pinning observable closure typing,
+diagnostics, capture ordering, dynamic defaults, ownership transfer, mutable
+writeback, task results, cleanup, imported identity, malformed-runtime
+diagnostics, and ledger/reachability behavior. No test was added only to
+execute a line, no production branch was changed for coverage, and no coverage
+exclusion was added. Two defensive semantic arms remain deliberately
+unforced: erasing callable contracts from a capturing `Type::Closure`, and
+deriving task-observation shape directly from a capturing `Type::Closure`.
+Both are unreachable from Aurora source because every storage or generic
+escape that could erase the compiler-known environment is rejected first.
+
+The first full-CI replay exposed six outer CLI watchdogs that still used a
+15-second process budget. Under the complete default-parallel suite, host
+oversubscription delayed otherwise-correct direct binaries past that budget;
+the same Queue-iteration, join-cycle, and numeric-trap cases all passed when
+focused, and the isolated cross-join case itself required 17.41 seconds. Only
+those six outer watchdogs now use the repository's existing 30-second
+load-tolerant margin. Their Aurora-level sleeps, outputs, diagnostics,
+deadlock behavior, and worker counts are unchanged.
+
+The corrected full repository replay is green through formatting, 49
+scalable-runtime benchmark checks, all default-parallel Rust tests (319 CLI,
+6 retry, 2 closure acceptance, 1,306 compiler-library tests, and every other
+integration target), forced MIR/direct parity, 94 LSP tests, 14 extension
+tests, compiler coverage, and 100% LSP coverage. The reference gate re-executes
+the maintained Manual blocks, passes its 59 integrity tests, validates the
+unchanged historical 683-file capability-migration ledger, and finds no
+unallowlisted retired syntax. The docs build, npm and Rust dependency audits,
+and warning-denied Clippy also pass.
+
+The global hygiene command reaches only whitespace in the excluded,
+user-owned `personal/file_ops.au`. The staged Phase 6.3 tree passes
+`git diff --cached --check`; the HEAD-history, forbidden-artifact,
+tracked-executable, raw-scheduler-pointer, and unsafe-scheduler-reconstruction
+checks all pass independently. The user file and untracked ADR-0022 draft
+remain untouched and outside the commit.
+
 ## Verification policy
 
 Each behavior change starts with a failing regression and receives focused

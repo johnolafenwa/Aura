@@ -1,0 +1,6 @@
+error[AU3003]: lambda capture `values` cannot be mutably accessed because mutable closures are not supported
+ --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_mutable_capture_access.au:6:25
+  |
+6 |     apply(lambda value: values.push(value))
+  |                         ^
+  = help: move the mutation outside the lambda, or pass the value as a `mut` lambda parameter

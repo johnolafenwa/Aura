@@ -18,14 +18,15 @@ use super::{
     validate_requested_read_size, validate_retry_runtime_policy, wait_all_cancelled,
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
-    wait_timeout_condvar, BlockingIoPool, CancellationContext, ChannelValue, EnumVariantValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal,
-    MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription, RecvValueResult, RngValue,
-    SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue,
-    Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    wait_timeout_condvar, BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue,
+    ClosureEnvironment, EnumVariantValue, FileValue, FunctionValue, HttpListenerValue,
+    HttpResponseValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy,
+    ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 
@@ -186,6 +187,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         entry_span: Span::new(7, 3),
         direct_thunk: Some(11),
         direct_default_binder: Some(12),
+        closure_environment: None,
     }));
     assert_eq!(function.render(), "<function support::transform>");
 
@@ -217,6 +219,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
             entry_span: Span::new(70, 30),
             direct_thunk: Some(101),
             direct_default_binder: None,
+            closure_environment: None,
         }));
     assert_eq!(
         function, same_callable_contract_with_different_execution_metadata,
@@ -230,6 +233,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         entry_span: Span::new(1, 1),
         direct_thunk: None,
         direct_default_binder: None,
+        closure_environment: None,
     }));
     assert_ne!(function, different_name);
 
@@ -243,6 +247,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         entry_span: Span::new(1, 1),
         direct_thunk: None,
         direct_default_binder: None,
+        closure_environment: None,
     }));
     assert_ne!(function, different_signature);
     assert_ne!(function, Value::Unit);
@@ -272,6 +277,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
                     entry_span: Span::new(index + 2, 5),
                     direct_thunk: Some(20 + index as i64),
                     direct_default_binder: None,
+                    closure_environment: None,
                 }))
             })
             .collect(),
@@ -300,6 +306,147 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
         ),
         (Span::new(2, 5), Some(20), Span::new(3, 5), Some(21))
     );
+}
+
+#[test]
+fn closure_environments_share_identity_and_enforce_capture_ownership() {
+    let capture_type = Type::named("int64");
+    let captured = || ClosureCaptureValue {
+        name: "offset".to_string(),
+        ty: capture_type.clone(),
+        value: Value::Int(IntegerValue::from_signed(9)),
+    };
+
+    let repeatable = Arc::new(ClosureEnvironment::new(vec![captured()], false));
+    for invocation in 1..=2 {
+        let arguments = repeatable
+            .arguments("main::__lambda_repeatable")
+            .unwrap_or_else(|error| panic!("repeatable invocation {invocation} failed: {error}"));
+        let [argument] = arguments.as_slice() else {
+            panic!("repeatable closure should expose its one captured argument");
+        };
+        assert_eq!(argument.name, "offset");
+        assert_eq!(argument.ty, capture_type);
+        assert_eq!(argument.value, Value::Int(IntegerValue::from_signed(9)));
+    }
+
+    let poisoned = Arc::new(ClosureEnvironment::new(vec![captured()], false));
+    let poison_target = Arc::clone(&poisoned);
+    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = poison_target
+            .captures
+            .lock()
+            .expect("fresh closure environment lock should be healthy");
+        panic!("poison closure environment for recovery test");
+    }));
+    assert!(poison.is_err());
+    let recovered = poisoned
+        .arguments("main::__lambda_poisoned")
+        .expect("a poisoned bookkeeping lock must not discard the captured environment");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].value, Value::Int(IntegerValue::from_signed(9)));
+
+    let consuming = Arc::new(ClosureEnvironment::new(vec![captured()], true));
+    let consuming_alias = Arc::clone(&consuming);
+    let first = consuming
+        .arguments("main::__lambda_consuming")
+        .expect("the first consuming invocation owns the captures");
+    assert_eq!(first[0].value, Value::Int(IntegerValue::from_signed(9)));
+    let second = consuming_alias
+        .arguments("main::__lambda_consuming")
+        .expect_err("all aliases must observe that the environment was consumed");
+    assert_eq!(
+        second.message,
+        "closure `main::__lambda_consuming` has already consumed its captured environment"
+    );
+
+    let signature = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(capture_type.clone()),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "offset".to_string(),
+            ty: capture_type.clone(),
+            mode: crate::sema::ClosureCaptureMode::Copy,
+            span: Span::new(2, 41),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+    };
+    let function = |environment: Option<Arc<ClosureEnvironment>>| {
+        Value::Function(Box::new(FunctionValue {
+            name: "main::__lambda_repeatable".to_string(),
+            signature: signature.clone(),
+            source_path: Some("/workspace/main.au".to_string()),
+            entry_span: Span::new(2, 41),
+            direct_thunk: Some(17),
+            direct_default_binder: None,
+            closure_environment: environment,
+        }))
+    };
+    let shared = function(Some(Arc::clone(&repeatable)));
+    let same_environment = function(Some(Arc::clone(&repeatable)));
+    let distinct_environment = function(Some(Arc::new(ClosureEnvironment::new(
+        vec![captured()],
+        false,
+    ))));
+    let capture_free_storage = function(None);
+
+    assert_eq!(
+        shared, same_environment,
+        "function clones that share one environment are the same runtime closure"
+    );
+    assert_eq!(shared, shared.clone());
+    assert_ne!(
+        shared, distinct_environment,
+        "identical capture contents do not make distinct closure instances equal"
+    );
+    assert_ne!(
+        shared, capture_free_storage,
+        "closure identity must distinguish the presence of an environment"
+    );
+    assert_eq!(
+        shared.render(),
+        "<function main::__lambda_repeatable>",
+        "rendering remains stable without exposing captured values"
+    );
+}
+
+#[test]
+fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
+    let instance = |class_name: &str, runtime_type: &str| {
+        Value::Instance(super::InstanceValue {
+            class_name: class_name.to_string(),
+            fields: BTreeMap::from([
+                (
+                    super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
+                    Value::String(runtime_type.to_string()),
+                ),
+                (
+                    "value".to_string(),
+                    Value::Int(IntegerValue::from_signed(7)),
+                ),
+            ]),
+        })
+    };
+
+    let integer = instance("Packet\0pkg.Packet[int64]", "pkg.Packet[int64]");
+    let string = instance("Packet\0pkg.Packet[String]", "pkg.Packet[String]");
+    let other = instance("Envelope\0pkg.Envelope[int64]", "pkg.Envelope[int64]");
+
+    assert_eq!(
+        integer, string,
+        "generic runtime metadata is not part of structural instance equality"
+    );
+    assert_ne!(
+        integer, other,
+        "different nominal base types must never compare equal"
+    );
+    assert_eq!(integer.render(), "Packet(value=7)");
+    assert_eq!(string.render(), "Packet(value=7)");
+    assert_eq!(
+        super::embedded_nominal_runtime_type_name("Packet\0pkg.Packet[int64]"),
+        Some("pkg.Packet[int64]")
+    );
+    assert_eq!(super::embedded_nominal_runtime_type_name("Packet"), None);
 }
 
 #[test]
@@ -5451,6 +5598,52 @@ fn task_execution_finalization_maps_failures_to_task_results() {
 }
 
 #[test]
+fn p63_retry_cancellation_propagates_as_task_cancellation_not_a_panic_error() {
+    super::propagate_retry_task_cancellation();
+
+    let entered = Arc::new(AtomicBool::new(false));
+    let entered_probe = entered.clone();
+    let result = run_lightweight_root_task(move || {
+        let cancellation_signal = Arc::new(super::RuntimeWakeSignal::new(false));
+        let cancellation = CancellationContext {
+            flags: vec![cancellation_signal.clone()],
+        };
+        let task = spawn_lightweight_task_with_cancellation(cancellation, move || {
+            entered_probe.store(true, Ordering::SeqCst);
+            cancellation_signal.store(true, Ordering::SeqCst);
+            super::propagate_retry_task_cancellation();
+            Ok(Value::Unit)
+        })?;
+
+        let status = task
+            .wait_result_with_cancellation(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        Ok(Value::Bool(matches!(status, TaskWaitStatus::Cancelled)))
+    })
+    .expect("the root scheduler should observe a cancelled child without failing");
+
+    assert!(entered.load(Ordering::SeqCst));
+    assert_eq!(result, Value::Bool(true));
+}
+
+#[test]
+fn p63_host_task_join_handoff_normalizes_a_panicked_thread_to_a_diagnostic() {
+    let task = TaskValue::from_handle(thread::spawn(
+        || -> std::result::Result<Value, Diagnostic> {
+            std::panic::panic_any(37usize);
+        },
+    ));
+
+    let status = task
+        .wait_result_with_cancellation(Some(StdDuration::from_secs(1)), None)
+        .expect("joining a panicked host task should produce a ready diagnostic");
+    let TaskWaitStatus::Ready(Err(error)) = status else {
+        panic!("a panicked host task must complete with a diagnostic");
+    };
+    assert_eq!(error.message, "spawned task panicked");
+}
+
+#[test]
 fn lightweight_worker_count_defaults_and_rejects_invalid_overrides() {
     assert_eq!(super::decode_lightweight_worker_count(None, 7).unwrap(), 7);
     assert_eq!(
@@ -5705,6 +5898,67 @@ fn worker_infrastructure_failures_cancel_root_cleanup_once_and_return_diagnostic
             cleanup_count.load(Ordering::SeqCst),
             1,
             "failed admission must run root cleanup exactly once"
+        );
+    }
+}
+
+#[test]
+fn p63_single_worker_infrastructure_failure_cancels_unadmitted_root_exactly_once() {
+    let cases = [
+        (
+            super::LightweightWorkerFaults {
+                reactor_initialization_at: Some(0),
+                ..Default::default()
+            },
+            "failed to initialize Aurora worker 0 reactor",
+        ),
+        (
+            super::LightweightWorkerFaults {
+                worker_panic_at: Some(0),
+                ..Default::default()
+            },
+            "internal error: Aurora worker 0 panicked: injected Aurora worker panic",
+        ),
+        (
+            super::LightweightWorkerFaults {
+                thread_spawn_at: Some(0),
+                ..Default::default()
+            },
+            "failed to start Aurora worker 0: injected Aurora worker thread spawn failure",
+        ),
+    ];
+
+    for (faults, expected_diagnostic) in cases {
+        let entry_ran = Arc::new(AtomicBool::new(false));
+        let entry_probe = entry_ran.clone();
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let cleanup_probe = cleanup_count.clone();
+
+        let error = super::run_lightweight_root_task_on_workers_with_faults(
+            1,
+            Box::new(move || {
+                entry_probe.store(true, Ordering::SeqCst);
+                Ok(Value::Unit)
+            }),
+            Some(Box::new(move || {
+                cleanup_probe.fetch_add(1, Ordering::SeqCst);
+            })),
+            faults,
+        )
+        .expect_err("an injected worker failure must reach the root caller");
+
+        assert!(
+            error.message.contains(expected_diagnostic),
+            "unexpected injected worker failure diagnostic: {error:?}"
+        );
+        assert!(
+            !entry_ran.load(Ordering::SeqCst),
+            "a root task whose only worker failed before admission must never run"
+        );
+        assert_eq!(
+            cleanup_count.load(Ordering::SeqCst),
+            1,
+            "failed root admission must run forced-exit cleanup exactly once"
         );
     }
 }
@@ -7328,6 +7582,167 @@ fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     }
     assert!(task_weak.upgrade().is_none());
     assert!(channel_weak.upgrade().is_none());
+}
+
+#[test]
+fn p63_task_wait_reachability_follows_live_dependencies_without_retaining_them() {
+    let waiting = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    let dependency = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    let dependency_weak = Arc::downgrade(&dependency.inner);
+    *lock_mutex(&waiting.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: vec![dependency_weak.clone(), dependency_weak.clone()],
+        deadline: None,
+        cancellation: None,
+    });
+
+    assert!(
+        waiting.unbounded_wait_has_reachable_waker(),
+        "a runnable joined task can still make progress for its waiter"
+    );
+
+    *lock_mutex(&dependency.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: vec![Arc::downgrade(&waiting.inner)],
+        deadline: None,
+        cancellation: None,
+    });
+    assert!(
+        !waiting.unbounded_wait_has_reachable_waker(),
+        "a pure task-wait cycle has no reachable source of progress"
+    );
+
+    super::complete_lightweight_task_state(
+        &dependency.inner,
+        TaskExecutionResult::Ready(Ok(Value::Unit)),
+    );
+    assert!(
+        waiting.unbounded_wait_has_reachable_waker(),
+        "a completed dependency makes the join ready even if its prior wait graph was cyclic"
+    );
+
+    drop(dependency);
+    assert!(dependency_weak.upgrade().is_none());
+    assert!(
+        !waiting.unbounded_wait_has_reachable_waker(),
+        "a dead weak dependency must not be treated as a reachable waker"
+    );
+}
+
+#[test]
+fn p63_task_join_reachability_tracks_weak_dependencies_and_external_wake_sources() {
+    let joiner = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    let dependency = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    let dependency_weak = Arc::downgrade(&dependency.inner);
+    *lock_mutex(&joiner.inner.join_dependencies) =
+        Some(vec![dependency_weak.clone(), dependency_weak.clone()]);
+
+    assert!(
+        joiner.unbounded_wait_has_reachable_waker(),
+        "a runnable join dependency is a reachable source of progress"
+    );
+
+    *lock_mutex(&dependency.inner.join_dependencies) = Some(vec![Arc::downgrade(&joiner.inner)]);
+    assert!(
+        !joiner.unbounded_wait_has_reachable_waker(),
+        "a duplicate dependency inside a pure join cycle must remain bounded and unreachable"
+    );
+
+    super::complete_lightweight_task_state(
+        &dependency.inner,
+        TaskExecutionResult::Ready(Ok(Value::Unit)),
+    );
+    assert!(
+        joiner.unbounded_wait_has_reachable_waker(),
+        "completion makes a formerly cyclic join dependency ready"
+    );
+    drop(dependency);
+    assert!(dependency_weak.upgrade().is_none());
+    assert!(
+        !joiner.unbounded_wait_has_reachable_waker(),
+        "the join graph must not retain a completed dependency"
+    );
+
+    *lock_mutex(&joiner.inner.join_dependencies) = None;
+    *lock_mutex(&joiner.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: Some(Instant::now() + StdDuration::from_secs(1)),
+        cancellation: None,
+    });
+    assert!(
+        joiner.unbounded_wait_has_reachable_waker(),
+        "a finite deadline is an external wake source"
+    );
+
+    let cancellation_signal = Arc::new(super::RuntimeWakeSignal::new(false));
+    *lock_mutex(&joiner.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: None,
+        cancellation: Some(CancellationContext {
+            flags: vec![cancellation_signal.clone()],
+        }),
+    });
+    assert!(!joiner.unbounded_wait_has_reachable_waker());
+    cancellation_signal.store(true, Ordering::SeqCst);
+    assert!(
+        joiner.unbounded_wait_has_reachable_waker(),
+        "cancellation becomes an external wake source once signalled"
+    );
+
+    let recv_channel = ChannelValue::new();
+    let send_channel = ChannelValue::with_capacity(1);
+    assert_eq!(
+        send_channel.try_send(Value::Unit),
+        super::TrySendResult::Sent
+    );
+    let peer = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    recv_channel.register_task_handle(&peer);
+    *lock_mutex(&peer.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: vec![Arc::downgrade(&recv_channel.inner)],
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
+        task_waits: Vec::new(),
+        deadline: None,
+        cancellation: None,
+    });
+    *lock_mutex(&joiner.inner.current_wait) = Some(super::TaskWaitReachability {
+        recv_channels: vec![
+            Arc::downgrade(&recv_channel.inner),
+            Arc::downgrade(&recv_channel.inner),
+        ],
+        ignore_closed_recv_channels: false,
+        send_channels: vec![
+            Arc::downgrade(&send_channel.inner),
+            Arc::downgrade(&send_channel.inner),
+        ],
+        task_waits: Vec::new(),
+        deadline: None,
+        cancellation: None,
+    });
+    assert!(
+        !joiner.unbounded_wait_has_reachable_waker(),
+        "duplicate Queue edges and a Queue/task cycle must terminate without inventing progress"
+    );
 }
 
 #[test]

@@ -1,0 +1,5 @@
+def invoke(callback: def() -> int64) -> int64:
+    return callback()
+
+def inspect(value: String) -> int64:
+    return invoke(lambda: value.len())

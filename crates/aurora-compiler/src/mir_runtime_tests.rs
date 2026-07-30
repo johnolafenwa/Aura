@@ -8,8 +8,9 @@ use super::{
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm,
-    MirMethod, MirModule, MirParam, MirTraitImpl, Operand, Rvalue, Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirClosureCapture, MirFunction,
+    MirLocalType, MirMatchArm, MirMethod, MirModule, MirParam, MirTraitImpl, Operand, Rvalue,
+    Terminator,
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
@@ -164,6 +165,23 @@ fn mir_task_stack_override_accepts_contract_boundaries_and_reports_dynamic_viola
     let error = runtime
         .evaluate_task_stack_size(&Operand::Place("not_bytes".to_string()), &env)
         .expect_err("malformed MIR must not pass a non-int64 task stack size to the scheduler");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "task stack size must evaluate to an int64 value"
+    );
+
+    env.define_typed(
+        "unsigned_bytes",
+        Type::named("uint128"),
+        Value::Int(
+            IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+                .expect("u128::MAX is representable as uint128"),
+        ),
+    );
+    let error = runtime
+        .evaluate_task_stack_size(&Operand::Place("unsigned_bytes".to_string()), &env)
+        .expect_err("task stack sizes whose runtime integer metadata is not int64 must fail");
     assert_eq!(error.code, "AU4005");
     assert_eq!(
         error.message,
@@ -14781,6 +14799,30 @@ fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
         assert_eq!(error.message, expected);
         assert_eq!(error.span, Some(Span::new(7, 9)));
     }
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut loop_state = HashMap::new();
+    let mut cleanups = Vec::new();
+    let error = match runtime.execute_terminator(
+        "entry",
+        &Terminator::AssertFail {
+            message: Some(Operand::Int(17)),
+            span: Span::new(11, 13),
+        },
+        &mut env,
+        &mut loop_state,
+        &mut cleanups,
+    ) {
+        Ok(_) => panic!("malformed MIR assertion messages must still be strings"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "MIR assertion message must evaluate to `String`, found `17`"
+    );
+    assert_eq!(error.span, Some(Span::new(11, 13)));
 }
 
 #[test]
@@ -15493,4 +15535,704 @@ def main():
         .call_frames
         .iter()
         .all(|frame| !frame.function.contains("::__default_")));
+}
+
+#[test]
+fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_consuming() {
+    let int_type = Type::named("int64");
+    let string_type = Type::named("String");
+    let shared_int_param = |name: &str| MirParam {
+        name: name.to_string(),
+        passing: crate::mir::MirReceiverKind::Borrow,
+        ty: int_type.clone(),
+        default_function: None,
+    };
+    let owned_string_param = |name: &str| MirParam {
+        name: name.to_string(),
+        passing: crate::mir::MirReceiverKind::Value,
+        ty: string_type.clone(),
+        default_function: None,
+    };
+    let repeatable_body = MirFunction {
+        name: "main::__lambda_1".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(2, 16),
+        receiver: None,
+        params: vec![
+            shared_int_param("__capture_offset"),
+            shared_int_param("value"),
+        ],
+        local_types: vec![MirLocalType {
+            name: "sum".to_string(),
+            ty: int_type.clone(),
+        }],
+        return_type: int_type.clone(),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::Assign {
+                target: "sum".to_string(),
+                value: Rvalue::Binary {
+                    op: crate::ast::BinaryOp::Add,
+                    left: Operand::Place("__capture_offset".to_string()),
+                    right: Operand::Place("value".to_string()),
+                    span: Span::new(2, 36),
+                },
+            }],
+            terminator: Terminator::Return(Operand::Place("sum".to_string())),
+        }],
+    };
+    let consuming_body = MirFunction {
+        name: "main::__lambda_2".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(4, 16),
+        receiver: None,
+        params: vec![owned_string_param("__capture_text")],
+        local_types: Vec::new(),
+        return_type: string_type.clone(),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::MovePlace("__capture_text".to_string())),
+        }],
+    };
+    let mut runtime = MirRuntime::new(
+        MirModule {
+            functions: vec![repeatable_body, consuming_body],
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "offset",
+        int_type.clone(),
+        Value::Int(IntegerValue::from_signed(40)),
+    );
+    env.define_typed(
+        "text",
+        string_type.clone(),
+        Value::String("captured".to_string()),
+    );
+
+    let repeatable_signature = Type::Closure {
+        params: Box::new(vec![crate::sema::FunctionParamContract {
+            name: "value".to_string(),
+            ty: int_type.clone(),
+            passing: crate::ast::ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }]),
+        return_type: Box::new(int_type.clone()),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "__capture_offset".to_string(),
+            ty: int_type.clone(),
+            mode: crate::sema::ClosureCaptureMode::Copy,
+            span: Span::new(2, 16),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+    };
+    let repeatable = runtime
+        .evaluate_rvalue(
+            &Rvalue::Closure {
+                function: "main::__lambda_1".to_string(),
+                signature: repeatable_signature.clone(),
+                captures: vec![MirClosureCapture {
+                    name: "__capture_offset".to_string(),
+                    value: Operand::Place("offset".to_string()),
+                    ty: int_type.clone(),
+                }],
+                consuming: false,
+            },
+            &mut env,
+        )
+        .expect("a repeatable closure should capture its environment");
+    let super::RvalueOutcome::Value(repeatable) = repeatable else {
+        panic!("closure construction cannot return from its enclosing function");
+    };
+    env.define_typed("repeatable", repeatable_signature, repeatable);
+    for expected in [42, 43] {
+        let value = runtime
+            .evaluate_call(
+                &CallTarget::Value(Operand::Place("repeatable".to_string())),
+                &[MirArg {
+                    name: None,
+                    value: Operand::Int((expected - 40) as u128),
+                    writeback_place: None,
+                }],
+                &mut env,
+            )
+            .expect("a read-only closure must be callable repeatedly");
+        assert_eq!(value, Value::Int(IntegerValue::from_signed(expected)));
+    }
+    assert_eq!(
+        env.place_ref("offset")
+            .expect("copy capture source stays live"),
+        &Value::Int(IntegerValue::from_signed(40)),
+        "copy captures are copied into the closure environment"
+    );
+
+    let consuming_signature = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(string_type),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "__capture_text".to_string(),
+            ty: Type::named("String"),
+            mode: crate::sema::ClosureCaptureMode::Move,
+            span: Span::new(4, 16),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Consuming,
+    };
+    let consuming = runtime
+        .evaluate_rvalue(
+            &Rvalue::Closure {
+                function: "main::__lambda_2".to_string(),
+                signature: consuming_signature.clone(),
+                captures: vec![MirClosureCapture {
+                    name: "__capture_text".to_string(),
+                    value: Operand::MovePlace("text".to_string()),
+                    ty: Type::named("String"),
+                }],
+                consuming: true,
+            },
+            &mut env,
+        )
+        .expect("a consuming closure should move its environment");
+    let super::RvalueOutcome::Value(consuming) = consuming else {
+        panic!("closure construction cannot return from its enclosing function");
+    };
+    assert!(
+        env.place_ref("text").is_err(),
+        "non-Copy capture construction must consume the source place"
+    );
+    env.define_typed("consuming", consuming_signature, consuming);
+    assert_eq!(
+        runtime
+            .evaluate_call(
+                &CallTarget::Value(Operand::Place("consuming".to_string())),
+                &[],
+                &mut env,
+            )
+            .expect("the first consuming closure call should transfer its environment"),
+        Value::String("captured".to_string())
+    );
+    let repeated = runtime
+        .evaluate_call(
+            &CallTarget::Value(Operand::Place("consuming".to_string())),
+            &[],
+            &mut env,
+        )
+        .expect_err("a consuming closure environment is single-use");
+    assert_eq!(
+        repeated.message,
+        "closure `main::__lambda_2` has already consumed its captured environment"
+    );
+}
+
+#[test]
+fn mir_closure_callbacks_keep_defaults_capture_snapshots_and_nested_environments() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def mark_default() -> int64:
+    print("default")
+    return 5
+
+def invoke(callback: def(int64) -> int64, value: int64 = mark_default()) -> int64:
+    return callback(value)
+
+def main():
+    print(invoke(lambda value: value + 1))
+
+    offset: int64 = 7
+    add_offset: def(int64) -> int64 = lambda value: value + offset
+    values: Vec[int64] = [1, 3]
+    print(values.map(add_offset))
+
+    nested: def() -> int64 = lambda: add_offset(3)
+    print(nested())
+"#,
+    )
+    .expect("supported lambda callback and nested-capture positions should lower");
+
+    let output = crate::run_mir(&module)
+        .expect("nested repeatable closure environments should remain callable");
+    assert_eq!(
+        output.stdout, "default\n6\n[8, 10]\n10\n",
+        "default binding, compiler-known callbacks, and nested environments must retain their observable order and captures"
+    );
+}
+
+#[test]
+fn mir_closure_task_failure_surfaces_after_handoff_cleanup_with_task_ancestry() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def crash(label: String) -> int64:
+    print(label)
+    return 1 // 0
+
+def main():
+    payload = "task-handoff"
+    worker: def() -> int64 = lambda: crash(payload)
+    with group = TaskGroup():
+        task = group.start(worker)
+"#,
+    )
+    .expect("an owned closure capture should lower as a task target");
+
+    let error = crate::run_mir(&module)
+        .expect_err("group cleanup must surface an unobserved closure-task failure");
+    assert_eq!(error.code, "AU4004", "{error:?}");
+    assert_eq!(error.message, "division by zero");
+    assert_eq!(
+        error.partial_stdout(),
+        Some("task-handoff\n"),
+        "the child must receive and use the owned capture before its failure"
+    );
+    assert_eq!(
+        error
+            .call_frames
+            .first()
+            .map(|frame| frame.function.as_str()),
+        Some("crash"),
+        "the failing public callee must remain the innermost runtime frame"
+    );
+    assert!(
+        error
+            .call_frames
+            .iter()
+            .any(|frame| frame.function.contains("::__lambda_")),
+        "the closure body must remain visible in the child call stack"
+    );
+    assert_eq!(error.task_ancestry.len(), 1);
+    assert_eq!(error.task_ancestry[0].parent_function, "main");
+    assert!(
+        error.task_ancestry[0].task_function.contains("::__lambda_"),
+        "cleanup must preserve which closure task failed"
+    );
+}
+
+#[test]
+fn mir_closure_behavior_preserves_mut_writeback_owned_args_nested_moves_and_fresh_defaults() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def mark_default() -> int64:
+    print("fresh-default")
+    return 3
+
+def add_default(value: int64, delta: int64 = mark_default()) -> int64:
+    return value + delta
+
+def decorate(prefix: String, value: own String) -> String:
+    return f"{prefix}:{value}"
+
+def main():
+    offset: int64 = 4
+    push_offset: def(mut Vec[int64]) -> None = lambda mut values: values.push(offset)
+    mut values: Vec[int64] = [1, 2]
+    push_offset(values)
+    push_offset(values)
+    print(values)
+
+    add_fresh: def() -> int64 = lambda: add_default(offset)
+    print(add_fresh())
+    print(add_fresh())
+
+    prefix = "tag"
+    decorate_value: def(own String) -> String = lambda own value: decorate(prefix, value)
+    first = "one"
+    second = "two"
+    print(decorate_value(first))
+    print(decorate_value(second))
+
+    nested: def() -> String = lambda: decorate_value("nested")
+    print(nested())
+"#,
+    )
+    .expect("mutable, owned, defaulted, and nested closure calls should lower");
+
+    let output = crate::run_mir(&module)
+        .expect("closure calls should preserve writeback and environment ownership");
+    assert_eq!(
+        output.stdout,
+        "[1, 2, 4, 4]\nfresh-default\n7\nfresh-default\n7\ntag:one\ntag:two\ntag:nested\n",
+        "mut parameters must write back, own arguments must transfer, defaults must stay fresh, and nested closure moves must retain their environment"
+    );
+}
+
+#[test]
+fn mir_closure_behavior_retry_repeats_capture_and_returns_last_owned_error() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import control
+
+def fail(label: String) -> Result[int64, String]:
+    print(label)
+    return Result.Err(label.clone())
+
+def main():
+    label = "captured-attempt"
+    worker: def() -> Result[int64, String] = lambda: fail(label)
+    match own control.retry[int64, String](worker):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(error):
+            print(error)
+"#,
+    )
+    .expect("a repeatable capturing retry callback should lower");
+
+    let output =
+        crate::run_mir(&module).expect("retry should invoke a read-only environment repeatedly");
+    assert_eq!(
+        output.stdout,
+        "captured-attempt\ncaptured-attempt\ncaptured-attempt\ncaptured-attempt\n",
+        "the default retry count must invoke the same captured environment three times and return its last owned error"
+    );
+}
+
+#[test]
+fn mir_closure_behavior_callback_traps_preserve_partial_output_and_public_frames() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def divide(label: String, value: int64) -> int64:
+    print(label)
+    return 10 // value
+
+def main():
+    label = "callback-trap"
+    values: Vec[int64] = [2, 0, 5]
+    print("before-map")
+    mapped = values.map(lambda value: divide(label, value))
+    print(mapped)
+"#,
+    )
+    .expect("a trapping capturing callback should lower");
+
+    let error = crate::run_mir(&module).expect_err("the second callback invocation should trap");
+    assert_eq!(error.code, "AU4004");
+    assert_eq!(error.message, "division by zero");
+    assert_eq!(
+        error.partial_stdout(),
+        Some("before-map\ncallback-trap\ncallback-trap\n"),
+        "completed callback effects must remain visible before the trap"
+    );
+    let frames = error
+        .call_frames
+        .iter()
+        .map(|frame| frame.function.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0], "divide");
+    assert!(
+        frames[1].starts_with("main::__lambda_"),
+        "the generated closure body must remain visible, found {frames:?}"
+    );
+    assert_eq!(frames[2], "main");
+}
+
+#[test]
+fn mir_closure_behavior_consuming_trap_follows_owned_transfer_with_complete_frames() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def consume_and_crash(value: own String) -> int64:
+    print(value)
+    return 1 // 0
+
+def main():
+    payload = "direct-owned"
+    fail_once: def() -> int64 = lambda: consume_and_crash(payload)
+    print("before-call")
+    print(fail_once())
+"#,
+    )
+    .expect("a consuming trapping closure should lower");
+
+    let error =
+        crate::run_mir(&module).expect_err("the closure should trap after moving its capture");
+    assert_eq!(error.code, "AU4004");
+    assert_eq!(error.message, "division by zero");
+    assert_eq!(
+        error.partial_stdout(),
+        Some("before-call\ndirect-owned\n"),
+        "the owned capture must reach the callee before the trap"
+    );
+    let frames = error
+        .call_frames
+        .iter()
+        .map(|frame| frame.function.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0], "consume_and_crash");
+    assert!(frames[1].starts_with("main::__lambda_"));
+    assert_eq!(frames[2], "main");
+}
+
+#[test]
+fn mir_closure_behavior_explicit_stack_tasks_handoff_captures_and_cleanup() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    events = Queue[String]()
+    producer = events
+    label = "stack-worker"
+    worker: def() -> Result[None, SendError[String]] = lambda: producer.put(label)
+
+    offset: int64 = 4
+    add_offset: def(int64) -> int64 = lambda value: value + offset
+    with group = TaskGroup():
+        task = group.start_with_stack(262144, add_offset, 5)
+        group.start_soon_with_stack(262144, worker)
+        print(task.result_or(-1, timeout=1s))
+    print(events.get_or("missing", timeout=1s))
+"#,
+    )
+    .expect("an explicit-stack closure task should lower");
+
+    let output =
+        crate::run_mir(&module).expect("group cleanup should await a fire-and-forget closure task");
+    assert_eq!(
+        output.stdout, "9\nstack-worker\n",
+        "captured and explicit arguments must bind in order, and the fire-and-forget child must receive both owned captures before cleanup returns"
+    );
+}
+
+#[test]
+fn mir_closure_final_task_results_cover_ready_error_optional_poll_and_cleanup() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def fail(label: String) -> int64:
+    print(label)
+    return 1 // 0
+
+def print_task_result(value: own TaskResult[int64]):
+    match own value:
+        case TaskResult.Ready(result):
+            print(f"ready:{result}")
+        case TaskResult.Error(message):
+            print(f"error:{message}")
+        case TaskResult.TimedOut:
+            print("timedout")
+        case TaskResult.Cancelled:
+            print("cancelled")
+
+def main():
+    offset: int64 = 4
+    add_offset: def(int64) -> int64 = lambda value: value + offset
+
+    error_label = "task-error"
+    fail_with_label: def() -> int64 = lambda: fail(error_label)
+
+    optional_error_label = "optional-error"
+    optional_fail: def() -> int64 = lambda: fail(optional_error_label)
+
+    release = Queue[int64]()
+    worker_release = release
+    wait_for_release: def() -> int64 = lambda: worker_release.get_or(-1, timeout=1s)
+
+    with group = TaskGroup():
+        ready_task = group.start(add_offset, 5)
+        print_task_result(ready_task.result(timeout=1s))
+
+        error_task = group.start(fail_with_label)
+        print_task_result(error_task.result(timeout=1s))
+
+        optional_error_task = group.start(optional_fail)
+        print(optional_error_task.result_or_none(timeout=1s))
+
+        pending_task = group.start(wait_for_release)
+        print(pending_task.result_or_none())
+        release.put(7)
+
+    print("cleanup-complete")
+"#,
+    )
+    .expect("closure tasks using each result helper should lower");
+
+    let output = crate::run_mir(&module)
+        .expect("observed task failures and a released pending child should clean up normally");
+    assert_eq!(
+        output.stdout,
+        "ready:9\ntask-error\nerror:division by zero\noptional-error\nOption.None\nOption.None\ncleanup-complete\n",
+        "task results must preserve ready values and owned errors, map errors and pending polls to None, and await the released closure during group cleanup"
+    );
+}
+
+#[test]
+fn mir_closure_selected_entry_and_runtime_hardening_preserve_exact_observable_contracts() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def selected():
+    offset: int64 = 4
+    callback: def(int64) -> int64 = lambda value: value + offset
+    print(callback(5))
+
+def main():
+    print("wrong-entry")
+"#,
+    )
+    .expect("a capture-bearing callback in an explicit entry should lower");
+    let output = super::run_entry_with_stdout_sink_and_program_args(
+        &module,
+        Some("selected"),
+        None,
+        Vec::new(),
+    )
+    .expect("the selected entry should execute through the ordinary closure runtime");
+    assert_eq!(
+        output.stdout, "9\n",
+        "explicit-entry execution must select the requested function and retain its closure environment"
+    );
+    let missing_entry = super::run_entry_with_stdout_sink_and_program_args(
+        &module,
+        Some("missing"),
+        None,
+        Vec::new(),
+    )
+    .expect_err("an absent explicit entry must be diagnosed");
+    assert_eq!(
+        missing_entry.message,
+        "no entry function named `missing` was found"
+    );
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "huge",
+        Type::named("uint128"),
+        Value::Int(
+            IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+                .expect("u128::MAX is representable as uint128"),
+        ),
+    );
+
+    let duration_metadata = runtime
+        .evaluate_call(
+            &CallTarget::Name("Duration.seconds".to_string()),
+            &[mir_arg(None, Operand::Place("huge".to_string()))],
+            &mut env,
+        )
+        .expect_err("Duration constructors must reject non-int64 integer metadata");
+    assert_eq!(
+        duration_metadata.message,
+        "`Duration.seconds` expects `int64`"
+    );
+
+    let missing_callable = runtime
+        .evaluate_call(
+            &CallTarget::Name("missing_callable".to_string()),
+            &[],
+            &mut env,
+        )
+        .expect_err("malformed MIR cannot name an absent callable");
+    assert_eq!(
+        missing_callable.message,
+        "unknown MIR function `missing_callable`"
+    );
+
+    let private_take = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Bool(false),
+                field: "__take_index_option".to_string(),
+                receiver_place: None,
+            },
+            &[],
+            &mut env,
+        )
+        .expect_err("owned iteration's private take operation only accepts collections");
+    assert_eq!(
+        private_take.message,
+        "unsupported MIR member call `__take_index_option` on `false`"
+    );
+
+    for (object, field, expected) in [
+        (
+            Operand::Int(1),
+            "to_float",
+            "`to_float` does not take arguments",
+        ),
+        (
+            Operand::Duration(1),
+            "to_ms",
+            "`to_ms` does not take arguments",
+        ),
+    ] {
+        let error = runtime
+            .evaluate_call(
+                &CallTarget::Member {
+                    object,
+                    field: field.to_string(),
+                    receiver_place: None,
+                },
+                &[mir_arg(None, Operand::Int(0))],
+                &mut env,
+            )
+            .expect_err("argument-free conversion members must reject malformed MIR arguments");
+        assert_eq!(error.message, expected);
+    }
+
+    let shuffle_type = runtime
+        .evaluate_rng_method(
+            crate::runtime_value::RngValue::from_seed(7),
+            "shuffle",
+            &[mir_arg(None, Operand::Bool(true))],
+            &mut env,
+        )
+        .expect_err("Rng.shuffle must reject non-vector runtime values");
+    assert_eq!(
+        shuffle_type.message,
+        "`Rng.shuffle(...)` expects `Vec[T]`, found `true`"
+    );
+
+    env.define_typed(
+        "values",
+        Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![Value::Int(IntegerValue::from_signed(1))],
+        }),
+    );
+    let shuffle_place = runtime
+        .evaluate_rng_method(
+            crate::runtime_value::RngValue::from_seed(7),
+            "shuffle",
+            &[mir_arg(None, Operand::Place("values".to_string()))],
+            &mut env,
+        )
+        .expect_err("Rng.shuffle requires an explicit mutable writeback place in MIR");
+    assert_eq!(
+        shuffle_place.message,
+        "`Rng.shuffle(...)` requires a mutable vector place"
+    );
+    assert_eq!(
+        env.place_ref("values")
+            .expect("a rejected shuffle must preserve its input"),
+        &Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![Value::Int(IntegerValue::from_signed(1))],
+        })
+    );
+
+    let close_args = runtime
+        .evaluate_channel_method(
+            ChannelValue::new(),
+            "close",
+            &[mir_arg(None, Operand::Int(1))],
+            &mut env,
+        )
+        .expect_err("Queue.close must reject arguments");
+    assert_eq!(close_args.message, "`close` does not take arguments");
+    let unknown_queue_member = runtime
+        .evaluate_channel_method(ChannelValue::new(), "missing", &[], &mut env)
+        .expect_err("unknown Queue members must be diagnosed");
+    assert_eq!(
+        unknown_queue_member.message,
+        "unsupported channel method `missing`"
+    );
 }

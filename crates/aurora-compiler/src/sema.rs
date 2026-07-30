@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, EnumDecl, Expr, ExprKind,
-    FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
-    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
+    FunctionDecl, ImplDecl, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
     VariantPattern, WithStmt,
 };
 use crate::call::{
@@ -36,7 +36,18 @@ pub struct Program {
     /// Imported aliases map to their defining module, while local names map
     /// to themselves. Tooling uses this to mirror checker type identity.
     pub canonical_type_names: BTreeMap<String, String>,
+    /// Closure-conversion metadata for lambdas defined by this module.
+    ///
+    /// The key carries the defining module and callable owner so identical
+    /// source positions in different files or bodies cannot collide.
+    pub closures: BTreeMap<ClosureId, ClosureInfo>,
     pub top_level_stmts: Vec<Stmt>,
+}
+
+impl Program {
+    pub fn closure_info(&self, id: &ClosureId) -> Option<&ClosureInfo> {
+        self.closures.get(id)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +129,18 @@ struct TaskObservationSummary {
 struct SymbolicCopyShape {
     intrinsic_noncopy: bool,
     noncopy_formals: Vec<usize>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ClosureArgumentPolicy {
+    Reject,
+    RepeatableParameter(&'static str),
+}
+
+#[derive(Copy, Clone)]
+struct LambdaCallableContext<'a> {
+    params: &'a [FunctionParamContract],
+    return_type: Option<&'a Type>,
 }
 
 #[derive(Clone, Debug)]
@@ -284,6 +307,8 @@ pub struct ModuleNamespace {
     pub all_enums: BTreeMap<String, EnumInfo>,
     pub all_traits: BTreeMap<String, TraitInfo>,
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
+    /// Closure metadata exported with this module's callable bodies.
+    pub closures: BTreeMap<ClosureId, ClosureInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -319,7 +344,7 @@ pub struct FunctionSignature {
     pub rng_clone_safe_type_params: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FunctionParamContract {
     /// Empty for a written `def(T) -> R` type, which has no parameter-name
     /// contract. Inferred values retain the declaration name.
@@ -335,6 +360,95 @@ pub struct FunctionParamContract {
     pub default_erased: bool,
 }
 
+/// The callable body that lexically owns a lambda expression.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum ClosureOwner {
+    Function(String),
+    ClassMethod {
+        class_name: String,
+        method_name: String,
+    },
+    TraitMethod {
+        trait_name: String,
+        method_name: String,
+    },
+    TraitImplMethod {
+        trait_name: String,
+        for_type: String,
+        method_name: String,
+    },
+    TopLevel,
+}
+
+/// Stable semantic identity for one lambda expression.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ClosureId {
+    pub module_name: String,
+    pub owner: ClosureOwner,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl ClosureId {
+    fn new(module_name: &str, owner: ClosureOwner, span: crate::diag::Span) -> Self {
+        Self {
+            module_name: module_name.to_string(),
+            owner,
+            line: span.line,
+            column: span.column,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ClosureCaptureMode {
+    Copy,
+    Move,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ClosureCallKind {
+    Repeatable,
+    Consuming,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClosureCapture {
+    pub name: String,
+    pub ty: Type,
+    pub mode: ClosureCaptureMode,
+    pub span: crate::diag::Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClosureInfo {
+    pub id: ClosureId,
+    pub span: crate::diag::Span,
+    pub params: Vec<FunctionParamContract>,
+    pub return_type: Type,
+    /// Deterministic lexical-first-use capture order.
+    pub captures: Vec<ClosureCapture>,
+    pub call_kind: ClosureCallKind,
+}
+
+impl ClosureInfo {
+    pub fn ty(&self) -> Type {
+        if self.captures.is_empty() {
+            Type::Function {
+                params: self.params.clone(),
+                return_type: Box::new(self.return_type.clone()),
+            }
+        } else {
+            Type::Closure {
+                params: Box::new(self.params.clone()),
+                return_type: Box::new(self.return_type.clone()),
+                captures: Box::new(self.captures.clone()),
+                call_kind: self.call_kind,
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Type {
     Named(String, Vec<Type>),
@@ -342,6 +456,17 @@ pub enum Type {
     Function {
         params: Vec<FunctionParamContract>,
         return_type: Box<Type>,
+    },
+    Closure {
+        params: Box<Vec<FunctionParamContract>>,
+        return_type: Box<Type>,
+        /// Kept indirect so closure-only ownership metadata does not inflate
+        /// every `Type`, and consequently every typed runtime collection.
+        ///
+        /// `Box<Vec<_>>` remains transparent to Serde, preserving the
+        /// established semantic-interface and MIR cache schema.
+        captures: Box<Vec<ClosureCapture>>,
+        call_kind: ClosureCallKind,
     },
     TypeParam(String),
     Module(String),
@@ -368,9 +493,32 @@ impl PartialEq for Type {
                 left_params.len() == right_params.len()
                     && left_params
                         .iter()
-                        .zip(right_params)
+                        .zip(right_params.iter())
                         .all(|(left, right)| left.ty == right.ty && left.passing == right.passing)
                     && left_return == right_return
+            }
+            (
+                Self::Closure {
+                    params: left_params,
+                    return_type: left_return,
+                    captures: left_captures,
+                    call_kind: left_call_kind,
+                },
+                Self::Closure {
+                    params: right_params,
+                    return_type: right_return,
+                    captures: right_captures,
+                    call_kind: right_call_kind,
+                },
+            ) => {
+                left_params.len() == right_params.len()
+                    && left_params
+                        .iter()
+                        .zip(right_params.iter())
+                        .all(|(left, right)| left.ty == right.ty && left.passing == right.passing)
+                    && left_return == right_return
+                    && left_captures == right_captures
+                    && left_call_kind == right_call_kind
             }
             (Self::TypeParam(left), Self::TypeParam(right))
             | (Self::Module(left), Self::Module(right)) => left == right,
@@ -394,6 +542,7 @@ impl Type {
             Type::TypeParam(_) => false,
             Type::Tuple(elements) => elements.iter().all(Type::is_copy),
             Type::Function { .. } => true,
+            Type::Closure { .. } => false,
             Type::Named(name, args) if name == "Task" && args.len() == 1 => args[0].is_copy(),
             Type::Named(name, args) => is_builtin_copy_named_type(name, args),
         }
@@ -532,6 +681,20 @@ fn rng_clone_safety_in_context_inner(
         return match ty {
             Type::TypeParam(_) => RngCloneSafety::Unknown,
             Type::Unit | Type::Module(_) | Type::Function { .. } => RngCloneSafety::Safe,
+            Type::Closure { captures, .. } => {
+                captures
+                    .iter()
+                    .fold(RngCloneSafety::Safe, |safety, capture| {
+                        safety.combine(rng_clone_safety_in_context_inner(
+                            &capture.ty,
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                        ))
+                    })
+            }
             Type::Tuple(elements) => {
                 elements
                     .iter()
@@ -713,6 +876,19 @@ fn collect_rng_clone_obligation_params_in_context_inner(
             params.insert(name.clone());
         }
         Type::Unit | Type::Module(_) | Type::Function { .. } => {}
+        Type::Closure { captures, .. } => {
+            for capture in captures.iter() {
+                collect_rng_clone_obligation_params_in_context_inner(
+                    &capture.ty,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                    params,
+                );
+            }
+        }
         Type::Tuple(elements) => collect_rng_clone_obligation_params_from_args(
             elements,
             classes,
@@ -953,6 +1129,7 @@ fn type_is_copy_in_context_inner(
             )
         }),
         Type::Function { .. } => true,
+        Type::Closure { .. } => false,
         Type::Named(name, args) if name == "Task" && args.len() == 1 => {
             type_is_copy_in_context_inner(
                 &args[0],
@@ -1089,6 +1266,29 @@ impl fmt::Display for Type {
                 return_type,
             } => {
                 write!(f, "def(")?;
+                for (index, param) in params.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    match param.passing {
+                        ReceiverKind::Borrow => {}
+                        ReceiverKind::BorrowMut => write!(f, "mut ")?,
+                        ReceiverKind::Value => write!(f, "own ")?,
+                    }
+                    write!(f, "{}", param.ty)?;
+                }
+                write!(f, ") -> {return_type}")
+            }
+            Type::Closure {
+                params,
+                return_type,
+                call_kind,
+                ..
+            } => {
+                if *call_kind == ClosureCallKind::Consuming {
+                    write!(f, "consuming ")?;
+                }
+                write!(f, "closure def(")?;
                 for (index, param) in params.iter().enumerate() {
                     if index > 0 {
                         write!(f, ", ")?;
@@ -2106,6 +2306,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         imported_modules,
         module_registry: context.module_registry,
         canonical_type_names: canonical_type_names.clone(),
+        closures: BTreeMap::new(),
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
@@ -2154,6 +2355,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             class_method_obligations,
             trait_method_obligations,
             impl_method_obligations,
+            closure_infos,
         ) = {
             let checker = FunctionChecker::new(
                 &program.module_name,
@@ -2168,6 +2370,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &program.imported_modules,
                 &program.module_registry,
             );
+            let closure_infos = checker.closure_infos.clone();
             let mut function_obligations = BTreeMap::<String, BTreeSet<String>>::new();
             let mut class_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
             let mut trait_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
@@ -2246,6 +2449,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         .with_module_name(&trait_impl.module_name)
                         .with_rng_clone_obligation_sink(sink.clone())
                         .check_trait_impl_method(
+                            &trait_impl.trait_name,
                             &trait_impl.for_type,
                             &trait_impl.type_params,
                             &trait_impl.type_param_bounds,
@@ -2256,11 +2460,13 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 }
             }
 
+            let closure_infos = closure_infos.borrow().clone();
             (
                 function_obligations,
                 class_method_obligations,
                 trait_method_obligations,
                 impl_method_obligations,
+                closure_infos,
             )
         };
 
@@ -2399,6 +2605,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             changed |= target.len() != before;
         }
         if !changed {
+            program.closures = closure_infos;
             // An explicit impl may honor a trait clone-safety contract, but it
             // may not silently strengthen it: bound-based callers can enforce
             // only requirements declared by the trait method itself.
@@ -2433,7 +2640,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         }
     }
 
-    FunctionChecker::new(
+    let top_level_checker = FunctionChecker::new(
         &program.module_name,
         &type_names,
         &type_arities,
@@ -2445,8 +2652,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &program.trait_impls,
         &program.imported_modules,
         &program.module_registry,
-    )
-    .check_top_level(&program.top_level_stmts)?;
+    );
+    top_level_checker.check_top_level(&program.top_level_stmts)?;
+    program
+        .closures
+        .extend(top_level_checker.closure_infos.borrow().clone());
 
     Ok(program)
 }
@@ -2999,6 +3209,18 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         | ExprKind::String(_)
         | ExprKind::DurationNanos(_)
         | ExprKind::BuiltinOmitted => None,
+        ExprKind::Lambda { params, body } => {
+            let shadowed = params
+                .iter()
+                .map(|param| &param.name)
+                .collect::<BTreeSet<_>>();
+            let visible = param_names
+                .iter()
+                .filter(|name| !shadowed.contains(name))
+                .cloned()
+                .collect::<Vec<_>>();
+            default_argument_references_param(body, &visible)
+        }
     }
 }
 
@@ -3160,7 +3382,44 @@ fn type_contains_named(ty: &Type, target: &str) -> bool {
         // A function field stores only a code pointer, not values of its
         // parameter or return types, so it cannot create recursive storage.
         Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Closure { captures, .. } => captures
+            .iter()
+            .any(|capture| type_contains_named(&capture.ty, target)),
     }
+}
+
+fn type_contains_closure_value(ty: &Type) -> bool {
+    match ty {
+        Type::Closure { .. } => true,
+        Type::Tuple(elements) | Type::Named(_, elements) => {
+            elements.iter().any(type_contains_closure_value)
+        }
+        // Function parameter and return types describe calls; they are not
+        // values stored inside the function pointer itself.
+        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+    }
+}
+
+fn capturing_closure_branch_mismatch(expected: &Type, actual: &Type) -> bool {
+    expected != actual
+        && (type_contains_closure_value(expected) || type_contains_closure_value(actual))
+}
+
+fn capturing_closure_branch_diagnostic(
+    expression_kind: &str,
+    branch_kind: &str,
+    span: crate::diag::Span,
+) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2002",
+        span,
+        format!(
+            "{expression_kind} expressions cannot merge capturing closure values in this language version"
+        ),
+    )
+    .with_help(format!(
+        "call the closure inside each {branch_kind}, or use capture-free lambdas or named functions that share one `def(...) -> ...` type"
+    ))
 }
 
 fn recursive_field_message(class_name: &str, field_name: &str, field_type: &TypeRef) -> String {
@@ -3214,6 +3473,9 @@ fn type_reaches_class_through_non_indirect_fields(
             reaches_target
         }
         Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Closure { captures, .. } => captures.iter().any(|capture| {
+            type_reaches_class_through_non_indirect_fields(&capture.ty, target, classes, visiting)
+        }),
     }
 }
 
@@ -3246,6 +3508,38 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
                 })
                 .collect(),
             return_type: Box::new(substitute_type(return_type, substitutions)),
+        },
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => Type::Closure {
+            params: Box::new(
+                params
+                    .iter()
+                    .map(|param| FunctionParamContract {
+                        name: param.name.clone(),
+                        ty: substitute_type(&param.ty, substitutions),
+                        passing: param.passing,
+                        has_default: param.has_default,
+                        default_erased: param.default_erased,
+                    })
+                    .collect(),
+            ),
+            return_type: Box::new(substitute_type(return_type, substitutions)),
+            captures: Box::new(
+                captures
+                    .iter()
+                    .map(|capture| ClosureCapture {
+                        name: capture.name.clone(),
+                        ty: substitute_type(&capture.ty, substitutions),
+                        mode: capture.mode,
+                        span: capture.span,
+                    })
+                    .collect(),
+            ),
+            call_kind: *call_kind,
         },
         Type::Named(name, args) => {
             let mut substituted_args = args
@@ -3320,6 +3614,20 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             }
             collect_type_params_from_type(return_type, collected);
         }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            for param in params.iter() {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
+            for capture in captures.iter() {
+                collect_type_params_from_type(&capture.ty, collected);
+            }
+        }
         Type::Unit | Type::Module(_) => {}
     }
 }
@@ -3330,6 +3638,17 @@ pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
         Type::Named(_, args) => 1 + args.iter().map(type_pattern_specificity).sum::<usize>(),
         Type::Tuple(elements) => 1 + elements.iter().map(type_pattern_specificity).sum::<usize>(),
         Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            1 + params
+                .iter()
+                .map(|param| type_pattern_specificity(&param.ty))
+                .sum::<usize>()
+                + type_pattern_specificity(return_type)
+        }
+        Type::Closure {
             params,
             return_type,
             ..
@@ -3416,10 +3735,63 @@ pub(crate) fn type_pattern_matches(
                 return false;
             };
             params.len() == actual_params.len()
-                && params.iter().zip(actual_params).all(|(pattern, actual)| {
-                    pattern.passing == actual.passing
-                        && type_pattern_matches(&pattern.ty, &actual.ty, type_params, substitutions)
-                })
+                && params
+                    .iter()
+                    .zip(actual_params.iter())
+                    .all(|(pattern, actual)| {
+                        pattern.passing == actual.passing
+                            && type_pattern_matches(
+                                &pattern.ty,
+                                &actual.ty,
+                                type_params,
+                                substitutions,
+                            )
+                    })
+                && type_pattern_matches(return_type, actual_return, type_params, substitutions)
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => {
+            let Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                captures: actual_captures,
+                call_kind: actual_call_kind,
+            } = actual
+            else {
+                return false;
+            };
+            call_kind == actual_call_kind
+                && captures.len() == actual_captures.len()
+                && captures
+                    .iter()
+                    .zip(actual_captures.iter())
+                    .all(|(pattern, actual)| {
+                        pattern.name == actual.name
+                            && pattern.mode == actual.mode
+                            && type_pattern_matches(
+                                &pattern.ty,
+                                &actual.ty,
+                                type_params,
+                                substitutions,
+                            )
+                    })
+                && params.len() == actual_params.len()
+                && params
+                    .iter()
+                    .zip(actual_params.iter())
+                    .all(|(pattern, actual)| {
+                        pattern.passing == actual.passing
+                            && type_pattern_matches(
+                                &pattern.ty,
+                                &actual.ty,
+                                type_params,
+                                substitutions,
+                            )
+                    })
                 && type_pattern_matches(return_type, actual_return, type_params, substitutions)
         }
         Type::Module(path) => matches!(actual, Type::Module(actual_path) if actual_path == path),
@@ -3442,6 +3814,20 @@ fn has_unresolved_type_params(ty: &Type) -> bool {
                 .iter()
                 .any(|param| has_unresolved_type_params(&param.ty))
                 || has_unresolved_type_params(return_type)
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            params
+                .iter()
+                .any(|param| has_unresolved_type_params(&param.ty))
+                || has_unresolved_type_params(return_type)
+                || captures
+                    .iter()
+                    .any(|capture| has_unresolved_type_params(&capture.ty))
         }
         Type::Named(_, args) => args.iter().any(has_unresolved_type_params),
     }
@@ -3541,27 +3927,77 @@ fn unify_type_pattern(
             params,
             return_type,
         } => {
-            let Type::Function {
-                params: actual_params,
-                return_type: actual_return,
-            } = actual
-            else {
-                return Err(Diagnostic::new(format!(
-                    "expected `{pattern}`, found `{actual}`"
-                )));
+            let (actual_params, actual_return) = match actual {
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params.as_slice(), return_type),
+                Type::Closure {
+                    params,
+                    return_type,
+                    ..
+                } => (params.as_slice(), return_type),
+                _ => {
+                    return Err(Diagnostic::new(format!(
+                        "expected `{pattern}`, found `{actual}`"
+                    )))
+                }
             };
             if params.len() != actual_params.len()
                 || params
                     .iter()
-                    .zip(actual_params)
+                    .zip(actual_params.iter())
                     .any(|(expected, actual)| expected.passing != actual.passing)
             {
                 return Err(Diagnostic::new(function_type_mismatch_message(
                     pattern, actual,
                 )));
             }
-            for (param, actual_param) in params.iter().zip(actual_params) {
+            for (param, actual_param) in params.iter().zip(actual_params.iter()) {
                 unify_type_pattern(&param.ty, &actual_param.ty, substitutions)?;
+            }
+            unify_type_pattern(return_type, actual_return, substitutions)
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => {
+            let Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                captures: actual_captures,
+                call_kind: actual_call_kind,
+            } = actual
+            else {
+                return Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )));
+            };
+            if call_kind != actual_call_kind
+                || params.len() != actual_params.len()
+                || captures.len() != actual_captures.len()
+                || params
+                    .iter()
+                    .zip(actual_params.iter())
+                    .any(|(expected, actual)| expected.passing != actual.passing)
+                || captures
+                    .iter()
+                    .zip(actual_captures.iter())
+                    .any(|(expected, actual)| {
+                        expected.name != actual.name || expected.mode != actual.mode
+                    })
+            {
+                return Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )));
+            }
+            for (param, actual_param) in params.iter().zip(actual_params.iter()) {
+                unify_type_pattern(&param.ty, &actual_param.ty, substitutions)?;
+            }
+            for (capture, actual_capture) in captures.iter().zip(actual_captures.iter()) {
+                unify_type_pattern(&capture.ty, &actual_capture.ty, substitutions)?;
             }
             unify_type_pattern(return_type, actual_return, substitutions)
         }
@@ -3602,6 +4038,31 @@ fn function_type_mismatch_message(expected: &Type, actual: &Type) -> String {
         );
     }
     format!("expected `{expected}`, found `{actual}`")
+}
+
+fn closure_signature_matches_function(closure: &Type, function: &Type) -> bool {
+    let (
+        Type::Closure {
+            params: closure_params,
+            return_type: closure_return,
+            ..
+        },
+        Type::Function {
+            params: function_params,
+            return_type: function_return,
+        },
+    ) = (closure, function)
+    else {
+        return false;
+    };
+    closure_params.len() == function_params.len()
+        && closure_params
+            .iter()
+            .zip(function_params)
+            .all(|(closure, function)| {
+                closure.passing == function.passing && closure.ty == function.ty
+            })
+        && closure_return == function_return
 }
 
 /// Joins the non-structural callable contract carried alongside a type.
@@ -3688,6 +4149,28 @@ fn erase_type_callable_contracts(ty: &Type) -> Type {
                 })
                 .collect(),
             return_type: Box::new(erase_type_callable_contracts(return_type)),
+        },
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => Type::Closure {
+            params: Box::new(
+                params
+                    .iter()
+                    .map(|param| FunctionParamContract {
+                        name: String::new(),
+                        ty: erase_type_callable_contracts(&param.ty),
+                        passing: param.passing,
+                        has_default: false,
+                        default_erased: true,
+                    })
+                    .collect(),
+            ),
+            return_type: Box::new(erase_type_callable_contracts(return_type)),
+            captures: captures.clone(),
+            call_kind: *call_kind,
         },
         Type::Tuple(elements) => {
             Type::Tuple(elements.iter().map(erase_type_callable_contracts).collect())
@@ -4008,6 +4491,10 @@ struct LocalBinding {
     /// Copy payload bindings are values, but ADR-0022 still keeps the selected
     /// scrutinee shared until its arm completes.
     shared_match_places: BTreeMap<PlacePath, crate::diag::Span>,
+    /// True for a value stored in a lambda environment. Phase 6.3 has no
+    /// mutable-call closure category, so mutable access to these places is
+    /// rejected even when the outer binding was declared `mut`.
+    captured: bool,
 }
 
 #[derive(Clone)]
@@ -4133,6 +4620,8 @@ struct FunctionChecker<'a> {
     active_match_borrow_places: Rc<RefCell<Vec<PlacePath>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
+    closure_owner: ClosureOwner,
+    closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
 }
 
 #[derive(Clone)]
@@ -4203,17 +4692,61 @@ impl<'a> FunctionChecker<'a> {
         element_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        let callback_ty = self.type_of_expr(&callback.value, locals)?;
-        let Type::Function {
-            params,
-            return_type,
-        } = callback_ty
-        else {
-            return Err(Diagnostic::coded_at(
-                "AU2002",
-                callback.span,
-                format!("`Vec.{method_name}` expects a function value, found `{callback_ty}`"),
-            ));
+        let contextual_params = [FunctionParamContract {
+            name: "value".to_string(),
+            ty: element_ty.clone(),
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }];
+        let bool_ty = Type::named("bool");
+        let callback_ty = match &callback.value.kind {
+            ExprKind::Lambda { params, body } => self.type_of_lambda(
+                params,
+                body,
+                callback.value.span,
+                locals,
+                None,
+                Some(LambdaCallableContext {
+                    params: &contextual_params,
+                    return_type: (method_name == "filter").then_some(&bool_ty),
+                }),
+            )?,
+            _ => self.type_of_expr(&callback.value, locals)?,
+        };
+        let (params, return_type) = match &callback_ty {
+            Type::Function {
+                params,
+                return_type,
+            } => (params.clone(), return_type.clone()),
+            Type::Closure {
+                params,
+                return_type,
+                call_kind: ClosureCallKind::Repeatable,
+                ..
+            } => (params.as_ref().clone(), return_type.clone()),
+            Type::Closure {
+                call_kind: ClosureCallKind::Consuming,
+                ..
+            } => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    callback.span,
+                    format!(
+                        "`Vec.{method_name}` callback must be repeatable, found `{callback_ty}`"
+                    ),
+                )
+                .with_help(
+                    "clone or precompute the consumed capture outside the lambda, or use a named function that does not consume closure state",
+                ))
+            }
+            _ => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    callback.span,
+                    format!("`Vec.{method_name}` expects a function value, found `{callback_ty}`"),
+                ))
+            }
         };
         if params.len() != 1 || params[0].passing != ReceiverKind::Borrow {
             return Err(Diagnostic::coded_at(
@@ -4317,10 +4850,18 @@ impl<'a> FunctionChecker<'a> {
         nominals: &mut BTreeMap<String, TransferNominal>,
     ) {
         let Type::Named(name, args) = ty else {
-            if let Type::Tuple(elements) = ty {
-                for element in elements {
-                    self.collect_transfer_nominals(element, nominals);
+            match ty {
+                Type::Tuple(elements) => {
+                    for element in elements {
+                        self.collect_transfer_nominals(element, nominals);
+                    }
                 }
+                Type::Closure { captures, .. } => {
+                    for capture in captures.iter() {
+                        self.collect_transfer_nominals(&capture.ty, nominals);
+                    }
+                }
+                _ => {}
             }
             return;
         };
@@ -4441,6 +4982,20 @@ impl<'a> FunctionChecker<'a> {
         }
         match ty {
             Type::Unit | Type::Function { .. } => TransferSummary::default(),
+            Type::Closure { captures, .. } => {
+                let mut result = TransferSummary::default();
+                for capture in captures.iter() {
+                    let capture_summary = Self::prefix_transfer_summary(
+                        self.transfer_shape(&capture.ty, formals, summaries),
+                        &format!("capture `{}` of `{ty}`", capture.name),
+                    );
+                    Self::merge_transfer_summary(&mut result, capture_summary);
+                    if result.failure.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
             Type::Module(name) => TransferSummary {
                 failure: Some(format!(
                     "`module {name}` is a module capability and is not Transfer"
@@ -4943,6 +5498,15 @@ impl<'a> FunctionChecker<'a> {
             Type::Unit | Type::Module(_) | Type::Function { .. } => {
                 TaskObservationSummary::default()
             }
+            Type::Closure { captures, .. } => {
+                let mut result = TaskObservationSummary::default();
+                for capture in captures.iter() {
+                    let capture_summary =
+                        self.task_observation_shape(&capture.ty, formals, summaries);
+                    Self::merge_task_observation_summary(&mut result, capture_summary);
+                }
+                result
+            }
             Type::TypeParam(name) => {
                 formals
                     .get(name)
@@ -5093,6 +5657,10 @@ impl<'a> FunctionChecker<'a> {
     ) -> SymbolicCopyShape {
         match ty {
             Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
+            Type::Closure { .. } => SymbolicCopyShape {
+                intrinsic_noncopy: true,
+                noncopy_formals: Vec::new(),
+            },
             Type::Module(_) => SymbolicCopyShape {
                 intrinsic_noncopy: true,
                 noncopy_formals: Vec::new(),
@@ -5687,6 +6255,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -5726,6 +6295,8 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
+            closure_owner: ClosureOwner::TopLevel,
+            closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
 
@@ -5750,6 +6321,8 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            closure_owner: self.closure_owner.clone(),
+            closure_infos: self.closure_infos.clone(),
         }
     }
 
@@ -5778,6 +6351,8 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            closure_owner: self.closure_owner.clone(),
+            closure_infos: self.closure_infos.clone(),
         }
     }
 
@@ -5802,6 +6377,8 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            closure_owner: self.closure_owner.clone(),
+            closure_infos: self.closure_infos.clone(),
         }
     }
 
@@ -5826,7 +6403,14 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             rng_clone_obligations: sink,
             expr_result_entries: self.expr_result_entries.clone(),
+            closure_owner: self.closure_owner.clone(),
+            closure_infos: self.closure_infos.clone(),
         }
+    }
+
+    fn with_closure_owner(mut self, owner: ClosureOwner) -> Self {
+        self.closure_owner = owner;
+        self
     }
 
     fn with_implicit_param_borrows(
@@ -6121,7 +6705,21 @@ impl<'a> FunctionChecker<'a> {
     ) -> Diagnostic {
         let mut diagnostic = Diagnostic::at(span, format!("use of moved value `{}`", name));
         if let Some(origin) = binding.moved_at {
-            diagnostic = diagnostic.with_secondary(origin, "value moved here");
+            let moved_into_closure = self.closure_infos.borrow().values().any(|closure| {
+                closure.captures.iter().any(|capture| {
+                    capture.name == name
+                        && capture.mode == ClosureCaptureMode::Move
+                        && capture.span == origin
+                })
+            });
+            diagnostic = diagnostic.with_secondary(
+                origin,
+                if moved_into_closure {
+                    "value moved into closure here"
+                } else {
+                    "value moved here"
+                },
+            );
             if self.type_supports_builtin_clone(&binding.ty) {
                 diagnostic = diagnostic.with_help(
                     "pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
@@ -6604,6 +7202,10 @@ impl<'a> FunctionChecker<'a> {
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
             .with_return_type(return_type.clone())
+            .with_closure_owner(ClosureOwner::TraitMethod {
+                trait_name: trait_info.decl.name.clone(),
+                method_name: method.name.clone(),
+            })
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -6631,6 +7233,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -6658,6 +7261,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -6693,6 +7297,7 @@ impl<'a> FunctionChecker<'a> {
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
             .with_return_type(return_type.clone())
+            .with_closure_owner(ClosureOwner::Function(function.name.clone()))
             .with_implicit_param_borrows(
                 &function.params,
                 &function_info.signature.params,
@@ -6731,6 +7336,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -6788,6 +7394,10 @@ impl<'a> FunctionChecker<'a> {
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
             .with_return_type(return_type.clone())
+            .with_closure_owner(ClosureOwner::ClassMethod {
+                class_name: class_decl.name.clone(),
+                method_name: method.name.clone(),
+            })
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -6830,6 +7440,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -6857,6 +7468,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -6920,6 +7532,7 @@ impl<'a> FunctionChecker<'a> {
 
     fn check_trait_impl_method(
         &self,
+        trait_name: &str,
         for_type: &Type,
         impl_type_params: &[String],
         impl_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
@@ -6951,6 +7564,11 @@ impl<'a> FunctionChecker<'a> {
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
             .with_return_type(return_type.clone())
+            .with_closure_owner(ClosureOwner::TraitImplMethod {
+                trait_name: trait_name.to_string(),
+                for_type: for_type.to_string(),
+                method_name: method.name.clone(),
+            })
             .with_implicit_param_borrows(
                 &method.params,
                 &method_info.signature.params,
@@ -6985,6 +7603,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -7012,6 +7631,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
         }
@@ -7219,6 +7839,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        captured: false,
                     },
                 );
                 Ok(())
@@ -7720,6 +8341,7 @@ impl<'a> FunctionChecker<'a> {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                captured: false,
             },
         );
         self.check_block(
@@ -8236,7 +8858,24 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
-        let final_ty = annotation_ty.unwrap_or_else(|| value_ty.clone());
+        let contextual_capturing_closure = annotation_ty
+            .as_ref()
+            .is_some_and(|annotation| closure_signature_matches_function(&value_ty, annotation));
+        if contextual_capturing_closure && assign.mutable {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                assign.span,
+                "a capturing closure cannot be stored in a mutable `def(...) -> ...` binding",
+            )
+            .with_help(
+                "keep the contextualized closure in an immutable local so its capture ownership and call count remain precise",
+            ));
+        }
+        let final_ty = if contextual_capturing_closure {
+            value_ty.clone()
+        } else {
+            annotation_ty.unwrap_or_else(|| value_ty.clone())
+        };
         if value_ty != final_ty {
             if matches!(value_ty, Type::Function { .. })
                 && matches!(final_ty, Type::Function { .. })
@@ -8277,6 +8916,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        captured: false,
                     },
                 );
                 return Ok(());
@@ -8335,6 +8975,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    captured: false,
                 },
             );
             return Ok(());
@@ -8359,6 +9000,7 @@ impl<'a> FunctionChecker<'a> {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                captured: false,
             },
         );
         Ok(())
@@ -8673,6 +9315,380 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn collect_lambda_capture_uses(
+        expr: &Expr,
+        bound: &BTreeSet<String>,
+        seen: &mut BTreeSet<String>,
+        captures: &mut Vec<(String, crate::diag::Span)>,
+    ) {
+        match &expr.kind {
+            ExprKind::Name(name) => {
+                if !bound.contains(name) && seen.insert(name.clone()) {
+                    captures.push((name.clone(), expr.span));
+                }
+            }
+            ExprKind::Lambda { params, body } => {
+                let mut nested_bound = bound.clone();
+                nested_bound.extend(params.iter().map(|param| param.name.clone()));
+                Self::collect_lambda_capture_uses(body, &nested_bound, seen, captures);
+            }
+            ExprKind::Group(inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Unary { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. } => {
+                Self::collect_lambda_capture_uses(inner, bound, seen, captures);
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Membership {
+                value: left,
+                container: right,
+                ..
+            } => {
+                Self::collect_lambda_capture_uses(left, bound, seen, captures);
+                Self::collect_lambda_capture_uses(right, bound, seen, captures);
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                Self::collect_lambda_capture_uses(condition, bound, seen, captures);
+                Self::collect_lambda_capture_uses(then_expr, bound, seen, captures);
+                Self::collect_lambda_capture_uses(else_expr, bound, seen, captures);
+            }
+            ExprKind::Call { callee, args } => {
+                Self::collect_lambda_capture_uses(callee, bound, seen, captures);
+                for argument in args {
+                    Self::collect_lambda_capture_uses(&argument.value, bound, seen, captures);
+                }
+            }
+            ExprKind::Member { object, .. } => {
+                Self::collect_lambda_capture_uses(object, bound, seen, captures);
+            }
+            ExprKind::Index { object, index } => {
+                Self::collect_lambda_capture_uses(object, bound, seen, captures);
+                Self::collect_lambda_capture_uses(index, bound, seen, captures);
+            }
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    Self::collect_lambda_capture_uses(element, bound, seen, captures);
+                }
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    Self::collect_lambda_capture_uses(&entry.key, bound, seen, captures);
+                    Self::collect_lambda_capture_uses(&entry.value, bound, seen, captures);
+                }
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FormatPart::Expr(value) = part {
+                        Self::collect_lambda_capture_uses(value, bound, seen, captures);
+                    }
+                }
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                Self::collect_lambda_capture_uses(scrutinee, bound, seen, captures);
+                for arm in arms {
+                    let mut arm_bound = bound.clone();
+                    Self::collect_pattern_binding_names(&arm.pattern, &mut arm_bound);
+                    Self::collect_lambda_capture_uses(&arm.value, &arm_bound, seen, captures);
+                }
+            }
+            ExprKind::CompareChain { first, links } => {
+                Self::collect_lambda_capture_uses(first, bound, seen, captures);
+                for link in links {
+                    Self::collect_lambda_capture_uses(&link.operand, bound, seen, captures);
+                }
+            }
+            ExprKind::Int(_)
+            | ExprKind::DurationNanos(_)
+            | ExprKind::BuiltinOmitted
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::String(_) => {}
+        }
+    }
+
+    fn collect_pattern_binding_names(pattern: &Pattern, names: &mut BTreeSet<String>) {
+        match pattern {
+            Pattern::Binding(binding) => {
+                names.insert(binding.name.clone());
+            }
+            Pattern::Tuple(tuple) => {
+                for element in &tuple.elements {
+                    Self::collect_pattern_binding_names(element, names);
+                }
+            }
+            Pattern::Variant(variant) => {
+                for subpattern in &variant.subpatterns {
+                    Self::collect_pattern_binding_names(subpattern, names);
+                }
+            }
+            Pattern::Literal(_) | Pattern::Wildcard(_) => {}
+        }
+    }
+
+    fn type_of_lambda(
+        &self,
+        params: &[LambdaParam],
+        body: &Expr,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+        callable_context: Option<LambdaCallableContext<'_>>,
+    ) -> Result<Type> {
+        let expected_signature = match (callable_context, expected) {
+            (Some(context), _) => Some((context.params, context.return_type)),
+            (
+                None,
+                Some(Type::Function {
+                    params,
+                    return_type,
+                }),
+            ) => Some((params.as_slice(), Some(return_type.as_ref()))),
+            (
+                None,
+                Some(Type::Closure {
+                    params,
+                    return_type,
+                    ..
+                }),
+            ) => Some((params.as_slice(), Some(return_type.as_ref()))),
+            (None, Some(expected)) => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!("lambda requires a callable context, found expected type `{expected}`"),
+                ))
+            }
+            (None, None) => None,
+        };
+        if !params.is_empty() && expected_signature.is_none() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                "lambda parameter types require an expected `def(...) -> ...` context",
+            )
+            .with_help(
+                "add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter",
+            ));
+        }
+        if let Some((expected_params, _)) = expected_signature {
+            if params.len() != expected_params.len() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!(
+                        "lambda expects {} contextual parameter{}, but its function type provides {}",
+                        params.len(),
+                        if params.len() == 1 { "" } else { "s" },
+                        expected_params.len()
+                    ),
+                ));
+            }
+            for (param, expected_param) in params.iter().zip(expected_params) {
+                let passing = resolve_param_passing(param.mode);
+                if passing != expected_param.passing {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        param.span,
+                        format!(
+                            "lambda parameter `{}` has `{}` capability, but the expected function type requires `{}`",
+                            param.name,
+                            Self::capability_name(passing),
+                            Self::capability_name(expected_param.passing),
+                        ),
+                    )
+                    .with_help(
+                        "use a bare, `mut`, or `own` lambda parameter matching the expected function type",
+                    ));
+                }
+            }
+        }
+
+        let bound = params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut seen = BTreeSet::new();
+        let mut capture_uses = Vec::new();
+        Self::collect_lambda_capture_uses(body, &bound, &mut seen, &mut capture_uses);
+
+        let mut captures = Vec::new();
+        let mut lambda_locals = HashMap::new();
+        for (name, capture_span) in capture_uses {
+            let Some(binding) = locals.get(&name) else {
+                continue;
+            };
+            self.ensure_pattern_binding_not_stale(&name, capture_span, binding)?;
+            if binding.moved {
+                return Err(self.moved_value_diagnostic(&name, capture_span, binding));
+            }
+            if !binding.moved_fields.is_empty() {
+                return Err(Diagnostic::coded_at(
+                    "AU3001",
+                    capture_span,
+                    format!("cannot capture partially moved value `{name}`"),
+                ));
+            }
+            if binding.passing != ReceiverKind::Value {
+                let shared_parameter = self.implicit_borrowed_params.contains_key(&name);
+                let mut diagnostic = Diagnostic::coded_at(
+                    "AU3002",
+                    capture_span,
+                    format!(
+                        "lambda cannot capture shared {} `{name}` by value",
+                        if shared_parameter {
+                            "parameter"
+                        } else {
+                            "value"
+                        }
+                    ),
+                );
+                if let Some(origin) = binding.borrowed_at {
+                    diagnostic = diagnostic.with_secondary(
+                        origin,
+                        format!(
+                            "shared {} `{name}` is declared here",
+                            if shared_parameter {
+                                "parameter"
+                            } else {
+                                "value"
+                            }
+                        ),
+                    );
+                }
+                return Err(diagnostic.with_help(format!(
+                    "clone `{name}` into an owned local before creating the lambda, or declare the enclosing parameter as `own {}`",
+                    binding.ty
+                )));
+            }
+            let mode = if self.is_copy_type(&binding.ty) {
+                ClosureCaptureMode::Copy
+            } else {
+                ClosureCaptureMode::Move
+            };
+            captures.push(ClosureCapture {
+                name: name.clone(),
+                ty: binding.ty.clone(),
+                mode,
+                span: capture_span,
+            });
+            lambda_locals.insert(
+                name,
+                LocalBinding {
+                    ty: binding.ty.clone(),
+                    assignable: false,
+                    mutable_place: false,
+                    managed_resource: false,
+                    passing: ReceiverKind::Value,
+                    borrow_origin: None,
+                    borrowed_at: None,
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
+                    shared_match_scrutinee: None,
+                    moved: false,
+                    moved_at: None,
+                    moved_fields: BTreeMap::new(),
+                    frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
+                    captured: true,
+                },
+            );
+        }
+
+        let expected_params = expected_signature.map(|(params, _)| params);
+        let param_contracts = params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| FunctionParamContract {
+                name: param.name.clone(),
+                ty: expected_params
+                    .and_then(|params| params.get(index))
+                    .map(|param| param.ty.clone())
+                    .unwrap_or(Type::Unit),
+                passing: resolve_param_passing(param.mode),
+                has_default: false,
+                default_erased: false,
+            })
+            .collect::<Vec<_>>();
+        for (param, contract) in params.iter().zip(&param_contracts) {
+            lambda_locals.insert(
+                param.name.clone(),
+                LocalBinding {
+                    ty: contract.ty.clone(),
+                    assignable: false,
+                    mutable_place: contract.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
+                    passing: contract.passing,
+                    borrow_origin: (contract.passing != ReceiverKind::Value)
+                        .then(|| param.name.clone()),
+                    borrowed_at: (contract.passing != ReceiverKind::Value).then_some(param.span),
+                    match_borrow_place: None,
+                    stale_match_borrow_place: None,
+                    shared_match_scrutinee: None,
+                    moved: false,
+                    moved_at: None,
+                    moved_fields: BTreeMap::new(),
+                    frozen_places: BTreeMap::new(),
+                    shared_match_places: BTreeMap::new(),
+                    captured: false,
+                },
+            );
+        }
+
+        let expected_return = expected_signature.and_then(|(_, return_type)| return_type);
+        let return_type = self.type_of_expr_hint(body, &mut lambda_locals, expected_return)?;
+        if let Some(expected_return) = expected_return {
+            if return_type != *expected_return {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    body.span,
+                    format!("lambda body has type `{return_type}`, expected `{expected_return}`"),
+                ));
+            }
+        }
+        self.consume_value_expr(body, &mut lambda_locals)?;
+        let call_kind = if captures.iter().any(|capture| {
+            lambda_locals
+                .get(&capture.name)
+                .is_some_and(|binding| binding.moved || !binding.moved_fields.is_empty())
+        }) {
+            ClosureCallKind::Consuming
+        } else {
+            ClosureCallKind::Repeatable
+        };
+        let id = ClosureId::new(self.module_name, self.closure_owner.clone(), span);
+        let info = ClosureInfo {
+            id: id.clone(),
+            span,
+            params: param_contracts,
+            return_type,
+            captures,
+            call_kind,
+        };
+        let ty = info.ty();
+        self.closure_infos.borrow_mut().insert(id, info.clone());
+        for capture in &info.captures {
+            if capture.mode == ClosureCaptureMode::Move {
+                self.consume_binding(&capture.name, capture.span, locals)?;
+            }
+        }
+        Ok(ty)
+    }
+
+    fn capability_name(passing: ReceiverKind) -> &'static str {
+        match passing {
+            ReceiverKind::Borrow => "shared",
+            ReceiverKind::BorrowMut => "mut",
+            ReceiverKind::Value => "own",
+        }
+    }
+
     fn conditional_result_hint(
         &self,
         then_expr: &Expr,
@@ -8887,6 +9903,9 @@ impl<'a> FunctionChecker<'a> {
             );
         }
         match &expr.kind {
+            ExprKind::Lambda { params, body } => {
+                self.type_of_lambda(params, body, expr.span, locals, expected, None)
+            }
             ExprKind::Name(name) if name == "None" => {
                 if let Some(expected_ty) = expected {
                     if matches!(expected_ty, Type::Named(enum_name, args) if enum_name == "Option" && args.len() == 1)
@@ -9009,11 +10028,22 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::List(elements) => {
                 let mut element_ty = expected.and_then(vec_element_type).cloned();
                 for element in elements {
+                    let has_contextual_element_type = element_ty.is_some();
                     let actual = if let Some(expected_element_ty) = element_ty.as_ref() {
                         self.type_of_expr_hint(element, locals, Some(expected_element_ty))?
                     } else {
                         self.type_of_expr(element, locals)?
                     };
+                    if !has_contextual_element_type && type_contains_closure_value(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            element.span,
+                            "capturing closures cannot be stored in collection literals in this language version",
+                        )
+                        .with_help(
+                            "keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda",
+                        ));
+                    }
                     if let Some(expected_element_ty) = element_ty.as_ref() {
                         if actual != *expected_element_ty {
                             return Err(Diagnostic::at(
@@ -9044,11 +10074,22 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Set(elements) => {
                 let mut element_ty = expected.and_then(set_element_type).cloned();
                 for element in elements {
+                    let has_contextual_element_type = element_ty.is_some();
                     let actual = if let Some(expected_element_ty) = element_ty.as_ref() {
                         self.type_of_expr_hint(element, locals, Some(expected_element_ty))?
                     } else {
                         self.type_of_expr(element, locals)?
                     };
+                    if !has_contextual_element_type && type_contains_closure_value(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            element.span,
+                            "capturing closures cannot be stored in collection literals in this language version",
+                        )
+                        .with_help(
+                            "keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda",
+                        ));
+                    }
                     if let Some(expected_element_ty) = element_ty.as_ref() {
                         if actual != *expected_element_ty {
                             return Err(Diagnostic::at(
@@ -9094,11 +10135,22 @@ impl<'a> FunctionChecker<'a> {
                     .and_then(map_key_value_types)
                     .map(|(_, value_ty)| value_ty.clone());
                 for entry in entries {
+                    let has_contextual_key_type = key_ty.is_some();
                     let actual_key = if let Some(expected_key_ty) = key_ty.as_ref() {
                         self.type_of_expr_hint(&entry.key, locals, Some(expected_key_ty))?
                     } else {
                         self.type_of_expr(&entry.key, locals)?
                     };
+                    if !has_contextual_key_type && type_contains_closure_value(&actual_key) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            entry.key.span,
+                            "capturing closures cannot be stored in collection literals in this language version",
+                        )
+                        .with_help(
+                            "keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda",
+                        ));
+                    }
                     if let Some(expected_key_ty) = key_ty.as_ref() {
                         if actual_key != *expected_key_ty {
                             return Err(Diagnostic::at(
@@ -9114,11 +10166,22 @@ impl<'a> FunctionChecker<'a> {
                         key_ty = Some(actual_key);
                     }
 
+                    let has_contextual_value_type = value_ty.is_some();
                     let actual_value = if let Some(expected_value_ty) = value_ty.as_ref() {
                         self.type_of_expr_hint(&entry.value, locals, Some(expected_value_ty))?
                     } else {
                         self.type_of_expr(&entry.value, locals)?
                     };
+                    if !has_contextual_value_type && type_contains_closure_value(&actual_value) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            entry.value.span,
+                            "capturing closures cannot be stored in collection literals in this language version",
+                        )
+                        .with_help(
+                            "keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda",
+                        ));
+                    }
                     if let Some(expected_value_ty) = value_ty.as_ref() {
                         if actual_value != *expected_value_ty {
                             return Err(Diagnostic::at(
@@ -9175,6 +10238,13 @@ impl<'a> FunctionChecker<'a> {
                 let then_ty =
                     self.type_of_expr_hint(then_expr, &mut then_locals, Some(&result_ty))?;
                 if then_ty != result_ty {
+                    if capturing_closure_branch_mismatch(&result_ty, &then_ty) {
+                        return Err(capturing_closure_branch_diagnostic(
+                            "conditional",
+                            "branch",
+                            then_expr.span,
+                        ));
+                    }
                     return Err(Diagnostic::coded_at(
                         "AU2002",
                         then_expr.span,
@@ -9189,6 +10259,13 @@ impl<'a> FunctionChecker<'a> {
                 let else_ty =
                     self.type_of_expr_hint(else_expr, &mut else_locals, Some(&result_ty))?;
                 if else_ty != result_ty {
+                    if capturing_closure_branch_mismatch(&result_ty, &else_ty) {
+                        return Err(capturing_closure_branch_diagnostic(
+                            "conditional",
+                            "branch",
+                            else_expr.span,
+                        ));
+                    }
                     return Err(Diagnostic::coded_at(
                         "AU2002",
                         else_expr.span,
@@ -10886,6 +11963,17 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
+            let resolved_field_ty = substitute_type(&field_info.ty, &substitutions);
+            if type_contains_closure_value(&actual) {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    argument.value.span,
+                    format!("expected `{resolved_field_ty}`, found `{actual}`"),
+                )
+                .with_help(
+                    "capturing closures cannot be stored in fields because a written `def` type erases capture metadata; use a named function or a capture-free lambda",
+                ));
+            }
             if !self.is_copy_type(&actual) {
                 self.consume_value_expr(&argument.value, locals)?;
             }
@@ -12082,21 +13170,30 @@ impl<'a> FunctionChecker<'a> {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
                     if let Some(function) = namespace.functions.get(field) {
-                        return self.type_check_callable_args(
-                            &format!("function `{}`", function.decl.name),
-                            &function.decl.type_params,
-                            &function.decl.params,
-                            &function.signature.param_passings,
-                            &function.signature.params,
-                            &function.signature.return_type,
-                            &function.type_param_bounds,
-                            &function.signature.rng_clone_safe_type_params,
-                            args,
-                            span,
-                            locals,
-                            expected,
-                            HashMap::new(),
-                        );
+                        let closure_argument_policy =
+                            if namespace.path == "control" && field == "retry" {
+                                ClosureArgumentPolicy::RepeatableParameter("worker")
+                            } else {
+                                ClosureArgumentPolicy::Reject
+                            };
+                        return self
+                            .type_check_callable_args_detailed(
+                                &format!("function `{}`", function.decl.name),
+                                &function.decl.type_params,
+                                &function.decl.params,
+                                &function.signature.param_passings,
+                                &function.signature.params,
+                                &function.signature.return_type,
+                                &function.type_param_bounds,
+                                &function.signature.rng_clone_safe_type_params,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                HashMap::new(),
+                                closure_argument_policy,
+                            )
+                            .map(|checked| checked.return_type);
                     }
                     if let Some(class) = namespace.classes.get(field) {
                         if let Some(constructor) = class.builtin_constructor() {
@@ -13406,12 +14503,58 @@ impl<'a> FunctionChecker<'a> {
                                     Err(named_target_error) => {
                                         let target_ty =
                                             self.type_of_expr(&args[target_index].value, locals)?;
-                                        let Type::Function {
-                                            params,
-                                            return_type,
-                                        } = target_ty
-                                        else {
-                                            return Err(named_target_error);
+                                        let (params, return_type, closure_captures) =
+                                            match &target_ty {
+                                                Type::Function {
+                                                    params,
+                                                    return_type,
+                                                } => (params.clone(), return_type.clone(), None),
+                                                Type::Closure {
+                                                    params,
+                                                    return_type,
+                                                    captures,
+                                                    ..
+                                                } => (
+                                                    params.as_ref().clone(),
+                                                    return_type.clone(),
+                                                    Some(captures.as_slice()),
+                                                ),
+                                                _ => return Err(named_target_error),
+                                            };
+                                        if let Some(captures) = closure_captures {
+                                            if let Some(reason) = self.transfer_failure(&target_ty)
+                                            {
+                                                let target_label =
+                                                    match &args[target_index].value.kind {
+                                                        ExprKind::Name(name) => {
+                                                            format!("task target `{name}`")
+                                                        }
+                                                        _ => "task closure target".to_string(),
+                                                    };
+                                                let mut diagnostic = Diagnostic::coded_at(
+                                                    "AU3008",
+                                                    args[target_index].span,
+                                                    format!(
+                                                        "{target_label} cannot cross a task boundary because {reason}"
+                                                    ),
+                                                );
+                                                if let Some(capture) =
+                                                    captures.iter().find(|capture| {
+                                                        self.transfer_failure(&capture.ty).is_some()
+                                                    })
+                                                {
+                                                    diagnostic = diagnostic.with_secondary(
+                                                        capture.span,
+                                                        format!(
+                                                            "capture `{}` is created here",
+                                                            capture.name
+                                                        ),
+                                                    );
+                                                }
+                                                return Err(diagnostic.with_help(
+                                                    "task closures may capture only owned Transfer data; keep capabilities and host resources on their owning worker",
+                                                ));
+                                            }
                                         };
                                         if let Some(index) = params.iter().position(|param| {
                                             param.passing == ReceiverKind::BorrowMut
@@ -13461,6 +14604,12 @@ impl<'a> FunctionChecker<'a> {
                                             format!("task result `{checked_return}`"),
                                             args[target_index].span,
                                         )?;
+                                        if closure_captures.is_some() {
+                                            self.consume_value_expr(
+                                                &args[target_index].value,
+                                                locals,
+                                            )?;
+                                        }
                                         return Ok(
                                             if matches!(
                                                 field.as_str(),
@@ -13501,6 +14650,7 @@ impl<'a> FunctionChecker<'a> {
                                     locals,
                                     None,
                                     callable.seed_substitutions,
+                                    ClosureArgumentPolicy::Reject,
                                 )?;
                                 let transfer_args = bind_call_arguments(
                                     &callable.display_name,
@@ -15051,6 +16201,7 @@ impl<'a> FunctionChecker<'a> {
                                         type_args,
                                     ),
                                     receiver_borrows,
+                                    ClosureArgumentPolicy::Reject,
                                 )
                                 .map(|checked| checked.return_type);
                         }
@@ -15087,6 +16238,7 @@ impl<'a> FunctionChecker<'a> {
                                 expected,
                                 HashMap::new(),
                                 receiver_borrows,
+                                ClosureArgumentPolicy::Reject,
                             )
                             .map(|checked| checked.return_type);
                     }
@@ -15132,6 +16284,7 @@ impl<'a> FunctionChecker<'a> {
                             expected,
                             impl_substitutions,
                             receiver_borrows,
+                            ClosureArgumentPolicy::Reject,
                         )
                         .map(|checked| checked.return_type);
                 }
@@ -15211,6 +16364,31 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         expected,
                     ),
+                    Type::Closure {
+                        params,
+                        return_type,
+                        call_kind,
+                        ..
+                    } => {
+                        if explicit_type_args.is_some() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2005",
+                                span,
+                                "closure values have a concrete signature and do not take explicit type arguments",
+                            ));
+                        }
+                        if call_kind == ClosureCallKind::Consuming {
+                            self.consume_value_expr(base_callee, locals)?;
+                        }
+                        self.type_check_function_value_args(
+                            &params,
+                            &return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                        )
+                    }
                     _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
                 }
             }
@@ -16031,6 +17209,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        captured: false,
                     },
                 );
                 Ok(())
@@ -16403,6 +17582,13 @@ impl<'a> FunctionChecker<'a> {
                     )?;
                     if let Some(expected_ty) = result_ty.as_ref() {
                         if arm_ty != *expected_ty {
+                            if capturing_closure_branch_mismatch(expected_ty, &arm_ty) {
+                                return Err(capturing_closure_branch_diagnostic(
+                                    "match",
+                                    "arm",
+                                    arm.value.span,
+                                ));
+                            }
                             return Err(Diagnostic::at(
                                 arm.value.span,
                                 format!(
@@ -16560,6 +17746,13 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 if let Some(expected_ty) = result_ty.as_ref() {
                     if arm_ty != *expected_ty {
+                        if capturing_closure_branch_mismatch(expected_ty, &arm_ty) {
+                            return Err(capturing_closure_branch_diagnostic(
+                                "match",
+                                "arm",
+                                arm.value.span,
+                            ));
+                        }
                         return Err(Diagnostic::at(
                             arm.value.span,
                             format!(
@@ -16758,7 +17951,7 @@ impl<'a> FunctionChecker<'a> {
                         )
                     });
             }
-            Type::Function { .. } | Type::Tuple(_) | Type::Unit => {
+            Type::Function { .. } | Type::Closure { .. } | Type::Tuple(_) | Type::Unit => {
                 return Err(Diagnostic::at(
                     span,
                     format!("cannot access field `{}` on `{}`", field, object_ty),
@@ -16867,10 +18060,24 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<bool> {
         match &expr.kind {
-            ExprKind::Name(name) => Ok(locals
-                .get(name)
-                .map(|binding| binding.mutable_place)
-                .unwrap_or(false)),
+            ExprKind::Name(name) => {
+                if locals.get(name).is_some_and(|binding| binding.captured) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3003",
+                        expr.span,
+                        format!(
+                            "lambda capture `{name}` cannot be mutably accessed because mutable closures are not supported"
+                        ),
+                    )
+                    .with_help(
+                        "move the mutation outside the lambda, or pass the value as a `mut` lambda parameter",
+                    ));
+                }
+                Ok(locals
+                    .get(name)
+                    .map(|binding| binding.mutable_place)
+                    .unwrap_or(false))
+            }
             ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
             ExprKind::Member { object, field } => {
                 self.resolve_member_target_type(object, field, expr.span, locals)?;
@@ -17372,6 +18579,18 @@ impl<'a> FunctionChecker<'a> {
                 self.collect_expr_place_reads(scrutinee, locals, label, places);
                 for arm in arms {
                     self.collect_expr_place_reads(&arm.value, locals, label, places);
+                }
+            }
+            ExprKind::Lambda { params, body } => {
+                let bound = params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<BTreeSet<_>>();
+                let mut seen = BTreeSet::new();
+                let mut captures = Vec::new();
+                Self::collect_lambda_capture_uses(body, &bound, &mut seen, &mut captures);
+                for (name, span) in captures {
+                    push_place(PlacePath::root(name), span);
                 }
             }
             ExprKind::Int(_)
@@ -19852,6 +21071,7 @@ impl<'a> FunctionChecker<'a> {
             locals,
             expected_return,
             seed_substitutions,
+            ClosureArgumentPolicy::Reject,
         )
         .map(|checked| checked.return_type)
     }
@@ -19872,6 +21092,7 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected_return: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
+        closure_argument_policy: ClosureArgumentPolicy,
     ) -> Result<CheckedCallableTypes> {
         self.type_check_callable_args_seeded(
             callee_name,
@@ -19888,6 +21109,7 @@ impl<'a> FunctionChecker<'a> {
             expected_return,
             seed_substitutions,
             Vec::new(),
+            closure_argument_policy,
         )
     }
 
@@ -19908,6 +21130,7 @@ impl<'a> FunctionChecker<'a> {
         expected_return: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
         seeded_borrowed_places: Vec<BorrowedCallPlace>,
+        closure_argument_policy: ClosureArgumentPolicy,
     ) -> Result<CheckedCallableTypes> {
         let ordered_args = bind_call_arguments(
             callee_name,
@@ -20145,7 +21368,25 @@ impl<'a> FunctionChecker<'a> {
             .zip(param_passings.iter().copied())
         {
             let expected = substitute_type(expected, &substitutions);
-            if actual != expected {
+            let repeatable_closure_compatible = matches!(
+                closure_argument_policy,
+                ClosureArgumentPolicy::RepeatableParameter(name) if name == param_decl.name
+            ) && matches!(
+                (&actual, &expected),
+                (
+                    Type::Closure {
+                        params: actual_params,
+                        return_type: actual_return,
+                        call_kind: ClosureCallKind::Repeatable,
+                        ..
+                    },
+                    Type::Function {
+                        params: expected_params,
+                        return_type: expected_return,
+                    }
+                ) if actual_params.as_ref() == expected_params && actual_return == expected_return
+            );
+            if actual != expected && !repeatable_closure_compatible {
                 let span = argument
                     .map(|argument| argument.span)
                     .unwrap_or(param_decl.span);

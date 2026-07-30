@@ -124,6 +124,45 @@ route, and a class, enum, or collection containing one cannot be cloned through
 a public clone-producing operation. Generic clone helpers infer this
 requirement and reject an unsafe concrete specialization with `AU3007`.
 
+## Closures Capture By Value
+
+A contextually typed lambda owns every outer local it uses:
+
+```python
+label = "compile"
+length: def() -> int64 = lambda: label.len()
+
+print(length())
+print(length())
+```
+
+`label` moves into the closure when the lambda expression is evaluated. Both
+calls work because the body only reads its capture. If the body consumed a
+non-copy capture, the call would consume the closure and a second call would
+report `AU3001`.
+
+Copy captures are snapshots and leave their sources usable. When outer code
+also needs a non-copy value, clone before creating the closure:
+
+```python
+label = "compile"
+captured = label.clone()
+length: def() -> int64 = lambda: captured.len()
+
+print(label)
+print(length())
+```
+
+Bare and `mut` enclosing parameters are borrowed capabilities and cannot be
+captured. Closure environments are read-only in Phase 6.3. A closure may cross
+a task boundary only when every captured value is Transfer.
+
+Stored and arbitrary parameter `def` types remain capture-free. Keep a
+capturing closure in an immutable local, call it directly, pass it to a
+compiler-known repeatable callback, or move a qualifying closure into one task
+start; do not erase its environment metadata through a field, collection, or
+annotated return.
+
 ## Passing Values To Functions
 
 Bare function parameters grant logical shared access for every type. An

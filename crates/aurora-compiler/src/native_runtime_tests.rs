@@ -16,12 +16,13 @@ use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, CancellationContext, ChannelValue,
-    EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
-    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
-    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FileValue, FunctionValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
+    ModuleNamespaceValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig,
+    ProcessSupervisorValue, RangeValue, RngValue, SetValue, TaskCancelledSignal, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{FunctionParamContract, Type};
 #[cfg(unix)]
@@ -2878,6 +2879,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         entry_span: Span::new(7, 3),
         direct_thunk: Some(11),
         direct_default_binder: Some(22),
+        closure_environment: None,
     })));
     let encoded = super::canonical_runtime_type_name(&concrete_function_signature);
     super::aurora_direct_tag_value_type(function, encoded.as_ptr(), encoded.len());
@@ -3241,6 +3243,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         entry_span: Span::new(1, 1),
         direct_thunk: None,
         direct_default_binder: None,
+        closure_environment: None,
     })));
     let missing_targets_address = missing_targets as usize;
     assert_eq!(
@@ -6076,6 +6079,97 @@ unsafe extern "C-unwind" fn test_native_thunk(args: *const i64, len: usize) -> *
     super::aurora_direct_box_i64(total)
 }
 
+unsafe extern "C-unwind" fn direct_closure_add_and_increment_mut_arg(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(len, 2, "expected one capture and one public argument");
+    let args = unsafe { std::slice::from_raw_parts_mut(args as *mut i64, len) };
+    let capture = std::mem::replace(&mut args[0], 0) as *mut OpaqueValue;
+    let public = std::mem::replace(&mut args[1], 0) as *mut OpaqueValue;
+    let capture_value = match unsafe { value_ref(capture) } {
+        Value::Int(value) => value.as_i128().expect("expected signed capture"),
+        other => panic!("expected int capture, found {other:?}"),
+    };
+    let public_value = match unsafe { value_ref(public) } {
+        Value::Int(value) => value.as_i128().expect("expected signed public argument"),
+        other => panic!("expected int public argument, found {other:?}"),
+    };
+    unsafe {
+        release_value(capture);
+        release_value(public);
+    }
+    args[1] = int_value((public_value + 1) as i64) as i64;
+    int_value((capture_value + public_value) as i64)
+}
+
+unsafe extern "C-unwind" fn direct_closure_returns_capture(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(len, 1, "expected one captured argument");
+    let args = unsafe { std::slice::from_raw_parts_mut(args as *mut i64, len) };
+    let capture = std::mem::replace(&mut args[0], 0) as *mut OpaqueValue;
+    let captured = match unsafe { value_ref(capture) } {
+        Value::Int(value) => value.as_i128().expect("expected signed capture"),
+        other => panic!("expected int capture, found {other:?}"),
+    };
+    unsafe {
+        release_value(capture);
+    }
+    int_value(captured as i64)
+}
+
+unsafe extern "C-unwind" fn direct_closure_consumes_owned_and_writes_mut(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(len, 3, "expected one capture and two public arguments");
+    let args = unsafe { std::slice::from_raw_parts_mut(args as *mut i64, len) };
+    let capture = std::mem::replace(&mut args[0], 0) as *mut OpaqueValue;
+    let owned = std::mem::replace(&mut args[1], 0) as *mut OpaqueValue;
+    let mutable = std::mem::replace(&mut args[2], 0) as *mut OpaqueValue;
+    let read_int = |value| match unsafe { value_ref(value) } {
+        Value::Int(value) => value.as_i128().expect("expected signed integer"),
+        other => panic!("expected int closure argument, found {other:?}"),
+    };
+    let capture_value = read_int(capture);
+    let owned_value = read_int(owned);
+    let mutable_value = read_int(mutable);
+    unsafe {
+        release_value(capture);
+        release_value(owned);
+        release_value(mutable);
+    }
+    args[2] = int_value((mutable_value + 5) as i64) as i64;
+    int_value((capture_value + owned_value + mutable_value) as i64)
+}
+
+unsafe extern "C-unwind" fn direct_zero_capture_closure(
+    _args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(len, 0, "zero-capture closure received hidden arguments");
+    int_value(42)
+}
+
+unsafe extern "C-unwind" fn direct_test_default_binder(
+    args: *mut i64,
+    len: usize,
+    transfer_defaults: i64,
+) {
+    assert_eq!(len, 1, "default binder received the wrong arity");
+    assert_eq!(
+        transfer_defaults, 0,
+        "this callback probe keeps its default in the active ownership ledger"
+    );
+    if unsafe { *args } == 0 {
+        unsafe {
+            *args = int_value(41) as i64;
+        }
+    }
+}
+
 #[test]
 fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_values() {
     let external_duration = duration_value(125);
@@ -6201,6 +6295,41 @@ unsafe extern "C-unwind" fn direct_task_panics_before_result_handoff(
     assert_eq!(arg_count, 1);
     assert!(!args.is_null());
     panic!("ordinary task panic before result handoff")
+}
+
+#[test]
+fn native_runtime_direct_yield_allows_a_queued_task_to_make_observable_progress() {
+    let child_ran = Arc::new(AtomicBool::new(false));
+    let child_probe = child_ran.clone();
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(1, move || {
+        let child = spawn_lightweight_task(move || {
+            child_probe.store(true, Ordering::Release);
+            Ok(Value::Unit)
+        })?;
+        assert!(
+            !child_ran.load(Ordering::Acquire),
+            "the only worker remains in the root task before it yields"
+        );
+
+        super::aurora_direct_yield_now();
+        assert!(
+            child_ran.load(Ordering::Acquire),
+            "the direct yield wrapper must let the queued child execute"
+        );
+        match child
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None)
+            .map_err(|error| Diagnostic::new(error.to_string()))?
+        {
+            TaskWaitStatus::Ready(Ok(Value::Unit)) => Ok(Value::Unit),
+            other => Err(Diagnostic::new(format!(
+                "yielded child should complete successfully, found {other:?}"
+            ))),
+        }
+    });
+    assert_eq!(
+        result.expect("direct yield scheduling probe should complete"),
+        Value::Unit
+    );
 }
 
 static DIRECT_ROOT_TEST_OWNED_VALUE: AtomicUsize = AtomicUsize::new(0);
@@ -13361,6 +13490,7 @@ fn native_runtime_child_task_inherits_youngest_first_ancestry_and_starts_a_new_c
 
 #[test]
 fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let parent_ancestry = vec![RuntimeTaskFrame {
         task_function: "outer".to_string(),
         task_entry_span: runtime_source_span("/workspace/outer.au", 3, 1),
@@ -13389,6 +13519,7 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
                 entry_span: Span::new(2, 1),
                 direct_thunk: Some(direct_task_frame_trap as *const () as usize as i64),
                 direct_default_binder: Some(1),
+                closure_environment: None,
             })));
             let args = super::aurora_direct_arg_buffer_new(0);
             let group = super::aurora_direct_task_group_new();
@@ -13463,7 +13594,454 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
 }
 
 #[test]
+fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope(|| {
+            let capture_type = Type::named("int64");
+            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "capturing_child".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(capture_type.clone()),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "captured".to_string(),
+                        ty: capture_type.clone(),
+                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        span: Span::new(2, 1),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: Some("/workspace/capturing_child.au".to_string()),
+                entry_span: Span::new(2, 1),
+                direct_thunk: Some(test_native_thunk as *const () as usize as i64),
+                direct_default_binder: Some(1),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                    vec![ClosureCaptureValue {
+                        name: "captured".to_string(),
+                        ty: capture_type,
+                        value: Value::Int(crate::integer::IntegerValue::from_signed(9)),
+                    }],
+                    false,
+                ))),
+            })));
+            let args = super::aurora_direct_arg_buffer_new(0);
+            let group = super::aurora_direct_task_group_new();
+            let task = unsafe {
+                super::aurora_direct_start_task_function_with_frames(
+                    function,
+                    args,
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    12,
+                    9,
+                )
+            };
+            let joined = super::aurora_direct_task_join(task);
+            assert_eq!(expect_task_result_ready_int(joined), 9);
+            unsafe {
+                release_value(joined);
+            }
+            let closed = super::aurora_direct_task_group_close(group, 0);
+            expect_unit(closed);
+            unsafe {
+                release_value(closed);
+                release_value(task);
+                release_value(group);
+                release_value(function);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "a completed closure task must leave no capture in the parent ownership ledger"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("capturing direct task should finish without poisoning teardown state"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "closure task handoff must release its externally owned claim flag"
+    );
+}
+
+#[test]
+fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semantics() {
+    fn closure_task_value(name: &str, captured: i64, consuming: bool) -> *mut OpaqueValue {
+        boxed_value(Value::Function(Box::new(FunctionValue {
+            name: name.to_string(),
+            signature: Type::Closure {
+                params: Box::new(Vec::new()),
+                return_type: Box::new(Type::named("int64")),
+                captures: Box::new(vec![crate::sema::ClosureCapture {
+                    name: "captured".to_string(),
+                    ty: Type::named("int64"),
+                    mode: if consuming {
+                        crate::sema::ClosureCaptureMode::Move
+                    } else {
+                        crate::sema::ClosureCaptureMode::Copy
+                    },
+                    span: Span::new(2, 1),
+                }]),
+                call_kind: if consuming {
+                    crate::sema::ClosureCallKind::Consuming
+                } else {
+                    crate::sema::ClosureCallKind::Repeatable
+                },
+            },
+            source_path: Some("/workspace/task_closure.au".to_string()),
+            entry_span: Span::new(2, 1),
+            direct_thunk: Some(test_native_thunk as *const () as usize as i64),
+            direct_default_binder: Some(1),
+            closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                vec![ClosureCaptureValue {
+                    name: "captured".to_string(),
+                    ty: Type::named("int64"),
+                    value: Value::Int(IntegerValue::from_signed(i128::from(captured))),
+                }],
+                consuming,
+            ))),
+        })))
+    }
+
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope(|| {
+            let repeatable = closure_task_value("repeatable_child", 11, false);
+            let consuming = closure_task_value("consuming_child", 23, true);
+            let group = super::aurora_direct_task_group_new();
+
+            for expected in [11, 11] {
+                let task = unsafe {
+                    super::aurora_direct_start_task_function_with_frames(
+                        repeatable,
+                        super::aurora_direct_arg_buffer_new(0),
+                        0,
+                        1,
+                        group,
+                        1,
+                        0,
+                        0,
+                        b"parent".as_ptr(),
+                        b"parent".len(),
+                        b"/workspace/parent.au".as_ptr(),
+                        b"/workspace/parent.au".len(),
+                        8,
+                        5,
+                    )
+                };
+                let joined = super::aurora_direct_task_join(task);
+                assert_eq!(
+                    expect_task_result_ready_int(joined),
+                    expected,
+                    "repeatable closure task starts must clone the capture each time"
+                );
+                unsafe {
+                    release_value(joined);
+                    release_value(task);
+                }
+            }
+
+            let consuming_task = unsafe {
+                super::aurora_direct_start_task_function_with_frames(
+                    consuming,
+                    super::aurora_direct_arg_buffer_new(0),
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    b"/workspace/parent.au".as_ptr(),
+                    b"/workspace/parent.au".len(),
+                    9,
+                    5,
+                )
+            };
+            let joined = super::aurora_direct_task_join(consuming_task);
+            assert_eq!(expect_task_result_ready_int(joined), 23);
+            unsafe {
+                release_value(joined);
+                release_value(consuming_task);
+            }
+
+            let rejected_args = super::aurora_direct_arg_buffer_new(0);
+            let consuming_address = consuming as usize;
+            let group_address = group as usize;
+            let rejected_args_address = rejected_args as usize;
+            assert_eq!(
+                capture_runtime_error_message(move || unsafe {
+                    super::aurora_direct_start_task_function_with_frames(
+                        consuming_address as *mut OpaqueValue,
+                        rejected_args_address as *mut i64,
+                        0,
+                        1,
+                        group_address as *mut OpaqueValue,
+                        1,
+                        0,
+                        0,
+                        b"parent".as_ptr(),
+                        b"parent".len(),
+                        std::ptr::null(),
+                        0,
+                        10,
+                        5,
+                    );
+                }),
+                "closure `consuming_child` has already consumed its captured environment"
+            );
+            unsafe {
+                free_arg_buffer(rejected_args, 0);
+            }
+
+            let closed = super::aurora_direct_task_group_close(group, 0);
+            expect_unit(closed);
+            unsafe {
+                release_value(closed);
+                release_value(group);
+                release_value(consuming);
+                release_value(repeatable);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "closure task transfer and retry rejection must balance all owned handles"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("closure task call-kind probes should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "repeatable and one-shot task starts must release every claim flag"
+    );
+}
+
+#[test]
+fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_retry() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope(|| {
+            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "retryable_child".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(Type::named("int64")),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "captured".to_string(),
+                        ty: Type::named("int64"),
+                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        span: Span::new(2, 1),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: Some("/workspace/retryable_child.au".to_string()),
+                entry_span: Span::new(2, 1),
+                direct_thunk: Some(test_native_thunk as *const () as usize as i64),
+                direct_default_binder: Some(1),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                    vec![ClosureCaptureValue {
+                        name: "captured".to_string(),
+                        ty: Type::named("int64"),
+                        value: Value::Int(IntegerValue::from_signed(29)),
+                    }],
+                    false,
+                ))),
+            })));
+            let group = super::aurora_direct_task_group_new();
+            let closure_address = closure as usize;
+            let group_address = group as usize;
+            assert_eq!(
+                capture_runtime_error_message(move || unsafe {
+                    super::aurora_direct_start_task_function_with_frames(
+                        closure_address as *mut OpaqueValue,
+                        std::ptr::null(),
+                        -1,
+                        1,
+                        group_address as *mut OpaqueValue,
+                        1,
+                        0,
+                        0,
+                        b"parent".as_ptr(),
+                        b"parent".len(),
+                        std::ptr::null(),
+                        0,
+                        4,
+                        3,
+                    );
+                }),
+                "invalid task-start arg count"
+            );
+
+            let task = unsafe {
+                super::aurora_direct_start_task_function_with_frames(
+                    closure,
+                    super::aurora_direct_arg_buffer_new(0),
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    std::ptr::null(),
+                    0,
+                    5,
+                    3,
+                )
+            };
+            let joined = super::aurora_direct_task_join(task);
+            assert_eq!(
+                expect_task_result_ready_int(joined),
+                29,
+                "a repeatable closure must remain callable after rejected ABI metadata"
+            );
+            unsafe {
+                release_value(joined);
+                release_value(task);
+            }
+            let closed = super::aurora_direct_task_group_close(group, 0);
+            expect_unit(closed);
+            unsafe {
+                release_value(closed);
+                release_value(group);
+                release_value(closure);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "rejected and successful closure task starts must balance ownership"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("closure task retry probe should complete"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "the valid retry must release its external claim flag"
+    );
+}
+
+#[test]
+fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capture() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let diagnostic =
+        crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+            super::with_direct_task_runtime_scope(|| {
+                Ok(super::with_task_runtime_error_capture(|| {
+                    let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                        name: "detached_closure".to_string(),
+                        signature: Type::Closure {
+                            params: Box::new(Vec::new()),
+                            return_type: Box::new(Type::Unit),
+                            captures: Box::new(vec![crate::sema::ClosureCapture {
+                                name: "payload".to_string(),
+                                ty: Type::named("String"),
+                                mode: crate::sema::ClosureCaptureMode::Move,
+                                span: Span::new(2, 1),
+                            }]),
+                            call_kind: crate::sema::ClosureCallKind::Consuming,
+                        },
+                        source_path: Some("/workspace/detached.au".to_string()),
+                        entry_span: Span::new(2, 1),
+                        direct_thunk: Some(direct_task_frame_trap as *const () as usize as i64),
+                        direct_default_binder: Some(1),
+                        closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                            vec![ClosureCaptureValue {
+                                name: "payload".to_string(),
+                                ty: Type::named("String"),
+                                value: Value::String("owned by detached task".to_string()),
+                            }],
+                            true,
+                        ))),
+                    })));
+                    let group = super::aurora_direct_task_group_new();
+                    let detached = unsafe {
+                        super::aurora_direct_start_task_function_with_frames(
+                            closure,
+                            super::aurora_direct_arg_buffer_new(0),
+                            0,
+                            0,
+                            group,
+                            1,
+                            0,
+                            0,
+                            b"parent".as_ptr(),
+                            b"parent".len(),
+                            b"/workspace/parent.au".as_ptr(),
+                            b"/workspace/parent.au".len(),
+                            12,
+                            9,
+                        )
+                    };
+                    expect_unit(detached);
+                    unsafe {
+                        release_value(detached);
+                    }
+                    let closed = super::aurora_direct_task_group_close(group, 0);
+                    #[allow(unreachable_code)]
+                    {
+                        unsafe {
+                            release_value(closed);
+                            release_value(group);
+                            release_value(closure);
+                        }
+                        Value::Unit
+                    }
+                }))
+            })
+        })
+        .expect_err("closing the group must surface the detached task's unobserved failure");
+    assert_eq!(diagnostic.message, "child frame trap");
+    assert_eq!(
+        diagnostic.task_ancestry,
+        vec![RuntimeTaskFrame {
+            task_function: "detached_closure".to_string(),
+            task_entry_span: runtime_source_span("/workspace/detached.au", 2, 1),
+            parent_function: "parent".to_string(),
+            spawn_span: runtime_source_span("/workspace/parent.au", 12, 9),
+        }]
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "detached trap cleanup must release the task's capture claim flag"
+    );
+}
+
+#[test]
 fn native_runtime_function_value_task_handoff_preserves_absent_source_paths() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
         super::with_direct_task_runtime_scope(|| {
             let signature = Type::Function {
@@ -13541,6 +14119,138 @@ fn native_runtime_function_value_task_handoff_preserves_absent_source_paths() {
 }
 
 #[test]
+fn native_runtime_static_task_frames_preserve_absent_paths_and_reject_invalid_utf8() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let claim_flag_baseline = super::direct_task_claim_flag_live_count();
+    let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
+        super::with_direct_task_runtime_scope(|| {
+            let group = super::aurora_direct_task_group_new();
+            let task_ptr = unsafe {
+                super::aurora_direct_start_task_call_with_frames(
+                    direct_task_frame_trap as *const () as usize as i64,
+                    super::aurora_direct_arg_buffer_new(0),
+                    0,
+                    1,
+                    group,
+                    1,
+                    0,
+                    0,
+                    b"static_child".as_ptr(),
+                    b"static_child".len(),
+                    std::ptr::null(),
+                    0,
+                    2,
+                    1,
+                    b"parent".as_ptr(),
+                    b"parent".len(),
+                    std::ptr::null(),
+                    0,
+                    7,
+                    5,
+                )
+            };
+            let task = unsafe {
+                match value_ref(task_ptr) {
+                    Value::Task(task) => task,
+                    other => panic!("expected Task handle, found {other:?}"),
+                }
+            };
+            let diagnostic = match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(5)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Ready(Err(error)) => error,
+                other => panic!("expected failing static child, found {other:?}"),
+            };
+            assert_eq!(
+                diagnostic.task_ancestry,
+                vec![RuntimeTaskFrame {
+                    task_function: "static_child".to_string(),
+                    task_entry_span: RuntimeSourceSpan::point(None, Span::new(2, 1)),
+                    parent_function: "parent".to_string(),
+                    spawn_span: RuntimeSourceSpan::point(None, Span::new(7, 5)),
+                }]
+            );
+            unsafe {
+                release_value(task_ptr);
+                release_value(group);
+            }
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("static task with absent paths should finish"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::direct_task_claim_flag_live_count(),
+        claim_flag_baseline,
+        "static task metadata probes must release the external claim flag"
+    );
+
+    fn invalid_frame_metadata(case: usize) -> String {
+        capture_direct_boundary_error_message(move || {
+            let invalid = [0xff_u8];
+            let valid_task = b"child".as_slice();
+            let valid_parent = b"parent".as_slice();
+            let valid_path = b"/workspace/task.au".as_slice();
+            let task_function = if case == 0 {
+                invalid.as_slice()
+            } else {
+                valid_task
+            };
+            let parent_function = if case == 1 {
+                invalid.as_slice()
+            } else {
+                valid_parent
+            };
+            let task_path = if case == 2 {
+                invalid.as_slice()
+            } else {
+                valid_path
+            };
+            let spawn_path = if case == 3 {
+                invalid.as_slice()
+            } else {
+                valid_path
+            };
+            unsafe {
+                super::aurora_direct_start_task_call_with_frames(
+                    1,
+                    std::ptr::null(),
+                    0,
+                    1,
+                    std::ptr::null_mut(),
+                    1,
+                    0,
+                    0,
+                    task_function.as_ptr(),
+                    task_function.len(),
+                    task_path.as_ptr(),
+                    task_path.len(),
+                    1,
+                    1,
+                    parent_function.as_ptr(),
+                    parent_function.len(),
+                    spawn_path.as_ptr(),
+                    spawn_path.len(),
+                    1,
+                    1,
+                );
+            }
+        })
+    }
+
+    for case in 0..4 {
+        assert_eq!(
+            invalid_frame_metadata(case),
+            "aurora direct runtime received invalid UTF-8 bytes",
+            "metadata case {case} must fail before task ownership handoff"
+        );
+    }
+}
+
+#[test]
 fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() {
     let signature = Type::Function {
         params: Vec::new(),
@@ -13610,6 +14320,7 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
         entry_span: Span::new(1, 1),
         direct_thunk: None,
         direct_default_binder: Some(1),
+        closure_environment: None,
     })));
     let group = super::aurora_direct_task_group_new();
 
@@ -13653,6 +14364,575 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
         release_value(missing_thunk);
         release_value(group);
     }
+}
+
+#[test]
+fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let repeatable = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_repeatable".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(vec![FunctionParamContract {
+                        name: "value".to_string(),
+                        ty: Type::named("int64"),
+                        passing: ReceiverKind::BorrowMut,
+                        has_default: false,
+                        default_erased: false,
+                    }]),
+                    return_type: Box::new(Type::named("int64")),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "offset".to_string(),
+                        ty: Type::named("int64"),
+                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        span: Span::new(2, 17),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: Some("/workspace/main.au".to_string()),
+                entry_span: Span::new(2, 17),
+                direct_thunk: Some(
+                    direct_closure_add_and_increment_mut_arg as *const () as usize as i64,
+                ),
+                direct_default_binder: Some(1),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                    vec![ClosureCaptureValue {
+                        name: "offset".to_string(),
+                        ty: Type::named("int64"),
+                        value: Value::Int(IntegerValue::from_signed(7)),
+                    }],
+                    false,
+                ))),
+            })));
+
+            let mut first_args = [int_value(5) as i64];
+            let first_result =
+                super::aurora_direct_function_call(repeatable, first_args.as_mut_ptr(), 1);
+            assert_eq!(expect_int(first_result), 12);
+            assert_eq!(
+                expect_int(first_args[0] as *mut OpaqueValue),
+                6,
+                "the closure thunk's mutable writeback must reach its caller"
+            );
+            unsafe {
+                release_value(first_result);
+                release_value(first_args[0] as *mut OpaqueValue);
+            }
+
+            let mut second_args = [int_value(8) as i64];
+            let second_result =
+                super::aurora_direct_function_call(repeatable, second_args.as_mut_ptr(), 1);
+            assert_eq!(
+                expect_int(second_result),
+                15,
+                "repeatable closure calls must receive a fresh clone of the capture"
+            );
+            assert_eq!(expect_int(second_args[0] as *mut OpaqueValue), 9);
+            unsafe {
+                release_value(second_result);
+                release_value(second_args[0] as *mut OpaqueValue);
+            }
+
+            unsafe {
+                release_value(repeatable);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "successful and rejected closure calls must balance every opaque handle"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("native closure calls should complete"),
+        Value::Unit
+    );
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let consuming = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_consuming".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(Type::named("int64")),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "payload".to_string(),
+                        ty: Type::named("int64"),
+                        mode: crate::sema::ClosureCaptureMode::Move,
+                        span: Span::new(4, 17),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Consuming,
+                },
+                source_path: Some("/workspace/main.au".to_string()),
+                entry_span: Span::new(4, 17),
+                direct_thunk: Some(direct_closure_returns_capture as *const () as usize as i64),
+                direct_default_binder: Some(1),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                    vec![ClosureCaptureValue {
+                        name: "payload".to_string(),
+                        ty: Type::named("int64"),
+                        value: Value::Int(IntegerValue::from_signed(19)),
+                    }],
+                    true,
+                ))),
+            })));
+            let first = super::aurora_direct_function_call(consuming, std::ptr::null_mut(), 0);
+            assert_eq!(expect_int(first), 19);
+            unsafe {
+                release_value(first);
+            }
+            super::aurora_direct_function_call(consuming, std::ptr::null_mut(), 0);
+        }),
+        "closure `main::__lambda_consuming` has already consumed its captured environment"
+    );
+}
+
+#[test]
+fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebacks() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_mixed_args".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(vec![
+                        FunctionParamContract {
+                            name: "owned".to_string(),
+                            ty: Type::named("int64"),
+                            passing: ReceiverKind::Value,
+                            has_default: false,
+                            default_erased: false,
+                        },
+                        FunctionParamContract {
+                            name: "mutable".to_string(),
+                            ty: Type::named("int64"),
+                            passing: ReceiverKind::BorrowMut,
+                            has_default: false,
+                            default_erased: false,
+                        },
+                    ]),
+                    return_type: Box::new(Type::named("int64")),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "offset".to_string(),
+                        ty: Type::named("int64"),
+                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        span: Span::new(3, 17),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: Some("/workspace/main.au".to_string()),
+                entry_span: Span::new(3, 17),
+                direct_thunk: Some(
+                    direct_closure_consumes_owned_and_writes_mut as *const () as usize as i64,
+                ),
+                direct_default_binder: Some(1),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                    vec![ClosureCaptureValue {
+                        name: "offset".to_string(),
+                        ty: Type::named("int64"),
+                        value: Value::Int(IntegerValue::from_signed(2)),
+                    }],
+                    false,
+                ))),
+            })));
+            let mut public_args = [int_value(3) as i64, int_value(4) as i64];
+            let called = super::aurora_direct_function_call(closure, public_args.as_mut_ptr(), 2);
+
+            assert_eq!(expect_int(called), 9);
+            assert_eq!(
+                public_args[0], 0,
+                "an owned public argument must remain consumed after the closure returns"
+            );
+            assert_eq!(
+                expect_int(public_args[1] as *mut OpaqueValue),
+                9,
+                "only the mutable argument's replacement must be copied to the caller"
+            );
+
+            unsafe {
+                release_value(public_args[1] as *mut OpaqueValue);
+                release_value(called);
+                release_value(closure);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "mixed closure argument movement must balance captures, inputs, and writebacks"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("mixed closure call should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid_inputs() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let zero_capture_base = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_zero".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(Type::named("int64")),
+                    captures: Box::new(Vec::new()),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: Some("/workspace/main.au".to_string()),
+                entry_span: Span::new(2, 17),
+                direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
+                direct_default_binder: Some(1),
+                closure_environment: None,
+            })));
+            let zero_capture =
+                super::aurora_direct_closure_value(zero_capture_base, std::ptr::null_mut(), 0, 0);
+            let called = super::aurora_direct_function_call(zero_capture, std::ptr::null_mut(), 0);
+            assert_eq!(expect_int(called), 42);
+            unsafe {
+                release_value(called);
+                release_value(zero_capture);
+            }
+
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "invalid closure construction must consume or release every transferred value"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("closure construction probes should complete"),
+        Value::Unit
+    );
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let invalid_count_base = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_invalid".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(Type::Unit),
+                    captures: Box::new(Vec::new()),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: None,
+                entry_span: Span::new(1, 1),
+                direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
+                direct_default_binder: Some(1),
+                closure_environment: None,
+            })));
+            super::aurora_direct_closure_value(invalid_count_base, std::ptr::null_mut(), -1, 0);
+        }),
+        "invalid closure capture count"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_closure_value(int_value(7), std::ptr::null_mut(), 0, 0);
+        }),
+        "direct closure construction expected a function value"
+    );
+}
+
+#[test]
+fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let ordinary = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "selected".to_string(),
+                signature: Type::Function {
+                    params: vec![FunctionParamContract {
+                        name: "value".to_string(),
+                        ty: Type::named("int64"),
+                        passing: ReceiverKind::Value,
+                        has_default: true,
+                        default_erased: false,
+                    }],
+                    return_type: Box::new(Type::named("int64")),
+                },
+                source_path: None,
+                entry_span: Span::new(1, 1),
+                direct_thunk: Some(test_native_thunk as *const () as usize as i64),
+                direct_default_binder: Some(
+                    direct_test_default_binder as *const () as usize as i64,
+                ),
+                closure_environment: None,
+            })));
+            let ordinary_args = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_function_bind_defaults(ordinary, ordinary_args, 1, 0);
+            assert_eq!(
+                unsafe { value_ref(*ordinary_args as *mut OpaqueValue) },
+                Value::Int(IntegerValue::from_signed(41)),
+                "the selected declaration's native default binder must fill its missing slot"
+            );
+            let called = super::aurora_direct_function_call(ordinary, ordinary_args, 1);
+            assert_eq!(expect_int(called), 41);
+            unsafe {
+                release_value(called);
+            }
+            unsafe {
+                free_arg_buffer(ordinary_args, 1);
+            }
+
+            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_no_defaults".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(vec![FunctionParamContract {
+                        name: "value".to_string(),
+                        ty: Type::named("int64"),
+                        passing: ReceiverKind::Value,
+                        has_default: false,
+                        default_erased: false,
+                    }]),
+                    return_type: Box::new(Type::Unit),
+                    captures: Box::new(Vec::new()),
+                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                },
+                source_path: None,
+                entry_span: Span::new(1, 1),
+                direct_thunk: Some(test_native_thunk as *const () as usize as i64),
+                direct_default_binder: Some(
+                    direct_test_default_binder as *const () as usize as i64,
+                ),
+                closure_environment: Some(Arc::new(ClosureEnvironment::new(Vec::new(), false))),
+            })));
+            let closure_args = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_function_bind_defaults(closure, closure_args, 1, 0);
+            assert_eq!(
+                unsafe { *closure_args },
+                0,
+                "lambda parameters have no declaration defaults and must bypass the binder callback"
+            );
+            unsafe {
+                free_arg_buffer(closure_args, 1);
+                release_value(closure);
+                release_value(ordinary);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(state.owned_value_refs.is_empty());
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("selected default callback probes should complete"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_indirect_call_and_default_callback_traps_identify_invalid_selection() {
+    fn selected_function(thunk: Option<i64>, default_binder: Option<i64>) -> *mut OpaqueValue {
+        boxed_value(Value::Function(Box::new(FunctionValue {
+            name: "selected".to_string(),
+            signature: Type::Function {
+                params: Vec::new(),
+                return_type: Box::new(Type::named("int64")),
+            },
+            source_path: None,
+            entry_span: Span::new(1, 1),
+            direct_thunk: thunk,
+            direct_default_binder: default_binder,
+            closure_environment: None,
+        })))
+    }
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_bind_defaults(int_value(7), std::ptr::null_mut(), 0, 0);
+        }),
+        "indirect call expected a function value, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_bind_defaults(
+                selected_function(Some(1), None),
+                std::ptr::null_mut(),
+                0,
+                0,
+            );
+        }),
+        "direct function value has no native default binder"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_bind_defaults(
+                selected_function(
+                    Some(1),
+                    Some(direct_test_default_binder as *const () as usize as i64),
+                ),
+                std::ptr::null_mut(),
+                -1,
+                0,
+            );
+        }),
+        "invalid indirect-call arg count"
+    );
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_call(int_value(7), std::ptr::null_mut(), 0);
+        }),
+        "indirect call expected a function value, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_call(
+                selected_function(None, Some(1)),
+                std::ptr::null_mut(),
+                0,
+            );
+        }),
+        "direct function value has no native thunk"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_function_call(
+                selected_function(
+                    Some(test_native_thunk as *const () as usize as i64),
+                    Some(1),
+                ),
+                std::ptr::null_mut(),
+                -1,
+            );
+        }),
+        "invalid indirect-call arg count"
+    );
+}
+
+#[test]
+fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_writeback() {
+    unsafe extern "C-unwind" fn trapping_closure_thunk(
+        _args: *const i64,
+        _count: usize,
+    ) -> *mut OpaqueValue {
+        super::runtime_error("closure body trapped")
+    }
+
+    let external = string_value("mutable caller value");
+    let external_address = external as usize;
+    let signature = Type::Closure {
+        params: Box::new(vec![FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("String"),
+            passing: ReceiverKind::BorrowMut,
+            has_default: false,
+            default_erased: false,
+        }]),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "captured".to_string(),
+            ty: Type::named("String"),
+            mode: crate::sema::ClosureCaptureMode::Move,
+            span: Span::new(3, 13),
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Consuming,
+    };
+    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "main::__lambda_trap".to_string(),
+        signature,
+        source_path: Some("/workspace/main.au".to_string()),
+        entry_span: Span::new(3, 13),
+        direct_thunk: Some(trapping_closure_thunk as *const () as usize as i64),
+        direct_default_binder: Some(1),
+        closure_environment: Some(Arc::new(ClosureEnvironment::new(
+            vec![ClosureCaptureValue {
+                name: "captured".to_string(),
+                ty: Type::named("String"),
+                value: Value::String("owned capture".to_string()),
+            }],
+            false,
+        ))),
+    })));
+    let function_address = function as usize;
+
+    let error = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let external = external_address as *mut OpaqueValue;
+            let retained = unsafe { retain_value(external) };
+            let mut args = [retained as i64];
+            let function = function_address as *mut OpaqueValue;
+            let failure = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                super::with_task_runtime_error_capture(|| {
+                    super::aurora_direct_function_call(function, args.as_mut_ptr(), 1);
+                    Ok::<Value, Diagnostic>(Value::Unit)
+                })
+            }));
+            assert!(failure.is_err(), "the generated closure thunk must trap");
+            assert_eq!(
+                args[0], 0,
+                "a trapping closure call must not install a mutable writeback"
+            );
+            assert_eq!(
+                unsafe { &*external }.ref_count.load(Ordering::Acquire),
+                1,
+                "the unwind guard must release the retained public argument"
+            );
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "closure capture and public-argument handles must leave no owned-ledger entries"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    let error = error.expect_err("the direct-runtime trap should fail the root task");
+    assert_eq!(error.message, "closure body trapped");
+    unsafe {
+        release_value(function);
+        release_value(external);
+    }
+}
+
+#[test]
+fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let base = boxed_value(Value::Function(Box::new(FunctionValue {
+                name: "main::__lambda_uncalled".to_string(),
+                signature: Type::Closure {
+                    params: Box::new(Vec::new()),
+                    return_type: Box::new(Type::Unit),
+                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                        name: "payload".to_string(),
+                        ty: Type::named("String"),
+                        mode: crate::sema::ClosureCaptureMode::Move,
+                        span: Span::new(2, 17),
+                    }]),
+                    call_kind: crate::sema::ClosureCallKind::Consuming,
+                },
+                source_path: Some("/workspace/main.au".to_string()),
+                entry_span: Span::new(2, 17),
+                direct_thunk: Some(1),
+                direct_default_binder: Some(1),
+                closure_environment: None,
+            })));
+            let capture = string_value("never called");
+            let captures = super::aurora_direct_arg_buffer_new(1);
+            super::aurora_direct_arg_buffer_store_owned(captures, 0, capture as i64);
+            let closure = super::aurora_direct_closure_value(base, captures, 1, 1);
+            unsafe {
+                release_value(closure);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "dropping an uncalled closure must release its environment and opaque handle"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("uncalled closure cleanup should complete"),
+        Value::Unit
+    );
 }
 
 unsafe extern "C-unwind" fn direct_task_frame_trap(
@@ -14437,6 +15717,77 @@ fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
 }
 
 #[test]
+fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() {
+    unsafe extern "C-unwind" fn mark_cleanup_invoked(
+        args: *const i64,
+        arg_count: usize,
+    ) -> *mut OpaqueValue {
+        assert_eq!(arg_count, 1);
+        let value = unsafe { *args as *mut OpaqueValue };
+        unsafe {
+            value_mut(value, |value| match value {
+                Value::String(text) => *text = "cleanup invoked".to_string(),
+                other => panic!("expected String cleanup witness, found {other:?}"),
+            });
+        }
+        boxed_value(Value::Unit)
+    }
+
+    let witness = string_value("cleanup skipped");
+    let witness_address = witness as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                for _ in 0..super::DIRECT_MAX_CALL_DEPTH {
+                    unsafe {
+                        super::aurora_direct_enter_call(
+                            1,
+                            1,
+                            b"recurse".as_ptr(),
+                            b"recurse".len(),
+                        );
+                    }
+                }
+                let cleanup_args = super::aurora_direct_arg_buffer_new(1);
+                super::aurora_direct_arg_buffer_store(
+                    cleanup_args,
+                    0,
+                    witness_address as *mut OpaqueValue as i64,
+                );
+                super::aurora_direct_register_cleanup(
+                    mark_cleanup_invoked as *const () as usize as i64,
+                    cleanup_args,
+                    1,
+                );
+                unsafe {
+                    super::aurora_direct_enter_call(2, 1, b"rejected".as_ptr(), b"rejected".len());
+                }
+                #[allow(unreachable_code)]
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("the saturated call chain should fail at the task boundary");
+    assert_eq!(
+        diagnostic.message,
+        "maximum call depth of 256 exceeded while calling `rejected`"
+    );
+    assert_eq!(
+        unsafe { value_ref(witness) },
+        Value::String("cleanup skipped".to_string()),
+        "a cleanup registered at the saturated depth must not enter its callback"
+    );
+    assert_eq!(
+        unsafe { &*witness }.ref_count.load(Ordering::SeqCst),
+        1,
+        "skipping the callback must still release its retained argument snapshot"
+    );
+    unsafe {
+        release_value(witness);
+    }
+}
+
+#[test]
 fn native_runtime_retain_and_release_keep_values_alive_until_last_handle() {
     let boxed = string_value("aurora");
     let retained = unsafe { retain_value(boxed) };
@@ -14463,6 +15814,70 @@ fn native_runtime_arg_buffer_store_retains_opaque_values() {
         release_value(stored);
         free_arg_buffer(buffer, 1);
     }
+}
+
+#[test]
+fn native_runtime_owned_arg_buffer_replacement_releases_previous_value_and_validates_index() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let previous = string_value("previous");
+            let replacement = string_value("replacement");
+            let replacement_alias = unsafe { retain_value(replacement) };
+            let buffer = super::aurora_direct_arg_buffer_new(1);
+
+            super::aurora_direct_arg_buffer_store(buffer, 0, previous as i64);
+            assert_eq!(
+                unsafe { &*previous }.ref_count.load(Ordering::SeqCst),
+                2,
+                "the ordinary store must retain its input for the buffer"
+            );
+            super::aurora_direct_arg_buffer_store_owned(buffer, 0, replacement as i64);
+            assert_eq!(
+                unsafe { &*previous }.ref_count.load(Ordering::SeqCst),
+                1,
+                "an owned replacement must release the prior buffered reference"
+            );
+            assert_eq!(
+                unsafe { &*replacement }.ref_count.load(Ordering::SeqCst),
+                2,
+                "the replacement buffer and retained alias must own one reference each"
+            );
+
+            super::aurora_direct_arg_buffer_store_owned(buffer, 0, 0);
+            assert_eq!(
+                unsafe { &*replacement }.ref_count.load(Ordering::SeqCst),
+                1,
+                "clearing an owned slot must release the transferred replacement"
+            );
+            unsafe {
+                free_arg_buffer(buffer, 1);
+                release_value(replacement_alias);
+                release_value(previous);
+            }
+            super::with_direct_task_runtime_state(|state| {
+                assert!(
+                    state.owned_value_refs.is_empty(),
+                    "owned replacement and clearing must leave no stale ledger references"
+                );
+            });
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("owned buffer replacement should complete"),
+        Value::Unit
+    );
+
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aurora_direct_arg_buffer_store_owned(
+                std::ptr::null_mut(),
+                -1,
+                string_value("still caller owned") as i64,
+            );
+        }),
+        "invalid owned arg index"
+    );
 }
 
 #[test]

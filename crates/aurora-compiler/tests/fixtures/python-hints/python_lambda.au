@@ -1,2 +1,2 @@
 def main():
-    transform = lambda value: value
+    transform: def(int32) -> int32 = lambda value: value

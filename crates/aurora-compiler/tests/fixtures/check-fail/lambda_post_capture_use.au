@@ -1,0 +1,5 @@
+def main() -> int32:
+    payload = "moved"
+    measure: def() -> int64 = lambda: payload.len()
+    print(payload)
+    return 0

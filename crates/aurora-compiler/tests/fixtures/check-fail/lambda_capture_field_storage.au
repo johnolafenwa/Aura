@@ -1,0 +1,8 @@
+class Handler:
+    callback: def() -> int64
+
+def main() -> int32:
+    offset: int64 = 4
+    handler = Handler(callback=lambda: offset)
+    print(handler.callback())
+    return 0

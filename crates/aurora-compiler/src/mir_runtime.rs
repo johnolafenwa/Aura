@@ -49,15 +49,15 @@ use crate::runtime_value::{
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RunOutput,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE,
-    NANOS_PER_SECOND,
+    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FileValue,
+    FunctionValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -233,6 +233,9 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
             scrutinee: value, ..
         }
         | Rvalue::Member { object: value, .. } => operand_is_process_run_function(value),
+        Rvalue::Closure { captures, .. } => captures
+            .iter()
+            .any(|capture| operand_is_process_run_function(&capture.value)),
         Rvalue::FormatString { parts } => parts.iter().any(|part| {
             matches!(
                 part,
@@ -573,6 +576,7 @@ fn mir_function_value(name: &str, signature: &Type) -> Value {
         entry_span: Span::new(0, 0),
         direct_thunk: None,
         direct_default_binder: None,
+        closure_environment: None,
     }))
 }
 
@@ -1865,6 +1869,11 @@ impl MirRuntime {
                 function.signature = ty.clone();
                 Value::Function(function)
             }
+            (Value::Function(function), Type::Closure { .. }) => {
+                let mut function = function.clone();
+                function.signature = ty.clone();
+                Value::Function(function)
+            }
             _ => value,
         };
         self.validate_value_fits_type(&coerced, ty, span)?;
@@ -2558,6 +2567,37 @@ impl MirRuntime {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
                 self.evaluate_owned_operand(operand, env)?,
             )),
+            Rvalue::Closure {
+                function,
+                signature,
+                captures,
+                consuming,
+            } => {
+                let mut captured = Vec::with_capacity(captures.len());
+                for capture in captures {
+                    captured.push(ClosureCaptureValue {
+                        name: capture.name.clone(),
+                        ty: capture.ty.clone(),
+                        value: self.evaluate_owned_operand(&capture.value, env)?,
+                    });
+                }
+                let metadata = self.functions.get(function);
+                Ok(RvalueOutcome::Value(Value::Function(Box::new(
+                    FunctionValue {
+                        name: function.clone(),
+                        signature: signature.clone(),
+                        source_path: metadata.and_then(|function| function.source_path.clone()),
+                        entry_span: metadata
+                            .map(|function| function.span)
+                            .unwrap_or_else(|| Span::new(0, 0)),
+                        direct_thunk: None,
+                        direct_default_binder: None,
+                        closure_environment: Some(Arc::new(ClosureEnvironment::new(
+                            captured, *consuming,
+                        ))),
+                    },
+                ))))
+            }
             Rvalue::FormatString { parts } => {
                 let mut rendered = String::new();
                 for part in parts {
@@ -3757,7 +3797,7 @@ impl MirRuntime {
         env: &mut Env,
         expected_return_type: Option<&Type>,
     ) -> Result<Value> {
-        let function_value = self.evaluate_operand(function, env)?;
+        let function_value = self.evaluate_owned_operand(function, env)?;
         let Value::Function(function_value) = function_value else {
             return Err(Diagnostic::new(format!(
                 "indirect MIR call expected a function value, found `{}`",
@@ -3771,7 +3811,28 @@ impl MirRuntime {
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
             })?;
-        let evaluated_args = evaluate_named_args(args, env)?;
+        let mut evaluated_args = evaluate_named_args(args, env)?;
+        if let Some(closure) = &function_value.closure_environment {
+            let captures = closure.arguments(&function_value.name)?;
+            let mut combined = Vec::with_capacity(captures.len() + evaluated_args.len());
+            combined.extend(captures.into_iter().map(|capture| EvaluatedMirArg {
+                name: None,
+                value: capture.value,
+                ty: Some(capture.ty),
+                writeback_place: None,
+            }));
+            combined.append(&mut evaluated_args);
+            let writeback_places = bind_function_writeback_places(&function.params, &combined)?;
+            let outcome =
+                self.call_function_for_target(&function, None, combined, expected_return_type)?;
+            self.apply_borrowed_param_writebacks(
+                &function.params,
+                &writeback_places,
+                outcome.updated_params,
+                env,
+            )?;
+            return Ok(outcome.value);
+        }
         let writeback_places = bind_function_writeback_places(&function.params, &evaluated_args)?;
         let outcome = self.call_function_for_value(
             &function,
@@ -3817,12 +3878,25 @@ impl MirRuntime {
         // parent task. The child receives a complete declaration-ordered
         // argument vector, so a dynamically selected target cannot defer its
         // default side effects until after scheduling.
-        let supplied_args = evaluate_named_args(args, env)?;
+        let mut supplied_args = evaluate_named_args(args, env)?;
+        let is_closure = function_value.closure_environment.is_some();
+        if let Some(environment) = &function_value.closure_environment {
+            let captures = environment.arguments(&function_value.name)?;
+            let mut combined = Vec::with_capacity(captures.len() + supplied_args.len());
+            combined.extend(captures.into_iter().map(|capture| EvaluatedMirArg {
+                name: None,
+                value: capture.value,
+                ty: Some(capture.ty),
+                writeback_place: None,
+            }));
+            combined.append(&mut supplied_args);
+            supplied_args = combined;
+        }
         let bound_args = self.bind_function_args(
             &function,
             supplied_args,
             None,
-            Some(&function_value.signature),
+            (!is_closure).then_some(&function_value.signature),
         )?;
         let mut producer_queues = Vec::new();
         for argument in &bound_args {
@@ -3864,9 +3938,20 @@ impl MirRuntime {
                 program_args,
             );
             runtime.task_ancestry = task_ancestry;
-            runtime
-                .call_function_for_value(&function_for_task, bound_args, &function_signature, None)
-                .map(|outcome| outcome.value)
+            if is_closure {
+                runtime
+                    .call_function_for_target(&function_for_task, None, bound_args, None)
+                    .map(|outcome| outcome.value)
+            } else {
+                runtime
+                    .call_function_for_value(
+                        &function_for_task,
+                        bound_args,
+                        &function_signature,
+                        None,
+                    )
+                    .map(|outcome| outcome.value)
+            }
         };
         let register_before_submit = |task: &TaskValue| {
             group_value.register_task(task.clone());
@@ -8066,13 +8151,54 @@ fn collect_runtime_type_substitutions(
             if pattern_params.len() != actual_params.len() {
                 return;
             }
-            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params) {
+            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
                 if pattern_param.passing != actual_param.passing {
                     return;
                 }
                 collect_runtime_type_substitutions(
                     &pattern_param.ty,
                     &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_runtime_type_substitutions(pattern_return, actual_return, substitutions);
+        }
+        Type::Closure {
+            params: pattern_params,
+            return_type: pattern_return,
+            captures: pattern_captures,
+            ..
+        } => {
+            let Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                captures: actual_captures,
+                ..
+            } = actual
+            else {
+                return;
+            };
+            if pattern_params.len() != actual_params.len()
+                || pattern_captures.len() != actual_captures.len()
+            {
+                return;
+            }
+            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
+                if pattern_param.passing != actual_param.passing {
+                    return;
+                }
+                collect_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            for (pattern_capture, actual_capture) in
+                pattern_captures.iter().zip(actual_captures.iter())
+            {
+                collect_runtime_type_substitutions(
+                    &pattern_capture.ty,
+                    &actual_capture.ty,
                     substitutions,
                 );
             }
@@ -8136,8 +8262,22 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
             return_type,
             ..
         } => {
-            for param in params {
+            for param in params.iter() {
                 collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(return_type, collected);
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => {
+            for param in params.iter() {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            for capture in captures.iter() {
+                collect_type_params_from_type(&capture.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
         }

@@ -135,7 +135,8 @@ Read the normative core in this order:
 3. [Names And Scopes](/manual/names-and-scopes)
 4. [Types](/manual/types) and [Static Semantics](/manual/static-semantics)
 5. [Ownership And Borrowing](/manual/ownership-and-borrowing)
-6. [Expressions](/manual/expressions), [Statements](/manual/statements), and declaration chapters
+6. [Expressions](/manual/expressions), [Statements](/manual/statements),
+   [Closures](/manual/closures), and declaration chapters
 7. [Execution Model](/manual/execution-model)
 8. runtime/library chapters and the [API Index](/manual/api-index)
 9. [Diagnostics](/manual/diagnostics), [Current Limits](/manual/current-limits), and [Conformance](/manual/conformance)

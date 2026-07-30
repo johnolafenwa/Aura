@@ -180,7 +180,7 @@
       "patterns": [
         {
           "name": "keyword.control.aurora",
-          "match": "\\b(import|return|assert|if|elif|else|while|for|in|match|case|with|try|and|or|not|break|continue|pass|impl|as)\\b"
+          "match": "\\b(import|return|assert|if|elif|else|while|for|in|match|case|with|try|lambda|and|or|not|break|continue|pass|impl|as)\\b"
         },
         {
           "name": "storage.modifier.aurora",

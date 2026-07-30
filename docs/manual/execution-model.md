@@ -41,6 +41,8 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 - an index evaluates its base before its index
 - a receiver is evaluated before call arguments
 - every supplied call or constructor argument is evaluated in call-site source order
+- a lambda copies or moves every by-value capture when the lambda expression
+  is evaluated, before any later sibling expression
 
 Evaluating a copy place captures its copied value at that point. A non-copy
 place selected as a binary left operand, index base, method receiver, or
@@ -73,6 +75,12 @@ When two evaluated keys in one map literal compare equal, the later value
 replaces the earlier value and the key keeps its first insertion position.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
+
+A lambda call evaluates arguments under its contextual structural function
+type. A read-only closure borrows its owned environment for the body and may be
+called repeatedly. A closure whose body consumes a non-Copy capture is
+consumed by the call. Never-called and called closure environments are cleaned
+up exactly once on both maintained backends.
 
 A comparison chain evaluates its operand expressions from left to right at
 most once. It evaluates each adjacent link after obtaining that link's right

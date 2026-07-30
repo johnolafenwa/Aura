@@ -1,0 +1,5 @@
+error[AU2002]: argument type mismatch for function `invoke`: expected `def() -> int64`, found `closure def() -> int64`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_capture_def_parameter_erasure.au:6:18
+  |
+6 |     print(invoke(lambda: offset))
+  |                  ^

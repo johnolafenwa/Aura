@@ -71,11 +71,38 @@ Last updated: 2026-07-30
   No synthetic coverage test or exclusion was added. The global hygiene
   command reports only the excluded user-owned `personal/file_ops.au`.
 
-  Phase 6.3 lambda and closure work is the next active stage. It must settle
-  contextual parameter inference, capture-by-value ownership, repeatable versus
-  consuming callability, Transfer derivation, mutable/shared-capture
-  diagnostics, backend parity, LSP, ADR, reference, examples, and coverage
-  before its isolated decision commit.
+  Phase 6.3 lambda and closure implementation is complete and fully gated.
+  Provisional ADR-0037, the
+  source-hash-pinned Closure Manual page, cross-reference/Learn/tutorial/example
+  updates, compiler-backed lambda scope/hover/definition/completion, and VS
+  Code grammar/snippet support are implemented. Focused compiler-analysis,
+  LSP, recovery, extension, reference-integrity, and both-backend maintained
+  example checks pass. The explicit Phase 6.3 closure-union boundary now
+  rejects conditional/`match` merging of distinct capturing closures with a
+  teaching AU2002 diagnostic, while branch-local creation/calls, same-site
+  distinct environments, nested capture, and never-called cleanup pass on MIR
+  and direct. The combined semantic, ownership, Transfer, backend, fixture, and
+  exact instrumented suites are green: 319 CLI tests, 6 retry tests, 2 closure
+  acceptance tests, 1,306 compiler tests, and every remaining integration
+  target pass. Compiler coverage is 77,482/80,598 lines (96.133899%),
+  5,135/5,298 functions (96.923367%), and 113,378/119,923 regions
+  (94.542331%), above the frozen `96.13/96.90/94.46` floors. Coverage closure
+  used only observable semantic, diagnostic, runtime, cleanup, and parity
+  assertions; no synthetic test, production coverage edit, or exclusion was
+  added. The first full-CI replay then identified six remaining 15-second
+  outer process watchdogs as load-sensitive under default-parallel direct
+  execution; every case passes focused, and the isolated cross-join case took
+  17.41 seconds. Those six test-only watchdogs now use the existing 30-second
+  load-tolerant margin without changing semantic timings or assertions. The
+  corrected full repository replay passes formatting, 49 benchmark checks,
+  all default-parallel Rust tests, the forced MIR/direct parity matrix, 94 LSP
+  tests, 14 extension tests, both coverage gates, reference integrity across
+  all 683 historical capability-migration entries, docs, dependency audits,
+  and warning-denied Clippy. LSP coverage remains 100% in every metric. The
+  global hygiene command reports only the excluded user-owned
+  `personal/file_ops.au`; the staged Phase 6.3 tree passes whitespace checks
+  and every other hygiene invariant independently. The isolated Phase 6.3
+  commit is the only remaining action before Phase 6.4 FFI starts.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the

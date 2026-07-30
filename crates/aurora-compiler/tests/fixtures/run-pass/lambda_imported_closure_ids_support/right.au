@@ -1,0 +1,4 @@
+public def compute(value: int64) -> int64:
+    offset: int64 = 20
+    add: def(int64) -> int64 = lambda item: item + offset
+    return add(value)

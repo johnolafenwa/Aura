@@ -1,0 +1,7 @@
+def apply(callback: def(int64) -> None) -> None:
+    callback(1)
+
+def main() -> int32:
+    mut values: Vec[int64] = [0]
+    apply(lambda value: values.push(value))
+    return 0

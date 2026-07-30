@@ -1,0 +1,7 @@
+def invoke(callback: def() -> int64) -> int64:
+    return callback()
+
+def main() -> int32:
+    offset: int64 = 4
+    print(invoke(lambda: offset))
+    return 0

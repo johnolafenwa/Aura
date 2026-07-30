@@ -77,8 +77,9 @@ with group = TaskGroup():
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
-All four start methods accept capture-free named function values, which are
-copy values and satisfy `Transfer`. Existing direct named-function and
+All four start methods accept capture-free function values, which are copy
+values and satisfy `Transfer`, plus closure values whose complete captured
+environment is Transfer. Existing direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
 `Type.associated_method[Types]` in the callable slot. Associated methods do not
@@ -384,8 +385,8 @@ and the relevant statement and call productions are in
 `Queue[T]` is a copy handle; `Task[T]` is conditionally Copy under Provisional
 ADR-0033; `TaskGroup` is a managed move resource. Queue sends, fallback values,
 task captures, and returned outcome payloads use the exact owned positions
-shown in the API tables above. Task targets may be capture-free named function
-values. The existing direct named-function and
+shown in the API tables above. Task targets may be capture-free function or
+Transfer closure values. The existing direct named-function and
 associated-method-without-`self` forms remain accepted; generic targets may
 infer every type argument or use explicit `function[Types]` and
 `Type.associated_method[Types]` specialization in the callable slot. Bare

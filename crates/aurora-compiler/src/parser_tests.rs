@@ -12,6 +12,159 @@ fn parse_stmt_from(source: &str) -> Result<Stmt> {
     parser.parse_stmt()
 }
 
+#[test]
+fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
+    let lambda = parse_expression("lambda value, own text, mut output: output")
+        .expect("lambda with all supported parameter modes should parse");
+    let ExprKind::Lambda { params, body } = lambda.kind else {
+        panic!("expected lambda expression");
+    };
+    assert!(matches!(
+        params.as_slice(),
+        [
+            LambdaParam {
+                name: value,
+                mode: ParamMode::Default,
+                ..
+            },
+            LambdaParam {
+                name: text,
+                mode: ParamMode::Own,
+                ..
+            },
+            LambdaParam {
+                name: output,
+                mode: ParamMode::BorrowMut,
+                ..
+            },
+        ] if value == "value" && text == "text" && output == "output"
+    ));
+    assert!(matches!(body.kind, ExprKind::Name(ref name) if name == "output"));
+
+    let no_params = parse_expression("lambda: 42").expect("zero-parameter lambda should parse");
+    assert!(matches!(
+        no_params.kind,
+        ExprKind::Lambda { ref params, ref body }
+            if params.is_empty() && matches!(body.kind, ExprKind::Int(42))
+    ));
+
+    let contextual_name = parse_expression("lambda from: from")
+        .expect("contextual identifier parameter should parse");
+    assert!(matches!(
+        contextual_name.kind,
+        ExprKind::Lambda { ref params, ref body }
+            if params[0].name == "from"
+                && matches!(body.kind, ExprKind::Name(ref name) if name == "from")
+    ));
+}
+
+#[test]
+fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
+    let conditional_body = parse_expression("lambda value: value if ready else fallback")
+        .expect("conditional expression should remain inside the lambda body");
+    assert!(matches!(
+        conditional_body.kind,
+        ExprKind::Lambda { ref body, .. }
+            if matches!(body.kind, ExprKind::Conditional { .. })
+    ));
+
+    let call = parse_expression("apply(lambda value: value + 1, 41)")
+        .expect("lambda should parse as an ordinary call argument");
+    assert!(matches!(
+        call.kind,
+        ExprKind::Call { ref args, .. }
+            if matches!(args[0].value.kind, ExprKind::Lambda { .. })
+                && matches!(args[1].value.kind, ExprKind::Int(41))
+    ));
+
+    let nested = parse_expression("lambda left: lambda right: left + right")
+        .expect("lambda bodies should permit nested lambdas");
+    assert!(matches!(
+        nested.kind,
+        ExprKind::Lambda { ref body, .. }
+            if matches!(body.kind, ExprKind::Lambda { .. })
+    ));
+
+    let invoked = parse_expression("(lambda value: value)(1)")
+        .expect("a grouped lambda should support ordinary postfix calls");
+    assert!(matches!(invoked.kind, ExprKind::Call { .. }));
+
+    let lambda_else = parse_expression("fallback if ready else lambda value: value")
+        .expect("a lambda should parse in the else branch of a conditional expression");
+    assert!(matches!(
+        lambda_else.kind,
+        ExprKind::Conditional { ref else_expr, .. }
+            if matches!(else_expr.kind, ExprKind::Lambda { .. })
+    ));
+
+    let map_key = parse_expression("{lambda value: value: \"identity\"}")
+        .expect("the map delimiter after a lambda key must not look like a type annotation");
+    assert!(matches!(
+        map_key.kind,
+        ExprKind::Map(ref entries)
+            if matches!(entries[0].key.kind, ExprKind::Lambda { .. })
+    ));
+}
+
+#[test]
+fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics() {
+    let default = parse_expression("lambda value = 1: value")
+        .expect_err("lambda parameters must not declare defaults");
+    assert_eq!(
+        default.message,
+        "lambda parameters cannot have defaults; pass values explicitly when calling the closure"
+    );
+
+    let typed = parse_expression("lambda value: int32: value")
+        .expect_err("lambda parameter types come from context");
+    assert_eq!(
+        typed.message,
+        "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
+    );
+    let typed_generic = parse_expression("lambda value: Vec[int32]: value")
+        .expect_err("generic lambda parameter types come from context");
+    assert_eq!(
+        typed_generic.message,
+        "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
+    );
+
+    let statement_body =
+        parse("def main():\n    transform = lambda value:\n        return value\n")
+            .expect_err("lambda bodies must be one expression");
+    assert_eq!(
+        statement_body.message,
+        "lambda body must be a single expression after `:`; use a named `def` for multi-statement logic"
+    );
+
+    let duplicate = parse_expression("lambda value, value: value")
+        .expect_err("lambda parameter names must be unique");
+    assert_eq!(duplicate.message, "duplicate lambda parameter `value`");
+
+    let missing_colon =
+        parse_expression("lambda value value").expect_err("lambda requires a body delimiter");
+    assert_eq!(
+        missing_colon.message,
+        "expected `:` after lambda parameter list"
+    );
+
+    let retired_borrow = parse_expression("lambda borrow value: value")
+        .expect_err("borrow spelling must stay retired");
+    assert_eq!(
+        retired_borrow.message,
+        "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access"
+    );
+}
+
+#[test]
+fn p63_lambda_nesting_obeys_the_expression_recursion_limit() {
+    let source = format!(
+        "{}0",
+        "lambda: ".repeat(crate::limits::RECURSION_LIMIT + 32)
+    );
+    let error = parse_expression(&source).expect_err("deeply nested lambdas should fail");
+    assert!(error.message.contains("recursion limit"));
+}
+
 fn parse_pattern_from(source: &str) -> Result<Pattern> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);

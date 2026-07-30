@@ -21,6 +21,7 @@ const KEYWORDS = [
   "impl",
   "import",
   "in",
+  "lambda",
   "match",
   "mut",
   "None",

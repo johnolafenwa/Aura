@@ -295,15 +295,16 @@ that message come from the rejected declaration.
 
 `AU2005` identifies focused migration guidance where Python-looking source has
 an Aurora spelling or an explicitly later language surface. Maintained hints
-cover `True`/`False`, `.append(...)`, `is` and `is None`, `try`/`except`,
-lambdas, and comprehensions. Related diagnostics
+cover `True`/`False`, `.append(...)`, `is` and `is None`, `try`/`except`, and
+comprehensions. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
 
 A hint is retired when Aurora implements the form it pointed at. `in`,
-`not in`, chained comparisons, `len(...)`, and `str(...)` are implemented and no
-longer produce a hint; their fixtures remain in the family and now assert that
-the Python spelling is accepted.
+`not in`, chained comparisons, `len(...)`, `str(...)`, and contextually typed
+expression lambdas are implemented and no longer produce an unavailable-form
+hint; their fixtures remain in the family and now assert the accepted
+spelling.
 
 Hints MUST name an available spelling when one exists. For a reserved future
 feature, they MUST say that it arrives in a later Aurora release and name a

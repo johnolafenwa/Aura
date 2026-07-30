@@ -365,8 +365,8 @@ The alternate top-level execution form, evaluation order, cleanup on return, and
 Function and method declarations, generic parameters and bounds, receiver and
 ordinary parameter forms, defaults, owned return annotations, and call
 arguments are normative in [Grammar](/manual/grammar). Ordinary
-functions are module items; nested function declarations and lambda syntax are
-not accepted.
+functions are module items; nested function declarations are not accepted.
+Expression lambdas are specified by [Closures](/manual/closures).
 
 ## Typing Rules
 
@@ -426,9 +426,10 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora has no method values, trait-object function interactions, closures,
-lambdas, variadics, overloads, nested functions, or mutable-parameter task
-targets. Written function types express bare shared, `mut`, and `own`
+Aurora has no method values, trait-object function interactions, variadics,
+overloads, nested functions, or mutable-parameter task targets. Expression
+lambdas are specified by [Closures](/manual/closures); they do not add nested
+item declarations. Written function types express bare shared, `mut`, and `own`
 parameter contracts. Runtime calls are limited to 256 nested Aurora frames. Host
 process exit representation may narrow the requested `int32` after it leaves
 Aurora; function binding and evaluation order are otherwise not
@@ -445,5 +446,5 @@ which is **Accepted**. The rules are pinned
 by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends. Return values are owned; no return-source or label contract
-is reserved. First-class loan/view values, closures, and FFI call signatures
-are unavailable and are not part of the frozen Batch 1 surface.
+is reserved. By-value expression closures are implemented under Provisional
+ADR-0037. First-class loan/view values and FFI call signatures are unavailable.

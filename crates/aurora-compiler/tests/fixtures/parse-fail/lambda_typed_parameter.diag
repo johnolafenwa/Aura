@@ -1,0 +1,5 @@
+error[AU1101]: lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/lambda_typed_parameter.au:2:34
+  |
+2 |     invalid = lambda value: int32: value
+  |                                  ^

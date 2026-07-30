@@ -42,6 +42,19 @@ This page documents known current limits of the Aurora compiler and runtime.
   targets; bare function-type parameters are shared.
   Instance, associated, and trait method values remain unavailable; the task
   API retains its direct associated-method-without-`self` target carve-out.
+- Lambdas with parameters require complete expected parameter types; a
+  zero-parameter lambda may infer `def() -> R` from its expression body.
+  Captures are by value and closure environments are read-only in Phase 6.3.
+  Shared/mutable capability capture, inline parameter types, defaults,
+  generics, statement bodies, capture lists, and comprehensions remain
+  unavailable. A consuming closure is single-use. Capturing closures cannot
+  pass through arbitrary written-`def` parameters, fields, collections, or
+  annotated returns because those boundaries describe capture-free code
+  pointers. Compiler-known repeatable callback sites preserve closure
+  metadata; task start accepts a qualifying closure by move for one call.
+  Conditional and `match` expressions cannot merge capturing closures from
+  multiple branches because Phase 6.3 has no closure-union type; invoke the
+  closure within each branch or use capture-free lambdas or named functions.
 - Callable-powered Vec algorithms are eager. `map` and `filter` return owned
   vectors rather than iterators; `filter` requires clone-safe elements.
   `sort_by`, `map`, and `filter` accept only their exact bare/shared callback
@@ -194,12 +207,14 @@ This page documents known current limits of the Aurora compiler and runtime.
   Within that request ceiling, unsatisfied allocation or OS entropy requests
   also trap with `AU4005`.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
-- `control.retry` is a sequential eager helper for a capture-free
-  `def() -> Result[T, E]` worker. Every `Err` is retryable. It has no error
-  classifier, jitter, attempt hook, shared retry budget, or detached/parallel
-  mode. Attempt budgets below one and negative or host-unrepresentable
-  backoffs trap before the worker runs. Backoff overflow traps, worker traps
-  propagate, and task cancellation is not converted to the worker's `E`.
+- `control.retry` is a sequential eager helper for a repeatable
+  `def() -> Result[T, E]` worker. The worker may be a capture-free function
+  value or a repeatable capturing closure. Every `Err` is retryable. It has no
+  error classifier, jitter, attempt hook, shared retry budget, or
+  detached/parallel mode. Attempt budgets below one and negative or
+  host-unrepresentable backoffs trap before the worker runs. Backoff overflow
+  traps, worker traps propagate, and task cancellation is not converted to the
+  worker's `E`.
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may currently become infinity; prefer `float64` when large literal validation matters.
 - Unix domain sockets require a Unix host.

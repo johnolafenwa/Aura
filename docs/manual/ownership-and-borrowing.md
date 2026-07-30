@@ -308,6 +308,24 @@ callable acquires an inferred clone-safety obligation. Safe specializations
 remain valid; a specialization that would duplicate `random.Rng` is rejected
 with `AU3007`.
 
+## Closures And Capture
+
+Closure capture is an ownership operation at lambda creation. A referenced
+outer Copy value is copied into the closure environment. A referenced outer
+non-Copy owned value is moved, so the source cannot be used afterward unless
+the program cloned before creation.
+
+A read-only closure borrows its environment for each call and is repeatable,
+including when it owns non-Copy data. A closure whose body consumes any
+non-Copy capture is itself consumed by the call and is single-use under
+`AU3001`. Capturing closures are non-Copy. Their environment is Transfer only
+when every captured value is Transfer.
+
+Enclosing bare and `mut` parameters are borrowed capabilities rather than
+owned values and cannot be captured. Captured state is read-only in Phase 6.3;
+in-loan and mutable capture wait for the separate loan/view design. See
+[Closures](/manual/closures) and Provisional ADR-0037.
+
 ## Tasks And Borrowing
 
 The four `TaskGroup` start methods accept named functions or associated

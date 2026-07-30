@@ -65,6 +65,8 @@ Current compiler workflow:
   - execute user-defined generic classes, enums, and functions
 - `cargo run -p aura -- run examples/basics/default_arguments.au`
   - execute default parameter values on ordinary functions
+- `cargo run -p aura -- run examples/basics/closures.au`
+  - execute contextually typed expression closures with by-value captures
 - `cargo run -p aura -- run examples/basics/len_and_str.au`
   - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
     String length versus UTF-8 byte length, and `str(value)`

@@ -48,6 +48,28 @@ key's first insertion position.
 
 An empty collection literal has no self-contained element type and therefore requires an expected `Vec[T]`, `Set[T]`, or `Map[K, V]` type. `{}` is grammatically a map literal but may be interpreted as an empty `Set[T]` when its expected type is `Set[T]`.
 
+### Lambdas
+
+A lambda with parameters requires an expected structural function type. That
+type fixes its parameter count and each bare/`mut`/`own` capability and
+parameter type; an expected result constrains the body. The body is checked
+once under those parameter bindings. Aurora does not infer parameter types
+from body operations. A zero-parameter lambda may infer `def() -> R` from its
+body when no expected callable type is present.
+
+Outer owned locals and `own` parameters referenced by the body are captured by
+value. Copy values are snapshotted and non-Copy values move when the lambda
+expression is evaluated. Bare and `mut` enclosing parameters are capabilities
+and cannot be captured. Captured values permit shared reads or consumption,
+but not mutation in Phase 6.3. See [Closures](/manual/closures).
+
+Capture-free lambdas may cross every ordinary structural function-value
+boundary. Capturing closures retain environment and call-kind metadata, so
+they cannot coerce through arbitrary written-`def` parameters or stored
+fields, collections, and annotated returns. Immutable local bindings,
+compiler-known repeatable callbacks, direct calls, and qualifying task starts
+preserve the metadata.
+
 ### Generic Calls
 
 Generic type parameters are inferred by unifying argument types with parameter type patterns and, where available, the expected result type. Explicit specialization such as `identity[int64](value)` seeds or fixes the substitutions.
@@ -333,9 +355,10 @@ The managed binding cannot be moved out in a way that would prevent required cle
 ## Tasks And Static Safety
 
 `TaskGroup.start`, `start_soon`, `start_with_stack`, and
-`start_soon_with_stack` accept capture-free named function values as well as
-the existing direct named-function and associated-method-without-`self`
-targets. The explicit-stack methods first require an exact `int64` capacity.
+`start_soon_with_stack` accept capture-free function values and closure values
+as well as the existing direct named-function and
+associated-method-without-`self` targets. The explicit-stack methods first
+require an exact `int64` capacity.
 Target arguments are copied or moved into task-owned capture storage
 independently of the target ABI. Bare shared target parameters borrow that
 storage for the child call; `own` parameters
@@ -366,6 +389,12 @@ conservatively; Phase 5.6 does not infer a deferred Transfer contract. A
 rejection uses `AU3008`, identifies the task or Queue boundary, and gives the
 nested component path that caused it, such as a field that contains `fs.File`;
 it does not suggest implementing a `Transfer` trait.
+
+A closure target is Transfer exactly when every stored capture is Transfer.
+The complete closure value is moved or copied into task-owned storage before
+the child calls it. Capture-free lambdas are Copy and Transfer. By-value
+closure capture cannot launder shared or mutable capabilities because those
+captures are rejected when the closure is created.
 
 Task-target resolution accepts a concrete function value. Explicit
 `function[Types]` specialization may now produce such a value before the call;

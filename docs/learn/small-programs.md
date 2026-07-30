@@ -94,6 +94,32 @@ print(classify_with_limit(40, limit=100))
 
 Named arguments are always available and are worth reaching for whenever a call would otherwise be hard to read.
 
+## Small Callbacks With Lambdas
+
+When a callback is one expression, write a contextually typed lambda:
+
+```python
+offset: int32 = 40
+add: def(int32) -> int32 = lambda value: value + offset
+
+print(add(2))
+```
+
+The `def(int32) -> int32` annotation tells the compiler the parameter and
+result types. Lambdas do not repeat those types inline. The outer `offset` is a
+Copy value, so the closure snapshots it when the lambda is created. A
+non-Copy owned value instead moves into the closure; clone first when the outer
+scope also needs an owner.
+
+Read-only closures may be called repeatedly. A closure that consumes a
+non-Copy capture is single-use. Use a named function when the callback needs
+multiple statements.
+
+A zero-parameter lambda can infer its result from the body. Lambdas with
+parameters need their parameter types from context. Capture-free lambdas may
+be stored anywhere a function value can; capturing closures stay in immutable
+locals, direct calls, compiler-known callbacks, or one qualifying task start.
+
 ## Control Flow
 
 `if`, `elif`, and `else` chain as you would expect:
@@ -245,4 +271,5 @@ Small Aurora programs read well when type boundaries line up with data boundarie
 
 Every one of those rules is still the right rule when the program grows. The next chapter puts them to work on richer data types.
 
-Reference: [Statements](/manual/statements), [Functions](/manual/functions), [Expressions](/manual/expressions).
+Reference: [Statements](/manual/statements), [Functions](/manual/functions),
+[Closures](/manual/closures), [Expressions](/manual/expressions).

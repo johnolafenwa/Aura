@@ -16,6 +16,8 @@ Current features:
 - hover for classes, functions, locals, fields, and builtin members
 - go-to-definition for local and top-level symbols
 - document diagnostics for duplicate declarations and obvious unknown names/members
+- `lambda parameters: expression` highlighting and snippet support, with
+  compiler-owned lambda scope, hover, completion, and capture diagnostics
 
 The language intelligence comes from the in-repo `aurora-language-server`
 package. The extension bundles its JavaScript LSP transport and that transport
@@ -30,6 +32,7 @@ Current completion scope is intentionally lightweight. The language server under
 - built-in `Result` and `Option` variants
 - class fields and methods
 - function parameters and simple local bindings
+- contextually typed lambda parameters and captured outer locals
 - method `self`, enum match payload bindings, and `for` loop bindings
 - constructor-style type inference such as `p = Point(...)`
 - basic builtin helpers such as `range` and `float64.sqrt`

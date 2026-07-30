@@ -27,6 +27,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Functions](/manual/functions): signatures, bare/`own`/`mut` parameter
   modes, default arguments, named arguments, `main`, owned returns, and call
   binding.
+- [Closures](/manual/closures): contextual expression lambdas, by-value
+  captures, repeated read-only calls, consuming single-use calls, and
+  structural Transfer.
 - [Classes](/manual/classes): fields, constructors, methods, receivers, associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads, exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait declarations, impls, bounds, dispatch, and current restrictions.

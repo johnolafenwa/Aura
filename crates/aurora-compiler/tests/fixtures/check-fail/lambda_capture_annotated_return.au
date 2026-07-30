@@ -1,0 +1,6 @@
+def build() -> def() -> int64:
+    offset: int64 = 4
+    return lambda: offset
+
+def main() -> int32:
+    return 0

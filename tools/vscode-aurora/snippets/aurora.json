@@ -15,6 +15,13 @@
     ],
     "description": "Aurora function declaration"
   },
+  "Lambda": {
+    "prefix": "lambda",
+    "body": [
+      "lambda ${1:value}: ${2:expression}"
+    ],
+    "description": "Aurora expression lambda"
+  },
   "If": {
     "prefix": "if",
     "body": [
