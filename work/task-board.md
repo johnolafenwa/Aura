@@ -17,11 +17,14 @@ Last updated: 2026-07-30
 - Current stage: B6.0-a/b/c/d are implemented. Dedicated `AU2008` rejects
   equality and inequality over named functions and both closure kinds before
   backend selection; exact semantic, fixture, registry, and forced-backend
-  parity checks pass. ADR-0037 is recorded as Accepted, ADR-0038 has its exact
-  design-only 0.3 status plus ten yes answers, and the retry, Vec callback, and
-  nested-lambda documentation is synchronized. Every benchmark workload now
-  uses a verified owned process-group cleanup guard; all 54 harness tests pass
-  across success and abnormal exits. The baseline Mac rebooted at
+  parity checks pass. The first full gate found and closed two stale FFI
+  closure assertions: callable equality now pins `AU2008` there while direct
+  opaque-handle equality retains `AU2003`. ADR-0037 is recorded as Accepted,
+  ADR-0038 has its exact design-only 0.3 status plus ten yes answers, and the
+  retry, Vec callback, and nested-lambda documentation is synchronized. Every
+  benchmark workload now uses a verified owned process-group cleanup guard;
+  all 54 harness tests pass across success and abnormal exits. The baseline
+  Mac rebooted at
   `2026-07-30 23:02:25 +0100`; the clean contractual schema-4 replay measured
   V6 whole-process medians of `36.691666 ms` / `14.837417 ms`, reproducing the
   accepted reactor-era baseline within `1.99%` / `1.12%`. The slower dirty

@@ -660,8 +660,8 @@ def main():
 }
 
 #[test]
-fn public_path_check_rejects_rhs_and_captured_opaque_identity_comparisons() {
-    for (case, source, compared_type) in [
+fn public_path_check_preserves_opaque_and_callable_equality_diagnostics() {
+    for (case, source, expected_code, expected_message, expected_help) in [
         (
             "right operand",
             r#"
@@ -672,7 +672,12 @@ def main():
     handle = acquire()
     result = 0 != handle
 "#,
-            "Handle",
+            "AU2003",
+            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            vec![
+                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                    .to_string(),
+            ],
         ),
         (
             "closure capture",
@@ -687,29 +692,18 @@ def main():
     right: def() -> Handle = lambda: right_handle
     result = left == right
 "#,
-            "consuming closure def() -> Handle",
+            "AU2008",
+            "callable equality is not supported; compare results or use an explicit discriminant",
+            Vec::new(),
         ),
     ] {
         let temp = TempDir::new(&format!("aurora-ffi-{case}"));
         let main_path = write_checked_ffi_package(&temp, source, true);
         let diagnostic = aurora_compiler::check_path(&main_path)
-            .expect_err("opaque foreign identity must never become comparable");
-        assert_eq!(diagnostic.code, "AU2003", "{case}: {diagnostic:?}");
-        assert_eq!(
-            diagnostic.message,
-            format!(
-                "cannot compare `{compared_type}` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity"
-            ),
-            "{case}"
-        );
-        assert_eq!(
-            diagnostic.help,
-            vec![
-                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
-                    .to_string()
-            ],
-            "{case}"
-        );
+            .expect_err("opaque handles and callables must remain non-comparable");
+        assert_eq!(diagnostic.code, expected_code, "{case}: {diagnostic:?}");
+        assert_eq!(diagnostic.message, expected_message, "{case}");
+        assert_eq!(diagnostic.help, expected_help, "{case}");
     }
 }
 

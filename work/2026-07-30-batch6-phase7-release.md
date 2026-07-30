@@ -31,7 +31,10 @@ B6.0 is active in strict-order entry closure:
 - B6.0-b is implemented with dedicated `AU2008`. Named function values,
   capture-free closures, and capturing closures uniformly reject `==` and
   `!=` before backend selection, with exact semantic, fixture, registry, and
-  MIR/direct diagnostic-parity tests.
+  MIR/direct diagnostic-parity tests. The first complete gate found two stale
+  FFI closure assertions that still expected generic opaque-handle equality;
+  both now explicitly pin `AU2008` precedence while direct opaque-handle
+  comparisons retain `AU2003`.
 - B6.0-c is implemented. ADR-0037 is recorded as Accepted; ADR-0038 has the
   exact accepted-design-only status and all ten yes answers. The retry and Vec
   callback pages now describe repeatable capturing closures, and the closure

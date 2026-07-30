@@ -658,7 +658,7 @@ def main():
 }
 
 #[test]
-fn ffi_closures_that_capture_opaque_handles_do_not_gain_equality() {
+fn ffi_closures_that_capture_opaque_handles_use_the_callable_equality_diagnostic() {
     let diagnostic = check_ffi_source_for_test(
         r#"
 extern "C" opaque class Handle
@@ -672,22 +672,13 @@ def main():
     result = left == right
 "#,
     )
-    .expect_err("a closure value retains the non-comparable identity of its capture");
-    assert_eq!(diagnostic.code, "AU2003", "{diagnostic:?}");
-    assert!(
-        diagnostic
-            .message
-            .contains("contains opaque FFI handle `Handle`"),
-        "{}",
-        diagnostic.message
+    .expect_err("all callable equality must use the dedicated diagnostic");
+    assert_eq!(diagnostic.code, "AU2008", "{diagnostic:?}");
+    assert_eq!(
+        diagnostic.message,
+        "callable equality is not supported; compare results or use an explicit discriminant"
     );
-    assert!(
-        diagnostic
-            .message
-            .contains("does not define equality for foreign identity"),
-        "{}",
-        diagnostic.message
-    );
+    assert!(diagnostic.help.is_empty(), "{diagnostic:?}");
 }
 
 #[test]
