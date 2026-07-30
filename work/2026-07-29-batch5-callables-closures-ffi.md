@@ -1,7 +1,7 @@
 # Batch 5: defect closure, callables, closures, and FFI
 
 - Date: 2026-07-29
-- Status: active
+- Status: complete at checkpoint
 - Entry commit: `4c9d9a2`
 - Stop boundary: checkpoint after Phase 6.5; do not begin Phase 7 or release work
 
@@ -526,3 +526,32 @@ updates, coverage check, full CI gate, and commit family.
 At checkpoint, record B5.0 evidence, per-stage commits, callable/closure/FFI
 reference inventory, suite counts, parity, coverage and the one-time
 re-ratchet, provisional decisions, and any work moved into or out of Batch 6.
+
+## Final checkpoint
+
+Batch 5 is complete at its authorized checkpoint. The final implementation
+replay passed formatting, 49 scalable-runtime harness tests, all
+default-parallel Rust targets (320 CLI tests, 1,385 compiler tests, 6 retry
+tests, 4 FFI acceptance tests, and 2 closure acceptance tests), forced
+MIR/direct parity, 97 LSP tests, 15 extension tests, both coverage gates,
+executable reference integrity, docs, dependency audits, and warning-denied
+Clippy. LSP coverage remains 100% at 937/937 lines, 49/49 functions, and
+251/251 branches.
+
+Final compiler coverage is 80,453/83,647 lines (96.18157256088085%),
+5,346/5,513 functions (96.97079629965536%), and 117,329/123,988 regions
+(94.62931896635159%). The single checkpoint re-ratchet sets the
+downward-truncated floors to 96.18/96.97/94.62. No synthetic coverage test,
+production coverage-only edit, or exclusion was added.
+
+The complete checkpoint report is
+`work/2026-07-30-batch5-checkpoint.md`. ADR-0037 remains Provisional pending
+the next authoritative ruling; its completed implementation supports
+acceptance. ADR-0038 remains Proposed, explicitly unimplemented, and
+recommended for Aurora 0.3 after ratification. Phase 7 and release work have
+not started.
+
+The global hygiene command reaches only the unrelated user-owned
+`personal/file_ops.au`. The Batch 5 tree and all other hygiene invariants pass
+when that file and the untracked user-owned ADR-0022 draft are excluded. Both
+files remain untouched and outside Batch 5.

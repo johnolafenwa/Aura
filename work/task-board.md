@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-30
 
-## Batch 5 of 6 (active)
+## Batch 5 of 6 (completed)
 
 - Authorized target: close B5.0-a through B5.0-f before Phase 6, then implement
   capture-free function values, the callable-powered standard-library
@@ -102,7 +102,7 @@ Last updated: 2026-07-30
   global hygiene command reports only the excluded user-owned
   `personal/file_ops.au`; the staged Phase 6.3 tree passes whitespace checks
   and every other hygiene invariant independently. The isolated Phase 6.3
-  isolated Phase 6.3 commit is settled as `e1feb04`.
+  commit is settled as `e1feb04`.
 
   Phase 6.4 FFI v0 implementation and final-audit hardening are complete.
   Its provisional surface uses explicit-result `extern "C" def`
@@ -155,8 +155,21 @@ Last updated: 2026-07-30
   capture until implementation, does not revive `borrow` or return labels,
   keeps proposed syntax out of the normative Manual, and recommends Aurora
   0.3 rather than 0.2. No compiler or tooling implementation was added. The
-  remaining Batch 5 work is the final checkpoint gate, one-time coverage
-  re-ratchet, checkpoint report, and stop before Phase 7.
+  The final checkpoint gate is green through formatting, 49 benchmark-harness
+  tests, all Rust targets (320 CLI, 1,385 compiler, 6 retry, 4 FFI acceptance,
+  and 2 closure acceptance tests), forced MIR/direct parity, 97 LSP tests, 15
+  extension tests, both coverage gates, executable reference integrity, docs,
+  audits, and warning-denied Clippy. LSP coverage is 100% at 937/937 lines,
+  49/49 functions, and 251/251 branches. Final compiler coverage is
+  80,453/83,647 lines (96.18157256088085%), 5,346/5,513 functions
+  (96.97079629965536%), and 117,329/123,988 regions
+  (94.62931896635159%). The one-time downward-truncated coverage floors are
+  now `96.18/96.97/94.62`. No synthetic coverage test, production
+  coverage-only edit, or exclusion was added. The checkpoint report is
+  `work/2026-07-30-batch5-checkpoint.md`; ADR-0037 remains Provisional pending
+  the next authoritative ruling, and ADR-0038 remains Proposed and
+  unimplemented with Aurora 0.3 recommended. Phase 7 and release work have
+  not started. Batch 5 is complete.
 - Standing rules: test-first implementation; behavior-focused coverage only;
   reference pages land with each new language surface; each Phase 6 stage is a
   separately gated commit family; user-owned `personal/file_ops.au` and the
