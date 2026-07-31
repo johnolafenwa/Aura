@@ -76,9 +76,22 @@ B6.0 is active in strict-order entry closure:
   `Closure` case instead of adding a synthetic test. The behavior-focused
   closure also pins both malformed lambda-parameter diagnostics: a capability
   marker without a name, and a trailing comma without a following name.
-  Focused parser and FFI equality tests pass. The exact clean full-CI replay
-  and final coverage numbers remain pending.
-- Phase 7 must not start until B6.0-a and the combined gate are complete.
+  Focused parser and FFI equality tests pass.
+- B6.0 is complete at `49ae8bb`. The exact clean full-CI replay passes the
+  54-test benchmark harness, 320 CLI tests, 1,386 compiler tests and all
+  integration targets, 6 retry tests, 4 FFI acceptance tests, 2 closure
+  acceptance tests, the 659.88-second forced MIR/direct matrix, 97 LSP tests,
+  15 extension tests, both coverage gates, all 683 historical migration
+  manifests, the executable Manual inventory, docs build, npm and Rust
+  audits, warning-denied Clippy, and hygiene. Compiler coverage is
+  80,466/83,652 lines (96.191364%), 5,345/5,512 functions (96.970247%), and
+  117,334/123,989 regions (94.632588%), above the frozen floors. LSP coverage
+  remains 100% at 937/937 lines, 49/49 functions, and 251/251 branches. The
+  exact log is `/private/tmp/aurora-b60-ci-49ae8bb-full-access.log`, SHA-256
+  `130a78d5f09982b58918b2454254b41edb194187829d69878fbdf9e714e5da36`.
+  No synthetic coverage test or exclusion was added; one unreachable
+  structural closure branch was replaced by its explicit 0.2 non-structural
+  case. Phase 7 comprehension work is now active.
 
 ## Authorized sequence
 

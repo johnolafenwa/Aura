@@ -14,7 +14,7 @@ Last updated: 2026-07-30
   and is not authorized in the 0.2 cycle; all ten ratification questions are
   answered yes as recommended. Compiler coverage floors are frozen at
   `96.18/96.97/94.62` until the one-time final downward-truncated re-ratchet.
-- Current stage: B6.0-a/b/c/d are implemented. Dedicated `AU2008` rejects
+- Current stage: B6.0 is complete. Dedicated `AU2008` rejects
   equality and inequality over named functions and both closure kinds before
   backend selection; exact semantic, fixture, registry, and forced-backend
   parity checks pass. The first full gate found and closed two stale FFI
@@ -38,8 +38,15 @@ Last updated: 2026-07-30
   gained precedence; it is replaced by an explicit non-structural `Closure`
   case rather than a synthetic test. Two exact malformed-lambda parameter
   diagnostics now provide observable parser coverage. Focused parser and FFI
-  equality tests pass. The exact clean full-CI replay and final coverage
-  numbers are the remaining B6.0 gate; Phase 7 has not started.
+  equality tests pass. The exact clean full-CI replay at `49ae8bb` is green:
+  54 benchmark tests, 320 CLI tests, 1,386 compiler tests plus all integration
+  targets, 6 retry tests, 4 FFI acceptance tests, 2 closure acceptance tests,
+  659.88 seconds of forced MIR/direct parity, 97 LSP tests, 15 extension tests,
+  both coverage gates, reference integrity, docs, both audits, warning-denied
+  Clippy, and hygiene. Compiler coverage is 80,466/83,652 lines (96.191364%),
+  5,345/5,512 functions (96.970247%), and 117,334/123,989 regions
+  (94.632588%); LSP coverage is 100%. No synthetic coverage test or exclusion
+  was added. Phase 7 comprehension work is now active.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
