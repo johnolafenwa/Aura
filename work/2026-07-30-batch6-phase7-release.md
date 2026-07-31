@@ -275,9 +275,8 @@ Phase 7.1 is signed off.
 
 ## Phase 7.2 owned Vec and String slices
 
-Implementation and focused verification are complete; the exact clean
-full-CI and frozen-floor coverage replay remains before Phase 7.2 sign-off.
-Phase 7.3 has not started.
+Implementation, independent audit, and the exact clean full-CI and frozen-
+floor coverage replay are complete. Phase 7.2 is signed off at `1903aae`.
 
 - The AST has a distinct `Slice` expression with optional endpoints and the
   exact colon span. The parser accepts `value[start:end]`, `value[:end]`,
@@ -335,6 +334,34 @@ Build hygiene removed coverage-only output and the obsolete
 `native-runtime-uninstrumented` tree, reducing `target/` from 24 GiB to 17
 GiB before the focused rebuild. It is currently 20 GiB with 125 GiB free. No
 synthetic coverage test or exclusion was added. There is no current blocker.
+
+### Exact clean sign-off
+
+The exact detached full-CI replay at `1903aae` is green:
+
+- 54/54 benchmark-harness tests
+- 326/326 CLI tests in 429.08 seconds
+- 1,436/1,436 compiler-library tests in 183.10 seconds plus every integration
+  target
+- complete forced MIR/direct fixture parity in 725.84 seconds
+- 100/100 language-server tests and 18/18 bundled-extension tests
+- compiler coverage of 82,477/85,734 lines (96.201040427%),
+  5,448/5,617 functions (96.991276482%), and 120,411/127,229 regions
+  (94.641158855%), above the frozen `96.18/96.97/94.62` floors
+- 100% LSP statements, branches, functions, and lines
+- reference integrity over 36 pages, 258 fenced blocks, 125 verified blocks,
+  9 reference tests, 59 integrity tests, and all 683 migration manifests
+- docs build, zero npm vulnerabilities, the allowed `rustls-pemfile` RustSec
+  warning, warning-denied Clippy, and hygiene
+
+The retained log is `/private/tmp/aurora-slice-ci-1903aae.log`, SHA-256
+`a3088d808902694863e7109be4b518d8f3f1d114d9fc4a435570d4ecdef770a0`.
+The detached proof worktree is clean. No coverage-only closure, synthetic
+test, or exclusion was required.
+
+Phase 7.3 contiguous arrays, scalar and array integer wrapping/saturating
+operations, native kernels, and measured post-reboot NumPy comparisons is now
+active. There is no current blocker.
 
 ## Authorized sequence
 

@@ -221,9 +221,22 @@ Last updated: 2026-07-31
   rejection, generic clone-safety specialization, and retained-base
   consumption. No synthetic coverage test or exclusion has been added.
 
-  The exact clean Phase 7.2 full-CI and frozen-floor coverage replay remains
-  before sign-off; Phase 7.3 arrays have not started. There is no current
-  blocker.
+  The exact clean full-CI replay at `1903aae` is green end to end: 54
+  benchmark-harness tests, 326 CLI tests, 1,436 compiler-library tests plus
+  every integration target, 725.84 seconds of forced MIR/direct parity, 100
+  language-server tests, and 18 extension tests. Compiler coverage is
+  82,477/85,734 lines (96.201040427%), 5,448/5,617 functions
+  (96.991276482%), and 120,411/127,229 regions (94.641158855%), above the
+  frozen `96.18/96.97/94.62` floors. LSP coverage remains 100%. Reference,
+  docs, npm and Rust audits, warning-denied Clippy, and hygiene pass. The
+  retained log is `/private/tmp/aurora-slice-ci-1903aae.log`, SHA-256
+  `a3088d808902694863e7109be4b518d8f3f1d114d9fc4a435570d4ecdef770a0`.
+  The detached proof worktree is clean. No synthetic coverage test or
+  exclusion was added.
+
+  Phase 7.2 is signed off. Phase 7.3 contiguous arrays, arithmetic modes,
+  kernels, and measured post-reboot NumPy comparisons is the active stage.
+  There is no current blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
