@@ -336,10 +336,22 @@ Last updated: 2026-07-31
   checks, bounded owned process groups, and descendant cleanup. Nine focused
   release-packaging tests plus the metadata and release-stamp suites pass.
 
-  Current stage: commit the release-preparation tree, run final compiler
-  coverage and the one-time downward-truncated re-ratchet, execute exact clean
-  full CI, create and verify only the local `v0.2.0-preview` tag, build the
-  locally available release artifacts, and write the final report. The
+  The release-preparation tree is committed at `b6230af`. Its first exact
+  final compiler replay passed all 334 CLI and 1,498 compiler-library tests
+  plus every integration target at 86,650/90,002 lines (96.275638%),
+  5,706/5,870 functions (97.206133%), and 126,854/134,075 regions
+  (94.614208%). Only the frozen 94.62% region floor was red. Per the standing
+  coverage-only rule, grouped and tuple lambda-type diagnostics plus the
+  generic treatment of slice and literal lambda bodies now pin observable
+  parser behavior. A retained instrumented proof covers eight more regions,
+  bringing the candidate tree to 126,862/134,075 regions (94.620175%) without
+  a synthetic test or exclusion. The exact fresh full replay is next.
+
+  Current stage: commit the behavior-focused coverage closure, rerun exact
+  final compiler coverage, apply the one-time downward-truncated re-ratchet,
+  execute exact clean full CI, create and verify only the local
+  `v0.2.0-preview` tag, build the locally available release artifacts, and
+  write the final report. The
   Linux-x64 and Intel-macOS runner products cannot be produced locally from
   the still-unpushed source ref and will not be claimed as built; nothing will
   be pushed or published in this batch.

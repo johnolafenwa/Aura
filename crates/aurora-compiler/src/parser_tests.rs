@@ -270,6 +270,25 @@ fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics(
         typed_generic.message,
         "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
     );
+    for source in [
+        "lambda value: (int32): value",
+        "lambda value: (int32, bool): value",
+    ] {
+        let error = parse_expression(source)
+            .expect_err("grouped and tuple lambda parameter types come from context");
+        assert_eq!(
+            error.message,
+            "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
+        );
+    }
+    let slice_body_with_extra_colon =
+        parse("def main():\n    transform = lambda value: values[:1]: value\n")
+            .expect_err("a slice body followed by an extra colon is not a type annotation");
+    assert_eq!(slice_body_with_extra_colon.message, "expected Newline");
+    let literal_body_with_extra_colon =
+        parse("def main():\n    transform = lambda value: 1: value\n")
+            .expect_err("a literal body is not a type annotation");
+    assert_eq!(literal_body_with_extra_colon.message, "expected Newline");
 
     let statement_body =
         parse("def main():\n    transform = lambda value:\n        return value\n")
