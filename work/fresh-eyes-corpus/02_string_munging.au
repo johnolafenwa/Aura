@@ -1,0 +1,12 @@
+def clean_label(raw: String) -> String:
+    trimmed = raw.trim()
+    lowered = trimmed.to_lower()
+    renamed = lowered.replace("python", "aurora")
+    parts = renamed.split(" ")
+    return "-".join(parts)
+
+def main():
+    source = "  Python Builds Reliable Tools  "
+    label = clean_label(source)
+    print(f"label={label}")
+    print(f"chars={label.len()} bytes={label.byte_len()}")

@@ -1,0 +1,24 @@
+class Note:
+    title: String
+
+def copied_increment(value: int32) -> int32:
+    return value + 1
+
+def read_title(note: Note) -> String:
+    return note.title.clone()
+
+def take_title(note: own Note) -> String:
+    return note.title
+
+def main():
+    count: int32 = 7
+    next = copied_increment(count)
+    print(f"copy source={count} next={next}")
+
+    retained = Note(title="shared access")
+    print(read_title(retained))
+    print(retained.title)
+
+    transferred = Note(title="owned transfer")
+    title = take_title(transferred)
+    print(title)

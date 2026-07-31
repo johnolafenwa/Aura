@@ -1,0 +1,14 @@
+def main():
+    scores: Vec[int32] = [42, 17, 42, 8, 17, 31]
+    mut ordered = scores.clone()
+    ordered.sort()
+
+    mut unique = Set[int32]()
+    for score in scores:
+        unique.insert(score)
+
+    print(ordered)
+    print(unique.len())
+    print(8 in unique)
+    print(99 in unique)
+    print(scores)

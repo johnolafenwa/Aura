@@ -1,0 +1,59 @@
+import io
+import net
+
+
+def serve_once(addresses: Queue[String]) -> Result[None, io.Error]:
+    with listener = try net.http_listen("127.0.0.1:0"):
+        bound_address = try listener.local_addr()
+        addresses.put(bound_address)
+        with exchange = try listener.accept(timeout=5s):
+            body = try exchange.body_text()
+            response_headers: Map[String, String] = {
+                "Content-Type": "text/plain"
+            }
+            text = exchange.method() + " " + exchange.path() + " " + body
+            try exchange.respond_text(200, text, response_headers)
+    return Result.Ok(None)
+
+
+def run_workflow() -> Result[None, io.Error]:
+    addresses = Queue[String]()
+    with group = TaskGroup():
+        server = group.start(serve_once, addresses)
+        address = addresses.get_or("missing", timeout=5s)
+        url = "http://" + address + "/double"
+        request_headers: Map[String, String] = {
+            "Content-Type": "text/plain"
+        }
+        with response = try net.http_request_text_timeout(
+            "POST",
+            url,
+            "21",
+            request_headers,
+            5s
+        ):
+            print(response.status())
+            print(try response.text())
+
+        server_outcome = server.result(timeout=5s)
+        match own server_outcome:
+            case TaskResult.Ready(Result.Ok(_)):
+                print("server complete")
+            case TaskResult.Ready(Result.Err(error)):
+                return Result.Err(error)
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.TimedOut:
+                print("server timed out")
+            case TaskResult.Cancelled:
+                print("server cancelled")
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run_workflow():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

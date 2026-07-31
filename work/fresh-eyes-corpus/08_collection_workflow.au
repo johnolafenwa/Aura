@@ -1,0 +1,21 @@
+def main():
+    mut readings: Vec[int32] = [9, 3, 7, 3]
+    readings.push(5)
+    readings.sort()
+
+    middle = readings[1:4]
+    mut total: int32 = 0
+    for value in middle:
+        total += value
+
+    unique: Set[int32] = {value for value in readings}
+    labels = {value: f"reading-{value}" for value in readings}
+
+    print(f"sorted={readings} middle={middle}")
+    print(f"middle_total={total}")
+    selected = labels.get(7)
+    match own selected:
+        case Option.Some(label):
+            print(f"unique={unique.len()} label={label}")
+        case Option.None:
+            print("missing label")

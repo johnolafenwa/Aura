@@ -1,0 +1,18 @@
+def main():
+    readings: Vec[int32] = [10, 20, 30, 40, 50]
+    middle = readings[-4:-1]
+    tail = readings[-2:]
+    copy = readings[:]
+
+    label = "Aé🎉BΩ"
+    unicode_middle = label[-4:-1]
+    unicode_prefix = label[:2]
+    unicode_tail = label[-2:]
+
+    print(middle)
+    print(tail)
+    print(copy)
+    print(unicode_middle)
+    print(unicode_prefix)
+    print(unicode_tail)
+    print(label.len())

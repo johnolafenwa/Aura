@@ -57,7 +57,8 @@ B4.0 implementation and its repository gates are complete:
   key writer. The installed immutable-runtime path remains usable with caching
   disabled or unavailable.
 - B4.0-b flushes `aura: waiting for a concurrent build...` before a human-mode
-  process blocks and `aura: rebuilding native runtime...` before rebuild work.
+  process blocks and `aura: building native program...` before building a
+  native program artifact.
   Each notice is deduplicated per invocation. JSON mode provisionally buffers
   those exact strings so stderr remains one JSON document: success uses the
   `progress` array and failure uses diagnostic `notes`; an `auto` fallback

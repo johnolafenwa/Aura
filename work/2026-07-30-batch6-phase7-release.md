@@ -460,8 +460,40 @@ The retained exact-CI log is
 `/private/tmp/aurora-array-ci-465d0a0.log`, SHA-256
 `9eb63c28c882c418a87470ea6fe348b3ea76b03652bee41626465cc035966b08`.
 The clean detached proof worktree and its 11 GiB disposable build output were
-removed after evidence capture. Part 3 final self-audit is now active,
-beginning with the 30-program fresh-eyes corpus.
+removed after evidence capture.
+
+## Part 3 fresh-eyes corpus
+
+The 30-program fresh-eyes corpus is complete. Its sources were written from
+the maintained README, Manual, and tutorials without consulting compiler
+fixtures or existing examples. All 30 pass `aura check` and `aura fmt
+--check`; all 60 forced MIR/direct executions pass with byte-identical
+program stdout and no final language diagnostic. The consolidated result is
+`/private/tmp/aurora-fresh-eyes-final-20260731/results.tsv`, SHA-256
+`0ff7a962c32116050c78685d881e1d3159d54ce19e74f3d39009c796dddbe13d`.
+
+One compiler defect was found and closed test-first. A contextual literal
+operand in an `int16` wrapping/saturating method retained its default `int64`
+runtime tag and made MIR panic while direct execution returned the correct
+value. MIR now reapplies the statically checked receiver width to both
+operands and diagnoses an unexpected mismatch as `AU4001`; all six `int16`
+boundary methods have forced-backend regression coverage.
+
+The corpus also closed a reader-documentation gap by enumerating the built-in
+ordered types and the lack of built-in `Ord[String]` in Aurora 0.2, with
+practical migrations. Cache investigation proved that same-program MIR and
+native keys are deterministic and warm hits reuse one entry. The apparent
+rebuild loop was 30 distinct cold programs plus real runtime-archive SHA
+changes during concurrent Cargo work. The cache logic is unchanged; the
+misleading cold-build progress text is now the accurate
+`aura: building native program...`, pinned across human and JSON CLI paths.
+
+Focused cache and integer CLI regressions, formatting, reference integrity,
+docs build, the exact production Clippy gate, and scoped diff hygiene pass.
+The detailed corpus and lane evidence is in
+`work/2026-07-31-batch6-fresh-eyes-corpus.md` and
+`work/fresh-eyes-corpus/`. Part 3 now proceeds to the consolidated
+post-reboot performance story.
 
 ## Authorized sequence
 

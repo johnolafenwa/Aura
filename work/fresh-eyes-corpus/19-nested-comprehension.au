@@ -1,0 +1,11 @@
+def main():
+    aisles: Vec[int32] = [1, 2, 3]
+    shelves: Vec[int32] = [10, 20, 30]
+    inventory_slots = [
+        aisle * 100 + shelf
+        for aisle in aisles if aisle != 2
+        for shelf in shelves if shelf <= 20
+    ]
+
+    print(inventory_slots)
+    print(inventory_slots.len())

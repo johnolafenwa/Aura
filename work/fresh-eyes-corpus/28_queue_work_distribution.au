@@ -1,0 +1,23 @@
+def sum_squares(jobs: Queue[int32]) -> int32:
+    mut subtotal: int32 = 0
+    for value in jobs:
+        subtotal += value * value
+    return subtotal
+
+
+def main() -> int32:
+    jobs = Queue[int32]()
+    jobs.put(1)
+    jobs.put(2)
+    jobs.put(3)
+    jobs.put(4)
+    jobs.put(5)
+    jobs.put(6)
+    jobs.close()
+
+    with group = TaskGroup():
+        first = group.start(sum_squares, jobs)
+        second = group.start(sum_squares, jobs)
+        total = first.result_or(-1000, timeout=2s) + second.result_or(-1000, timeout=2s)
+        print(total)
+    return 0

@@ -1,0 +1,3 @@
+def main():
+    high: int16 = 30000
+    print(high.wrapping_add(10000))

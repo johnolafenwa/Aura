@@ -1,0 +1,19 @@
+import bytes
+import fs
+import io
+
+def byte_roundtrip(path: String) -> Result[String, io.Error]:
+    payload: Vec[uint8] = [0, 1, 2, 127, 128, 254, 255]
+    try fs.write_bytes(path, payload)
+    loaded = try fs.read_bytes(path)
+    try fs.remove_file(path)
+    return Result.Ok(bytes.hex_encode(loaded))
+
+def main():
+    path = "/private/tmp/aurora-fresh-eyes-lane-b-bytes.bin"
+    match byte_roundtrip(path):
+        case Result.Ok(hex):
+            print(hex)
+            print(fs.exists(path))
+        case Result.Err(error):
+            print(error)

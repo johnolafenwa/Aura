@@ -289,12 +289,26 @@ Last updated: 2026-07-31
   `9eb63c28c882c418a87470ea6fe348b3ea76b03652bee41626465cc035966b08`.
   The detached proof tree was clean and its 11 GiB build output was removed.
 
-  Current stage: Part 3 final self-audit, beginning with 30 new programs
-  written from the maintained documentation without consulting compiler
-  fixtures. Every program must run through forced MIR and direct backends;
-  every failure becomes a fix or a documented limitation with a migration
-  hint. There is no current blocker.
-- Work note: `work/2026-07-30-batch6-phase7-release.md`.
+  The Part 3 fresh-eyes corpus is complete. Thirty new programs were written
+  from the maintained reader documentation without consulting fixtures or
+  examples; all 30 pass `check` and `fmt --check`, and all 60 forced MIR/direct
+  executions pass with byte-identical program stdout. The corpus found one
+  compiler defect: contextual `int16` operands could panic in MIR wrapping
+  and saturating methods. The test-first repair reapplies the checked receiver
+  width and returns controlled `AU4001` on invariant failure; all six `int16`
+  boundary methods now have parity coverage. The corpus also closed the
+  missing String-ordering documentation and corrected cold native progress
+  from the misleading `rebuilding native runtime` to `building native
+  program`. Cache-key/MIR determinism is sound; the apparent repeat was 30
+  distinct cold programs plus concurrent Cargo runtime-archive SHA changes.
+  Focused CLI regressions, reference integrity, docs, formatting, the exact
+  production Clippy gate, and scoped diff hygiene pass.
+
+  Current stage: run the consolidated post-reboot performance suite for
+  fib(30), the V6 loops, 10,000 tasks, TCP fan-out, retrying worker, and Array
+  operations against CPython/NumPy. There is no current blocker.
+- Work notes: `work/2026-07-30-batch6-phase7-release.md` and
+  `work/2026-07-31-batch6-fresh-eyes-corpus.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
   post-reboot provenance for release performance; user-owned

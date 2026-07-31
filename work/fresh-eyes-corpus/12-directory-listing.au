@@ -1,0 +1,28 @@
+import fs
+import io
+
+def inspect_lane_files() -> Result[String, io.Error]:
+    first_path = "/private/tmp/aurora-fresh-eyes-lane-b-directory-a.txt"
+    second_path = "/private/tmp/aurora-fresh-eyes-lane-b-directory-b.txt"
+    try fs.write_string(first_path, "a")
+    try fs.write_string(second_path, "b")
+
+    entries = try fs.read_dir("/private/tmp")
+    mut saw_first = false
+    mut saw_second = false
+    for entry in entries:
+        if entry == "aurora-fresh-eyes-lane-b-directory-a.txt":
+            saw_first = true
+        elif entry == "aurora-fresh-eyes-lane-b-directory-b.txt":
+            saw_second = true
+
+    try fs.remove_file(first_path)
+    try fs.remove_file(second_path)
+    return Result.Ok(f"first={saw_first}; second={saw_second}")
+
+def main():
+    match inspect_lane_files():
+        case Result.Ok(summary):
+            print(summary)
+        case Result.Err(error):
+            print(error)

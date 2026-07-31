@@ -1,0 +1,20 @@
+import json
+
+def show_config(source: String):
+    match own json.parse(source):
+        case Result.Ok(json.Value.Object(config)):
+            match config.get("workers"):
+                case Option.Some(json.Value.Int(workers)):
+                    print(f"workers={workers}")
+                case Option.Some(_):
+                    print("workers has the wrong type")
+                case Option.None:
+                    print("workers is missing")
+            print(json.dumps(json.Value.Object(config)))
+        case Result.Ok(_):
+            print("config must be an object")
+        case Result.Err(error):
+            print(error)
+
+def main():
+    show_config("{\"mode\":\"batch\",\"workers\":3,\"ready\":true}")

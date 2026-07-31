@@ -1,0 +1,14 @@
+def main():
+    names: Vec[String] = ["Ada", "Grace", "Linus"]
+    hours: Vec[int32] = [6, 8]
+
+    for index, name in enumerate(names):
+        print(f"{index}: {name}")
+
+    mut scheduled: int32 = 0
+    for name, amount in zip(names, hours):
+        print(f"{name} worked {amount} hours")
+        scheduled += amount
+
+    print(scheduled)
+    print(names.len())

@@ -1,0 +1,16 @@
+class Envelope[T]:
+    payload: T
+
+    def unwrap(own self) -> T:
+        return self.payload
+
+def pack[T](value: own T) -> Envelope[T]:
+    return Envelope[T](payload=value)
+
+def main():
+    message = pack("generic hello")
+    value = message.unwrap()
+    print(value)
+
+    number = pack[int32](42)
+    print(number.unwrap())

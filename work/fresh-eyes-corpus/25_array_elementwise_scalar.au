@@ -1,0 +1,16 @@
+def main() -> int32:
+    left = Array[float64].from_vec(
+        [1.0, 2.0, 3.0, 4.0],
+        [2, 2]
+    )
+    right = Array[float64].full([2, 2], 0.5)
+
+    elementwise = left + right
+    scaled = elementwise * 2.0
+    shifted = 10.0 - scaled
+
+    print(elementwise[0, 0])
+    print(scaled[1, 1])
+    print(shifted[0, 1])
+    print(left[0, 0])
+    return 0

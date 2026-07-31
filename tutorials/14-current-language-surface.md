@@ -862,6 +862,10 @@ Current collection notes:
 - `Vec.sort()` and `Vec.sort_by(key)` are stable in-place mutations;
   `sort_by` evaluates one shared key per element from left to right before
   mutating, so a key trap leaves the source unchanged
+- built-in Vec ordering covers all integer types, `float32`, `float64`, and
+  `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2, so preserve
+  insertion order, use `sort_by` with an orderable key/index, or define a
+  nominal application type with the required `Ord` behavior
 - `Vec.map(f)` and `Vec.filter(f)` are eager shared traversals that retain the
   source and return fresh owned vectors; `filter` requires clone-safe `T`
 - Vec algorithm callbacks have exact bare/shared element parameters; `mut` and

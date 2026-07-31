@@ -1,0 +1,18 @@
+enum JobState:
+    Queued(position: int32)
+    Running(worker: String)
+    Done
+
+def status_line(state: own JobState) -> String:
+    return match own state:
+        case JobState.Queued(position):
+            f"queued at {position}"
+        case JobState.Running(worker):
+            f"running on {worker}"
+        case JobState.Done:
+            "done"
+
+def main():
+    print(status_line(JobState.Queued(position=3)))
+    print(status_line(JobState.Running(worker="worker-a")))
+    print(status_line(JobState.Done))

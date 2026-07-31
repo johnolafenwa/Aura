@@ -1251,7 +1251,7 @@ impl NativeProgressReporter<'_> {
             return;
         }
         self.rebuild_reported = true;
-        self.report("aura: rebuilding native runtime...");
+        self.report("aura: building native program...");
     }
 
     fn report(&mut self, message: &str) {

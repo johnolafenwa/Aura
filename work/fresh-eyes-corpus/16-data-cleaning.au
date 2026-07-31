@@ -1,0 +1,16 @@
+def usable(line: String) -> bool:
+    return line.trim() != ""
+
+def normalize(line: String) -> String:
+    return line.trim().to_lower().replace(" ", "-")
+
+def clean(lines: Vec[String]) -> Vec[String]:
+    return [normalize(line) for line in lines if usable(line)]
+
+def report(lines: Vec[String]) -> String:
+    labels = clean(lines)
+    return f"count={labels.len()}; labels=" + ",".join(labels)
+
+def main():
+    rows = ["  Beta Team ", "", "alpha team", "  Gamma  "]
+    print(report(rows))

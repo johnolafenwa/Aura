@@ -1,0 +1,9 @@
+def main():
+    celsius: Vec[int32] = [18, 21, 24, 17, 30, 22]
+    comfortable_fahrenheit = [
+        value * 9 // 5 + 32
+        for value in celsius if value >= 20 if value <= 25
+    ]
+
+    print(comfortable_fahrenheit)
+    print(celsius)

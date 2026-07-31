@@ -299,7 +299,8 @@ On maintained Unix hosts, cache establishment is coordinated across processes. A
 
 In human mode, a native `run` flushes the exact line
 `aura: waiting for a concurrent build...` before it blocks on another builder
-and `aura: rebuilding native runtime...` before it starts rebuild work. A
+and `aura: building native program...` before it starts building a native
+program artifact. A
 source-checkout `aura build` now flushes the same exact wait line before
 blocking on another process refreshing the shared runtime. The reporter
 deduplicates each notice within one invocation. JSON `run` mode provisionally

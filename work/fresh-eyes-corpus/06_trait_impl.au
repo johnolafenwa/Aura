@@ -1,0 +1,17 @@
+trait Greeter:
+    def greet(self) -> String
+
+class Person:
+    name: String
+
+impl Greeter for Person:
+    def greet(self) -> String:
+        return f"Hello, {self.name}!"
+
+def announce[T: Greeter](value: T) -> String:
+    return value.greet()
+
+def main():
+    person = Person(name="Ada")
+    print(announce(person))
+    print(person.name)

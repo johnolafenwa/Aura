@@ -1,0 +1,17 @@
+def square(value: float64) -> float64:
+    return value * value
+
+
+def main() -> int32:
+    readings = Array[float64].from_vec(
+        [1.0, 2.0, 3.0, 4.0],
+        [4]
+    )
+    squares = readings.map[float64](square)
+
+    print(squares[2])
+    print(squares.sum())
+    print(squares.min())
+    print(squares.max())
+    print(squares.mean())
+    return 0

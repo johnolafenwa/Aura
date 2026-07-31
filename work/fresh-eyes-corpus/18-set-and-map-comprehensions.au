@@ -1,0 +1,16 @@
+def main():
+    readings: Vec[int32] = [2, 3, 5, 8, 11, 14]
+    residues = {value % 3 for value in readings}
+    odd_squares = {
+        value: value * value
+        for value in readings if value % 2 != 0
+    }
+
+    print(residues.len())
+    print(0 in residues)
+    print(1 in residues)
+    print(2 in residues)
+    print(odd_squares[3])
+    print(odd_squares[5])
+    print(odd_squares[11])
+    print(8 in odd_squares)

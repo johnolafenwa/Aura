@@ -1,0 +1,21 @@
+def sum_odd_until(limit: int32) -> int32:
+    mut total: int32 = 0
+    for value in range(limit):
+        if value % 2 == 0:
+            continue
+        if value > 7:
+            break
+        total += value
+    return total
+
+def describe(total: int32) -> String:
+    if total < 10:
+        return "small"
+    elif total == 16:
+        return "exact"
+    return "large"
+
+def main():
+    total = sum_odd_until(20)
+    print(total)
+    print(describe(total))

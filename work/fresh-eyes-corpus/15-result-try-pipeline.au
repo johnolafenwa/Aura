@@ -1,0 +1,26 @@
+def positive(value: int32) -> Result[int32, String]:
+    if value <= 0:
+        return Result.Err("value must be positive")
+    return Result.Ok(value)
+
+def safe_divide(numerator: int32, denominator: int32) -> Result[int32, String]:
+    if denominator == 0:
+        return Result.Err("division by zero")
+    return Result.Ok(numerator // denominator)
+
+def calculate(left: String, right: String) -> Result[int32, String]:
+    numerator = try positive(try parse_int32(left))
+    denominator = try positive(try parse_int32(right))
+    quotient = try safe_divide(numerator, denominator)
+    return Result.Ok(quotient + 10)
+
+def show(result: Result[int32, String]):
+    match result:
+        case Result.Ok(value):
+            print(f"ok={value}")
+        case Result.Err(message):
+            print("error=" + message)
+
+def main():
+    show(calculate("84", "4"))
+    show(calculate("84", "0"))

@@ -1,0 +1,18 @@
+import fs
+import io
+
+def text_roundtrip(path: String) -> Result[String, io.Error]:
+    try fs.write_string(path, "alpha\n")
+    try fs.append_string(path, "beta\n")
+    text = try fs.read_to_string(path)
+    try fs.remove_file(path)
+    return Result.Ok(text)
+
+def main():
+    path = "/private/tmp/aurora-fresh-eyes-lane-b-text.txt"
+    match text_roundtrip(path):
+        case Result.Ok(text):
+            print(text.trim().replace("\n", ","))
+            print(fs.exists(path))
+        case Result.Err(error):
+            print(error)

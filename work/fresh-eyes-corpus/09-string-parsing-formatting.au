@@ -1,0 +1,23 @@
+def field(fields: Vec[String], index: int32) -> Result[String, String]:
+    match own fields.get(index):
+        case Option.Some(value):
+            return Result.Ok(value)
+        case Option.None:
+            return Result.Err("missing field")
+
+def summarize_record(raw: String) -> Result[String, String]:
+    fields = raw.trim().split(",")
+    if fields.len() != 3:
+        return Result.Err("expected name,count,ratio")
+
+    name = (try field(fields, 0)).trim().to_upper()
+    count = try parse_int32((try field(fields, 1)).trim())
+    ratio = try parse_float64((try field(fields, 2)).trim())
+    return Result.Ok(f"name={name}; count={count}; ratio={ratio}")
+
+def main():
+    match summarize_record("  aurora, 42, 3.5  "):
+        case Result.Ok(summary):
+            print(summary)
+        case Result.Err(message):
+            print("error: " + message)

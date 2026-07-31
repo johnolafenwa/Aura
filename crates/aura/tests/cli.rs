@@ -3467,8 +3467,8 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     );
     assert_eq!(String::from_utf8_lossy(&cold.stdout), "cached\n");
     assert!(
-        String::from_utf8_lossy(&cold.stderr).contains("aura: rebuilding native runtime..."),
-        "a cold direct run must explain the native-runtime rebuild, stderr was:\n{}",
+        String::from_utf8_lossy(&cold.stderr).contains("aura: building native program..."),
+        "a cold direct run must explain the native-program build, stderr was:\n{}",
         String::from_utf8_lossy(&cold.stderr)
     );
 
@@ -3726,6 +3726,15 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     let changed = run(&changed_path);
     assert!(changed.status.success());
     assert_eq!(String::from_utf8_lossy(&changed.stdout), "changed\n");
+    let changed_stderr = String::from_utf8_lossy(&changed.stderr);
+    assert!(
+        changed_stderr.contains("aura: building native program..."),
+        "a cold per-program cache miss must describe the program artifact build: {changed_stderr}"
+    );
+    assert!(
+        !changed_stderr.contains("rebuilding native runtime"),
+        "a cold per-program cache miss must not claim the shared runtime is being rebuilt: {changed_stderr}"
+    );
     let after_change = entries("changed");
     assert_eq!(
         after_change.len(),
@@ -3911,7 +3920,7 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     let rebuilds = outputs
         .iter()
         .filter(|output| {
-            String::from_utf8_lossy(&output.stderr).contains("aura: rebuilding native runtime...")
+            String::from_utf8_lossy(&output.stderr).contains("aura: building native program...")
         })
         .count();
     assert_eq!(
@@ -3965,7 +3974,7 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     );
     assert_eq!(String::from_utf8_lossy(&warm.stdout), "concurrent\n");
     assert!(
-        !String::from_utf8_lossy(&warm.stderr).contains("rebuilding native runtime"),
+        !String::from_utf8_lossy(&warm.stderr).contains("building native program"),
         "a poisoned-toolchain warm hit must not rebuild"
     );
 }
@@ -4068,7 +4077,7 @@ fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
             "{label} must not wait on the held cache-key writer: {stderr}"
         );
         assert!(
-            !stderr.contains("aura: rebuilding native runtime..."),
+            !stderr.contains("aura: building native program..."),
             "{label} must not rebuild through the poisoned toolchain: {stderr}"
         );
     }
@@ -4111,7 +4120,7 @@ fn direct_run_json_failure_remains_one_document_when_a_rebuild_is_needed() {
             .as_array()
             .is_some_and(|notes| notes
                 .iter()
-                .any(|note| note == "aura: rebuilding native runtime...")),
+                .any(|note| note == "aura: building native program...")),
         "JSON mode must preserve the exact rebuild notice as structured progress: {report}"
     );
 }
@@ -4172,7 +4181,7 @@ fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
             .as_array()
             .is_some_and(|notes| notes
                 .iter()
-                .any(|note| note == "aura: rebuilding native runtime...")),
+                .any(|note| note == "aura: building native program...")),
         "cold direct trap must retain rebuild progress in non-frame notes: {cold_report}"
     );
 
@@ -4524,7 +4533,7 @@ fn auto_run_json_fallback_preserves_native_progress_in_one_document() {
             .as_array()
             .is_some_and(|progress| progress
                 .iter()
-                .any(|message| message == "aura: rebuilding native runtime...")),
+                .any(|message| message == "aura: building native program...")),
         "the automatic fallback must retain the exact direct rebuild notice: {report}"
     );
     assert_eq!(report["fallback"]["from"], "direct");
@@ -4599,7 +4608,7 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "uncached\n");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("aura: rebuilding native runtime..."),
+        String::from_utf8_lossy(&output.stderr).contains("aura: building native program..."),
         "an uncached installed build should still report its long operation"
     );
 }
@@ -5429,13 +5438,21 @@ fn fixed_width_integer_methods_match_forced_mir_and_direct_backends() {
         "    print(unsigned_max.saturating_add(unsigned_one))",
         "    print(unsigned_zero.saturating_sub(unsigned_one))",
         "    print(unsigned_max.saturating_mul(unsigned_two))",
+        "    narrow_max: int16 = 32767",
+        "    narrow_min: int16 = -32768",
+        "    print(narrow_max.wrapping_add(1))",
+        "    print(narrow_min.wrapping_sub(1))",
+        "    print(narrow_max.wrapping_mul(2))",
+        "    print(narrow_max.saturating_add(1))",
+        "    print(narrow_min.saturating_sub(1))",
+        "    print(narrow_max.saturating_mul(2))",
         "    return 0",
     ]
     .join("\n");
     assert_run_and_direct_source_stdout(
         "aurora-fixed-width-integer-methods",
         &source,
-        "-128\n127\n-2\n127\n-128\n127\n0\n255\n254\n255\n0\n255\n",
+        "-128\n127\n-2\n127\n-128\n127\n0\n255\n254\n255\n0\n255\n-32768\n32767\n-2\n32767\n-32768\n32767\n",
     );
 }
 

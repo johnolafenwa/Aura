@@ -1,0 +1,19 @@
+class Rectangle:
+    width: int32
+    height: int32
+
+    def area(self) -> int32:
+        return self.width * self.height
+
+    def grow(mut self, amount: int32):
+        self.width += amount
+        self.height += amount
+
+    def describe(self) -> String:
+        return f"{self.width}x{self.height} area={self.area()}"
+
+def main():
+    mut rectangle = Rectangle(width=3, height=4)
+    print(rectangle.describe())
+    rectangle.grow(2)
+    print(rectangle.describe())

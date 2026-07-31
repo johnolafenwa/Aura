@@ -147,7 +147,7 @@ normalization, each operation keeps its normal bounds contract.
 | `insert` | `insert(index: int32, value: own T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
-| `sort` | `sort() -> None` | Stably sorts an orderable vector in place through a mutable receiver. |
+| `sort` | `sort() -> None` | Stably sorts an orderable vector in place through a mutable receiver. Built-in order is available for every integer type, `float32`, `float64`, and `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. |
 | `sort_by` | `sort_by[K](key: def(T) -> K) -> None` | Evaluates `key` once per element from left to right, then stably sorts in place by the orderable produced keys. |
 | `map` | `map[U](f: def(T) -> U) -> Vec[U]` | Calls `f` once per element in order and returns a fresh owned vector; the source is retained. |
 | `filter` | `filter(f: def(T) -> bool) -> Vec[T]` | Calls `f` once per element in order and returns a fresh owned vector of accepted cloned elements; requires clone-safe `T`. |
@@ -250,6 +250,15 @@ Orderable values use Aurora's existing `<` relation: integers, floating-point
 values under their ordinary partial-order behavior, `Duration`, and user types
 with an applicable `Ord` implementation. `sort_by` requires the produced `K`,
 not necessarily the stored `T`, to be orderable.
+
+Concretely, Aurora 0.2 provides built-in ordering for every signed and unsigned
+integer type (including the `int` alias), `float32`, `float64`, and `Duration`.
+It does not provide a built-in `Ord[String]`, so `Vec[String].sort()` is
+rejected. Keep insertion order when ordering is unnecessary; use `sort_by` to
+sort Strings by an orderable application key such as length or a separate
+numeric index; or define a nominal application type with an `Ord` implementation
+that compares the explicit rank/key your domain requires. Stable sorting keeps
+the prior relative order when two keys compare equally.
 
 `map` and `filter` are eager. They visit the source from left to right and
 return a fresh owned vector rather than a lazy iterator. Their shared receiver
@@ -482,7 +491,9 @@ containing `random.Rng` is rejected with `AU3007`. `filter` and Vec slicing
 establish that obligation for `T`; slicing a non-repeatable Task observation
 right is rejected with `AU3009`.
 
-`sort` requires a mutable `Vec[T]` place and an orderable `T`. `sort_by`
+`sort` requires a mutable `Vec[T]` place and an orderable `T`. The built-in
+orderable element types are every integer type, `float32`, `float64`, and
+`Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. `sort_by`
 requires a mutable `Vec[T]` place, exact callback type `def(T) -> K`, and an
 orderable result type `K`. `map` requires exact callback type
 `def(T) -> U`; `filter` requires exact callback type `def(T) -> bool`.

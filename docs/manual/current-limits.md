@@ -94,6 +94,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   guarantees and may terminate or corrupt the process.
 - Callable-powered Vec algorithms are eager. `map` and `filter` return owned
   vectors rather than iterators; `filter` requires clone-safe elements.
+  Built-in natural sorting covers all integer types, `float32`, `float64`, and
+  `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. Preserve
+  insertion order, use `sort_by` with an orderable key/index, or define a
+  nominal type with an application-specific `Ord` implementation when text
+  records require ordering.
   `sort_by`, `map`, and `filter` accept only their exact bare/shared callback
   parameter capabilities. There is no comparator-form sort, lazy map/filter,
   parallel traversal, or algorithm callback with mutable/owned element access.

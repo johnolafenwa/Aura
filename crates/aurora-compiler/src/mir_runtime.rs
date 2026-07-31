@@ -3842,21 +3842,45 @@ impl MirRuntime {
                     {
                         let values = evaluate_named_args(args, env)?;
                         let bound = bind_builtin_args(&["rhs"], values)?;
-                        let rhs = *checked_mir_integer_ref(&bound[0].value);
+                        let mismatch = || {
+                            Diagnostic::coded(
+                                "AU4001",
+                                format!("`{field}` expects matching fixed-width integer operands"),
+                            )
+                        };
+                        let receiver_kind = receiver_static_ty
+                            .as_ref()
+                            .and_then(|ty| match ty {
+                                Type::Named(name, args) if args.is_empty() => {
+                                    IntegerKind::from_runtime_type_name(name)
+                                }
+                                _ => None,
+                            })
+                            .or_else(|| value.runtime_kind())
+                            .ok_or_else(mismatch)?;
+                        // Call checking has already made `rhs` exactly the receiver type, but a
+                        // contextual integer literal can still arrive through a materialized MIR
+                        // place carrying its default `int64` runtime tag. Direct emission loads
+                        // that operand as the checked receiver type; mirror that coercion here.
+                        let with_receiver_kind =
+                            |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
+                        let left = with_receiver_kind(*value).ok_or_else(mismatch)?;
+                        let Value::Int(rhs) = &bound[0].value else {
+                            return Err(mismatch());
+                        };
+                        let rhs = with_receiver_kind(*rhs).ok_or_else(mismatch)?;
                         let result = match field.as_str() {
-                            "wrapping_add" => value.wrapping_add(rhs),
-                            "wrapping_sub" => value.wrapping_sub(rhs),
-                            "wrapping_mul" => value.wrapping_mul(rhs),
-                            "saturating_add" => value.saturating_add(rhs),
-                            "saturating_sub" => value.saturating_sub(rhs),
+                            "wrapping_add" => left.wrapping_add(rhs),
+                            "wrapping_sub" => left.wrapping_sub(rhs),
+                            "wrapping_mul" => left.wrapping_mul(rhs),
+                            "saturating_add" => left.saturating_add(rhs),
+                            "saturating_sub" => left.saturating_sub(rhs),
                             _ => {
                                 debug_assert_eq!(field, "saturating_mul");
-                                value.saturating_mul(rhs)
+                                left.saturating_mul(rhs)
                             }
                         };
-                        Ok(Value::Int(result.expect(
-                            "semantic analysis gives fixed-width integer methods matching operands",
-                        )))
+                        result.map(Value::Int).ok_or_else(mismatch)
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {

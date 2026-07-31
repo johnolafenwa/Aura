@@ -1,0 +1,18 @@
+import process
+
+def run_tool() -> Result[String, process.Error]:
+    completed = try process.run(
+        ["/usr/bin/printf", "aurora-process"],
+        stdout=process.pipe(),
+        stderr=process.pipe(),
+        timeout=1s
+    )
+    try completed.check()
+    return Result.Ok(f"success={completed.success()}; output={completed.stdout()}")
+
+def main():
+    match run_tool():
+        case Result.Ok(summary):
+            print(summary)
+        case Result.Err(error):
+            print(error)

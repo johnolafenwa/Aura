@@ -181,6 +181,23 @@ before it reorders anything. If a key call fails at runtime, the vector remains
 unchanged. The callback parameter must be bare/shared. A callback declared
 with `mut` or `own` is intentionally a different contract.
 
+Aurora 0.2's built-in orderable element types are all signed and unsigned
+integers, `float32`, `float64`, and `Duration`. `String` has no built-in
+`Ord[String]`, so `Vec[String].sort()` is rejected. For text workflows, keep
+insertion order when it already carries meaning, use `sort_by` with an
+orderable key such as `String.len()` or a separate numeric index, or define a
+nominal application type whose `Ord` implementation compares an explicit
+rank/key. For example, stable length ordering is available without defining
+lexical String order:
+
+```python
+def by_length(value: String) -> int64:
+    return value.len()
+
+mut labels = ["compiler", "io", "runtime"]
+labels.sort_by(by_length)  # ["io", "runtime", "compiler"]
+```
+
 See
 [`examples/collections/vec_algorithms.au`](../../examples/collections/vec_algorithms.au)
 for stable key ordering and the complete output.

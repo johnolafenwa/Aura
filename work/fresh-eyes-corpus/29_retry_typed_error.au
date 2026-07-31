@@ -1,0 +1,29 @@
+import control
+import metrics
+
+
+enum RetryError:
+    Waiting(attempt: int64)
+
+
+def poll_worker() -> Result[String, RetryError]:
+    metrics.increment("lane_d_poll_attempts", 1)
+    attempt = metrics.get("lane_d_poll_attempts")
+    if attempt < 3:
+        return Result.Err(RetryError.Waiting(attempt=attempt))
+    return Result.Ok("ready")
+
+
+def main() -> int32:
+    metrics.reset()
+    match control.retry(
+        poll_worker,
+        max_attempts=4,
+        initial_backoff=0ms
+    ):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(RetryError.Waiting(attempt)):
+            print(f"still waiting after {attempt}")
+    print(metrics.get("lane_d_poll_attempts"))
+    return 0

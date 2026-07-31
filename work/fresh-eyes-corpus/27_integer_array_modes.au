@@ -1,0 +1,15 @@
+def main() -> int32:
+    high = Array[int32].from_vec([2147483647, -1], [2])
+    low = Array[int32].from_vec([-2147483648, 1], [2])
+
+    wrapped_high = high.wrapping_add(1)
+    saturated_high = high.saturating_add(1)
+    wrapped_low = low.wrapping_sub(1)
+    saturated_low = low.saturating_sub(1)
+
+    print(wrapped_high[0])
+    print(saturated_high[0])
+    print(wrapped_low[0])
+    print(saturated_low[0])
+    print(high[0])
+    return 0

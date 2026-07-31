@@ -1,0 +1,18 @@
+def main() -> int32:
+    mut grid = Array[int32].from_vec(
+        [3, 6, 9, 12, 15, 18],
+        [2, 3]
+    )
+
+    print(grid.shape())
+    print(grid[0, 2])
+    grid[1, 1] = 150
+    print(grid[1, 1])
+    print(grid[-1, -1])
+
+    match grid.get([1, 0]):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print(-1)
+    return 0
