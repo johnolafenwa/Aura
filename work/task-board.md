@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-31
 
-## Batch 6 of 6 (active)
+## Batch 6 of 6 (completed)
 
 - Authorized target: close B6.0-a through B6.0-d, then implement Phase 7
   comprehensions, owned Vec/String slices, and contiguous numeric arrays;
@@ -352,16 +352,32 @@ Last updated: 2026-07-31
   single final downward-truncated re-ratchet is now
   `96.28/97.20/94.62`.
 
-  Current stage: commit the one-time final re-ratchet, execute exact clean
-  full CI, create and verify only the local
-  `v0.2.0-preview` tag, build the locally available release artifacts, and
-  write the final report. The
-  Linux-x64 and Intel-macOS runner products cannot be produced locally from
-  the still-unpushed source ref and will not be claimed as built; nothing will
-  be pushed or published in this batch.
+  Batch 6 is complete. The one-time final re-ratchet is committed at
+  `003ca88`. Its exact clean full CI is green across behavior, 772.00 seconds
+  of forced backend parity, 101 LSP and 19 extension tests, compiler and 100%
+  LSP coverage, reference, docs, audits, warning-denied Clippy, and hygiene.
+  The final CI log/coverage JSON SHA-256 values are
+  `a111b1e4…`/`7a8ddfb2…`; the final replay covered
+  86,655/90,002 lines, 5,706/5,870 functions, and 126,863/134,075 regions.
+
+  The annotated local `v0.2.0-preview` tag object is `093ef98e…` and peels to
+  `003ca885…`. All three supported CLI archives were built from that clean
+  tag: native macOS arm64, macOS x86_64 under Rosetta, and Linux x86_64 in an
+  Ubuntu 24.04 amd64 container. Each passed architecture/layout checks plus
+  installed cold-cache smoke outside the checkout with Cargo unavailable.
+  The tag-built VSIX and commit-stamped docs archive also pass integrity and
+  content checks. The checksum manifest is under
+  `release/v0.2.0-preview-003ca8850207/`.
+
+  The single final report is
+  `work/2026-07-31-batch6-final-report.md`. No commit or tag was pushed and no
+  release was published. The next step is the user's hosted-runner
+  verification and publish decision.
 - Work notes: `work/2026-07-30-batch6-phase7-release.md`,
   `work/2026-07-31-batch6-fresh-eyes-corpus.md`, and
-  `work/2026-07-31-batch6-consolidated-benchmarks.md`.
+  `work/2026-07-31-batch6-consolidated-benchmarks.md`,
+  `work/2026-07-31-batch6-final-coverage-closure.md`, and
+  `work/2026-07-31-batch6-final-report.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
   post-reboot provenance for release performance; user-owned
