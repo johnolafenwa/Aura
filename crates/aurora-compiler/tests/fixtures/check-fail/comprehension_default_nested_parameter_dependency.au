@@ -1,0 +1,16 @@
+def collect(
+    limit: int64,
+    copied: Map[int64, int64] = {
+        value: (match true:
+            case true: {"fixed": f"constant"}
+            case false: (lambda: limit)()
+        )
+        for value in ([1] if true else [2])
+        if 0 in [1, 2]
+        if 0 < 1 < 2
+    }
+):
+    pass
+
+def main():
+    pass

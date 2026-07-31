@@ -16,6 +16,47 @@ def mutate_key(key: mut int64) -> int64:
     return key
 
 def main():
+    ranged: Vec[int32] = [
+        value * 3
+        for value in range(1, 4)
+    ]
+    print(ranged)
+
+    tags: Set[String] = Set{"set-owned"}
+    copied_tags: Vec[String] = [
+        tag.clone()
+        for tag in tags
+    ]
+    print(copied_tags)
+
+    pairs = Queue[(String, String)]()
+    pairs.put(("queue", "-tuple"))
+    pairs.close()
+    joined: Vec[String] = [
+        left + right
+        for left, right in pairs
+    ]
+    print(joined)
+
+    indexed: Vec[int64] = [
+        index * 10 + value
+        for index, value in enumerate([4, 5])
+    ]
+    print(indexed)
+
+    zipped: Vec[int64] = [
+        left + right
+        for left, right in zip([1, 2, 3], [10, 20])
+    ]
+    print(zipped)
+
+    offset: int64 = 10
+    build: def() -> Vec[int64] = lambda: [
+        value + offset
+        for value in [1, 2]
+    ]
+    print(build())
+
     filtered: Vec[int64] = [
         value
         for value in [1, 2, 3]

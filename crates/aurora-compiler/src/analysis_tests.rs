@@ -1875,6 +1875,310 @@ fn comprehension_scope_composes_with_contextual_lambda_scope() {
 }
 
 #[test]
+fn comprehension_completion_respects_token_boundaries_and_map_output_scope() {
+    let source = [
+        "def inspect(groups: Vec[Vec[String]], gift: Vec[String]):",
+        "    plain = [name.len() for name in gift]",
+        "    projected = {",
+        "        outer.len():",
+        "        inner.len()",
+        "        for outer in groups",
+        "        for inner in outer",
+        "        if inner.len() > 0",
+        "    }",
+        "    selected = [",
+        "        item.len()",
+        "        for item in gift",
+        "        if # gift_if iffy",
+        "            item.len() > 0",
+        "        if item.contains(\"a\")",
+        "    ]",
+        "    print(plain)",
+        "    print(projected)",
+        "    print(selected)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    let completion_names = |line: usize, character: usize, trigger| {
+        complete_source(&source, line, character, trigger)
+            .expect("comprehension completion should succeed")
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<BTreeSet<_>>()
+    };
+
+    let plain_line = source.lines().nth(1).unwrap();
+    let plain_iterable_start = plain_line.rfind("gift").unwrap();
+    let inside_identifier_if = completion_names(1, plain_iterable_start + 3, None);
+    assert!(inside_identifier_if.contains("gift"));
+    assert!(
+        !inside_identifier_if.contains("name"),
+        "the `if` bytes inside `gift` must not be mistaken for a filter keyword"
+    );
+
+    let at_final_iterable_end = completion_names(1, plain_line.len(), None);
+    assert!(at_final_iterable_end.contains("gift"));
+    assert!(
+        !at_final_iterable_end.contains("name"),
+        "the target must remain unavailable throughout the source iterable"
+    );
+
+    let output_members = completion_names(10, 13, Some('.'));
+    assert!(output_members.contains("len"));
+    assert!(output_members.contains("contains"));
+
+    let selected_iterable_line = source.lines().nth(11).unwrap();
+    let selected_iterable_start = selected_iterable_line.rfind("gift").unwrap();
+    let inside_filtered_identifier_if = completion_names(11, selected_iterable_start + 3, None);
+    assert!(inside_filtered_identifier_if.contains("gift"));
+    assert!(
+        !inside_filtered_identifier_if.contains("item"),
+        "the filtered target must stay unavailable inside an iterable whose name contains `if`"
+    );
+
+    let multiline_if_line = source.lines().nth(12).unwrap();
+    let immediately_after_multiline_if = completion_names(12, multiline_if_line.len(), None);
+    assert!(immediately_after_multiline_if.contains("item"));
+
+    let first_filter_line = source.lines().nth(13).unwrap();
+    let first_filter_members =
+        completion_names(13, first_filter_line.find('.').unwrap() + 1, Some('.'));
+    assert!(first_filter_members.contains("len"));
+
+    let second_if_line = source.lines().nth(14).unwrap();
+    let second_keyword_end = second_if_line.find("if").unwrap() + "if".len();
+    let immediately_after_second_if = completion_names(14, second_keyword_end, None);
+    assert!(immediately_after_second_if.contains("item"));
+
+    let second_filter_members =
+        completion_names(14, second_if_line.find('.').unwrap() + 1, Some('.'));
+    assert!(second_filter_members.contains("contains"));
+
+    let after_comprehension = completion_names(18, source.lines().nth(18).unwrap().len(), None);
+    assert!(
+        !after_comprehension.contains("item"),
+        "a target must not leak after its comprehension"
+    );
+
+    let outer_line = source.lines().nth(5).unwrap();
+    let outer_iterable_start = outer_line.rfind("groups").unwrap();
+    let before_outer_iterable = completion_names(5, outer_iterable_start - 1, None);
+    assert!(before_outer_iterable.contains("groups"));
+    assert!(!before_outer_iterable.contains("outer"));
+    assert!(!before_outer_iterable.contains("inner"));
+
+    let inner_line = source.lines().nth(6).unwrap();
+    let inner_iterable_start = inner_line.rfind("outer").unwrap();
+    let before_inner_iterable = completion_names(6, inner_iterable_start - 1, None);
+    assert!(before_inner_iterable.contains("outer"));
+    assert!(!before_inner_iterable.contains("inner"));
+
+    let filter_line = source.lines().nth(7).unwrap();
+    let filter_expression_start = filter_line.rfind("inner").unwrap();
+    let before_filter_expression = completion_names(7, filter_expression_start - 1, None);
+    assert!(
+        before_filter_expression.contains("outer"),
+        "{before_filter_expression:?}"
+    );
+    assert!(
+        before_filter_expression.contains("inner"),
+        "{before_filter_expression:?}"
+    );
+
+    let map_key_line = source.lines().nth(3).unwrap();
+    let map_key_members = completion_names(3, map_key_line.find('.').unwrap() + 1, Some('.'));
+    assert!(map_key_members.contains("len"));
+    let map_value_line = source.lines().nth(4).unwrap();
+    let map_value_members = completion_names(4, map_value_line.find('.').unwrap() + 1, Some('.'));
+    assert!(map_value_members.contains("len"));
+}
+
+#[test]
+fn comprehension_completion_finds_the_filter_keyword_by_source_token_position() {
+    let commented_source = [
+        "def inspect(values: Vec[String]):",
+        "    selected = [",
+        "        item.len()",
+        "        for item in values",
+        "        if # a standalone if inside this comment is not syntax",
+        "            item.len() > 0",
+        "    ]",
+        "    print(selected)",
+        "",
+    ]
+    .join("\n");
+    let keyword_line = commented_source.lines().nth(4).unwrap();
+    let keyword_end = keyword_line.find("if").unwrap() + "if".len();
+    let commented_names = complete_source(&commented_source, 4, keyword_end, None)
+        .expect("completion immediately after a commented filter keyword should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        commented_names.contains("item"),
+        "comment text must not displace the actual comprehension-filter keyword"
+    );
+
+    let unicode_source = [
+        "def inspect():",
+        "    selected = [item.len() for item in [\"é🙂\"] if item.len() > 0]",
+        "",
+    ]
+    .join("\n");
+    let unicode_line = unicode_source.lines().nth(1).unwrap();
+    let keyword_start = unicode_line.rfind(" if ").unwrap() + 1;
+    let keyword_end = unicode_line[..keyword_start + "if".len()]
+        .encode_utf16()
+        .count();
+    let unicode_names = complete_source(&unicode_source, 1, keyword_end, None)
+        .expect("completion after a filter following non-ASCII source should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        unicode_names.contains("item"),
+        "source byte offsets must be translated to LSP character positions"
+    );
+
+    let fstring_source = [
+        "def inspect(values: Vec[int64]):",
+        "    rendered = f\"{[item for item in values if item > 0]}\"",
+        "",
+    ]
+    .join("\n");
+    let fstring_line = fstring_source.lines().nth(1).unwrap();
+    let keyword_end = fstring_line.rfind(" if ").unwrap() + 1 + "if".len();
+    let fstring_names = complete_source(&fstring_source, 1, keyword_end, None)
+        .expect("completion inside an f-string comprehension should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        fstring_names.contains("item"),
+        "embedded expressions must retain comprehension-filter scope"
+    );
+}
+
+#[test]
+fn completion_keeps_function_scope_through_a_multiline_final_statement() {
+    let source = [
+        "def inspect(values: Vec[String]):",
+        "    selected = [",
+        "        item.len()",
+        "        for item in values",
+        "        if",
+        "            item.len() > 0",
+        "    ]",
+        "",
+    ]
+    .join("\n");
+
+    let keyword_line = source.lines().nth(4).unwrap();
+    let after_keyword = complete_source(&source, 4, keyword_line.len(), None)
+        .expect("completion after the final statement's filter keyword should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(after_keyword.contains("values"));
+    assert!(
+        after_keyword.contains("item"),
+        "the final multiline statement must retain its comprehension scope"
+    );
+
+    let filter_line = source.lines().nth(5).unwrap();
+    let filter_members = complete_source(&source, 5, filter_line.find('.').unwrap() + 1, Some('.'))
+        .expect("member completion in the final multiline statement should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(filter_members.contains("len"));
+    assert!(filter_members.contains("contains"));
+}
+
+#[test]
+fn completion_uses_expression_and_nested_block_extents_for_final_statements() {
+    for (source, line, character, expected) in [
+        (
+            "def retain(value: int64) -> int64:\n    return (\n        value\n    )\n",
+            2,
+            10,
+            "value",
+        ),
+        (
+            "def retain(flag: bool):\n    assert (\n        flag\n    )\n",
+            2,
+            10,
+            "flag",
+        ),
+        (
+            "def retain(value: int64):\n    print(\n        value\n    )\n",
+            2,
+            10,
+            "value",
+        ),
+    ] {
+        let names = complete_source(source, line, character, None)
+            .expect("completion in a multiline final value statement should succeed")
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<BTreeSet<_>>();
+        assert!(
+            names.contains(expected),
+            "the function scope must extend through the final expression: {source}"
+        );
+    }
+
+    let nested_source = [
+        "def inspect(values: Vec[String], enabled: bool):",
+        "    if enabled:",
+        "        selected = [",
+        "            item.len()",
+        "            for item in values",
+        "            if",
+        "                item.len() > 0",
+        "        ]",
+        "",
+    ]
+    .join("\n");
+    let keyword_line = nested_source.lines().nth(5).unwrap();
+    let names = complete_source(&nested_source, 5, keyword_line.len(), None)
+        .expect("completion in a nested final multiline statement should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(names.contains("enabled"));
+    assert!(names.contains("values"));
+    assert!(names.contains("item"));
+
+    let indexed_assignment_source = [
+        "def replace(values: mut Vec[String], index: int32, replacement: own String):",
+        "    values[",
+        "        index",
+        "    ] = (",
+        "        replacement",
+        "    )",
+        "",
+    ]
+    .join("\n");
+    let index_line = indexed_assignment_source.lines().nth(2).unwrap();
+    let names = complete_source(&indexed_assignment_source, 2, index_line.len(), None)
+        .expect("completion in a multiline final indexed-assignment target should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(names.contains("values"));
+    assert!(names.contains("index"));
+    assert!(names.contains("replacement"));
+}
+
+#[test]
 fn analysis_recovery_helpers_cover_member_error_paths() {
     let source = [
         "class Counter:",

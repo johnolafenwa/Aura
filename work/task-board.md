@@ -48,8 +48,9 @@ Last updated: 2026-07-31
   (94.632588%); LSP coverage is 100%. No synthetic coverage test or exclusion
   was added.
 
-  Phase 7.1 comprehension implementation is integrated but not yet complete
-  pending the broad gates. The parser and AST accept eager list, set, and map
+  Phase 7.1 comprehension implementation is integrated at `c7170b5` and is
+  in coverage/clean-CI sign-off. The parser and AST accept eager list, set,
+  and map
   comprehensions with progressive nested clauses, filters, recursive tuple
   targets, and multiline layout; rejected capability modifiers, generators,
   mixed literals, malformed clauses, and trailing commas have teaching
@@ -84,22 +85,71 @@ Last updated: 2026-07-31
   retained, hidden default lowerers carry the lexical owner, and lookup
   resolves the owner-qualified record in the defining module.
 
+  The first exact clean full-CI replay at `c7170b5` passed every behavior,
+  forced-backend parity, LSP, extension, reference, documentation, audit,
+  warning-denied Clippy, and hygiene stage before the frozen compiler-
+  coverage check. Its initial report reached 96.01% lines, 96.90% functions,
+  and 94.40% regions. The retained log is
+  `/private/tmp/aurora-comprehension-ci-c7170b5.log`, SHA-256
+  `f4e8bb8fe140277ce5a9362389fe28fe71a6fb29dd334d29156548b457c4036d`.
+  Per the standing rule, that is a coverage-only closure rather than an
+  escalation or permission to start Phase 7.2.
+
+  Two rounds of behavior-focused coverage work pin parser spans and exact
+  diagnostics, nested default dependencies, contextual result mismatches,
+  lambda captures and target shadowing, every supported iterable family,
+  owner-qualified defaults, and MIR/direct ownership parity. The first round
+  reached 81,690/84,978 lines (96.13%), 5,405/5,577 functions (96.92%), and
+  119,105/125,951 regions (94.56%). The second reached 81,734/84,979 lines
+  (96.18%), 5,412/5,581 functions (96.97%), and 119,176/125,954 regions
+  (94.61865%): the displayed region value rounded to 94.62%, but the exact
+  fraction remained microscopically below the frozen 94.62% floor.
+
+  Coverage audits also found and fixed three observable completion defects.
+  A target was hidden immediately after its comprehension `if`; raw source
+  scanning then let `if` in comments displace the keyword and compared byte
+  columns with UTF-16 LSP positions; and a multiline comprehension used as a
+  function's final statement fell outside function scope because statement
+  extents ignored contained multiline expressions. Exact regressions now
+  cover comments, non-BMP Unicode, f-string comprehensions, final multiline
+  assignments, returns, assertions, calls, and nested blocks.
+
   Focused verification is green: 14/14 comprehension compiler unit tests,
   60/60 parser tests plus parse fixtures and the retired Python hint,
   check-pass/check-fail fixtures, imported nominal-metadata MIR and dual-
   backend runtime regressions, both main and `try` runtime fixtures on MIR and
-  direct, the dedicated three-test CLI parity matrix, 87/87 analysis tests,
+  direct, the dedicated three-test CLI parity matrix, 91/91 analysis tests,
   99/99 LSP tests at 100% coverage, 17/17 extension tests, reference integrity
   (36 pages, 258 blocks, 9 reference tests, 59 integrity tests, and all 683
-  migration manifests), the docs build, and formatting. The unrestricted
-  pre-audit compiler-library replay passed 1,401/1,401 and the process
+  migration manifests), the docs build, and formatting. The latest complete
+  instrumented compiler-library replay passed 1,416/1,416 and the process
   integration suite passed 5/5; the new default-expression semantic,
   run-pass-fixture, and MIR/direct regressions are green.
 
-  Remaining before Phase 7.1 can be marked complete and committed: finish the
-  independent audit matrix, run warning-denied Clippy, the forced-backend
-  matrix, exact clean full CI, and frozen coverage. There is no current
-  blocker. Phase 7.1 remains active.
+  No synthetic coverage test or exclusion was added. The settled full-access
+  replay after the completion fixes passed every test at 81,766/85,015 lines
+  (96.178321%), 5,410/5,579 functions (96.970783%), and
+  119,241/126,026 regions (94.616190%); only 2 covered lines and 5 covered
+  regions remained. Its log is
+  `/private/tmp/aurora-comprehension-coverage-settled-full-access.log`,
+  SHA-256
+  `087286b9d38f3da7b1d72e616fb401e1849882ea3f02065243631480fb857fd0`.
+  A final observable regression now pins function-local completion inside a
+  multiline indexed assignment used as the final statement, covering the
+  indexed-target extent path. The only other new uncovered path is the
+  defensive no-filter-token fallback: a checked comprehension filter can
+  exist only after the parser consumes `if`, so exercising it would require a
+  synthetic AST/source mismatch. It remains deliberately unforced and is the
+  justified-invariant list for this closure. The definitive full-access
+  coverage replay is green: 81,768/85,015 lines (96.180674%),
+  5,410/5,579 functions (96.970783%), and 119,248/126,026 regions
+  (94.621745%), with 324/324 CLI and 1,416/1,416 compiler-library tests plus
+  every integration target passing. The exact log is
+  `/private/tmp/aurora-comprehension-coverage-final-full-access.log`, SHA-256
+  `bd4ac540e1b20e52925c885d4b23611cd9de2c56661538810b0a85379198d77e`.
+  The coverage fix and tracking are ready to commit; one final exact clean
+  full-CI replay will then close Phase 7.1. Slices have not started. There is
+  no current blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

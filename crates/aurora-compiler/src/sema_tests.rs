@@ -24427,3 +24427,338 @@ def main():
         "the early field-default checker needs to export its metadata"
     );
 }
+
+#[test]
+fn comprehension_lockstep_sources_reject_non_collection_inputs_with_teaching_diagnostics() {
+    for (source, expected_message) in [
+        (
+            "def main():\n    values = [index for index, value in enumerate(range(0, 2))]\n",
+            "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+        ),
+        (
+            "def main():\n    values = [left for left, right in zip([1, 2], range(0, 2))]\n",
+            "`zip` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("lockstep comprehensions must reject non-positioned iterable forms");
+        assert_eq!(diagnostic.code, "AU2002");
+        assert_eq!(diagnostic.message, expected_message);
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`"
+                    .to_string()
+            ]
+        );
+    }
+}
+
+#[test]
+fn comprehension_contextual_output_mismatches_name_each_collection_position() {
+    for (source, expected_message) in [
+        (
+            r#"
+def main():
+    values: Vec[int32] = ["value" for value in range(0, 2)]
+"#,
+            "list comprehension result has type `String`, expected `int32`",
+        ),
+        (
+            r#"
+def main():
+    values: Set[int32] = {"value" for value in range(0, 2)}
+"#,
+            "set comprehension result has type `String`, expected `int32`",
+        ),
+        (
+            r#"
+def main():
+    values: Map[int32, String] = {"key": "value" for value in range(0, 2)}
+"#,
+            "map comprehension key has type `String`, expected `int32`",
+        ),
+        (
+            r#"
+def main():
+    values: Map[int32, int32] = {value: "value" for value in range(0, 2)}
+"#,
+            "map comprehension value has type `String`, expected `int32`",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("contextual comprehension output types must match their collection slot");
+        assert_eq!(diagnostic.code, "AU2002");
+        assert_eq!(diagnostic.message, expected_message);
+    }
+}
+
+#[test]
+fn comprehension_default_parameter_dependencies_cover_filters_nested_sources_and_map_outputs() {
+    for (source, expected_parameter) in [
+        (
+            r#"
+def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if value < limit]):
+    pass
+
+def main():
+    pass
+"#,
+            "limit",
+        ),
+        (
+            r#"
+def collect(limit: int64, copied: Vec[int64] = [inner for outer in [1, 2] for inner in range(0, limit)]):
+    pass
+
+def main():
+    pass
+"#,
+            "limit",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Set[int64] = {value + offset for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Map[int64, int64] = {value + offset: value for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Map[int64, int64] = {value: value + offset for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("a comprehension must not hide a default's parameter dependency");
+        assert!(
+            diagnostic.message.contains("default")
+                && diagnostic.message.contains(expected_parameter)
+                && diagnostic.message.contains("parameter"),
+            "{diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn comprehension_lambda_capture_collection_covers_filters_sets_and_map_positions() {
+    let program = crate::check_source(
+        r#"
+def main():
+    set_values = [1, 2]
+    map_values = [1, 2]
+    threshold: int64 = 0
+    set_offset: int64 = 10
+    key_offset: int64 = 20
+    value_offset: int64 = 30
+    build_set: def() -> Set[int64] = lambda: {value + set_offset for value in set_values if value > threshold}
+    build_map: def() -> Map[int64, int64] = lambda: {value + key_offset: value + value_offset for value in map_values if value > threshold}
+"#,
+    )
+    .expect("comprehension targets stay local while every surrounding use is captured");
+
+    let capture_sets = program
+        .closures
+        .values()
+        .map(|closure| {
+            closure
+                .captures
+                .iter()
+                .map(|capture| capture.name.as_str())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        capture_sets
+            .iter()
+            .any(|captures| captures == &vec!["set_values", "threshold", "set_offset"]),
+        "{capture_sets:?}"
+    );
+    assert!(
+        capture_sets.iter().any(|captures| {
+            captures == &vec!["map_values", "threshold", "key_offset", "value_offset"]
+        }),
+        "{capture_sets:?}"
+    );
+    assert!(
+        capture_sets
+            .iter()
+            .all(|captures| !captures.contains(&"value")),
+        "the comprehension target must not escape into the lambda capture set: {capture_sets:?}"
+    );
+}
+
+#[test]
+fn comprehension_arguments_preserve_owned_results_and_allow_source_reuse() {
+    crate::check_source(
+        r#"
+def observe(values: Vec[int64], unique: Set[int64], lookup: Map[int64, int64]):
+    pass
+
+def main():
+    source = [1, 2, 3]
+    observe(
+        [value for value in source if value > 0],
+        {value for value in source if value > 0},
+        {value: value + 1 for value in source if value > 0}
+    )
+    print(source[0])
+"#,
+    )
+    .expect(
+        "collection arguments own their results, evaluate every comprehension position, and leave shared sources usable",
+    );
+}
+
+#[test]
+fn comprehension_defaults_find_parameter_dependencies_inside_nested_expression_containers() {
+    for (source, parameter) in [
+        (
+            r#"
+def collect(offset: int64, copied: Vec[int64] = [value for value in ([offset] if true else [1])]):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Vec[int64] = [value for value in ([1] if true else [offset])]):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if 0 in [limit]]):
+    pass
+
+def main():
+    pass
+"#,
+            "limit",
+        ),
+        (
+            r#"
+def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if 0 < limit < 10]):
+    pass
+
+def main():
+    pass
+"#,
+            "limit",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Vec[Map[String, int64]] = [{"fixed": offset} for value in [1, 2]]):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(label: String, copied: Set[String] = {f"value={label}" for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "label",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Map[int64, int64] = {int64(offset): value for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Map[int64, int64] = {value: [10, 20][offset] for value in [1, 2]}):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Vec[int64] = [(match true:
+    case true: offset
+    case false: 0
+) for value in [1, 2]]):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+        (
+            r#"
+def collect(offset: int64, copied: Vec[int64] = [(lambda: offset)() for value in [1, 2]]):
+    pass
+
+def main():
+    pass
+"#,
+            "offset",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("a nested comprehension expression must not hide a parameter dependency");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "default argument for parameter `copied` may not reference parameter `{parameter}`"
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn comprehension_default_tuple_targets_shadow_same_named_parameters() {
+    crate::check_source(
+        r#"
+def collect(left: int64, right: int64, copied: Vec[(int64, int64)] = [(left, right) for left, right in zip([1, 2], [3, 4])]):
+    pass
+
+def main():
+    collect(10, 20)
+"#,
+    )
+    .expect(
+        "tuple comprehension targets are local bindings, so they shadow same-named parameters in the output",
+    );
+}

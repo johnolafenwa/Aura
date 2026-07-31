@@ -1,11 +1,90 @@
 class Bucket:
     values: Vec[int64] = [value * 2 for value in [2, 4]]
+    unique: Set[int64] = {
+        value % 3
+        for value in [1, 2, 4, 5]
+        if value > 1
+        if value < 5
+    }
+    indexed: Map[int64, int64] = {
+        left: left + right
+        for left in [1, 2]
+        for right in [10]
+        if right > 0
+    }
 
 def selected(values: own Vec[int64] = [value * 2 for value in [1, 2, 3]]) -> Vec[int64]:
     return values
+
+def selected_set(
+    values: own Set[int64] = {
+        value % 2
+        for value in [2, 3, 4]
+        if value > 1
+        if value < 5
+    }
+) -> Set[int64]:
+    return values
+
+def selected_map(
+    values: own Map[int64, int64] = {
+        key: item
+        for key in [1]
+        for item in [10, 20]
+        if item > 0
+    }
+) -> Map[int64, int64]:
+    return values
+
+class Projector:
+    offset: int64
+
+    def project(self, values: Vec[int64]) -> Map[int64, int64]:
+        return {
+            value: value + self.offset
+            for value in values
+            if value > 0
+            if value < 3
+        }
+
+trait Deduplicate:
+    def deduplicate(self, values: Vec[int64]) -> Set[int64]
+
+class Marker:
+    offset: int64
+
+impl Deduplicate for Marker:
+    def deduplicate(self, values: Vec[int64]) -> Set[int64]:
+        return {
+            value + self.offset
+            for value in values
+            if value > 0
+            if value < 3
+        }
 
 def main():
     print(selected())
 
     bucket = Bucket()
     print(bucket.values)
+    print(bucket.unique.contains(1))
+    print(bucket.unique.contains(2))
+    print(bucket.indexed[1])
+    print(bucket.indexed[2])
+
+    generated_set = selected_set()
+    print(generated_set.contains(0))
+    print(generated_set.contains(1))
+
+    generated_map = selected_map()
+    print(generated_map[1])
+
+    projector = Projector(offset=10)
+    projected = projector.project([1, 2, 3])
+    print(projected[1])
+    print(projected[2])
+
+    marker = Marker(offset=20)
+    deduplicated = marker.deduplicate([1, 2, 3])
+    print(deduplicated.contains(21))
+    print(deduplicated.contains(22))

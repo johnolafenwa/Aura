@@ -93,8 +93,8 @@ B6.0 is active in strict-order entry closure:
   structural closure branch was replaced by its explicit 0.2 non-structural
   case.
 
-Phase 7.1 comprehension implementation is integrated but remains active until
-the broad gates pass:
+Phase 7.1 comprehension implementation is integrated at feature commit
+`c7170b5` but remains active through its coverage and clean-CI sign-off:
 
 - The parser and AST accept eager list, set, and map comprehensions with one
   or more progressive `for` clauses, left-to-right filters, recursive tuple
@@ -154,21 +154,74 @@ Focused verification completed so far:
 - main comprehension, full runtime-matrix, `try`-propagation, and partial-trap
   fixtures with identical MIR/direct behavior across the three focused CLI
   parity tests
-- 87/87 compiler-analysis tests
+- 91/91 compiler-analysis tests
 - 99/99 language-server tests at 100% statements, branches, functions, and
   lines
 - 17/17 extension tests
 - reference integrity: 36 pages, 258 executable blocks, 9 reference tests,
   59 integrity tests, and all 683 migration manifests
 - documentation build and Rust formatting
-- the unrestricted pre-audit compiler-library replay at 1,401/1,401 and the
-  process integration suite at 5/5
+- the latest complete instrumented compiler-library replay at 1,416/1,416 and
+  the process integration suite at 5/5
 - the new default-expression semantic regression, run-pass fixture, and
   MIR/direct CLI regression after the audit fix
 
-Before Phase 7.1 is complete or committed, finish the independent audit
-matrix, run warning-denied Clippy, then pass the forced-backend matrix, exact
-clean full CI, and frozen compiler coverage. There is no current blocker.
+The first exact clean full-CI replay at `c7170b5` passed all behavior,
+forced-backend parity, LSP, extension, reference, documentation, audit,
+warning-denied Clippy, and hygiene stages, then stopped only at the frozen
+compiler-coverage ratchet. Its report was 96.01% lines, 96.90% functions, and
+94.40% regions. The log is
+`/private/tmp/aurora-comprehension-ci-c7170b5.log`, SHA-256
+`f4e8bb8fe140277ce5a9362389fe28fe71a6fb29dd334d29156548b457c4036d`.
+
+The first behavior-focused closure reached 81,690/84,978 lines (96.13%),
+5,405/5,577 functions (96.92%), and 119,105/125,951 regions (94.56%). The
+second reached 81,734/84,979 lines (96.18%), 5,412/5,581 functions (96.97%),
+and 119,176/125,954 regions (94.61865%). The printed region value rounded to
+94.62%, but the exact fraction was still just below the frozen 94.62% floor.
+Every instrumented suite was green, including 1,413/1,413 compiler-library
+tests.
+
+Coverage review found three real completion defects. The current target was
+hidden immediately after a comprehension `if`; raw matching could mistake
+`if` in a comment for that keyword and compared byte columns with UTF-16 LSP
+positions; and a multiline final statement ended the enclosing function at
+its first line, dropping local and comprehension scope on continuation lines.
+The fixes lex the exact clause-to-filter interval, translate source byte
+columns to UTF-16, and compute recursive statement extents from contained
+expressions and bodies. Regressions pin comments, non-BMP Unicode, f-string
+comprehensions, final multiline assignments, returns, assertions, calls, and
+nested blocks. Compiler analysis is green at 91/91 and LSP remains 99/99 at
+100% coverage.
+
+No synthetic coverage test or exclusion was added. The settled full-access
+replay after these fixes passed every test at 81,766/85,015 lines
+(96.178321%), 5,410/5,579 functions (96.970783%), and 119,241/126,026
+regions (94.616190%). Only 2 covered lines and 5 covered regions remained.
+Its log is
+`/private/tmp/aurora-comprehension-coverage-settled-full-access.log`, SHA-256
+`087286b9d38f3da7b1d72e616fb401e1849882ea3f02065243631480fb857fd0`.
+
+A final observable regression pins function-local completion inside a
+multiline indexed assignment used as the function's last statement. This
+covers the indexed-assignment extent path without production changes. The
+only other uncovered line added by the completion repair is a defensive
+no-filter-token fallback. A checked comprehension filter exists only after
+the parser consumes `if`, so reaching that fallback would require a synthetic
+AST/source mismatch. It is deliberately unforced and is the justified-
+invariant list for this coverage closure.
+
+The definitive full-access compiler-coverage replay is green at
+81,768/85,015 lines (96.180674%), 5,410/5,579 functions (96.970783%), and
+119,248/126,026 regions (94.621745%), above all three frozen floors. It passed
+324/324 CLI tests in 729.57 seconds, 1,416/1,416 compiler-library tests in
+379.82 seconds, and every integration target. The exact log is
+`/private/tmp/aurora-comprehension-coverage-final-full-access.log`, SHA-256
+`bd4ac540e1b20e52925c885d4b23611cd9de2c56661538810b0a85379198d77e`.
+
+The coverage fix and tracking are ready to commit. An exact clean full-CI
+replay on that commit will close Phase 7.1. Phase 7.2 slicing has not started.
+There is no current blocker.
 
 ## Authorized sequence
 

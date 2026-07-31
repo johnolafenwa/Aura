@@ -1171,6 +1171,117 @@ def build(
 }
 
 #[test]
+fn comprehensions_preserve_checked_iterator_ownership_and_generated_lambda_context() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    ranged: Vec[int32] = [value * 3 for value in range(1, 4)]
+
+    tags: Set[String] = Set{"set-owned"}
+    copied_tags: Vec[String] = [tag.clone() for tag in tags]
+
+    pairs = Queue[(String, String)]()
+    pairs.put(("queue", "-tuple"))
+    pairs.close()
+    joined: Vec[String] = [left + right for left, right in pairs]
+
+    indexed: Vec[int64] = [
+        index * 10 + value
+        for index, value in enumerate([4, 5])
+    ]
+    zipped: Vec[int64] = [
+        left + right
+        for left, right in zip([1, 2, 3], [10, 20])
+    ]
+
+    offset: int64 = 10
+    build: def() -> Vec[int64] = lambda: [
+        value + offset
+        for value in [1, 2]
+    ]
+
+    print(ranged)
+    print(copied_tags)
+    print(joined)
+    print(indexed)
+    print(zipped)
+    print(build())
+"#,
+    )
+    .expect("every comprehension iterator and a generated closure body should lower");
+
+    let output =
+        crate::run_mir(&module).expect("checked comprehension iterator ownership should execute");
+    assert_eq!(
+        output.stdout,
+        "[3, 6, 9]\n[set-owned]\n[queue-tuple]\n[4, 15]\n[11, 22]\n[11, 12]\n"
+    );
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let tuple_takes = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::TupleTakeElement { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        tuple_takes, 2,
+        "Queue tuple bindings must transfer both received String elements"
+    );
+
+    let tuple_reads = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::TupleElement { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        tuple_reads, 4,
+        "enumerate and zip bindings must project their shared or Copy elements"
+    );
+
+    let lifted = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("main::__lambda_"))
+        .expect("the capturing builder closure should lower");
+    assert!(
+        lifted.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::VecLiteral { element_type, .. },
+                        ..
+                    } if *element_type == Type::named("int64")
+                )
+            })
+        }),
+        "the generated closure must resolve its owning function's comprehension metadata"
+    );
+}
+
+#[test]
 fn mutable_vec_writeback_precedes_its_single_safepoint_latch() {
     let module = crate::lower_source_to_mir(
         r#"

@@ -814,14 +814,19 @@ impl<'a> AnalysisBuilder<'a> {
             }
 
             let next_clause_span = clauses.get(clause_index + 1).map(|next| next.span);
-            let iterable_boundary = clause
-                .filters
-                .first()
-                .map(expression_start_span)
-                .or(next_clause_span);
-            if iterable_boundary
-                .is_some_and(|boundary| position_is_before_span(target_line, character, boundary))
-            {
+            let first_filter_span = clause.filters.first().map(expression_start_span);
+            let iterable_boundary = first_filter_span.or(next_clause_span);
+            if iterable_boundary.is_some_and(|boundary| {
+                position_is_before_span(target_line, character, boundary)
+                    && !first_filter_span.is_some_and(|filter_span| {
+                        self.position_is_after_filter_keyword(
+                            target_line,
+                            character,
+                            clause.span,
+                            filter_span,
+                        )
+                    })
+            }) {
                 self.extend_lambda_scope_from_expr(
                     &clause.iterable,
                     target_line,
@@ -881,8 +886,53 @@ impl<'a> AnalysisBuilder<'a> {
                 }
             }
         }
+    }
 
-        *scope = comprehension_scope;
+    fn position_is_after_filter_keyword(
+        &self,
+        target_line: usize,
+        character: usize,
+        clause_span: Span,
+        following_span: Span,
+    ) -> bool {
+        let clause_line = clause_span.line.saturating_sub(1);
+        let following_line = following_span.line.saturating_sub(1);
+        let source_between = self.source_lines[clause_line..=following_line]
+            .iter()
+            .enumerate()
+            .map(|(line_offset, line)| {
+                let start = if line_offset == 0 {
+                    clause_span.column.saturating_sub(1)
+                } else {
+                    0
+                };
+                let end = if clause_line + line_offset == following_line {
+                    following_span.column.saturating_sub(1)
+                } else {
+                    line.len()
+                };
+                &line[start..end]
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let Some(keyword_span) = crate::lexer::lex(&source_between).ok().and_then(|tokens| {
+            tokens.into_iter().rev().find_map(|token| {
+                matches!(token.kind, crate::lexer::TokenKind::KwIf).then_some(token.span)
+            })
+        }) else {
+            return false;
+        };
+        let keyword_line = clause_line + keyword_span.line.saturating_sub(1);
+        let keyword_byte = if keyword_span.line == 1 {
+            clause_span.column.saturating_sub(1) + keyword_span.column.saturating_sub(1)
+        } else {
+            keyword_span.column.saturating_sub(1)
+        };
+        let keyword_end = self.source_lines[keyword_line][..keyword_byte]
+            .encode_utf16()
+            .count()
+            + "if".encode_utf16().count();
+        (target_line.saturating_sub(1), character) >= (keyword_line, keyword_end)
     }
 
     fn extend_lambda_scope_from_comprehension_output(
@@ -5517,21 +5567,51 @@ fn stmt_start_line(stmt: &Stmt) -> usize {
 
 fn stmt_end_line(stmt: &Stmt) -> usize {
     match stmt {
-        Stmt::Assign(assign) => assign.span.line,
-        Stmt::Destructure(destructure) => destructure.span.line,
-        Stmt::Assert(assert_stmt) => assert_stmt.span.line,
-        Stmt::Return(ret) => ret.span.line,
+        Stmt::Assign(assign) => {
+            let target_end = match &assign.target {
+                AssignTarget::Name(_) => assign.span.line,
+                AssignTarget::Member { object, .. } => expression_end_line(object),
+                AssignTarget::Index { object, index } => {
+                    expression_end_line(object).max(expression_end_line(index))
+                }
+            };
+            assign
+                .span
+                .line
+                .max(target_end)
+                .max(expression_end_line(&assign.value))
+        }
+        Stmt::Destructure(destructure) => destructure
+            .span
+            .line
+            .max(expression_end_line(&destructure.value)),
+        Stmt::Assert(assert_stmt) => assert_stmt
+            .message
+            .as_ref()
+            .map(expression_end_line)
+            .unwrap_or(assert_stmt.span.line)
+            .max(assert_stmt.span.line)
+            .max(expression_end_line(&assert_stmt.condition)),
+        Stmt::Return(ret) => ret
+            .value
+            .as_ref()
+            .map(expression_end_line)
+            .unwrap_or(ret.span.line)
+            .max(ret.span.line),
         Stmt::If(if_stmt) => {
             let mut end = if_stmt.span.line;
             for branch in &if_stmt.branches {
-                end = end.max(
-                    branch
-                        .body
-                        .iter()
-                        .map(stmt_end_line)
-                        .max()
-                        .unwrap_or(branch.span.line),
-                );
+                end = end
+                    .max(branch.span.line)
+                    .max(expression_end_line(&branch.condition))
+                    .max(
+                        branch
+                            .body
+                            .iter()
+                            .map(stmt_end_line)
+                            .max()
+                            .unwrap_or(branch.span.line),
+                    );
             }
             if let Some(body) = &if_stmt.else_body {
                 end = end.max(
@@ -5552,31 +5632,40 @@ fn stmt_end_line(stmt: &Stmt) -> usize {
                     .map(stmt_end_line)
                     .max()
                     .unwrap_or(arm.span.line)
+                    .max(arm.span.line)
             })
             .max()
-            .unwrap_or(match_stmt.span.line),
+            .unwrap_or(match_stmt.span.line)
+            .max(match_stmt.span.line)
+            .max(expression_end_line(&match_stmt.scrutinee)),
         Stmt::For(for_stmt) => for_stmt
             .body
             .iter()
             .map(stmt_end_line)
             .max()
-            .unwrap_or(for_stmt.span.line),
+            .unwrap_or(for_stmt.span.line)
+            .max(for_stmt.span.line)
+            .max(expression_end_line(&for_stmt.iterable)),
         Stmt::With(with_stmt) => with_stmt
             .body
             .iter()
             .map(stmt_end_line)
             .max()
-            .unwrap_or(with_stmt.span.line),
+            .unwrap_or(with_stmt.span.line)
+            .max(with_stmt.span.line)
+            .max(expression_end_line(&with_stmt.value)),
         Stmt::While(while_stmt) => while_stmt
             .body
             .iter()
             .map(stmt_end_line)
             .max()
-            .unwrap_or(while_stmt.span.line),
+            .unwrap_or(while_stmt.span.line)
+            .max(while_stmt.span.line)
+            .max(expression_end_line(&while_stmt.condition)),
         Stmt::Break(stmt) => stmt.span.line,
         Stmt::Continue(stmt) => stmt.span.line,
         Stmt::Pass(stmt) => stmt.span.line,
-        Stmt::Expr(stmt) => stmt.span.line,
+        Stmt::Expr(stmt) => stmt.span.line.max(expression_end_line(&stmt.expr)),
     }
 }
 

@@ -985,6 +985,51 @@ fn comprehensions_parse_list_set_map_nested_filters_targets_and_multiline_forms(
 }
 
 #[test]
+fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
+    let iterable = parse_expression("[item for item in lambda: values]")
+        .expect("a lambda should parse as a comprehension iterable");
+    let ExprKind::Comprehension { clauses, .. } = iterable.kind else {
+        panic!("expected a comprehension");
+    };
+    assert!(matches!(
+        clauses.as_slice(),
+        [ComprehensionClause {
+            iterable:
+                Expr {
+                    kind: ExprKind::Lambda { params, body },
+                    ..
+                },
+            ..
+        }] if params.is_empty()
+            && matches!(body.kind, ExprKind::Name(ref name) if name == "values")
+    ));
+
+    let filtered = parse_expression("[item for item in values if lambda candidate: candidate]")
+        .expect("a lambda should parse as a comprehension filter");
+    let ExprKind::Comprehension { clauses, .. } = filtered.kind else {
+        panic!("expected a comprehension");
+    };
+    assert!(matches!(
+        clauses.as_slice(),
+        [ComprehensionClause { filters, .. }]
+            if matches!(
+                filters.as_slice(),
+                [Expr {
+                    kind: ExprKind::Lambda { params, body },
+                    ..
+                }] if matches!(
+                    params.as_slice(),
+                    [LambdaParam {
+                        name,
+                        mode: ParamMode::Default,
+                        ..
+                    }] if name == "candidate"
+                ) && matches!(body.kind, ExprKind::Name(ref name) if name == "candidate")
+            )
+    ));
+}
+
+#[test]
 fn comprehensions_reject_capability_modifiers_and_generator_expressions_with_guidance() {
     for source in [
         "[value for value in mut values]",
@@ -1079,6 +1124,15 @@ fn comprehensions_reject_mixed_literals_trailing_commas_and_malformed_clauses_pr
             error.message
         );
     }
+
+    let unexpected_component = parse_expression("[value for value in values else fallback]")
+        .expect_err("unexpected tokens after a clause should receive comprehension guidance");
+    assert_eq!(unexpected_component.code, "AU1101");
+    assert_eq!(
+        unexpected_component.message,
+        "expected `for`, `if`, or the end of the comprehension"
+    );
+    assert_eq!(unexpected_component.span, Some(Span::new(1, 28)));
 }
 
 #[test]
@@ -2478,6 +2532,107 @@ fn offset_helpers_cover_fstring_expression_parts() {
     assert_eq!(params[0].span, Span::new(14, 12));
     assert_eq!(params[0].ty.span, Span::new(14, 12));
     assert_eq!(return_type.span, Span::new(14, 23));
+}
+
+#[test]
+fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
+    let expression = parse_expression(
+        "f\"mapped={ {Box[def(mut Vec[int32], own (String, bool)) -> bool](lambda own item, mut sink: item): right for (left, (right,)) in pairs if ready} }\"",
+    )
+    .expect("a map comprehension with nested typed expressions should parse in an f-string");
+
+    assert_eq!(expression.span, Span::new(1, 1));
+    let ExprKind::FString(parts) = &expression.kind else {
+        panic!("expected an f-string");
+    };
+    let FormatPart::Expr(comprehension) = &parts[1] else {
+        panic!("expected a comprehension interpolation");
+    };
+    assert_eq!(comprehension.span, Span::new(1, 12));
+
+    let ExprKind::Comprehension { output, clauses } = &comprehension.kind else {
+        panic!("expected an interpolated comprehension");
+    };
+    let ComprehensionOutput::Map { key, value } = output else {
+        panic!("expected a map comprehension");
+    };
+    assert_eq!(key.span, Span::new(1, 13));
+    assert_eq!(value.span, Span::new(1, 100));
+
+    let ExprKind::Call { callee, args } = &key.kind else {
+        panic!("expected the map key to be a specialized call");
+    };
+    let ExprKind::Specialize { type_args, .. } = &callee.kind else {
+        panic!("expected the map key callee to be specialized");
+    };
+    let TypeRefKind::Function {
+        params,
+        return_type,
+    } = &type_args[0].kind
+    else {
+        panic!("expected a structural function type argument");
+    };
+    assert_eq!(type_args[0].span, Span::new(1, 17));
+    assert_eq!(params[0].mode, ParamMode::BorrowMut);
+    assert_eq!(params[0].span, Span::new(1, 21));
+    assert_eq!(params[0].ty.span, Span::new(1, 25));
+    let (_, vec_args) = named_type_ref(&params[0].ty).expect("expected Vec parameter type");
+    assert_eq!(vec_args[0].span, Span::new(1, 29));
+
+    assert_eq!(params[1].mode, ParamMode::Own);
+    assert_eq!(params[1].span, Span::new(1, 37));
+    assert_eq!(params[1].ty.span, Span::new(1, 41));
+    let tuple_elements = params[1]
+        .ty
+        .elements()
+        .expect("expected tuple parameter type");
+    assert_eq!(tuple_elements[0].span, Span::new(1, 42));
+    assert_eq!(tuple_elements[1].span, Span::new(1, 50));
+    assert_eq!(return_type.span, Span::new(1, 60));
+
+    assert_eq!(args[0].span, Span::new(1, 66));
+    let ExprKind::Lambda {
+        params: lambda_params,
+        body,
+    } = &args[0].value.kind
+    else {
+        panic!("expected the specialized call argument to be a lambda");
+    };
+    assert_eq!(lambda_params[0].mode, ParamMode::Own);
+    assert_eq!(lambda_params[0].span, Span::new(1, 77));
+    assert_eq!(lambda_params[1].mode, ParamMode::BorrowMut);
+    assert_eq!(lambda_params[1].span, Span::new(1, 87));
+    assert_eq!(body.span, Span::new(1, 93));
+
+    assert_eq!(clauses[0].span, Span::new(1, 106));
+    let BindingTarget::Tuple {
+        elements,
+        span: target_span,
+    } = &clauses[0].target
+    else {
+        panic!("expected a tuple comprehension target");
+    };
+    assert_eq!(*target_span, Span::new(1, 111));
+    assert!(matches!(
+        &elements[0],
+        BindingTarget::Name { name, span }
+            if name == "left" && *span == Span::new(1, 111)
+    ));
+    let BindingTarget::Tuple {
+        elements: nested,
+        span: nested_span,
+    } = &elements[1]
+    else {
+        panic!("expected a recursively nested tuple target");
+    };
+    assert_eq!(*nested_span, Span::new(1, 118));
+    assert!(matches!(
+        &nested[0],
+        BindingTarget::Name { name, span }
+            if name == "right" && *span == Span::new(1, 118)
+    ));
+    assert_eq!(clauses[0].iterable.span, Span::new(1, 130));
+    assert_eq!(clauses[0].filters[0].span, Span::new(1, 139));
 }
 
 #[test]
