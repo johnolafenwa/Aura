@@ -1,0 +1,179 @@
+import io
+import net
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def serve(addresses: Queue[String]) -> Result[int32, io.Error]:
+    with server = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try server.local_addr())
+        mut request_index: int32 = 0
+
+        while request_index < 112:
+            exchange = try server.accept(timeout=5s)
+            with request = exchange:
+                cycle: int32 = request_index // 7
+                offset: int32 = request_index % 7
+                mut expected_name = "exhaust"
+                mut status: int32 = 503
+
+                if offset == 0 or offset == 1:
+                    expected_name = "recover"
+                    if offset == 1:
+                        status = 200
+                elif offset == 2 or offset == 3:
+                    expected_name = "rate"
+                    if offset == 3:
+                        status = 429
+
+                if request.path() != f"/{cycle}/{expected_name}":
+                    return Result.Err(io.Error.Other(message="unexpected retry request path"))
+
+                try request.respond_text(status, "", {})
+                request_index += 1
+
+        return Result.Ok(request_index)
+
+
+def retry_delay(kind: int32, attempt: int32) -> Duration:
+    if kind == 0:
+        return 4ms
+    if kind == 1:
+        return 6ms
+    if attempt == 1:
+        return 3ms
+    return 5ms
+
+
+def request_with_retry(address: String, path: String, kind: int32, max_attempts: int32) -> Result[int32, io.Error]:
+    mut attempt: int32 = 1
+
+    while true:
+        response = try net.http_request_text_timeout(
+            "GET",
+            "http://" + address + path,
+            "",
+            {},
+            5s
+        )
+        mut status: int32 = 0
+        with http_response = response:
+            status = http_response.status()
+
+        if status != 503 or attempt == max_attempts:
+            return Result.Ok(status)
+
+        sleep(retry_delay(kind, attempt))
+        attempt += 1
+
+    return Result.Ok(500)
+
+
+def run_worker(address: own String) -> Result[int32, io.Error]:
+    mut checksum: int32 = 0
+    for cycle in range(16):
+        checksum += try request_with_retry(
+            address,
+            f"/{cycle}/recover",
+            0,
+            2
+        )
+        checksum += try request_with_retry(
+            address,
+            f"/{cycle}/rate",
+            1,
+            2
+        )
+        checksum += try request_with_retry(
+            address,
+            f"/{cycle}/exhaust",
+            2,
+            3
+        )
+
+    return Result.Ok(checksum)
+
+
+def run() -> Result[int32, io.Error]:
+    with TaskGroup() as group:
+        addresses = Queue[String](capacity=1)
+        server_task = group.start(serve, addresses)
+        mut address = ""
+
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(found_address):
+                address = found_address
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="retry address queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
+
+        print("READY release-performance retrying-worker 16 112 288")
+        if not flush_stdout():
+            return Result.Err(io.Error.Other(message="failed to flush retry READY"))
+        if not read_control("GO release-performance retrying-worker"):
+            return Result.Err(io.Error.Other(message="unexpected retry control line"))
+
+        worker_task = group.start(run_worker, address)
+        mut checksum: int32 = 0
+        match own worker_task.result(timeout=30s):
+            case TaskResult.Ready(result):
+                match own result:
+                    case Result.Ok(value):
+                        checksum = value
+                    case Result.Err(error):
+                        return Result.Err(error)
+            case TaskResult.Error(message):
+                return Result.Err(io.Error.Other(message=message))
+            case TaskResult.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case TaskResult.Cancelled:
+                return Result.Err(io.Error.Cancelled)
+
+        mut requests: int32 = 0
+        match own server_task.result(timeout=30s):
+            case TaskResult.Ready(result):
+                match own result:
+                    case Result.Ok(value):
+                        requests = value
+                    case Result.Err(error):
+                        return Result.Err(error)
+            case TaskResult.Error(message):
+                return Result.Err(io.Error.Other(message=message))
+            case TaskResult.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case TaskResult.Cancelled:
+                return Result.Err(io.Error.Cancelled)
+
+        if requests != 112 or checksum != 18112:
+            return Result.Err(io.Error.Other(message="retry workload verification failed"))
+        return Result.Ok(checksum)
+
+
+def main() -> int32:
+    match own run():
+        case Result.Ok(checksum):
+            print(f"DONE release-performance retrying-worker 112 {checksum}")
+            if not flush_stdout():
+                return 1
+            return 0
+        case Result.Err(_):
+            return 1

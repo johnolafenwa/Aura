@@ -1,0 +1,135 @@
+import io
+import net
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def serve_one(index: int32, addresses: Queue[String]) -> Result[int32, io.Error]:
+    with listener = try net.listen("127.0.0.1:0"):
+        addresses.put(try listener.local_addr())
+        stream = try listener.accept(timeout=5s)
+        with socket = stream:
+            match try socket.read_line(timeout=5s):
+                case Option.Some(payload):
+                    if payload != "ping":
+                        return Result.Err(io.Error.Other(message="unexpected TCP fan-out payload"))
+                case Option.None:
+                    return Result.Err(io.Error.Other(message="TCP fan-out client closed early"))
+
+            sleep(100ms)
+            try socket.write_all("pong\n", timeout=5s)
+            try socket.flush()
+            return Result.Ok(index)
+
+
+def run_client(address: own String) -> Result[int32, io.Error]:
+    stream = try net.connect_timeout(address, 5s)
+    with socket = stream:
+        try socket.write_all("ping\n", timeout=5s)
+        try socket.flush()
+        match try socket.read_line(timeout=5s):
+            case Option.Some(reply):
+                if reply != "pong":
+                    return Result.Err(io.Error.Other(message="unexpected TCP fan-out reply"))
+                return Result.Ok(reply.len() as int32)
+            case Option.None:
+                return Result.Err(io.Error.Other(message="TCP fan-out server closed early"))
+
+
+def run() -> Result[int32, io.Error]:
+    addresses = Queue[String]()
+    mut address_list = Vec[String]()
+
+    with TaskGroup() as group:
+        mut server_tasks = Vec[Task[Result[int32, io.Error]]]()
+        for index in range(20):
+            server_tasks.push(group.start(serve_one, index, addresses))
+
+        mut address_count: int32 = 0
+        while address_count < 20:
+            match own addresses.get(timeout=10s):
+                case QueueReceive.Item(address):
+                    address_list.push(address)
+                    address_count += 1
+                case QueueReceive.Closed:
+                    return Result.Err(io.Error.Other(message="TCP fan-out address queue closed"))
+                case QueueReceive.TimedOut:
+                    return Result.Err(io.Error.TimedOut)
+                case QueueReceive.Cancelled:
+                    return Result.Err(io.Error.Cancelled)
+
+        print("READY release-performance tcp-fanout 20 100 4")
+        if not flush_stdout():
+            return Result.Err(io.Error.Other(message="failed to flush TCP fan-out READY"))
+        if not read_control("GO release-performance tcp-fanout"):
+            return Result.Err(io.Error.Other(message="unexpected TCP fan-out control line"))
+
+        mut client_tasks = Vec[Task[Result[int32, io.Error]]]()
+        for address in own address_list:
+            client_tasks.push(group.start(run_client, address))
+
+        mut client_count: int32 = 0
+        mut checksum: int32 = 0
+        for task in own client_tasks:
+            match own task.result(timeout=10s):
+                case TaskResult.Ready(result):
+                    match own result:
+                        case Result.Ok(reply_length):
+                            client_count += 1
+                            checksum += reply_length
+                        case Result.Err(error):
+                            return Result.Err(error)
+                case TaskResult.Error(message):
+                    return Result.Err(io.Error.Other(message=message))
+                case TaskResult.TimedOut:
+                    return Result.Err(io.Error.TimedOut)
+                case TaskResult.Cancelled:
+                    return Result.Err(io.Error.Cancelled)
+
+        mut server_count: int32 = 0
+        for task in own server_tasks:
+            match own task.result(timeout=10s):
+                case TaskResult.Ready(result):
+                    match own result:
+                        case Result.Ok(_):
+                            server_count += 1
+                        case Result.Err(error):
+                            return Result.Err(error)
+                case TaskResult.Error(message):
+                    return Result.Err(io.Error.Other(message=message))
+                case TaskResult.TimedOut:
+                    return Result.Err(io.Error.TimedOut)
+                case TaskResult.Cancelled:
+                    return Result.Err(io.Error.Cancelled)
+
+        if client_count != 20 or server_count != 20 or checksum != 80:
+            return Result.Err(io.Error.Other(message="TCP fan-out verification failed"))
+
+        return Result.Ok(checksum)
+
+
+def main() -> int32:
+    match own run():
+        case Result.Ok(checksum):
+            print(f"DONE release-performance tcp-fanout 20 {checksum}")
+            if not flush_stdout():
+                return 1
+            return 0
+        case Result.Err(_):
+            return 1

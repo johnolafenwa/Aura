@@ -1,0 +1,59 @@
+import io
+
+
+def task_value(value: int32) -> int32:
+    return value
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def main() -> int32:
+    task_count: int32 = 10000
+    expected_checksum: int32 = 49995000
+
+    print("READY release-performance tasks 10000")
+    if not flush_stdout():
+        return 2
+    if not read_control("GO release-performance tasks"):
+        return 3
+
+    mut checksum: int32 = 0
+    with TaskGroup() as group:
+        mut tasks = Vec[Task[int32]]()
+        for value in range(task_count):
+            tasks.push(group.start(task_value, value))
+
+        match wait_all(tasks):
+            case WaitAll.Ready(results):
+                for result in results:
+                    checksum += result
+            case WaitAll.Error(_, _):
+                return 4
+            case WaitAll.TimedOut:
+                return 5
+            case WaitAll.Cancelled:
+                return 6
+
+    if checksum != expected_checksum:
+        return 7
+
+    print(f"DONE release-performance tasks 10000 {checksum}")
+    if not flush_stdout():
+        return 8
+    return 0

@@ -1,0 +1,42 @@
+import io
+
+
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def main() -> int32:
+    print("READY release-performance fib30 30")
+    if not flush_stdout():
+        return 3
+    if not read_control("GO release-performance fib30"):
+        return 4
+
+    result = fib(30)
+    if result != 832040:
+        return 5
+
+    print(f"DONE release-performance fib30 {result}")
+    if not flush_stdout():
+        return 6
+    return 0
