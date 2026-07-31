@@ -48,9 +48,10 @@ Last updated: 2026-07-31
   (94.632588%); LSP coverage is 100%. No synthetic coverage test or exclusion
   was added.
 
-  Phase 7.1 comprehension implementation is integrated at `c7170b5` and is
-  in coverage/clean-CI sign-off. The parser and AST accept eager list, set,
-  and map
+  Phase 7.1 comprehension implementation is complete across feature commit
+  `c7170b5`, completion/coverage closure `e8c7af1`, and deterministic
+  ADR-0035 coverage stabilization `5609d74`. The parser and AST accept eager
+  list, set, and map
   comprehensions with progressive nested clauses, filters, recursive tuple
   targets, and multiline layout; rejected capability modifiers, generators,
   mixed literals, malformed clauses, and trailing commas have teaching
@@ -165,10 +166,30 @@ Last updated: 2026-07-31
   contract when a slot opens behind an expired FIFO head: the expired job
   times out and never executes, the next live waiter is accepted into the
   released slot, both completion signals close exactly once, and no waiter or
-  capacity leaks. The focused test, formatting, diff check, and
-  warning-denied production Clippy pass. This behavior-focused one-line
-  stabilization is ready for its follow-up commit and exact clean-CI rerun.
-  Slices have not started. There is no current blocker.
+  capacity leaks. The focused test, formatting, diff check, and warning-denied
+  production Clippy pass.
+
+  The exact clean full-CI replay at `5609d74` is green end to end: 54
+  benchmark-harness tests, 324 CLI tests in 733.47 seconds, 1,417 compiler-
+  library tests in 377.84 seconds plus every integration target, the
+  683.02-second forced MIR/direct fixture matrix, 99 LSP tests, and 17
+  extension tests. Compiler coverage is 81,768/85,015 lines
+  (96.180673999%), 5,410/5,579 functions (96.970783294%), and
+  119,248/126,026 regions (94.621744719%), above the frozen
+  `96.18/96.97/94.62` floors. LSP coverage remains 937/937 lines, 49/49
+  functions, and 251/251 branches. Reference integrity covers 36 pages, 258
+  fenced blocks, 125 verified blocks, 9 reference tests, 59 integrity tests,
+  and all 683 migration manifests. Docs, npm audit, the allowed
+  `rustls-pemfile` RustSec warning, warning-denied Clippy, and hygiene pass.
+  The retained CI log is
+  `/private/tmp/aurora-comprehension-ci-5609d74.log`, SHA-256
+  `878710a6d88a79e9a0ae0993edbb4f8a2fe9dc4e551fb7f78d1db23255bc56c1`.
+  The detached proof worktree is clean. No synthetic coverage test or
+  exclusion was added; the sole justified defensive comprehension invariant
+  remains the unreachable no-filter-token fallback described above.
+
+  Phase 7.1 is signed off. Phase 7.2 owned Vec/String slicing is the active
+  stage. There is no current blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

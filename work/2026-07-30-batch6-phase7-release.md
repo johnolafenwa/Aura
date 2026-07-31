@@ -93,8 +93,9 @@ B6.0 is active in strict-order entry closure:
   structural closure branch was replaced by its explicit 0.2 non-structural
   case.
 
-Phase 7.1 comprehension implementation is integrated at feature commit
-`c7170b5` but remains active through its coverage and clean-CI sign-off:
+Phase 7.1 comprehension implementation is complete across feature commit
+`c7170b5`, completion/coverage closure `e8c7af1`, and deterministic ADR-0035
+coverage stabilization `5609d74`:
 
 - The parser and AST accept eager list, set, and map comprehensions with one
   or more progressive `for` clauses, left-to-right filters, recursive tuple
@@ -243,9 +244,35 @@ worker-side contract: an expired FIFO head becomes `TimedOut` and never
 executes; its live successor becomes `Accepted` into the same released slot;
 both completion signals deliver once and close; the live job executes; and no
 queued job, admission waiter, or capacity leaks. The focused test, formatting,
-diff check, and warning-denied production-library Clippy pass. It is ready for
-the follow-up commit and exact clean-CI rerun. Phase 7.2 slicing has not
-started. There is no current blocker.
+diff check, and warning-denied production-library Clippy pass.
+
+The exact clean full-CI replay at `5609d74` is green end to end:
+
+- 54/54 benchmark-harness tests
+- 324/324 CLI tests in 733.47 seconds
+- 1,417/1,417 compiler-library tests in 377.84 seconds plus every integration
+  target
+- the full forced MIR/direct fixture matrix in 683.02 seconds
+- 99/99 LSP tests and 17/17 extension tests
+- compiler coverage of 81,768/85,015 lines (96.180673999%),
+  5,410/5,579 functions (96.970783294%), and 119,248/126,026 regions
+  (94.621744719%), above the frozen `96.18/96.97/94.62` floors
+- LSP coverage of 937/937 lines, 49/49 functions, and 251/251 branches
+- reference integrity over 36 pages, 258 fenced blocks, 125 verified blocks,
+  9 reference tests, 59 integrity tests, and all 683 migration manifests
+- docs build, zero npm vulnerabilities, the allowed `rustls-pemfile` RustSec
+  warning, warning-denied Clippy, and hygiene
+
+The retained log is
+`/private/tmp/aurora-comprehension-ci-5609d74.log`, SHA-256
+`878710a6d88a79e9a0ae0993edbb4f8a2fe9dc4e551fb7f78d1db23255bc56c1`.
+The detached proof worktree is clean after the run, its target is 17 GiB, the
+main target is 20 GiB, and the host has 126 GiB free. No synthetic coverage
+test or exclusion was added. The only justified invariant remains the
+unreachable comprehension no-filter-token fallback described above.
+
+Phase 7.1 is signed off. Phase 7.2 owned Vec/String slicing is now active.
+There is no current blocker.
 
 ## Authorized sequence
 
