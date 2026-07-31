@@ -407,10 +407,18 @@ removed 72.3 GiB of disposable artifacts. The modified
 `personal/file_ops.au` and untracked ADR-0022 draft remain untouched and
 outside Batch 6.
 
-The remaining Phase 7.3 work is the implementation checkpoint commit, the
-controlled 11-pair post-reboot benchmark from a clean detached checkout,
-release disassembly inspection, measured-results documentation, and exact
-clean full CI.
+The implementation checkpoint is `0511adf`. Its clean detached contractual
+11-pair run on the post-reboot Mac14,9 M2 Pro / 16 GiB host measured median
+one-million-element `float64` operations of `1.142461 ms` for Aurora add
+versus `0.251602 ms` for NumPy 2.0.2, and `1.150392 ms` for Aurora sum versus
+`0.174065 ms` for NumPy. The ratios of medians are `4.540751×` and
+`6.608975×`. The raw and summary evidence hashes are `f51b9799…` and
+`f6fc84c1…`. These are exact-workload measurements, not portable performance
+claims. Release disassembly emitted scalar floating-point kernels, so no
+float-SIMD claim is made.
+
+The remaining Phase 7.3 work is the measured-evidence commit and exact clean
+full CI.
 
 ## Authorized sequence
 

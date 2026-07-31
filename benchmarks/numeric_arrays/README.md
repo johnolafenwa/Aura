@@ -56,13 +56,32 @@ so a canonical CPU burner such as `yes` is recorded even outside the checkout.
 The runner PID, its descendants, its direct parent, and the short-lived
 `ps`/`lsof` inventory helpers are excluded from classification.
 
-Measured results belong here only after the controlled post-reboot run. State
-them as:
+## Phase 7.3 measured result
 
-> On the post-reboot Mac14,9 host, at commit `<sha>`, the direct native Aurora
-> kernel measured a median `<x>` ms per one-million-element `float64` add and
-> `<y>` ms per sum across 11 paired repetitions. NumPy `<version>` measured
-> `<a>` and `<b>` ms under the recorded single-thread environment. These are
-> measurements of these exact workloads on this host, not a portable
-> performance guarantee, general NumPy comparison, or claim of NumPy API
-> compatibility.
+The contractual run completed on the post-reboot Mac14,9 M2 Pro / 16 GiB host
+at commit `0511adf61931953df096dc1b6721a543d856be25`. The recorded boot time
+was `Thu Jul 30 23:02:25 2026`; the checkout was clean and detached, all three
+quiet-host inventories were empty, and no override was used. Xcode Python
+3.9.6 supplied NumPy 2.0.2 with Accelerate.
+
+| workload | Aurora median per operation | NumPy median per operation | ratio of medians |
+| --- | ---: | ---: | ---: |
+| fresh owned one-million-element `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
+| existing one-million-element `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
+
+The 11-pair raw report is retained at
+`/private/tmp/aurora-phase73-arrays-post-reboot-raw.json`, SHA-256
+`f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d`.
+The summary is retained at
+`/private/tmp/aurora-phase73-arrays-post-reboot-summary.json`, SHA-256
+`f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab`.
+The measured release `aura` binary hash is
+`a717e19d2f634087ae51c601632b428ed8cc5c98ed6745039d7f036b189ca035`.
+
+Release disassembly of the float64 add kernel emitted scalar `fadd d`
+instructions, and the deterministic floating reductions likewise remained
+scalar. No floating-kernel vectorization claim is made.
+
+These are measurements of these exact workloads on this host, not a portable
+performance guarantee, general NumPy comparison, or claim of NumPy API
+compatibility.

@@ -253,10 +253,17 @@ Last updated: 2026-07-31
   rule correctly rejected it. `cargo clean` removed 72.3 GiB of disposable
   build artifacts before the final focused rebuild.
 
-  Phase 7.3 remains active until the implementation checkpoint is committed,
-  the 11-pair post-reboot Mac14,9 NumPy comparison is recorded, release
-  disassembly is inspected without an unsupported SIMD claim, and exact clean
-  full CI passes. There is no current implementation blocker.
+  The implementation checkpoint is `0511adf`. Its clean detached contractual
+  11-pair run on the post-reboot Mac14,9 M2 Pro host measured median
+  one-million-element `float64` operations of `1.142461 ms` for Aurora add
+  versus `0.251602 ms` for NumPy 2.0.2, and `1.150392 ms` for Aurora sum
+  versus `0.174065 ms` for NumPy. The ratios of medians are `4.540751×` and
+  `6.608975×`; these are exact-workload measurements, not portable claims.
+  The raw/summary evidence hashes are `f51b9799…` / `f6fc84c1…`. Release
+  disassembly showed scalar float kernels, so no float-SIMD claim is made.
+
+  Phase 7.3 remains active only until the measured evidence commit and exact
+  clean full CI pass. There is no current implementation blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

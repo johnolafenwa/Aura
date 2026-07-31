@@ -215,6 +215,20 @@ The maintained one-million-element `float64` add/sum comparison records
 post-reboot measurements from one named Mac14,9 host. It has no
 Aurora-versus-NumPy pass threshold and makes no portable performance claim.
 
+On the post-reboot Mac14,9 M2 Pro host at commit `0511adf`, across 11 paired
+single-thread observations, the direct native backend measured these medians
+per one-million-element operation:
+
+| workload | Aurora | NumPy 2.0.2 | Aurora / NumPy |
+| --- | ---: | ---: | ---: |
+| fresh owned `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
+| existing-array `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
+
+These are measurements of the exact maintained workloads on that host, not a
+portable performance guarantee, a general NumPy comparison, or a claim of
+NumPy API compatibility. Release disassembly showed scalar floating-point
+instructions for these kernels; Aurora 0.2 makes no vectorization claim.
+
 ## Status
 
 Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes
