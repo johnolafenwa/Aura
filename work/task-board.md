@@ -276,8 +276,24 @@ Last updated: 2026-07-31
   unforced. The retained log and JSON report have SHA-256
   `99359fa3f8da…` and `246765c9ffff…`.
 
-  Phase 7.3 remains active only until the coverage-closure commit and exact
-  clean full CI pass. There is no current implementation blocker.
+  Phase 7.3 is signed off at coverage-closure commit `465d0a0`. Its exact
+  detached full-CI replay passed 54 scalable-runtime and 10 numeric-Array
+  harness tests, 334 CLI tests in 474.09 seconds, 1,498 compiler-library
+  tests in 184.85 seconds plus every integration target, the complete forced
+  MIR/direct matrix in 764.95 seconds, 101 language-server tests, 19
+  extension tests, compiler and 100% LSP coverage, reference integrity, docs,
+  audits, warning-denied Clippy, and hygiene. Compiler coverage is
+  86,645/89,983 lines (96.290410411%), 5,704/5,866 functions
+  (97.238322537%), and 126,842/134,034 regions (94.634197293%). The retained
+  log is `/private/tmp/aurora-array-ci-465d0a0.log`, SHA-256
+  `9eb63c28c882c418a87470ea6fe348b3ea76b03652bee41626465cc035966b08`.
+  The detached proof tree was clean and its 11 GiB build output was removed.
+
+  Current stage: Part 3 final self-audit, beginning with 30 new programs
+  written from the maintained documentation without consulting compiler
+  fixtures. Every program must run through forced MIR and direct backends;
+  every failure becomes a fix or a documented limitation with a migration
+  hint. There is no current blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

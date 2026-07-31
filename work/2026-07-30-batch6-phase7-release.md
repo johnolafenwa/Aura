@@ -439,8 +439,29 @@ The retained coverage log is
 The JSON report is
 `/private/tmp/aurora-array-coverage-closure-6.json`, SHA-256
 `246765c9ffff71e2f54917c42f93d7b8804dd10d793818ee9bad7004751cf18b`.
-The remaining Phase 7.3 work is the exact clean full-CI proof from the
-coverage-closure commit.
+
+Phase 7.3 is signed off at coverage-closure commit `465d0a0`. Its exact
+detached full-CI replay passed:
+
+- 54 scalable-runtime and 10 numeric-Array benchmark-harness tests;
+- 334 CLI tests in 474.09 seconds;
+- 1,498 compiler-library tests in 184.85 seconds plus every integration and
+  doc-test target;
+- the complete forced MIR/direct fixture matrix in 764.95 seconds;
+- 101 language-server and 19 bundled-extension tests;
+- compiler coverage at 96.290410411% lines, 97.238322537% functions, and
+  94.634197293% regions;
+- 100% LSP coverage at 938 lines, 49 functions, and 251 branches;
+- reference integrity over 37 Manual pages, 260 fenced blocks, 126 verified
+  blocks, 59 integrity tests, and all 683 migration manifests;
+- docs, npm and Rust audits, warning-denied Clippy, and hygiene.
+
+The retained exact-CI log is
+`/private/tmp/aurora-array-ci-465d0a0.log`, SHA-256
+`9eb63c28c882c418a87470ea6fe348b3ea76b03652bee41626465cc035966b08`.
+The clean detached proof worktree and its 11 GiB disposable build output were
+removed after evidence capture. Part 3 final self-audit is now active,
+beginning with the 30-program fresh-eyes corpus.
 
 ## Authorized sequence
 
