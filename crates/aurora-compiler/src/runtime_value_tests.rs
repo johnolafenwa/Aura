@@ -9910,6 +9910,129 @@ fn bounded_blocking_io_admission_times_out_and_cancels_before_execution() {
 }
 
 #[test]
+fn released_blocking_io_slot_skips_expired_oldest_waiter_and_accepts_next_in_fifo() {
+    let pool = BlockingIoPool::new(BlockingIoPoolConfig {
+        worker_count: 1,
+        queue_capacity: Some(1),
+    });
+    let expired_executions = Arc::new(AtomicUsize::new(0));
+    let expired_executions_in_job = expired_executions.clone();
+    let expired_outcome = Arc::new(Mutex::new(None));
+    let expired_completion = ChannelValue::new();
+    let live_executions = Arc::new(AtomicUsize::new(0));
+    let live_executions_in_job = live_executions.clone();
+    let live_outcome = Arc::new(Mutex::new(None));
+    let live_completion = ChannelValue::new();
+
+    let (mut finished, live_job) = {
+        let mut state = lock_mutex(&pool.state);
+        state
+            .queue
+            .push_back(Box::new(|| panic!("the occupying job must not execute")));
+        state
+            .admission_waiters
+            .push_back(super::BlockingIoAdmissionWaiter {
+                id: 0,
+                job: Some(Box::new(move || {
+                    expired_executions_in_job.fetch_add(1, Ordering::SeqCst);
+                })),
+                deadline: Some(
+                    Instant::now()
+                        .checked_sub(StdDuration::from_secs(1))
+                        .unwrap_or_else(Instant::now),
+                ),
+                cancellation: None,
+                outcome: expired_outcome.clone(),
+                completion: expired_completion.clone(),
+            });
+        state
+            .admission_waiters
+            .push_back(super::BlockingIoAdmissionWaiter {
+                id: 1,
+                job: Some(Box::new(move || {
+                    live_executions_in_job.fetch_add(1, Ordering::SeqCst);
+                })),
+                deadline: None,
+                cancellation: None,
+                outcome: live_outcome.clone(),
+                completion: live_completion.clone(),
+            });
+
+        drop(
+            state
+                .queue
+                .pop_front()
+                .expect("removing the occupying job should open one queue slot"),
+        );
+        let finished = pool.fill_available_admission_slots_locked(&mut state);
+        assert_eq!(
+            state.queue.len(),
+            1,
+            "the live successor must consume the slot skipped by the expired waiter"
+        );
+        assert!(
+            state.admission_waiters.is_empty(),
+            "both decided waiters must leave the admission queue without leaking capacity"
+        );
+        let live_job = state
+            .queue
+            .pop_front()
+            .expect("the live successor's accepted job must occupy the released slot");
+        (finished, live_job)
+    };
+
+    assert_eq!(finished.len(), 2);
+    assert_eq!(
+        *lock_mutex(&expired_outcome),
+        Some(super::BlockingIoAdmissionOutcome::TimedOut)
+    );
+    assert_eq!(
+        *lock_mutex(&live_outcome),
+        Some(super::BlockingIoAdmissionOutcome::Accepted)
+    );
+    assert_eq!(
+        expired_completion.try_recv(),
+        TryRecvResult::Empty,
+        "the timeout outcome must be committed before its completion is signalled"
+    );
+    assert_eq!(
+        live_completion.try_recv(),
+        TryRecvResult::Empty,
+        "the acceptance outcome must be committed before its completion is signalled"
+    );
+    let expired_waiter = finished.remove(0);
+    assert!(
+        expired_waiter.job.is_some(),
+        "timing out must retain and ultimately drop the unexecuted job"
+    );
+    let live_waiter = finished
+        .pop()
+        .expect("the live successor should be returned for completion signalling");
+    assert!(
+        live_waiter.job.is_none(),
+        "acceptance must transfer the live successor's job into the released slot"
+    );
+    BlockingIoPool::signal_admission_waiter(expired_waiter);
+    BlockingIoPool::signal_admission_waiter(live_waiter);
+    assert_eq!(
+        expired_completion.try_recv(),
+        TryRecvResult::Value(Value::Unit)
+    );
+    assert_eq!(expired_completion.try_recv(), TryRecvResult::Closed);
+    assert_eq!(
+        live_completion.try_recv(),
+        TryRecvResult::Value(Value::Unit)
+    );
+    assert_eq!(live_completion.try_recv(), TryRecvResult::Closed);
+
+    live_job();
+    assert_eq!(expired_executions.load(Ordering::SeqCst), 0);
+    assert_eq!(live_executions.load(Ordering::SeqCst), 1);
+    assert_eq!(pool.pending_job_count(), 0);
+    assert_eq!(pool.admission_waiter_count(), 0);
+}
+
+#[test]
 fn bounded_blocking_io_capacity_counts_pending_jobs_but_excludes_running_jobs_and_waiters() {
     let pool = BlockingIoPool::new(BlockingIoPoolConfig {
         worker_count: 2,

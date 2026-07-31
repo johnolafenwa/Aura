@@ -219,9 +219,33 @@ The definitive full-access compiler-coverage replay is green at
 `/private/tmp/aurora-comprehension-coverage-final-full-access.log`, SHA-256
 `bd4ac540e1b20e52925c885d4b23611cd9de2c56661538810b0a85379198d77e`.
 
-The coverage fix and tracking are ready to commit. An exact clean full-CI
-replay on that commit will close Phase 7.1. Phase 7.2 slicing has not started.
-There is no current blocker.
+The coverage/completion closure is committed at `e8c7af1`. Its exact clean
+full-CI replay passed the 54-test benchmark harness, 324 CLI tests, 1,416
+compiler-library tests and all integration targets, the 697.85-second forced
+MIR/direct matrix, 99 LSP tests, and 17 extension tests. The only red stage
+was the compiler-coverage ratchet. Scheduling selected the submitter-side
+cleanup of a blocking-I/O admission deadline instead of the worker-side
+cleanup in `runtime_value.rs`, leaving one otherwise reachable line
+unexecuted. The clean report was 81,767/85,015 lines (96.179498%),
+5,410/5,579 functions (96.970783%), and 119,247/126,026 regions
+(94.620951%). The retained log is
+`/private/tmp/aurora-comprehension-ci-e8c7af1.log`, SHA-256
+`5f049f2aa5def066c698fbd1122061cb4c598d55609e29236777dd4b3273583e`.
+
+Independent audit confirmed no production bug. A slot-release/deadline race
+has two correct mutex-linearized outcomes: the worker can expire the oldest
+waiter while filling the released slot, or the submitter can remove itself
+after its deadline wake. Both preserve the ADR-0035 acceptance point and
+prevent pre-acceptance execution.
+
+A deterministic behavior-focused unit regression now pins the full
+worker-side contract: an expired FIFO head becomes `TimedOut` and never
+executes; its live successor becomes `Accepted` into the same released slot;
+both completion signals deliver once and close; the live job executes; and no
+queued job, admission waiter, or capacity leaks. The focused test, formatting,
+diff check, and warning-denied production-library Clippy pass. It is ready for
+the follow-up commit and exact clean-CI rerun. Phase 7.2 slicing has not
+started. There is no current blocker.
 
 ## Authorized sequence
 

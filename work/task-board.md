@@ -147,9 +147,28 @@ Last updated: 2026-07-31
   every integration target passing. The exact log is
   `/private/tmp/aurora-comprehension-coverage-final-full-access.log`, SHA-256
   `bd4ac540e1b20e52925c885d4b23611cd9de2c56661538810b0a85379198d77e`.
-  The coverage fix and tracking are ready to commit; one final exact clean
-  full-CI replay will then close Phase 7.1. Slices have not started. There is
-  no current blocker.
+  The coverage/completion closure is committed at `e8c7af1`. Its exact clean
+  full-CI replay passed the 54-test benchmark harness, 324 CLI tests, 1,416
+  compiler-library tests and all integration targets, 697.85 seconds of
+  forced MIR/direct parity, 99 LSP tests, and 17 extension tests. The only red
+  stage was again the coverage ratchet: scheduling chose the submitter-side
+  cleanup of a blocking-I/O admission deadline rather than the worker-side
+  cleanup in `runtime_value.rs`, leaving one otherwise reachable line
+  unexecuted. The clean totals were 81,767/85,015 lines (96.179498%),
+  5,410/5,579 functions (96.970783%), and 119,247/126,026 regions
+  (94.620951%). The retained log is
+  `/private/tmp/aurora-comprehension-ci-e8c7af1.log`, SHA-256
+  `5f049f2aa5def066c698fbd1122061cb4c598d55609e29236777dd4b3273583e`.
+
+  No runtime bug exists: the mutex linearizes either correct cleanup path.
+  A deterministic ADR-0035 unit regression now proves the full observable
+  contract when a slot opens behind an expired FIFO head: the expired job
+  times out and never executes, the next live waiter is accepted into the
+  released slot, both completion signals close exactly once, and no waiter or
+  capacity leaks. The focused test, formatting, diff check, and
+  warning-denied production Clippy pass. This behavior-focused one-line
+  stabilization is ready for its follow-up commit and exact clean-CI rerun.
+  Slices have not started. There is no current blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
