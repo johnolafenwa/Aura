@@ -3641,6 +3641,18 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
         ExprKind::Index { object, index } => default_argument_references_param(object, param_names)
             .or_else(|| default_argument_references_param(index, param_names)),
+        ExprKind::Slice {
+            object, start, end, ..
+        } => default_argument_references_param(object, param_names)
+            .or_else(|| {
+                start
+                    .as_deref()
+                    .and_then(|value| default_argument_references_param(value, param_names))
+            })
+            .or_else(|| {
+                end.as_deref()
+                    .and_then(|value| default_argument_references_param(value, param_names))
+            }),
         ExprKind::Call { callee, args } => default_argument_references_param(callee, param_names)
             .or_else(|| {
                 args.iter().find_map(|argument| {
@@ -5197,6 +5209,32 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    fn check_slice_endpoint_type(
+        &self,
+        endpoint: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let expected = Type::named("int32");
+        let actual = match self.type_of_expr_hint(endpoint, locals, Some(&expected)) {
+            Ok(actual) => actual,
+            Err(error)
+                if Self::is_integer_literal_expr(endpoint)
+                    && error.message.contains("does not fit in `int32`") =>
+            {
+                return Err(Diagnostic::coded_at("AU2002", endpoint.span, error.message));
+            }
+            Err(error) => return Err(error),
+        };
+        if actual != expected {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                endpoint.span,
+                format!("slice endpoints must have type `int32`, found `{}`", actual),
+            ));
+        }
+        Ok(actual)
+    }
+
     fn bound_argument<'b>(
         &self,
         ordered_args: &'b [Option<&'b Argument>],
@@ -6336,6 +6374,74 @@ impl<'a> FunctionChecker<'a> {
         self.opaque_handle_in_type_inner(ty, &mut BTreeSet::new())
     }
 
+    fn noncloneable_closure_in_type(&self, ty: &Type) -> Option<Type> {
+        self.noncloneable_closure_in_type_inner(ty, &mut BTreeSet::new())
+    }
+
+    fn noncloneable_closure_in_type_inner(
+        &self,
+        ty: &Type,
+        visiting: &mut BTreeSet<String>,
+    ) -> Option<Type> {
+        match ty {
+            Type::Closure { .. } => Some(ty.clone()),
+            Type::Tuple(elements) => elements
+                .iter()
+                .find_map(|element| self.noncloneable_closure_in_type_inner(element, visiting)),
+            Type::Named(name, args) => {
+                if let Some(closure) = args
+                    .iter()
+                    .find_map(|arg| self.noncloneable_closure_in_type_inner(arg, visiting))
+                {
+                    return Some(closure);
+                }
+
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    if args.len() != class_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    let closure = class_info.fields.values().find_map(|field| {
+                        let field_ty = substitute_type(&field.ty, &substitutions);
+                        self.noncloneable_closure_in_type_inner(&field_ty, visiting)
+                    });
+                    visiting.remove(&key);
+                    return closure;
+                }
+
+                if let Some(enum_info) = self.resolve_enum_info(name) {
+                    if args.len() != enum_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    let closure = enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| &variant.payloads)
+                        .find_map(|payload| {
+                            let payload_ty = substitute_type(&payload.ty, &substitutions);
+                            self.noncloneable_closure_in_type_inner(&payload_ty, visiting)
+                        });
+                    visiting.remove(&key);
+                    return closure;
+                }
+
+                None
+            }
+            Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+        }
+    }
+
     fn opaque_handle_in_type_inner(
         &self,
         ty: &Type,
@@ -6445,6 +6551,20 @@ impl<'a> FunctionChecker<'a> {
                 )
                 .with_help(
                     "transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers",
+                ));
+            }
+        }
+        if !transfers_unique_task_result {
+            if let Some(closure_ty) = self.noncloneable_closure_in_type(ty) {
+                return Err(Diagnostic::coded_at(
+                    "AU3007",
+                    span,
+                    format!(
+                        "cannot use {operation} because duplicating `{ty}` would duplicate non-cloneable closure `{closure_ty}`"
+                    ),
+                )
+                .with_help(
+                    "move the closure so its environment has one owner, or use a named function value when no capture is required",
                 ));
             }
         }
@@ -7458,6 +7578,10 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Index { .. } => self.type_of_expr(expr, locals).map(|_| ()),
+            // Slices materialize a fresh owned value. Their source and
+            // endpoints were fully checked while producing that value; moving
+            // the result must not replay or consume any of those inputs.
+            ExprKind::Slice { .. } => Ok(()),
             // Composite, branching, and fallible results have one branch-aware
             // walk. Reaching it from here means the expression is consumed
             // without a recorded pre-expression state, so the walk starts from
@@ -10328,6 +10452,17 @@ impl<'a> FunctionChecker<'a> {
                 Self::collect_lambda_capture_uses(object, bound, seen, captures);
                 Self::collect_lambda_capture_uses(index, bound, seen, captures);
             }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                Self::collect_lambda_capture_uses(object, bound, seen, captures);
+                if let Some(start) = start {
+                    Self::collect_lambda_capture_uses(start, bound, seen, captures);
+                }
+                if let Some(end) = end {
+                    Self::collect_lambda_capture_uses(end, bound, seen, captures);
+                }
+            }
             ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
                     Self::collect_lambda_capture_uses(element, bound, seen, captures);
@@ -12262,6 +12397,57 @@ impl<'a> FunctionChecker<'a> {
                     expr.span,
                     format!("cannot index non-vector-or-map value `{}`", object_ty),
                 ))
+            }
+            ExprKind::Slice {
+                object,
+                start,
+                end,
+                colon_span,
+            } => {
+                // Slicing observes the source rather than consuming it. Keep
+                // that shared access live while each present endpoint is
+                // checked in source order so endpoint calls cannot mutate or
+                // move the retained place.
+                let object_expected = expected
+                    .filter(|ty| vec_element_type(ty).is_some() || **ty == Type::named("String"));
+                let object_ty = self.type_of_expr_hint(object, locals, object_expected)?;
+                let vec_element = vec_element_type(&object_ty).cloned();
+                let is_string = object_ty == Type::named("String");
+                if vec_element.is_none() && !is_string {
+                    return Err(Diagnostic::coded_at(
+                        "AU2003",
+                        expr.span,
+                        format!(
+                            "owned slicing is available only for `Vec[T]` and `String`, found `{object_ty}`"
+                        ),
+                    )
+                    .with_help(
+                        "use indexing or a collection method supported by the base type, or convert the value to a Vec or String before slicing",
+                    ));
+                }
+
+                let retained_base = self
+                    .retained_place_access(object, &object_ty, ReceiverKind::Borrow, "slice base")
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                for endpoint in [start.as_deref(), end.as_deref()].into_iter().flatten() {
+                    let locals_before_endpoint = locals.clone();
+                    let endpoint_ty = self.check_slice_endpoint_type(endpoint, locals)?;
+                    self.reject_retained_expr_overlap(
+                        &retained_base,
+                        endpoint,
+                        &endpoint_ty,
+                        None,
+                        &locals_before_endpoint,
+                        locals,
+                        "slice endpoint",
+                    )?;
+                }
+
+                if let Some(element_ty) = vec_element {
+                    self.reject_rng_duplication("Vec slice", &element_ty, *colon_span)?;
+                }
+                Ok(object_ty)
             }
             ExprKind::Call { callee, args } => {
                 self.type_of_call(callee, args, expr.span, locals, expected)
@@ -19742,6 +19928,18 @@ impl<'a> FunctionChecker<'a> {
                 self.collect_expr_call_places(object, locals, places, include_consumed)?;
                 self.collect_expr_call_places(index, locals, places, include_consumed)
             }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                self.collect_expr_call_places(object, locals, places, include_consumed)?;
+                if let Some(start) = start {
+                    self.collect_expr_call_places(start, locals, places, include_consumed)?;
+                }
+                if let Some(end) = end {
+                    self.collect_expr_call_places(end, locals, places, include_consumed)?;
+                }
+                Ok(())
+            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {
@@ -19861,6 +20059,17 @@ impl<'a> FunctionChecker<'a> {
                     self.collect_expr_place_reads(object, locals, label, places);
                 }
                 self.collect_expr_place_reads(index, locals, label, places);
+            }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                self.collect_expr_place_reads(object, locals, label, places);
+                if let Some(start) = start {
+                    self.collect_expr_place_reads(start, locals, label, places);
+                }
+                if let Some(end) = end {
+                    self.collect_expr_place_reads(end, locals, label, places);
+                }
             }
             ExprKind::Match {
                 scrutinee, arms, ..

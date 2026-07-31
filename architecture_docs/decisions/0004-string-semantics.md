@@ -2,7 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-13
-- Amended: 2026-07-26 (B3.0-d int64 String length results)
+- Amended: 2026-07-26 (B3.0-d int64 String length results); 2026-07-31
+  (ADR-0040 owned scalar slices)
 - Roadmap decision: D4
 
 ## Decision
@@ -18,12 +19,16 @@ Both forms decode the same escape set, including `\"` and `\'`. F-strings
 remain double-quoted as `f"..."`; this decision does not add `f'...'`, character
 literals, triple-quoted strings, raw strings, or byte-string literals.
 
-Aurora 0.1 does not support integer indexing or slicing on `String`.
-`chars()`, `ord()`, `chr()`, and explicit-encoding String/bytes conversion land
-with the Phase 3 control-plane surface; slicing waits for the Phase 7 slice
-design.
+Integer indexing on `String` remains unavailable. Under ADR-0040,
+`text[start:end]`, `text[:end]`, `text[start:]`, and `text[:]` return fresh
+owned Strings. Written endpoints have exactly type `int32`, count Unicode
+scalar values, and use the negative normalization and loud bounds policy
+below. String slicing is O(n) in the source text and never produces a view.
+`chars()`, `ord()`, and `chr()` remain unavailable. Exact UTF-8 conversion is
+provided separately by the maintained String/bytes surface.
 
-Negative indexing is the language-wide policy for `Vec` now and future slices.
+Negative indexing is the language-wide policy for `Vec` indexing and owned
+Vec/String slices.
 For direct `[]` reads and writes and for `get`, `set`, `remove`, `swap`, and
 `insert`, a negative index `i` is normalized once as `len + i`. The operation
 then applies its existing bounds contract: direct reads/writes and mutating
@@ -34,6 +39,9 @@ before the last element and `insert(len, value)` appends.
 Unlike Python, Aurora does not clamp an insertion index that remains out of
 range after normalization. Clamping can silently place a value at the wrong
 position; Aurora treats that as a broken invariant and reports a runtime error.
+ADR-0040 applies the same rule to Vec and String slice endpoints: both
+normalized endpoints must be in `0..=len`, and a start greater than its end is
+also a runtime error rather than an empty or clamped slice.
 
 ## Completion tests
 
@@ -41,4 +49,7 @@ position; Aurora treats that as a broken invariant and reports a runtime error.
 - String builtin unit tests in MIR and native runtimes, including the `int64`
   result types for scalar and UTF-8 byte counts.
 - Vec negative-index check/run fixtures on both forced backends.
+- Vec and Unicode-scalar String slice fixtures under ADR-0040, including
+  omitted and negative endpoints, loud bounds failures, and owned-result
+  independence.
 - API/reference, tutorial, example, and LSP completion coverage.

@@ -1,0 +1,4 @@
+def main() -> int32:
+    text: String = "Aé🙂Z"
+    print(text[:5])
+    return 0

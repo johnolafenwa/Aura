@@ -22902,6 +22902,297 @@ def main():
 }
 
 #[test]
+fn owned_vec_and_string_slices_preserve_result_types_and_sources() {
+    crate::check_source(
+        r#"
+def retain_slice[T](values: Vec[T], start: int32, end: int32) -> Vec[T]:
+    return values[start:end]
+
+def main():
+    values: Vec[int32] = [1, 2, 3, 4]
+    prefix: Vec[int32] = values[:2]
+    suffix: Vec[int32] = values[1:]
+    middle: Vec[int32] = values[1:3]
+    copy: Vec[int32] = values[:]
+    empty: Vec[int32] = [][:]
+    names: Vec[String] = ["Ada", "Grace"]
+    names_copy: Vec[String] = names[:]
+    text: String = "Aé🙂Z"
+    text_prefix: String = text[:2]
+    text_suffix: String = text[-2:]
+    text_middle: String = text[1:3]
+    text_copy: String = text[:]
+    generic: Vec[int32] = retain_slice(values, 0, 2)
+    print(values.len())
+    print(text.len())
+    print(prefix.len() + suffix.len() + middle.len() + copy.len() + empty.len() + generic.len())
+    print(names.len() + names_copy.len())
+    print(text_prefix + text_suffix + text_middle + text_copy)
+"#,
+    )
+    .expect("owned Vec and String slices should retain their source and preserve its type");
+}
+
+#[test]
+fn owned_slice_endpoints_require_exact_int32_with_literal_context() {
+    for (source, found) in [
+        (
+            "def invalid(values: Vec[int32], endpoint: int64):\n    print(values[endpoint:])\n",
+            "int64",
+        ),
+        (
+            "def invalid(values: Vec[int32], endpoint: bool):\n    print(values[:endpoint])\n",
+            "bool",
+        ),
+        (
+            "def invalid(text: String, endpoint: String):\n    print(text[endpoint:])\n",
+            "String",
+        ),
+    ] {
+        let rejected =
+            crate::check_source(source).expect_err("present slice endpoints must be exact int32");
+        assert_eq!(rejected.code, "AU2002");
+        assert!(
+            rejected.message.contains(&format!(
+                "slice endpoints must have type `int32`, found `{found}`"
+            )),
+            "{source}: {rejected:?}"
+        );
+    }
+
+    crate::check_source(
+        r#"
+def main():
+    values: Vec[int32] = [1, 2, 3]
+    text = "Aé🙂Z"
+    print(values[0:2])
+    print(values[-2:-1])
+    print(text[1:3])
+"#,
+    )
+    .expect("integer literals in slice endpoints should receive int32 context");
+
+    let overflow =
+        crate::check_source("def main():\n    values = [1]\n    print(values[2147483648:])\n")
+            .expect_err("slice endpoint literals must fit int32");
+    assert_eq!(overflow.code, "AU2002");
+    assert!(
+        overflow.message.contains("int32"),
+        "overflowing endpoint should name the int32 boundary: {overflow:?}"
+    );
+}
+
+#[test]
+fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unavailable() {
+    for source in [
+        "def main():\n    value: int32 = 1\n    print(value[:])\n",
+        "def main():\n    values = Set{1, 2}\n    print(values[:])\n",
+        "def main():\n    values = {\"one\": 1}\n    print(values[:])\n",
+        "def main():\n    values = (1, 2)\n    print(values[:])\n",
+    ] {
+        let rejected =
+            crate::check_source(source).expect_err("only Vec and String support owned slicing");
+        assert_eq!(rejected.code, "AU2003");
+        assert!(
+            rejected
+                .message
+                .contains("owned slicing is available only for `Vec[T]` and `String`"),
+            "{source}: {rejected:?}"
+        );
+    }
+
+    let indexed = crate::check_source("def main():\n    print(\"text\"[0])\n")
+        .expect_err("String scalar indexing remains unavailable");
+    assert!(indexed.message.contains("cannot index"));
+}
+
+#[test]
+fn vec_slices_require_structurally_clone_safe_elements() {
+    let rng = crate::check_source(
+        r#"
+import random
+
+def duplicate(values: Vec[random.Rng]) -> Vec[random.Rng]:
+    return values[:]
+"#,
+    )
+    .expect_err("a Vec slice must not duplicate random.Rng state");
+    assert_eq!(rng.code, "AU3007");
+    assert!(rng.message.contains("Vec slice"));
+    assert!(rng.message.contains("non-cloneable `random.Rng`"));
+
+    let transitive = crate::check_source(
+        r#"
+import random
+
+class Holder:
+    generator: random.Rng
+
+def duplicate(values: Vec[Holder]) -> Vec[Holder]:
+    return values[1:]
+"#,
+    )
+    .expect_err("Vec slice clone safety must be structural");
+    assert_eq!(transitive.code, "AU3007");
+    assert!(transitive.message.contains("Vec slice"));
+
+    let task = crate::check_source(
+        r#"
+def duplicate(values: Vec[Task[String]]) -> Vec[Task[String]]:
+    return values[:]
+"#,
+    )
+    .expect_err("a Vec slice must not duplicate a non-repeatable Task observation right");
+    assert_eq!(task.code, "AU3009");
+    assert!(task.message.contains("Vec slice"));
+    assert!(
+        task.message.contains("non-repeatable task result `String`"),
+        "{task:?}"
+    );
+
+    let generic = crate::check_source(
+        r#"
+import random
+
+def duplicate[T](values: Vec[T]) -> Vec[T]:
+    return values[:]
+
+def main():
+    values = [random.Rng(seed=1)]
+    print(duplicate(values))
+"#,
+    )
+    .expect_err("generic Vec slicing must propagate its clone-safety obligation");
+    assert_eq!(generic.code, "AU3007");
+    assert!(generic.message.contains("function `duplicate`"));
+
+    let consuming_closure = crate::check_source(
+        r#"
+def singleton[T](value: own T) -> Vec[T]:
+    return [value]
+
+def take(value: own String) -> String:
+    return value
+
+def main():
+    token = "secret"
+    callback = lambda: take(token)
+    callbacks = singleton(callback)
+    copies = callbacks[:]
+    print(copies.len())
+"#,
+    )
+    .expect_err("generic construction must not let a Vec slice duplicate a closure environment");
+    assert_eq!(consuming_closure.code, "AU3007");
+    assert!(consuming_closure.message.contains("Vec slice"));
+    assert!(
+        consuming_closure.message.contains("non-cloneable closure"),
+        "{consuming_closure:?}"
+    );
+}
+
+#[test]
+fn slice_base_is_retained_through_both_endpoint_expressions() {
+    for source in [
+        r#"
+def consume(values: own Vec[int32]) -> int32:
+    return 0
+
+def invalid(values: own Vec[int32]) -> Vec[int32]:
+    return values[consume(values):]
+"#,
+        r#"
+def consume(values: own Vec[int32]) -> int32:
+    return 0
+
+def invalid(values: own Vec[int32]) -> Vec[int32]:
+    return values[:consume(values)]
+"#,
+        r#"
+def mutate(values: mut Vec[int32]) -> int32:
+    values.clear()
+    return 0
+
+def invalid(values: mut Vec[int32]) -> Vec[int32]:
+    return values[mutate(values):]
+"#,
+        r#"
+def mutate(values: mut Vec[int32]) -> int32:
+    values.clear()
+    return 0
+
+def invalid(values: mut Vec[int32]) -> Vec[int32]:
+    return values[:mutate(values)]
+"#,
+    ] {
+        let rejected = crate::check_source(source)
+            .expect_err("a slice base must remain shared through both endpoint expressions");
+        assert_eq!(rejected.code, "AU3002");
+        assert!(
+            rejected.message.contains("slice base"),
+            "{source}: {rejected:?}"
+        );
+    }
+}
+
+#[test]
+fn slice_walkers_cover_defaults_lambdas_and_nested_expression_positions() {
+    for (source, parameter) in [
+        (
+            r#"
+def invalid(values: Vec[int32], copy: Vec[int32] = values[:]):
+    pass
+"#,
+            "values",
+        ),
+        (
+            r#"
+def invalid(start: int32, copy: Vec[int32] = [][start:]):
+    pass
+"#,
+            "start",
+        ),
+        (
+            r#"
+def invalid(end: int32, copy: Vec[int32] = [][:end]):
+    pass
+"#,
+            "end",
+        ),
+    ] {
+        let default = crate::check_source(source)
+            .expect_err("a slice default must not hide a reference to another parameter");
+        assert_eq!(default.code, "AU2004");
+        assert!(
+            default.message.contains(&format!(
+                "default argument for parameter `copy` may not reference parameter `{parameter}`"
+            )),
+            "{default:?}"
+        );
+    }
+
+    let program = crate::check_source(
+        r#"
+def main():
+    values: Vec[int32] = [1, 2, 3]
+    start: int32 = 0
+    end: int32 = 2
+    nested: Vec[Vec[int32]] = [values[:]]
+    take: def() -> Vec[int32] = lambda: values[start:end]
+    print(nested)
+    print(take())
+"#,
+    )
+    .expect("slice inputs should participate in lambda capture and nested-expression walks");
+    let captures = program
+        .closures
+        .values()
+        .flat_map(|closure| closure.captures.iter().map(|capture| capture.name.as_str()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(captures, BTreeSet::from(["end", "start", "values"]));
+}
+
+#[test]
 fn class_field_default_calls_keep_the_callable_boundary_diagnostic() {
     let rejected = crate::check_source(
         r#"

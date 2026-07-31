@@ -1,0 +1,23 @@
+def retain_slice[T](values: Vec[T], start: int32, end: int32) -> Vec[T]:
+    return values[start:end]
+
+def main():
+    values: Vec[int32] = [1, 2, 3, 4]
+    prefix: Vec[int32] = values[:2]
+    suffix: Vec[int32] = values[1:]
+    middle: Vec[int32] = values[1:3]
+    copy: Vec[int32] = values[:]
+    empty: Vec[int32] = [][:]
+    names: Vec[String] = ["Ada", "Grace"]
+    names_copy: Vec[String] = names[:]
+    text = "Aé🙂Z"
+    text_prefix: String = text[:2]
+    text_suffix: String = text[-2:]
+    text_middle: String = text[1:3]
+    text_copy: String = text[:]
+    generic: Vec[int32] = retain_slice(values, 0, 2)
+    print(values.len())
+    print(text.len())
+    print(prefix.len() + suffix.len() + middle.len() + copy.len() + empty.len() + generic.len())
+    print(names.len() + names_copy.len())
+    print(text_prefix + text_suffix + text_middle + text_copy)

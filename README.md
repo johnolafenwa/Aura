@@ -82,6 +82,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/collections/comprehensions.au`
   - execute eager owned list, set, and map comprehensions with filters and
     nested outer-major clauses
+- `cargo run -p aura -- run examples/collections/slices.au`
+  - execute owned Vec and Unicode-scalar String slices, omitted and negative
+    endpoints, and source/result independence
 - `cargo run -p aura -- run examples/collections/map_basics.au`
   - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`

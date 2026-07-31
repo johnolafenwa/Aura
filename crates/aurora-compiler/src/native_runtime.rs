@@ -44,7 +44,8 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned, slice_vec_owned,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
@@ -3991,6 +3992,40 @@ pub extern "C-unwind" fn aurora_direct_string_byte_len(value: *mut OpaqueValue) 
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_string_slice(
+    value: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => slice_string_owned(
+                    text,
+                    (has_start != 0).then_some(i128::from(start)),
+                    (has_end != 0).then_some(i128::from(end)),
+                ),
+                other => runtime_error(format!(
+                    "expected `String`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        match result {
+            Ok(slice) => boxed_value(Value::String(slice)),
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_contains(
     value: *mut OpaqueValue,
     needle: *mut OpaqueValue,
@@ -4638,6 +4673,34 @@ pub extern "C-unwind" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_is_empty(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(with_vector(vec, |vector| vector.elements.is_empty())))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_vec_slice(
+    vec: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = with_vector(vec, |vector| {
+            slice_vec_owned(
+                vector,
+                (has_start != 0).then_some(i128::from(start)),
+                (has_end != 0).then_some(i128::from(end)),
+            )
+        });
+        match result {
+            Ok(slice) => boxed_value(Value::Vec(slice)),
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        }
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

@@ -1,0 +1,28 @@
+def main():
+    values = [10, 20, 30, 40]
+
+    middle = values[1:3]
+    prefix = values[:2]
+    suffix = values[-2:]
+    all_values = values[:]
+
+    mut independent = values[1:3]
+    independent[0] = 99
+
+    text = "A🎉Z"
+    celebration = text[1:2]
+    text_prefix = text[:2]
+    text_suffix = text[-2:]
+    all_text = text[:]
+
+    print(middle)
+    print(prefix)
+    print(suffix)
+    print(all_values)
+    print(values)
+    print(independent)
+    print(celebration)
+    print(text_prefix)
+    print(text_suffix)
+    print(all_text)
+    print(text)

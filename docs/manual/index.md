@@ -15,9 +15,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility, bindings, block scope, no-shadowing, and member lookup.
 - [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic types, copy and move categories, and type annotations.
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
-- [Expressions](/manual/expressions): operators, calls, indexing, member access,
-  literals, conditional expressions, membership and comparison chains, `match`
-  expressions, `try`, and f-strings.
+- [Expressions](/manual/expressions): operators, calls, indexing, owned
+  Vec/String slicing, member access, literals, conditional expressions,
+  membership and comparison chains, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
   unpacking and patterns, whole-source ownership, constant indexing, and
@@ -42,8 +42,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 ## Runtime And Library Reference
 
 - [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`,
-  literals, eager owned comprehensions, iteration, mutation, and eager
-  callable-powered Vec algorithms.
+  literals, eager owned comprehensions and slices, iteration, mutation, and
+  eager callable-powered Vec algorithms.
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `Vec[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.

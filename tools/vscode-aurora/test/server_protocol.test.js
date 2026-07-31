@@ -308,6 +308,279 @@ test("bundled language server preserves comprehension hover definition and scope
   assert.equal(afterLabels.has("entry"), false);
 });
 
+test("bundled language server preserves owned slice intelligence and reserved diagnostics", async (t) => {
+  const serverPath = process.env.AURORA_EXTENSION_SERVER_PATH
+    ? path.resolve(process.env.AURORA_EXTENSION_SERVER_PATH)
+    : path.resolve(__dirname, "..", "dist", "server.js");
+  assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
+
+  const client = startLanguageServer(serverPath);
+  t.after(() => client.dispose());
+  const repoRoot = path.resolve(__dirname, "../../..");
+  const repoUri = `file://${repoRoot}`;
+  const initialize = await client.request("initialize", {
+    processId: null,
+    rootUri: repoUri,
+    capabilities: {},
+    workspaceFolders: [{ uri: repoUri, name: "Aurora" }]
+  });
+  assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+  client.notify("initialized", {});
+
+  const lines = [
+    "def take_slice(values: Vec[String], start: int32, end: int32) -> Vec[String]:",
+    "    selected = values[start:end]",
+    "    print(values[start:end].len())",
+    "    return selected",
+    ""
+  ];
+  const source = lines.join("\n");
+  const uri = `file://${path.join(repoRoot, "owned-slice-protocol.au")}`;
+  const initialDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) => message.params?.uri === uri
+  );
+  client.notify("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: "aurora",
+      version: 1,
+      text: source
+    }
+  });
+  assert.deepEqual((await initialDiagnostics).params.diagnostics, []);
+
+  const endpointStart = lines[1].indexOf("start");
+  const hover = await client.request("textDocument/hover", {
+    textDocument: { uri },
+    position: { line: 1, character: endpointStart + 1 }
+  });
+  assert.equal(hover.error, undefined, JSON.stringify(hover.error));
+  assert.equal(hover.result?.contents?.value, "```aurora\nparam start: int32\n```");
+
+  const definition = await client.request("textDocument/definition", {
+    textDocument: { uri },
+    position: { line: 1, character: endpointStart + 1 }
+  });
+  assert.equal(definition.error, undefined, JSON.stringify(definition.error));
+  const declarationStart = lines[0].indexOf("start");
+  assert.deepEqual(definition.result?.range, {
+    start: { line: 0, character: declarationStart },
+    end: { line: 0, character: declarationStart + "start".length }
+  });
+
+  const dot = lines[2].indexOf(".len");
+  const completion = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 2, character: dot + 1 },
+    context: { triggerKind: 2, triggerCharacter: "." }
+  });
+  assert.equal(completion.error, undefined, JSON.stringify(completion.error));
+  const labels = new Set(completion.result.map((item) => item.label));
+  assert.ok(labels.has("push"));
+  assert.ok(labels.has("len"));
+
+  const receiverLines = [
+    "def make_values() -> Vec[String]:",
+    "    return [\"Ada\", \"Grace\"]",
+    "",
+    "def endpoint(text: String) -> int32:",
+    "    return 0",
+    "",
+    "def inspect(values: Vec[String]):",
+    "    print(make_values()[1:].len())",
+    "    print(values[endpoint(\"]\"):].len())",
+    ""
+  ];
+  const receiverUri = `file://${path.join(repoRoot, "owned-slice-receiver-protocol.au")}`;
+  const receiverDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) => message.params?.uri === receiverUri
+  );
+  client.notify("textDocument/didOpen", {
+    textDocument: {
+      uri: receiverUri,
+      languageId: "aurora",
+      version: 1,
+      text: receiverLines.join("\n")
+    }
+  });
+  assert.deepEqual((await receiverDiagnostics).params.diagnostics, []);
+
+  for (const line of [7, 8]) {
+    const receiverDot = receiverLines[line].indexOf(".len");
+    const receiverCompletion = await client.request("textDocument/completion", {
+      textDocument: { uri: receiverUri },
+      position: { line, character: receiverDot + 1 },
+      context: { triggerKind: 2, triggerCharacter: "." }
+    });
+    assert.equal(
+      receiverCompletion.error,
+      undefined,
+      JSON.stringify(receiverCompletion.error)
+    );
+    const receiverLabels = new Set(
+      receiverCompletion.result.map((item) => item.label)
+    );
+    assert.ok(receiverLabels.has("push"), receiverLines[line]);
+    assert.ok(receiverLabels.has("len"), receiverLines[line]);
+  }
+
+  const steppedLines = [
+    lines[0],
+    "    selected = values[1:3:2]",
+    "    return values[:]",
+    ""
+  ];
+  const steppedSource = steppedLines.join("\n");
+  const steppedDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) =>
+      message.params?.uri === uri &&
+      message.params?.diagnostics?.some((diagnostic) => diagnostic.code === "AU2005")
+  );
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 2 },
+    contentChanges: [{ text: steppedSource }]
+  });
+  const diagnostic = (await steppedDiagnostics).params.diagnostics.at(0);
+  assert.deepEqual(
+    {
+      code: diagnostic.code,
+      message: diagnostic.message,
+      range: diagnostic.range,
+      source: diagnostic.source
+    },
+    {
+      code: "AU2005",
+      message: "slice steps are unavailable; use an explicit loop to select a stride",
+      range: {
+        start: { line: 1, character: steppedLines[1].lastIndexOf(":") },
+        end: { line: 1, character: steppedLines[1].lastIndexOf(":") + 1 }
+      },
+      source: "aurora-compiler"
+    }
+  );
+
+  const recovery = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 1, character: steppedLines[1].lastIndexOf(":") + 1 },
+    context: { triggerKind: 1 }
+  });
+  assert.equal(recovery.error, undefined, JSON.stringify(recovery.error));
+  assert.ok(Array.isArray(recovery.result));
+
+  const endpointLines = [
+    "def reject(values: Vec[int32], endpoint: int64):",
+    "    print(values[endpoint:])",
+    ""
+  ];
+  const endpointDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) =>
+      message.params?.uri === uri &&
+      message.params?.diagnostics?.some((item) => item.code === "AU2002")
+  );
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 3 },
+    contentChanges: [{ text: endpointLines.join("\n") }]
+  });
+  const endpointDiagnostic = (await endpointDiagnostics).params.diagnostics.find(
+    (item) => item.code === "AU2002"
+  );
+  assert.deepEqual(
+    {
+      code: endpointDiagnostic.code,
+      message: endpointDiagnostic.message,
+      range: endpointDiagnostic.range,
+      source: endpointDiagnostic.source
+    },
+    {
+      code: "AU2002",
+      message: "slice endpoints must have type `int32`, found `int64`",
+      range: {
+        start: { line: 1, character: 17 },
+        end: { line: 1, character: 18 }
+      },
+      source: "aurora-compiler"
+    }
+  );
+
+  const assignmentLines = [
+    "def replace(values: Vec[int32]):",
+    "    values[1:3] = values",
+    ""
+  ];
+  const assignmentMessage =
+    "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value";
+  const assignmentDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) =>
+      message.params?.uri === uri &&
+      message.params?.diagnostics?.some(
+        (item) => item.code === "AU2005" && item.message === assignmentMessage
+      )
+  );
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 4 },
+    contentChanges: [{ text: assignmentLines.join("\n") }]
+  });
+  const assignmentDiagnostic = (await assignmentDiagnostics).params.diagnostics.find(
+    (item) => item.code === "AU2005" && item.message === assignmentMessage
+  );
+  assert.deepEqual(
+    {
+      code: assignmentDiagnostic.code,
+      message: assignmentDiagnostic.message,
+      range: assignmentDiagnostic.range,
+      source: assignmentDiagnostic.source
+    },
+    {
+      code: "AU2005",
+      message: assignmentMessage,
+      range: {
+        start: { line: 1, character: 12 },
+        end: { line: 1, character: 13 }
+      },
+      source: "aurora-compiler"
+    }
+  );
+
+  const incompleteLines = [
+    lines[0],
+    "    selected = values[:",
+    "    return values[:]",
+    ""
+  ];
+  const incompleteDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) =>
+      message.params?.uri === uri &&
+      message.params?.diagnostics?.some((item) => item.code === "AU1001")
+  );
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 5 },
+    contentChanges: [{ text: incompleteLines.join("\n") }]
+  });
+  await incompleteDiagnostics;
+  const incompleteCompletion = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 1, character: incompleteLines[1].length },
+    context: { triggerKind: 1 }
+  });
+  assert.equal(
+    incompleteCompletion.error,
+    undefined,
+    JSON.stringify(incompleteCompletion.error)
+  );
+  assert.ok(Array.isArray(incompleteCompletion.result));
+  assert.doesNotMatch(
+    client.stderr(),
+    /Cannot read properties|TypeError|UnhandledPromiseRejection/,
+    "malformed slice editor requests must not crash the bundled server"
+  );
+});
+
 test("bundled language server recovers safely while comprehension clauses are incomplete", async (t) => {
   const serverPath = process.env.AURORA_EXTENSION_SERVER_PATH
     ? path.resolve(process.env.AURORA_EXTENSION_SERVER_PATH)

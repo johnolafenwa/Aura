@@ -39,6 +39,8 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 - a map evaluates each key before its value and entries in source order
 - f-string interpolations are evaluated from left to right
 - an index evaluates its base before its index
+- a slice evaluates its base, written start, and written end exactly once from
+  left to right; omitted endpoints evaluate nothing
 - a receiver is evaluated before call arguments
 - every supplied call or constructor argument is evaluated in call-site source order
 - a lambda copies or moves every by-value capture when the lambda expression
@@ -56,6 +58,16 @@ to both the conflicting access and the retained-borrow origin. This applies to
 name roots and projected member places, and no backend may insert a hidden deep
 clone. Each f-string interpolation is converted to its rendered `String` at
 its own position before the next interpolation begins.
+
+A Vec or String slice captures its base, then any written start, then any
+written end. A non-Copy base remains retained while the endpoint expressions
+run. Negative endpoints are normalized once after those expressions complete;
+both effective bounds are checked in `0..=len`, followed by the `start <= end`
+check. A failure traps with `AU4003` and returns no partial value. A successful
+slice copies the selected range in source order into a fresh owned Vec or
+String. String endpoints count Unicode scalar values and locating them is
+O(n). No maintained backend may substitute Python-style endpoint clamping or a
+view into source storage.
 
 All supplied arguments complete before any omitted default is evaluated. Each
 supplied function/method argument or class-field expression is fully evaluated

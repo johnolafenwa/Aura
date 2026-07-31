@@ -252,12 +252,30 @@ print(text.len())       # 2; O(n)
 print(text.byte_len())  # 5; O(1)
 ```
 
-Aurora 0.1 does not support integer indexing or slicing on `String`.
-Character iteration, `ord()`, and `chr()` are not implemented. Strict UTF-8
-conversion is available now through `text.to_bytes()` and
-`String.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
+Integer indexing on `String` remains unavailable, but one-colon slicing
+returns a fresh owned String:
+
+```python
+text = "A🎉Z"
+print(text[1:2])   # 🎉
+print(text[:2])    # A🎉
+print(text[-2:])   # 🎉Z
+print(text[:])     # A🎉Z
+```
+
+Endpoints count Unicode scalar values, matching `len()`, rather than UTF-8
+bytes or grapheme clusters. Locating scalar boundaries scans the text, so
+String slicing is O(n). Written endpoints are exactly `int32`; negatives
+normalize once. Both effective endpoints must lie in `0..=len`, and start must
+not exceed end. Aurora does not clamp invalid bounds like Python: invalid or
+reversed ranges trap with `AU4003`.
+
+The result is an owned copy, not a view. Slice steps and slice assignment are
+unavailable. Character iteration, `ord()`, and `chr()` are also not
+implemented. Strict UTF-8 conversion is available through `text.to_bytes()`
+and `String.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
 and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
-argument is reserved but not implemented, and slicing waits for Phase 7.
+argument remains reserved but unimplemented.
 
 `strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
 

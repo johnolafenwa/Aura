@@ -20,7 +20,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `String(...)` is not a constructor; use string literals and string methods.
 - Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
-- `String` has scalar-count `len()` and UTF-8 `byte_len()`, but no integer indexing, slicing, `chars()`, `ord()`, or `chr()` in Aurora 0.1.
+- `String` has scalar-count `len()`, UTF-8 `byte_len()`, and owned
+  Unicode-scalar slicing, but no integer indexing, `chars()`, `ord()`, or
+  `chr()`.
 - `Vec[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 - Physical newlines continue a logical line only while `(`, `[`, or `{`
   remains open. Continuation indentation is visual; delimiter kinds must
@@ -62,6 +64,14 @@ This page documents known current limits of the Aurora compiler and runtime.
   until ordinary Queue iteration ends. Generator expressions
   remain unavailable and report `AU2005` with an eager-comprehension or
   explicit-loop migration.
+- Vec and String slices accept one contiguous half-open range and return fresh
+  owned copies. Written endpoints are exact `int32`; negatives normalize once,
+  and invalid or reversed ranges trap with `AU4003` rather than clamping.
+  String endpoints count Unicode scalar values and slicing is O(n). Slice
+  steps and slice assignment remain reserved `AU2005` forms; arbitrary
+  sliceable types, zero-copy views, String integer indexing, grapheme slicing,
+  and Python-style endpoint clamping are unavailable. Vec slicing requires
+  clone-safe, repeatably observable elements.
 - FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
   package also reports every reachable FFI-enabled dependency under exact
   `[ffi] dependencies`. Calls resolve already-loaded process-global symbols

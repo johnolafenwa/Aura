@@ -541,7 +541,7 @@ From lowest to highest precedence:
 | 6 | `+`, `-` | left |
 | 7 | `*`, `/`, `//`, `%` | left |
 | 8 | prefix `match`, `try`, unary `-` | right/prefix |
-| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 9 | specialization, indexing, slicing, member access, call, numeric cast | left-to-right postfix chain |
 | 10 | primary | — |
 
 ```ebnf
@@ -597,7 +597,9 @@ postfix-expression
       | call-suffix
       | numeric-cast-suffix } ;
 
-index-suffix  = "[", expression, "]" ;
+index-suffix
+    = "[", expression, "]"
+    | "[", [ expression ], ":", [ expression ], "]" ;
 member-suffix = ".", identifier ;
 call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
@@ -620,6 +622,12 @@ operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
 comparison operator. Casts bind more tightly than arithmetic.
+
+The one-colon bracket forms are owned slices. Each endpoint is optional, so
+`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` all use the
+second `index-suffix` alternative. A second colon is reserved step syntax and
+is rejected with `AU2005`; it is not part of the accepted grammar. A slice
+suffix is an expression only and cannot be an assignment target.
 
 ## Primary Expressions And Literals
 
@@ -732,6 +740,11 @@ function value. Otherwise the brackets remain indexing. Consequently,
 `Box[int32](value)` and `Result[int32, String].Ok(1)` specialize,
 `show[int32]` may produce one concrete function value, and `value[index]`
 indexes.
+
+A top-level colon inside the brackets selects slicing rather than
+specialization or indexing. Slice endpoints are expressions and are checked
+under the exact rules in
+[Static Semantics](/manual/static-semantics#indexing-slicing-and-members).
 
 ## Match Expressions
 

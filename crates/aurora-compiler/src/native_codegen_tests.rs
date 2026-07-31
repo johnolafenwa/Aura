@@ -2388,6 +2388,72 @@ fn direct_backend_internal_collection_member_surface_compiles() {
         .expect("String.byte_len() should compile directly")
         .is_empty());
 
+    let slice_args = || {
+        vec![
+            MirArg {
+                name: None,
+                value: Operand::Int(1),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Bool(true),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Int(3),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Bool(true),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Int(1),
+                writeback_place: None,
+            },
+            MirArg {
+                name: None,
+                value: Operand::Int(5),
+                writeback_place: None,
+            },
+        ]
+    };
+    let string_slice = module_with_main_member_call_result_type(
+        "text",
+        Type::named("String"),
+        Rvalue::Use(Operand::String("Aé🙂Z".to_string())),
+        Type::named("String"),
+        "__slice",
+        slice_args(),
+    );
+    assert!(!emit_host_object(&string_slice)
+        .expect("internal owned String slicing should compile directly")
+        .is_empty());
+
+    let vec_slice = module_with_main_member_call_result_type(
+        "values",
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Rvalue::VecLiteral {
+            element_type: Type::named("int32"),
+            elements: vec![
+                Operand::Int(1),
+                Operand::Int(2),
+                Operand::Int(3),
+                Operand::Int(4),
+            ],
+        },
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        "__slice",
+        slice_args(),
+    );
+    assert!(!emit_host_object(&vec_slice)
+        .expect("internal owned Vec slicing should compile directly")
+        .is_empty());
+
     let vec_index_option = module_with_main_member_call_result_type(
         "values",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),

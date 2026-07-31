@@ -404,6 +404,40 @@ fn adding_conditional_expressions_preserves_existing_expression_json_shapes() {
 }
 
 #[test]
+fn owned_slice_json_keeps_omitted_endpoints_and_colon_span_explicit() {
+    let slice = Expr {
+        kind: ExprKind::Slice {
+            object: Box::new(Expr {
+                kind: ExprKind::Name("values".to_string()),
+                span: Span::new(4, 5),
+            }),
+            start: None,
+            end: None,
+            colon_span: Span::new(4, 12),
+        },
+        span: Span::new(4, 5),
+    };
+
+    assert_eq!(
+        serde_json::to_value(slice).expect("owned slice AST should serialize"),
+        json!({
+            "kind": {
+                "Slice": {
+                    "object": {
+                        "kind": {"Name": "values"},
+                        "span": {"line": 4, "column": 5}
+                    },
+                    "start": null,
+                    "end": null,
+                    "colon_span": {"line": 4, "column": 12}
+                }
+            },
+            "span": {"line": 4, "column": 5}
+        })
+    );
+}
+
+#[test]
 fn membership_and_comparison_chain_json_shapes_are_stable() {
     let span = Span::new(2, 11);
     let operator_span = Span::new(2, 13);

@@ -6645,6 +6645,133 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
 }
 
 #[test]
+fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
+    let source = int_vec(&[10, 20, 30, 40]);
+    let source_elements = unsafe {
+        super::with_value(source, |value| match value {
+            Value::Vec(vector) => vector.elements.as_ptr(),
+            other => panic!("expected Vec, found {other:?}"),
+        })
+    };
+    let middle = super::aurora_direct_vec_slice(source, -3, 1, -1, 1, 8, 13);
+    unsafe {
+        super::with_value(middle, |value| match value {
+            Value::Vec(vector) => {
+                assert_eq!(vector.element_type, Type::named("uint8"));
+                assert_ne!(
+                    vector.elements.as_ptr(),
+                    source_elements,
+                    "a direct Vec slice must own fresh element storage"
+                );
+            }
+            other => panic!("expected Vec slice, found {other:?}"),
+        });
+    }
+    expect_unit(super::aurora_direct_vec_set_index_in_place(
+        source,
+        1,
+        int_value(99),
+        8,
+        13,
+    ));
+    assert_eq!(expect_vec_ints(middle), vec![20, 30]);
+    assert_eq!(
+        expect_vec_ints(super::aurora_direct_clone_value(source)),
+        vec![10, 99, 30, 40],
+        "mutating the source must not mutate the owned slice"
+    );
+    unsafe { release_value(source) };
+
+    let text = string_value("aé🎉e\u{301}");
+    let text_address = unsafe {
+        super::with_value(text, |value| match value {
+            Value::String(text) => text.as_ptr(),
+            other => panic!("expected String, found {other:?}"),
+        })
+    };
+    let text_slice = super::aurora_direct_string_slice(text, 1, 1, 4, 1, 9, 7);
+    unsafe {
+        super::with_value(text_slice, |value| match value {
+            Value::String(slice) => assert_ne!(
+                slice.as_ptr(),
+                text_address,
+                "a direct String slice must own fresh UTF-8 storage"
+            ),
+            other => panic!("expected String slice, found {other:?}"),
+        });
+    }
+    assert_eq!(expect_string(text_slice), "é🎉e");
+    assert_eq!(expect_string(text), "aé🎉e\u{301}");
+
+    let source = string_value("abc");
+    let source_address = source as usize;
+    let out_of_range = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_string_slice(
+                source_address as *mut OpaqueValue,
+                0,
+                0,
+                4,
+                1,
+                11,
+                5,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("direct String slicing must reject rather than clamp");
+    unsafe { release_value(source) };
+    assert_eq!(out_of_range.code, "AU4003");
+    assert_eq!(out_of_range.message, "slice end `4` is outside `0..=3`");
+    assert_eq!(out_of_range.span, Some(Span::new(11, 5)));
+
+    let source = int_vec(&[1, 2, 3]);
+    let source_address = source as usize;
+    let reversed = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_vec_slice(
+                source_address as *mut OpaqueValue,
+                3,
+                1,
+                1,
+                1,
+                12,
+                4,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("direct Vec slicing must reject reversed normalized bounds");
+    unsafe { release_value(source) };
+    assert_eq!(reversed.code, "AU4003");
+    assert_eq!(
+        reversed.message,
+        "slice start `3` is greater than slice end `1`"
+    );
+    assert_eq!(reversed.span, Some(Span::new(12, 4)));
+
+    let wrong_string_receiver = int_value(7);
+    let wrong_string_receiver_address = wrong_string_receiver as usize;
+    let wrong_receiver = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_string_slice(
+                wrong_string_receiver_address as *mut OpaqueValue,
+                0,
+                0,
+                0,
+                0,
+                13,
+                2,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("direct String slicing must reject the wrong receiver type");
+    unsafe { release_value(wrong_string_receiver) };
+    assert_eq!(wrong_receiver.message, "expected `String`, found `integer`");
+}
+
+#[test]
 fn direct_runtime_vec_helpers_cover_collection_surface() {
     let vec = super::aurora_direct_vec_empty();
     assert_eq!(super::aurora_direct_vec_len(vec), 0);

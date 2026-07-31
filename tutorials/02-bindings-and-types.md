@@ -174,6 +174,23 @@ result is still out of range; direct access and the mutating methods raise a
 runtime error. Unlike Python, `insert` does not clamp an extremely negative
 index to zero, because silently inserting at the wrong position hides bugs.
 
+Vec slicing uses the same loud boundary philosophy and returns a fresh owned
+Vec:
+
+```python
+values = [10, 20, 30, 40]
+middle = values[1:3]  # [20, 30]
+prefix = values[:2]   # [10, 20]
+suffix = values[-2:]  # [30, 40]
+copy = values[:]      # an independent Vec
+```
+
+Every written endpoint is exactly `int32`, negatives normalize once, and both
+effective bounds must be in `0..=len`. A start greater than end is also an
+`AU4003` runtime error. Aurora does not copy Python's clamping or
+reversed-range-as-empty behavior. Slicing copies Copy elements and clones
+clone-safe non-Copy elements; it never creates a view.
+
 The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`,
 `get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`,
 `reverse`, `sort`, `sort_by`, `map`, and `filter`.
@@ -242,6 +259,7 @@ match names.get(0):
 See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
 [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au),
 [examples/collections/vec_polish.au](../examples/collections/vec_polish.au),
+[examples/collections/slices.au](../examples/collections/slices.au),
 and
 [examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
 

@@ -10941,6 +10941,288 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
 }
 
 #[test]
+fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "negative_start",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_signed(-3)),
+    );
+
+    let slice_args =
+        |start: Operand, has_start: bool, end: Operand, has_end: bool, line: u128, column: u128| {
+            vec![
+                mir_arg(None, start),
+                mir_arg(None, Operand::Bool(has_start)),
+                mir_arg(None, end),
+                mir_arg(None, Operand::Bool(has_end)),
+                mir_arg(None, Operand::Int(line)),
+                mir_arg(None, Operand::Int(column)),
+            ]
+        };
+
+    let vector = VecValue {
+        element_type: Type::named("String"),
+        elements: ["zero", "one", "two", "three"]
+            .into_iter()
+            .map(|value| Value::String(value.to_string()))
+            .collect(),
+    };
+    let source_elements = vector.elements.as_ptr();
+    env.define_typed(
+        "source_vector",
+        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Value::Vec(vector),
+    );
+    let sliced = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("source_vector".to_string()),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(
+                Operand::Place("negative_start".to_string()),
+                true,
+                Operand::Int(0),
+                false,
+                8,
+                13,
+            ),
+            &mut env,
+        )
+        .expect("MIR Vec slicing should normalize a negative start");
+    let Value::Vec(sliced) = sliced else {
+        panic!("expected owned Vec slice");
+    };
+    assert_eq!(sliced.element_type, Type::named("String"));
+    assert_eq!(
+        sliced.elements,
+        ["one", "two", "three"]
+            .into_iter()
+            .map(|value| Value::String(value.to_string()))
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(
+        sliced.elements.as_ptr(),
+        source_elements,
+        "MIR Vec slicing must produce fresh owned storage"
+    );
+    let Value::Vec(source_after_slice) = env
+        .place_ref("source_vector")
+        .expect("the borrowed slice source must remain in its place")
+    else {
+        panic!("expected source Vec");
+    };
+    assert_eq!(
+        source_after_slice.elements.as_ptr(),
+        source_elements,
+        "MIR slicing a Vec place must not consume or replace its source storage"
+    );
+    assert_eq!(source_after_slice.elements.len(), 4);
+
+    let source_text = "aé🎉e\u{301}".to_string();
+    let source_text_bytes = source_text.as_ptr();
+    env.define_typed(
+        "source_text",
+        Type::named("String"),
+        Value::String(source_text),
+    );
+    let sliced = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("source_text".to_string()),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(Operand::Int(1), true, Operand::Int(4), true, 9, 7),
+            &mut env,
+        )
+        .expect("MIR String slicing should count Unicode scalar values");
+    let Value::String(sliced) = sliced else {
+        panic!("expected owned String slice");
+    };
+    assert_eq!(sliced, "é🎉e");
+    assert_ne!(
+        sliced.as_ptr(),
+        source_text_bytes,
+        "MIR String slicing must allocate a fresh owned result"
+    );
+    let Value::String(source_after_slice) = env
+        .place_ref("source_text")
+        .expect("the borrowed String source must remain in its place")
+    else {
+        panic!("expected source String");
+    };
+    assert_eq!(source_after_slice.as_ptr(), source_text_bytes);
+
+    let out_of_range = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("source_text".to_string()),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(Operand::Int(0), false, Operand::Int(6), true, 11, 5),
+            &mut env,
+        )
+        .expect_err("MIR String slicing must reject rather than clamp");
+    assert_eq!(out_of_range.code, "AU4003");
+    assert_eq!(out_of_range.message, "slice end `6` is outside `0..=5`");
+    assert_eq!(out_of_range.span, Some(Span::new(11, 5)));
+
+    let reversed = runtime
+        .evaluate_vec_method(
+            VecValue {
+                element_type: Type::named("int32"),
+                elements: vec![
+                    Value::Int(IntegerValue::from_signed(1)),
+                    Value::Int(IntegerValue::from_signed(2)),
+                    Value::Int(IntegerValue::from_signed(3)),
+                ],
+            },
+            "__slice",
+            None,
+            &slice_args(Operand::Int(3), true, Operand::Int(1), true, 12, 4),
+            &mut env,
+        )
+        .expect_err("MIR Vec slicing must reject reversed normalized bounds");
+    assert_eq!(reversed.code, "AU4003");
+    assert_eq!(
+        reversed.message,
+        "slice start `3` is greater than slice end `1`"
+    );
+    assert_eq!(reversed.span, Some(Span::new(12, 4)));
+
+    let temporary_reversed = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::String("temporary".to_string()),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(Operand::Int(8), true, Operand::Int(2), true, 13, 3),
+            &mut env,
+        )
+        .expect_err("temporary String slicing should use the owned fallback");
+    assert_eq!(temporary_reversed.code, "AU4003");
+    assert_eq!(
+        temporary_reversed.message,
+        "slice start `8` is greater than slice end `2`"
+    );
+    assert_eq!(temporary_reversed.span, Some(Span::new(13, 3)));
+
+    env.define_typed("not_sliceable", Type::named("bool"), Value::Bool(true));
+    let unsupported_place = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("not_sliceable".to_string()),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(Operand::Int(0), false, Operand::Int(0), false, 14, 2),
+            &mut env,
+        )
+        .expect_err("malformed MIR must reject a non-sliceable place");
+    assert_eq!(
+        unsupported_place.message,
+        "unsupported MIR member call `__slice` on `true`"
+    );
+
+    let unsupported_temporary = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Bool(false),
+                field: "__slice".to_string(),
+                receiver_place: None,
+            },
+            &slice_args(Operand::Int(0), false, Operand::Int(0), false, 15, 2),
+            &mut env,
+        )
+        .expect_err("malformed MIR must reject a non-sliceable temporary");
+    assert_eq!(
+        unsupported_temporary.message,
+        "unsupported MIR member call `__slice` on `false`"
+    );
+}
+
+#[test]
+fn mir_slice_internal_abi_rejects_malformed_endpoint_and_presence_operands() {
+    fn evaluated(value: Value) -> EvaluatedMirArg {
+        EvaluatedMirArg {
+            name: None,
+            value,
+            ty: None,
+            writeback_place: None,
+        }
+    }
+
+    let runtime = test_runtime();
+    let valid = || {
+        vec![
+            evaluated(Value::Int(IntegerValue::from_signed(0))),
+            evaluated(Value::Bool(false)),
+            evaluated(Value::Int(IntegerValue::from_signed(0))),
+            evaluated(Value::Bool(false)),
+            evaluated(Value::Int(IntegerValue::from_signed(1))),
+            evaluated(Value::Int(IntegerValue::from_signed(1))),
+        ]
+    };
+    let too_wide = || {
+        Value::Int(
+            IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+                .expect("uint128::MAX is a valid typed integer"),
+        )
+    };
+
+    let wrong_count = runtime
+        .mir_slice_args(Vec::new())
+        .expect_err("the private ABI requires exactly six operands");
+    assert!(wrong_count.message.contains("requires start, has_start"));
+
+    for (index, replacement, expected) in [
+        (
+            0,
+            Value::String("start".to_string()),
+            "internal slice start operand must be an integer",
+        ),
+        (
+            0,
+            too_wide(),
+            "slice start is outside the supported signed range",
+        ),
+        (
+            1,
+            Value::Int(IntegerValue::from_signed(1)),
+            "internal slice has_start operand must be bool",
+        ),
+        (
+            2,
+            Value::String("end".to_string()),
+            "internal slice end operand must be an integer",
+        ),
+        (
+            2,
+            too_wide(),
+            "slice end is outside the supported signed range",
+        ),
+        (
+            3,
+            Value::Int(IntegerValue::from_signed(1)),
+            "internal slice has_end operand must be bool",
+        ),
+    ] {
+        let mut values = valid();
+        values[index] = evaluated(replacement);
+        let error = runtime
+            .mir_slice_args(values)
+            .expect_err("malformed private slice operands must be rejected");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
 fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let mut runtime = test_runtime();
     let mut env = Env::default();

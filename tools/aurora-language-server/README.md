@@ -24,6 +24,11 @@ Current compiler-backed analysis covers:
   go-to-definition, nested-clause completion, and owned result-type inference
 - incomplete comprehension clauses and filters retain exact `AU1101`
   diagnostics, broad recovery completions, and safe empty hover responses
+- owned Vec/String slices use compiler-owned result types, exact endpoint
+  diagnostics, retained-source ownership analysis, and hover/navigation for
+  names inside base and endpoint expressions
+- incomplete or reserved slice forms preserve the compiler's exact `AU2005`
+  step/assignment guidance without JavaScript-side reinterpretation
 - extern C and opaque-handle symbols, hover, definitions, completions, and
   package-authorization diagnostics
 

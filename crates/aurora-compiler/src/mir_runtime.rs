@@ -43,7 +43,8 @@ use crate::runtime_value::{
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     runtime_value_to_json, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task,
     spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
@@ -3538,6 +3539,31 @@ impl MirRuntime {
                     }
                 }
 
+                if field == "__slice" {
+                    if let Operand::Place(place) = object {
+                        let values = evaluate_named_args(args, env)?;
+                        let (start, end, span) = self.mir_slice_args(values)?;
+                        let result = match env.place_ref(place)? {
+                            Value::Vec(vector) => {
+                                slice_vec_owned(vector, start, end).map(Value::Vec)
+                            }
+                            Value::String(text) => {
+                                slice_string_owned(text, start, end).map(Value::String)
+                            }
+                            other => {
+                                return Err(Diagnostic::new(format!(
+                                    "unsupported MIR member call `__slice` on `{}`",
+                                    other.render()
+                                )))
+                            }
+                        };
+                        return result.map_err(|mut error| {
+                            error.span = Some(span);
+                            error
+                        });
+                    }
+                }
+
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
@@ -3563,6 +3589,20 @@ impl MirRuntime {
                         other => Err(Diagnostic::new(format!(
                             "unsupported MIR member call `{}` on `{}`",
                             field,
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if field == "__slice" {
+                    let receiver = std::mem::replace(&mut receiver, Value::Unit);
+                    return match receiver {
+                        Value::Vec(vector) => {
+                            self.evaluate_vec_method(vector, field, None, args, env)
+                        }
+                        Value::String(text) => self.evaluate_string_method(text, field, args, env),
+                        other => Err(Diagnostic::new(format!(
+                            "unsupported MIR member call `__slice` on `{}`",
                             other.render()
                         ))),
                     };
@@ -4580,6 +4620,16 @@ impl MirRuntime {
                         )
                     })
             }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                slice_vec_owned(&vector, start, end)
+                    .map(Value::Vec)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
             "set" => {
                 let values = evaluate_named_args(args, env)?;
                 let mut bound = bind_builtin_args(&["index", "value"], values)?.into_iter();
@@ -5035,6 +5085,16 @@ impl MirRuntime {
                 }
                 Ok(Value::Int(IntegerValue::from_literal(text.len() as u128)))
             }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                slice_string_owned(&text, start, end)
+                    .map(Value::String)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
             "contains" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
@@ -5283,6 +5343,52 @@ impl MirRuntime {
                 field
             ))),
         }
+    }
+
+    fn mir_slice_args(
+        &self,
+        values: Vec<EvaluatedMirArg>,
+    ) -> Result<(Option<i128>, Option<i128>, Span)> {
+        let Ok([start, has_start, end, has_end, line, column]) =
+            <Vec<EvaluatedMirArg> as TryInto<[EvaluatedMirArg; 6]>>::try_into(values)
+        else {
+            return Err(Diagnostic::new(
+                "internal slicing requires start, has_start, end, has_end, line, and column operands",
+            ));
+        };
+        let Value::Int(start) = start.value else {
+            return Err(Diagnostic::new(
+                "internal slice start operand must be an integer",
+            ));
+        };
+        let start = start
+            .as_i128()
+            .ok_or_else(|| Diagnostic::new("slice start is outside the supported signed range"))?;
+        let Value::Bool(has_start) = has_start.value else {
+            return Err(Diagnostic::new(
+                "internal slice has_start operand must be bool",
+            ));
+        };
+        let Value::Int(end) = end.value else {
+            return Err(Diagnostic::new(
+                "internal slice end operand must be an integer",
+            ));
+        };
+        let end = end
+            .as_i128()
+            .ok_or_else(|| Diagnostic::new("slice end is outside the supported signed range"))?;
+        let Value::Bool(has_end) = has_end.value else {
+            return Err(Diagnostic::new(
+                "internal slice has_end operand must be bool",
+            ));
+        };
+        let line = self.mir_index_from_value(line.value)?;
+        let column = self.mir_index_from_value(column.value)?;
+        Ok((
+            has_start.then_some(start),
+            has_end.then_some(end),
+            Span::new(line, column),
+        ))
     }
 
     fn mir_index_from_value(&self, value: Value) -> Result<usize> {

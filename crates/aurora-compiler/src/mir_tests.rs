@@ -1413,6 +1413,107 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
 }
 
 #[test]
+fn owned_slice_lowering_preserves_endpoint_presence_and_source_order() {
+    let program = Box::leak(Box::new(checked_program("def main():\n    pass\n")));
+    let mut lowerer = Lowerer::new(
+        program,
+        "main",
+        &program.module_name,
+        Type::Unit,
+        BTreeMap::new(),
+    );
+    lowerer.local_types.insert(
+        "values".to_string(),
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+    );
+    lowerer
+        .local_types
+        .insert("start".to_string(), Type::named("int32"));
+    lowerer
+        .local_types
+        .insert("end".to_string(), Type::named("int32"));
+
+    let slice = Expr {
+        kind: ExprKind::Slice {
+            object: Box::new(name_expr("values")),
+            start: Some(Box::new(name_expr("start"))),
+            end: Some(Box::new(name_expr("end"))),
+            colon_span: Span::new(4, 18),
+        },
+        span: Span::new(4, 12),
+    };
+    let lowered = lowerer.lower_expr(&slice);
+    assert!(matches!(lowered, Operand::Place(_)));
+
+    let instructions = &lowerer.blocks[lowerer.current_block].instructions;
+    let call_index = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Member { field, .. },
+                            ..
+                        },
+                    ..
+                } if field == INTERNAL_SLICE_FIELD
+            )
+        })
+        .expect("slice lowering should emit the hidden owned-copy member call");
+    let (object, receiver_place, args) = match &instructions[call_index] {
+        Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            object,
+                            receiver_place,
+                            ..
+                        },
+                    args,
+                },
+            ..
+        } => (object, receiver_place, args),
+        other => panic!("expected slice member call, found {other:?}"),
+    };
+    let captured_places = instructions[..call_index]
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::Place(source)),
+            } if source == "start" || source == "end" => Some((target, source)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(object, &Operand::Place("values".to_string()));
+    assert_eq!(receiver_place.as_deref(), Some("values"));
+    assert_eq!(
+        captured_places
+            .iter()
+            .map(|(_, source)| source.as_str())
+            .collect::<Vec<_>>(),
+        vec!["start", "end"],
+        "written endpoints must be captured once in source order"
+    );
+    assert_eq!(args.len(), 6);
+    assert_eq!(
+        args[0].value,
+        Operand::Place(captured_places[0].0.to_string())
+    );
+    assert_eq!(args[1].value, Operand::Bool(true));
+    assert_eq!(
+        args[2].value,
+        Operand::Place(captured_places[1].0.to_string())
+    );
+    assert_eq!(args[3].value, Operand::Bool(true));
+    assert_eq!(args[4].value, Operand::Int(4));
+    assert_eq!(args[5].value, Operand::Int(18));
+}
+
+#[test]
 fn nested_and_copy_tuple_patterns_preserve_binding_ownership() {
     let module = crate::lower_source_to_mir(
         r#"

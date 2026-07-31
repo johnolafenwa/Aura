@@ -1,0 +1,2 @@
+def replace(values: Vec[int32]):
+    values[:] += values

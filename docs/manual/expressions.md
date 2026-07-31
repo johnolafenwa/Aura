@@ -67,9 +67,9 @@ consuming either one. Tuple ordering operators remain unavailable.
 
 An expression may span physical lines while a `(`, `[`, or `{` remains open.
 This applies uniformly to grouping, function and constructor calls, indexes,
-specialization/type arguments, collection literals, and delimited portions of
-headers and declarations. The lexer joins those physical lines before the
-expression grammar runs.
+owned slices, specialization/type arguments, collection literals, and
+delimited portions of headers and declarations. The lexer joins those physical
+lines before the expression grammar runs.
 
 Continuation indentation is visual only. It does not create a suite or alter
 evaluation order. The maintained style indents continued content by one level.
@@ -84,6 +84,8 @@ Except for short-circuit boolean operators and control-flow expressions, evaluat
 - a binary expression evaluates its left operand before its right operand
 - a postfix expression evaluates its base before its suffix inputs
 - an index evaluates its base before its index
+- a slice evaluates its base, written start, and written end once from left to
+  right; omitted endpoints evaluate nothing
 - a receiver is evaluated before call arguments
 - explicit call and constructor arguments are evaluated in source order, with
   copy or move results captured before later argument side effects
@@ -363,7 +365,10 @@ The last example means `left + (right as int64)`. Use parentheses when the cast 
 
 ## Postfix Expressions
 
-A primary expression may be followed by specialization, indexing, member access, calls, and numeric casts. Suffixes are applied from left to right; parenthesize a larger prefix or binary expression before applying a suffix to its result:
+A primary expression may be followed by specialization, indexing, slicing,
+member access, calls, and numeric casts. Suffixes are applied from left to
+right; parenthesize a larger prefix or binary expression before applying a
+suffix to its result:
 
 ```python
 users[0].name.clone()
@@ -484,11 +489,59 @@ clone-safe. Use `remove(index)` to transfer a non-cloneable stored value. Index 
 statement target and is covered by
 [Statements](/manual/statements#bindings-and-assignment).
 
-Aurora 0.1 does not define integer indexing or slicing for `String`. Use the
-maintained string methods for whole-string operations. Phase 3 provides exact
-UTF-8 conversion through `text.to_bytes()` and
-`String.from_bytes(bytes=...)`; scalar iteration and slicing remain future
-work.
+Integer indexing on `String` is unavailable. Use a slice when selecting a
+substring, or the maintained string methods for whole-string operations.
+Exact UTF-8 conversion is available through `text.to_bytes()` and
+`String.from_bytes(bytes=...)`.
+
+## Slicing
+
+`base[start:end]` selects the half-open range from start inclusive to end
+exclusive. Slicing is defined only for `Vec[T]` and `String`, and always
+returns a fresh owned value of the same type:
+
+    middle = values[1:3]
+    prefix = values[:2]
+    suffix = values[-2:]
+    all_values = values[:]
+    scalars = "A🎉Z"[1:2]
+
+An omitted start means zero and an omitted end means the source length. Equal
+endpoints produce an empty result. Every written endpoint has exactly type
+`int32`; a literal may adopt that expected type, but an `int64` binding is not
+implicitly narrowed.
+
+A negative endpoint `i` is normalized exactly once as `len + i`. After
+normalization, start and end must each be in `0..=len`, and start must not
+exceed end. Otherwise evaluation traps with `AU4003`.
+
+Aurora deliberately differs from Python here: slice endpoints are **not
+clamped**. An endpoint that remains out of range after one normalization is a
+broken invariant, not a request for the nearest boundary. A reversed range is
+also an `AU4003` failure rather than an empty slice.
+
+A Vec slice copies Copy elements and clones non-Copy elements into a fresh
+owned Vec. The element type must therefore be clone-safe. A type containing
+`random.Rng`, an opaque FFI handle, or a capturing closure environment is
+rejected with `AU3007`, and a type containing a non-repeatable Task result
+right is rejected with `AU3009`. Generic slicing infers the same obligation
+for its element type. The source remains usable.
+
+String endpoints count Unicode scalar values, matching `String.len()`, not
+UTF-8 bytes or grapheme clusters. Locating scalar boundaries scans the source,
+so String slicing is O(n); the result is a newly allocated valid UTF-8 String.
+Integer `string[index]` remains unavailable.
+
+The base, written start, and written end are evaluated once from left to right.
+The selected non-Copy base remains retained through endpoint evaluation, so an
+endpoint may read it but cannot mutate or consume the overlapping source.
+Neither a Vec nor String slice is a place or a view.
+
+A second colon is reserved for future step syntax. `value[start:end:step]` and
+`value[::]` report `AU2005` with `slice steps are unavailable; use an explicit
+loop to select a stride`. Slice assignment and compound assignment report
+`AU2005` with `slice assignment is unavailable because slices are owned
+copies; mutate the source by index or build a new value`.
 
 ## Collection Literals
 
@@ -719,7 +772,8 @@ condition first and exactly one selected arm. A membership test evaluates its
 value before its container. A comparison chain evaluates its operands left to
 right, evaluates each at most once, and stops at its first `false` link. A
 member receiver is evaluated before arguments; an index base is evaluated
-before its index; collection entries preserve source order; a match scrutinee
+before its index; a slice base is evaluated before its written start and end;
+collection entries preserve source order; a match scrutinee
 evaluates once; and each f-string interpolation renders immediately before the
 next begins.
 `try` either yields an `Ok` payload or returns the `Err` from the enclosing
@@ -771,6 +825,10 @@ immutable place was used mutably; and `AU3004` means an invalid ownership mode.
 `AU3005` means a direct indexed read would copy a non-copy stored value, and
 `AU3006` means indexed compound assignment would do the same during its
 read-modify-write step.
+`AU3007` and `AU3009` reject a Vec slice whose owned result would duplicate,
+respectively, non-cloneable state or a single-consumer Task observation right.
+`AU4003` reports an invalid normalized slice endpoint or reversed range.
+Reserved slice steps and slice assignment use `AU2005`.
 At runtime, `AU4001` means a general expression trap, `AU4002` means arithmetic
 overflow, underflow, range, or conversion-exactness failure, `AU4003` means a
 bounds or lookup violation, `AU4004` means a zero divisor, and `AU4005` means a

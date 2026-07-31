@@ -80,6 +80,16 @@ Result insertion follows ordinary Copy, move, explicit-clone, and ADR-0037
 capture rules. Generator expressions remain unavailable and
 receive an `AU2005` migration to an eager comprehension or explicit loop.
 
+Phase 7.2 adds owned Vec and String slicing under Accepted ADR-0040. The four
+one-colon forms accept omitted endpoints and select a half-open range. Written
+endpoints are exact `int32`; negatives normalize once, and an invalid or
+reversed range traps with `AU4003` instead of adopting Python's clamping
+behavior. String positions count Unicode scalar values and require an O(n)
+scan. Every result owns independent storage: Vec elements copy or clone under
+clone-safety and task-repeatability rules, while String produces a fresh valid
+UTF-8 value. String integer indexing, steps, slice assignment, and views remain
+unavailable; this feature does not implement ADR-0038.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

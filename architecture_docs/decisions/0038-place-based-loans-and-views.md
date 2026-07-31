@@ -24,6 +24,13 @@ This accepted design amends ADR-0013 and ADR-0037 only for the future,
 explicitly requested in-loan closure captures. Their implemented by-value
 capture rules remain unchanged.
 
+ADR-0040's Aurora 0.2 Vec and String slices are deliberately not an
+implementation of this design. `value[start:end]` produces a fresh owned
+collection or String and is never a place or view. It has no PlaceId, source
+generation, lifetime, reborrow, write-through behavior, or returned-view
+provenance. A future indexed-view amendment must use an explicit view form and
+must not reinterpret the owned slice syntax as an alias.
+
 ## Context
 
 Aurora 0.1 has call-scoped shared and mutable access, scoped shared aliases

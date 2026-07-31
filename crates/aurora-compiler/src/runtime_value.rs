@@ -463,6 +463,73 @@ pub struct VecValue {
     pub elements: Vec<Value>,
 }
 
+fn normalize_slice_endpoint(
+    supplied: Option<i128>,
+    default: i128,
+    label: &str,
+    len: i128,
+) -> Result<usize> {
+    let supplied = supplied.unwrap_or(default);
+    let normalized = if supplied < 0 {
+        // `len` is non-negative, so adding it to a negative i128 cannot
+        // overflow either end of the signed range.
+        len + supplied
+    } else {
+        supplied
+    };
+    if !(0..=len).contains(&normalized) {
+        let message = if supplied < 0 {
+            format!("slice {label} `{supplied}` normalizes to `{normalized}`, outside `0..={len}`")
+        } else {
+            format!("slice {label} `{supplied}` is outside `0..={len}`")
+        };
+        return Err(Diagnostic::coded("AU4003", message));
+    }
+    // Aurora's supported hosts have pointer widths smaller than i128, and
+    // `normalized <= len` where `len` came from a live usize.
+    Ok(normalized as usize)
+}
+
+pub(crate) fn normalize_slice_bounds(
+    start: Option<i128>,
+    end: Option<i128>,
+    len: usize,
+) -> Result<(usize, usize)> {
+    // Every supported Rust pointer width fits losslessly in i128.
+    let len = len as i128;
+    let start = normalize_slice_endpoint(start, 0, "start", len)?;
+    let end = normalize_slice_endpoint(end, len, "end", len)?;
+    if start > end {
+        return Err(Diagnostic::coded(
+            "AU4003",
+            format!("slice start `{start}` is greater than slice end `{end}`"),
+        ));
+    }
+    Ok((start, end))
+}
+
+pub(crate) fn slice_vec_owned(
+    vector: &VecValue,
+    start: Option<i128>,
+    end: Option<i128>,
+) -> Result<VecValue> {
+    let (start, end) = normalize_slice_bounds(start, end, vector.elements.len())?;
+    Ok(VecValue {
+        element_type: vector.element_type.clone(),
+        elements: vector.elements[start..end].to_vec(),
+    })
+}
+
+pub(crate) fn slice_string_owned(
+    text: &str,
+    start: Option<i128>,
+    end: Option<i128>,
+) -> Result<String> {
+    let scalar_len = text.chars().count();
+    let (start, end) = normalize_slice_bounds(start, end, scalar_len)?;
+    Ok(text.chars().skip(start).take(end - start).collect())
+}
+
 #[derive(Clone, Debug)]
 pub struct TupleValue {
     pub element_types: Vec<Type>,

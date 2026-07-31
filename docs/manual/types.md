@@ -87,9 +87,10 @@ O(n). `String.byte_len() -> int64` reads the UTF-8 byte count in O(1).
 `String.to_bytes() -> Vec[uint8]` and
 `String.from_bytes(Vec[uint8]) -> Result[String, bytes.Error]` provide the
 explicit strict UTF-8 boundary; `Vec[uint8]` is Aurora's bytes representation.
-Aurora 0.1 has no distinct character type, integer String indexing, slicing,
-`chars()`, `ord()`, or `chr()`. String slicing remains part of the Phase 7
-slicing work.
+Aurora has no distinct character type, integer String indexing, `chars()`,
+`ord()`, or `chr()`. String slicing accepts exact `int32` scalar endpoints,
+runs in O(n) over the source, and returns a fresh owned String. It is not a
+view or a byte-indexing operation.
 
 ## Copy And Move Categories
 
@@ -126,6 +127,12 @@ Move values transfer ownership:
 Move values can still be shared through a bare parameter, accessed mutably
 through a `mut` parameter, or duplicated explicitly through methods such as
 `.clone()` when the type supports cloning.
+
+Slicing `String` produces a fresh owned String. Slicing `Vec[T]` produces a
+fresh owned Vec and is clone-producing for `T`: Copy elements are copied,
+non-Copy elements must be clone-safe, `random.Rng` state is rejected with
+`AU3007`, and non-repeatable Task observation rights are rejected with
+`AU3009`. The result is another move value independent of the source.
 
 `Queue[T]` is a copy handle to shared runtime state. Under Accepted
 ADR-0033, a `Task[T]` handle is conditionally copyable so aliases cannot
@@ -441,7 +448,8 @@ borrow conflict; `AU3003` reports mutation through an immutable place; and
 `AU3004` reports an invalid ownership or receiver type mode. `AU3005` reports a
 non-copy indexed read, and `AU3006` reports a non-copy indexed compound
 assignment. `AU3007` reports an operation or specialization that would
-duplicate non-cloneable `random.Rng` state. `AU3008` reports a non-Transfer
+duplicate non-cloneable state such as `random.Rng`, an opaque FFI handle, or
+a capturing closure environment. `AU3008` reports a non-Transfer
 task or Queue boundary. `AU3009` rejects cloning, collection reads, or
 aggregate copies that would duplicate a single-consumer task-result right;
 using an already-consumed task binding is `AU3001`. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,

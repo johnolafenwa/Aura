@@ -34,6 +34,7 @@ fn is_known_enum_name(program: &Program, name: &str) -> bool {
 }
 
 const INTERNAL_VEC_INDEX_FIELD: &str = "__index";
+const INTERNAL_SLICE_FIELD: &str = "__slice";
 const INTERNAL_VEC_INDEX_OPTION_FIELD: &str = "__index_option";
 const INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD: &str = "__take_index_option";
 const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
@@ -4597,6 +4598,67 @@ impl<'a> Lowerer<'a> {
                 });
                 Operand::Place(temp)
             }
+            ExprKind::Slice {
+                object,
+                start,
+                end,
+                colon_span,
+            } => {
+                let temp = self.new_temp_for_expr(expr);
+                let lowered_object = self.lower_expr_at_sequence_point(object, None);
+                let endpoint_ty = Type::named("int32");
+                let lowered_start = start
+                    .as_deref()
+                    .map(|start| self.lower_expr_at_sequence_point(start, Some(&endpoint_ty)))
+                    .unwrap_or(Operand::Int(0));
+                let lowered_end = end
+                    .as_deref()
+                    .map(|end| self.lower_expr_at_sequence_point(end, Some(&endpoint_ty)))
+                    .unwrap_or(Operand::Int(0));
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: lowered_object,
+                            field: INTERNAL_SLICE_FIELD.to_string(),
+                            receiver_place: self.render_place_expr_option(object),
+                        },
+                        args: vec![
+                            MirArg {
+                                name: None,
+                                value: lowered_start,
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Bool(start.is_some()),
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: lowered_end,
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Bool(end.is_some()),
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Int(colon_span.line as u128),
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Int(colon_span.column as u128),
+                                writeback_place: None,
+                            },
+                        ],
+                    },
+                });
+                Operand::Place(temp)
+            }
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, None),
             ExprKind::Conditional {
                 then_expr,
@@ -8768,6 +8830,7 @@ impl<'a> Lowerer<'a> {
                     _ => None,
                 }
             }
+            ExprKind::Slice { object, .. } => self.infer_expr_type(object),
             ExprKind::Binary { op, left, right } => {
                 if matches!(
                     op,

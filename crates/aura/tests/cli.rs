@@ -4958,6 +4958,134 @@ fn run_backends_lower_comprehensions_in_function_and_field_defaults() {
 }
 
 #[test]
+fn owned_slice_matrix_matches_forced_mir_and_direct_backends() {
+    let root = repo_root();
+    let fixture = "crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au";
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout"
+    );
+
+    let mir = Command::new(aura_bin())
+        .current_dir(&root)
+        .args(["run", "--backend", "mir", fixture])
+        .output()
+        .expect("failed to run owned-slice matrix on the forced MIR backend");
+    assert!(
+        mir.status.success(),
+        "owned-slice matrix should run on MIR, stderr was:\n{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+
+    let output_dir = TempDir::new("aurora-owned-slice-direct");
+    let output_path = output_dir.path().join("out");
+    let direct_build = Command::new(aura_bin())
+        .current_dir(&root)
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(fixture)
+        .output()
+        .expect("failed to build owned-slice matrix on the direct backend");
+    assert!(
+        direct_build.status.success(),
+        "owned-slice matrix should build on direct, stderr was:\n{}",
+        String::from_utf8_lossy(&direct_build.stderr)
+    );
+
+    let direct = generated_binary(&output_path)
+        .current_dir(&root)
+        .output()
+        .expect("failed to run direct owned-slice matrix");
+    assert!(
+        direct.status.success(),
+        "owned-slice matrix should run on direct, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(
+        mir.stdout, direct.stdout,
+        "owned Vec/String slices must produce byte-identical stdout on MIR and direct"
+    );
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+}
+
+#[test]
+fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
+    let root = repo_root();
+    let cases = [
+        (
+            "Vec reversed bounds",
+            "crates/aurora-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.au",
+            include_str!(
+                "../../aurora-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.diag"
+            ),
+        ),
+        (
+            "String normalized start out of bounds",
+            "crates/aurora-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.au",
+            include_str!(
+                "../../aurora-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.diag"
+            ),
+        ),
+    ];
+
+    for (label, fixture, expected_stderr) in cases {
+        let mir = Command::new(aura_bin())
+            .current_dir(&root)
+            .args(["run", "--backend", "mir", fixture])
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run {label} trap on MIR: {error}"));
+        assert_eq!(
+            mir.status.code(),
+            Some(1),
+            "{label} should exit 1 on MIR; stderr was:\n{}",
+            String::from_utf8_lossy(&mir.stderr)
+        );
+
+        let output_dir = TempDir::new("aurora-owned-slice-trap-direct");
+        let output_path = output_dir.path().join("out");
+        let direct_build = Command::new(aura_bin())
+            .current_dir(&root)
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(&output_path)
+            .arg(fixture)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to build {label} trap on direct: {error}"));
+        assert!(
+            direct_build.status.success(),
+            "{label} should build on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct_build.stderr)
+        );
+
+        let direct = generated_binary(&output_path)
+            .current_dir(&root)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run {label} direct trap: {error}"));
+        assert_eq!(
+            direct.status.code(),
+            Some(1),
+            "{label} should exit 1 on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+        assert!(
+            mir.stdout.is_empty(),
+            "{label} should not print before trapping"
+        );
+        assert_eq!(
+            mir.stdout, direct.stdout,
+            "{label} stdout must match on MIR and direct"
+        );
+        assert_eq!(
+            mir.stderr, direct.stderr,
+            "{label} AU4003 code, message, source span, and call frame must be byte-identical"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&mir.stderr),
+            expected_stderr,
+            "{label} must retain its exact AU4003 diagnostic oracle"
+        );
+    }
+}
+
+#[test]
 fn run_backends_drop_partial_comprehension_before_propagating_trap() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au"

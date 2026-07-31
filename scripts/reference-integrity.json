@@ -342,9 +342,9 @@
       "stderr": ""
     },
     "docs/manual/collections.md#aurora-11": {
-      "sha256": "950ac4be7a7ca029863ab3afc1118c97e2dac5e60fd90d1a7fe81ee23342bc3d",
+      "sha256": "a3daaebbed4197a8b7e2758d32bab81d90be320447f31e2d9734c0e958dff2fb",
       "mode": "run",
-      "stdout": "[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n[9, 1, 4, 16]\n[4, 16]\n{3: 30, 4: 40}\n[11, 12, 21, 22]\n",
+      "stdout": "[1, 2]\n[3, 1]\n[2, 4]\n[3, 1, 2, 4]\n🎉\n[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n[9, 1, 4, 16]\n[4, 16]\n{3: 30, 4: 40}\n[11, 12, 21, 22]\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aurora-2": {
@@ -967,7 +967,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "4967192d5b5ae874635a2a32dddcba2ec7d273111edf6358c17a1602442bb7d9",
+      "sha256": "8e4f4d145c58d6a45c4b5e1d8d8a773e0c95fbfb65d28c824fc798c1cc21e468",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aurora program."
     },

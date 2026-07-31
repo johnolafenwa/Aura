@@ -1,0 +1,8 @@
+def preserve_slice_syntax(values: Vec[int32], text: String):
+    middle = values[1:3]
+    prefix = values[:3]
+    suffix = values[1:]
+    complete = values[:]
+    text_middle = text[1:3]
+    first = values[1:][0]
+    specialized = Vec[int32]()[1:]

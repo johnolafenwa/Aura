@@ -510,6 +510,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     ),
     (
+        "examples/collections/slices.au",
+        include_str!("../../../examples/collections/slices.au"),
+        "[20, 30]\n[10, 20]\n[30, 40]\n[10, 20, 30, 40]\n[10, 20, 30, 40]\n[99, 30]\n🎉\nA🎉\n🎉Z\nA🎉Z\nA🎉Z\n",
+    ),
+    (
         "examples/concurrency/queue_iteration.au",
         include_str!("../../../examples/concurrency/queue_iteration.au"),
         "1\n2\n",

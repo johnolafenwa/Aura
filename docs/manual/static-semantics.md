@@ -217,7 +217,7 @@ runtime-lazy, message-only moves and mutations are not applied to the
 fallthrough state. The statement itself has ordinary fallthrough and performs
 no lasting type or value refinement.
 
-### Indexing And Members
+### Indexing, Slicing, And Members
 
 Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`
 with exactly `K`. For a vector, a negative index `i` is normalized once as
@@ -235,8 +235,25 @@ map value, use `get(key)` only when the value type is clone-safe, or
 `remove(key)` to transfer ownership. These non-copy
 direct-read rejections use `AU3005`; a non-copy indexed compound assignment
 uses `AU3006` because its initial read has the same ownership problem. A missing map key
-in a direct read is runtime diagnostic `AU4003`. Integer indexing and slicing
-are not defined for `String` in Aurora 0.1.
+in a direct read is runtime diagnostic `AU4003`. Integer indexing is not
+defined for `String`.
+
+A slice suffix is defined only on `Vec[T]` and `String`. It returns a fresh
+owned value of the same source type. Each written endpoint has exactly type
+`int32`, with ordinary contextual integer-literal typing and no implicit
+narrowing of an already-bound `int64`. An omitted endpoint contributes no
+expression. After one `len + i` normalization for each negative written
+endpoint, both effective endpoints must lie in `0..=len` and start must not
+exceed end. Invalid or reversed bounds are runtime `AU4003`.
+
+Vec slicing establishes a clone-producing obligation for `T`: Copy elements
+are copied and non-Copy elements must be clone-safe. A concrete or transitive
+`random.Rng` element is rejected with `AU3007`; a non-repeatable Task
+observation right is rejected with `AU3009`; unresolved generic `T` carries
+the inferred obligation to specialization. String slicing counts Unicode
+scalar values and returns `String`. A slice is not a place and cannot be the
+target of assignment or mutable access. Step syntax and slice assignment are
+reserved `AU2005` migration diagnostics rather than accepted static forms.
 
 Member access must resolve to a visible field, method, enum variant, module item, or maintained builtin member. Calling a receiver method also validates whether the receiver is consumed, shared-borrowed, or mutable-borrowed.
 

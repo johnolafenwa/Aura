@@ -271,6 +271,8 @@ The current compiler supports these expression forms:
   contract (including Queue's receive-owned item carve-out)
 - member access with `.`
 - indexing with `expr[index]`
+- owned Vec/String slicing with `expr[start:end]`, `expr[:end]`,
+  `expr[start:]`, and `expr[:]`
 - function and method calls
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
@@ -305,7 +307,22 @@ with guidance to use an eager owned list comprehension or an explicit loop.
 Comprehension clauses do not accept `mut` or `own`; use a statement loop for
 mutable or consuming source traversal.
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read, and elements carrying `random.Rng` state must use `remove(index)` because they cannot be cloned at all. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
+Indexed expressions remain ordinary values after parsing. Copy-typed element
+reads like `values[idx]` still work directly, while clone-safe non-copy vector
+elements such as `String` use `get(index)` for an explicit cloned read, and
+elements carrying `random.Rng` state must use `remove(index)` because they
+cannot be cloned at all. Negative Vec indexes normalize as `len + index` for
+direct access and every maintained Vec index method. Map indexing and
+interpolations such as `f"{counts['key']}"` remain supported when the Map
+value type is copy; clone-safe non-copy values use `get(key)` for an explicit
+cloned optional read, while `remove(key)` transfers any stored value.
+
+One-colon Vec and String slices return fresh owned copies. Written endpoints
+are exact `int32`, negatives normalize once, both effective endpoints must be
+in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`
+rather than clamping. String positions count Unicode scalar values and require
+an O(n) scan. Integer String indexing, step syntax, slice assignment, and
+views remain unavailable.
 
 ## Methods
 
@@ -833,6 +850,10 @@ Current collection notes:
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
 - `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
+- Vec and String slices accept all four omitted-endpoint forms, return fresh
+  owned copies, and never clamp invalid or reversed bounds; String slicing
+  counts Unicode scalars in O(n), while Vec slicing requires clone-safe,
+  repeatably observable elements
 - `insert(-1, value)` inserts before the last element;
   `insert(values.len() as int32, value)` appends through a checked narrowing,
   and out-of-range indexes are never clamped

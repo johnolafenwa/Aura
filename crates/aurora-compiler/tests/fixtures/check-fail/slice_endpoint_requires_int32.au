@@ -1,0 +1,2 @@
+def invalid(values: Vec[int32], endpoint: int64):
+    print(values[endpoint:])

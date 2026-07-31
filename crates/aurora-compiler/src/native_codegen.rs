@@ -333,6 +333,7 @@ struct NativeCodegen<'a> {
     string_literal: FuncId,
     string_len: FuncId,
     string_byte_len: FuncId,
+    string_slice: FuncId,
     string_contains: FuncId,
     string_starts_with: FuncId,
     string_ends_with: FuncId,
@@ -380,6 +381,7 @@ struct NativeCodegen<'a> {
     vec_clear_in_place: FuncId,
     vec_reverse_in_place: FuncId,
     vec_index: FuncId,
+    vec_slice: FuncId,
     vec_index_option: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
@@ -821,6 +823,7 @@ impl<'a> NativeCodegen<'a> {
             string_literal => ("aurora_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
             string_len => ("aurora_direct_string_len", [types::I64], Some(types::I64)),
             string_byte_len => ("aurora_direct_string_byte_len", [types::I64], Some(types::I64)),
+            string_slice => ("aurora_direct_string_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             string_contains => ("aurora_direct_string_contains", [types::I64, types::I64], Some(types::I64)),
             string_starts_with => ("aurora_direct_string_starts_with", [types::I64, types::I64], Some(types::I64)),
             string_ends_with => ("aurora_direct_string_ends_with", [types::I64, types::I64], Some(types::I64)),
@@ -868,6 +871,7 @@ impl<'a> NativeCodegen<'a> {
             vec_clear_in_place => ("aurora_direct_vec_clear_in_place", [types::I64], Some(types::I64)),
             vec_reverse_in_place => ("aurora_direct_vec_reverse_in_place", [types::I64], Some(types::I64)),
             vec_index => ("aurora_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_slice => ("aurora_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aurora_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aurora_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aurora_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1234,6 +1238,7 @@ impl<'a> NativeCodegen<'a> {
             string_literal,
             string_len,
             string_byte_len,
+            string_slice,
             string_contains,
             string_starts_with,
             string_ends_with,
@@ -1281,6 +1286,7 @@ impl<'a> NativeCodegen<'a> {
             vec_clear_in_place,
             vec_reverse_in_place,
             vec_index,
+            vec_slice,
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -1892,6 +1898,9 @@ impl<'a> NativeCodegen<'a> {
         let string_byte_len = self
             .object
             .declare_func_in_func(self.string_byte_len, builder.func);
+        let string_slice = self
+            .object
+            .declare_func_in_func(self.string_slice, builder.func);
         let string_contains = self
             .object
             .declare_func_in_func(self.string_contains, builder.func);
@@ -2027,6 +2036,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_index = self
             .object
             .declare_func_in_func(self.vec_index, builder.func);
+        let vec_slice = self
+            .object
+            .declare_func_in_func(self.vec_slice, builder.func);
         let vec_index_option = self
             .object
             .declare_func_in_func(self.vec_index_option, builder.func);
@@ -2788,6 +2800,7 @@ impl<'a> NativeCodegen<'a> {
             string_literal,
             string_len,
             string_byte_len,
+            string_slice,
             string_contains,
             string_starts_with,
             string_ends_with,
@@ -2835,6 +2848,7 @@ impl<'a> NativeCodegen<'a> {
             vec_clear_in_place,
             vec_reverse_in_place,
             vec_index,
+            vec_slice,
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -3599,6 +3613,7 @@ struct FunctionCompiler<'a> {
     string_literal: cranelift_codegen::ir::FuncRef,
     string_len: cranelift_codegen::ir::FuncRef,
     string_byte_len: cranelift_codegen::ir::FuncRef,
+    string_slice: cranelift_codegen::ir::FuncRef,
     string_contains: cranelift_codegen::ir::FuncRef,
     string_starts_with: cranelift_codegen::ir::FuncRef,
     string_ends_with: cranelift_codegen::ir::FuncRef,
@@ -3646,6 +3661,7 @@ struct FunctionCompiler<'a> {
     vec_clear_in_place: cranelift_codegen::ir::FuncRef,
     vec_reverse_in_place: cranelift_codegen::ir::FuncRef,
     vec_index: cranelift_codegen::ir::FuncRef,
+    vec_slice: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -8562,6 +8578,61 @@ impl<'a> FunctionCompiler<'a> {
             if name == "String" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
+                    "__slice" => {
+                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
+                            args
+                        else {
+                            return Err(
+                                "direct backend expected internal String slicing to receive start, start presence, end, end presence, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let start = self.load_operand_with_integer_hint(
+                            &start_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let start =
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_start = self.load_operand(&has_start_arg.value)?;
+                        let has_start =
+                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let end = self.load_operand_with_integer_hint(
+                            &end_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_end = self.load_operand(&has_end_arg.value)?;
+                        let has_end =
+                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let line =
+                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let column =
+                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.string_slice,
+                            &[
+                                object.values[0],
+                                start.values[0],
+                                has_start.values[0],
+                                end.values[0],
+                                has_end.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::named("String"),
+                        ))
+                    }
                     "len" | "byte_len" => {
                         if !args.is_empty() {
                             return Err(format!(
@@ -8836,6 +8907,61 @@ impl<'a> FunctionCompiler<'a> {
                 let element_direct_ty =
                     ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
                 return match field {
+                    "__slice" => {
+                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
+                            args
+                        else {
+                            return Err(
+                                "direct backend expected internal vector slicing to receive start, start presence, end, end presence, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let start = self.load_operand_with_integer_hint(
+                            &start_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let start =
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_start = self.load_operand(&has_start_arg.value)?;
+                        let has_start =
+                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let end = self.load_operand_with_integer_hint(
+                            &end_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_end = self.load_operand(&has_end_arg.value)?;
+                        let has_end =
+                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let line =
+                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let column =
+                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.vec_slice,
+                            &[
+                                object.values[0],
+                                start.values[0],
+                                has_start.values[0],
+                                end.values[0],
+                                has_end.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Vec".to_string(), vec![element_ty]),
+                        ))
+                    }
                     "len" => {
                         if !args.is_empty() {
                             return Err(
@@ -14034,6 +14160,7 @@ fn builtin_opaque_member_return_type(
         | ("String", "to_lower")
         | ("String", "to_upper")
         | ("String", "trim")
+        | ("String", "__slice")
         | ("String", "clone") => Some(DirectType::Opaque(Type::named("String"))),
         ("String", "to_bytes") => Some(DirectType::Opaque(Type::Named(
             "Vec".to_string(),
@@ -14046,6 +14173,10 @@ fn builtin_opaque_member_return_type(
         ("Vec", "len") => direct_type(&Type::named("int64"), classes),
         ("Vec", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("Vec", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            args.clone(),
+        ))),
+        ("Vec", "__slice") => Some(DirectType::Opaque(Type::Named(
             "Vec".to_string(),
             args.clone(),
         ))),

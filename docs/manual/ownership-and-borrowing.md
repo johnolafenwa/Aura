@@ -73,6 +73,16 @@ A non-copy value is consumed when used in an owned position, including:
 
 An expression is evaluated before its move is recorded at that boundary. Aurora also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
+Vec slicing is a clone-producing shared read rather than an element move.
+`values[start:end]` retains `values` while the endpoint expressions run, then
+copies Copy elements or clones clone-safe non-Copy elements into a fresh owned
+Vec. A type containing `random.Rng` cannot be sliced because it cannot be
+safely duplicated; a non-repeatable Task observation right likewise cannot be
+duplicated. String slicing copies a Unicode-scalar range into a fresh owned
+String. Neither result aliases its source or acts as an assignable place.
+After creation, that fresh result follows the ordinary move rules for any
+other owned non-copy Vec or String value.
+
 Unpacking a non-copy tuple is one whole-source move. The target leaves receive
 owned elements, but the source does not become a set of independently reusable
 positional partial-move places. A later use of the source is rejected with the
@@ -501,8 +511,9 @@ shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
 `AU3005` rejects a direct indexed read of a non-copy Vec element or Map value;
 `AU3006` rejects the corresponding indexed compound read-modify-write.
-`AU3007` rejects direct or transitive duplication of non-cloneable
-`random.Rng` state, including an unsafe generic specialization. `AU3008`
+`AU3007` rejects direct or transitive duplication of non-cloneable state,
+including `random.Rng`, opaque FFI handles, capturing closure environments,
+and unsafe generic specializations. `AU3008`
 reports a non-Transfer task or Queue boundary. `AU3009` rejects clone,
 clone-producing collection read, or aggregate copy that would duplicate a
 single-consumer task-result right. Reuse after direct observation is the

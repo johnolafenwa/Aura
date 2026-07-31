@@ -271,8 +271,70 @@ main target is 20 GiB, and the host has 126 GiB free. No synthetic coverage
 test or exclusion was added. The only justified invariant remains the
 unreachable comprehension no-filter-token fallback described above.
 
-Phase 7.1 is signed off. Phase 7.2 owned Vec/String slicing is now active.
-There is no current blocker.
+Phase 7.1 is signed off.
+
+## Phase 7.2 owned Vec and String slices
+
+Implementation and focused verification are complete; the exact clean
+full-CI and frozen-floor coverage replay remains before Phase 7.2 sign-off.
+Phase 7.3 has not started.
+
+- The AST has a distinct `Slice` expression with optional endpoints and the
+  exact colon span. The parser accepts `value[start:end]`, `value[:end]`,
+  `value[start:]`, and `value[:]`; keeps indexing and specialization
+  distinct; rejects mixed tuple/slice delimiters; and gives the ratified
+  `AU2005` guidance for steps and slice assignment.
+- Static semantics require exact `int32` written endpoints and accept only
+  `Vec[T]` and `String`. The base is retained across start and end evaluation.
+  Vec results preserve `T` and infer clone-safety obligations through generic
+  specializations; `random.Rng`, opaque handles, capturing closure
+  environments, and non-repeatable Task observation rights remain protected.
+- MIR lowers the base, start, and end once from left to right, passes explicit
+  endpoint-presence flags plus colon coordinates, and returns a fresh owned
+  value. The MIR runtime borrows a place receiver so it clones only selected
+  Vec elements rather than cloning the whole source first.
+- Direct code generation uses the same six-operand private ABI through
+  `aurora_direct_vec_slice` and `aurora_direct_string_slice`. Both backends use
+  the shared normalize-once, no-clamp bounds helper. String indices are
+  Unicode scalar positions and String slicing is O(n).
+- ADR-0040 is Accepted. ADR-0004 and ADR-0038, the normative Manual, Learn and
+  tutorials, README surfaces, editor guidance, CHANGELOG, and the maintained
+  `examples/collections/slices.au` are synchronized. The executable
+  Collections Manual block now runs Vec and Unicode String slices and has a
+  reviewed source hash and exact output.
+
+Independent audit found and closed three concrete defects:
+
+1. completion after `make_values()[1:].` recovered only `()[1:]`, and `]`
+   inside an endpoint string corrupted raw bracket matching; the receiver
+   scanner is now delimiter-stack and string aware
+2. conformance claimed executable Manual slice evidence before the executable
+   block actually exercised slicing; the block now does
+3. generic `singleton[T]` construction could form a
+   `Vec[consuming closure]`, after which slicing shared the single-use closure
+   environment; structural clone-safety now rejects that specialization with
+   `AU3007`
+
+Focused verification:
+
+- 19/19 slice-focused compiler-library tests
+- 2/2 dedicated forced-MIR/direct CLI parity tests, including exact `AU4003`
+  diagnostics and frames
+- 9/9 fixture gates, including the new valid `-len`, negative-end-underflow,
+  String integer-index, generic-specialization, and retained-base-consumption
+  fixtures
+- 94/94 compiler-analysis tests
+- 100/100 language-server tests
+- 18/18 bundled-extension tests
+- warning-denied compiler/CLI Clippy, Rust formatting, and scoped diff hygiene
+- reference integrity over 36 pages, 258 fenced blocks, 125 verified blocks,
+  9 reference tests, 59 integrity tests, and all 683 migration manifests
+- documentation build
+
+Build hygiene removed coverage-only output and the obsolete
+`native-runtime-uninstrumented` tree, reducing `target/` from 24 GiB to 17
+GiB before the focused rebuild. It is currently 20 GiB with 125 GiB free. No
+synthetic coverage test or exclusion was added. There is no current blocker.
 
 ## Authorized sequence
 

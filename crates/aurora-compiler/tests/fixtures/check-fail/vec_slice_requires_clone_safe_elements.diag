@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `Vec slice` because `Holder` contains non-cloneable `random.Rng` state
+ --> crates/aurora-compiler/tests/fixtures/check-fail/vec_slice_requires_clone_safe_elements.au:7:19
+  |
+7 |     return values[:]
+  |                   ^
+  = help: move or remove the value so it has one owner, or construct an independent generator with an explicit seed

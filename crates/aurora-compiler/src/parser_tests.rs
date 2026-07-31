@@ -2080,6 +2080,134 @@ fn parser_helpers_cover_specialization_and_format_parts() {
 }
 
 #[test]
+fn phase72_parser_preserves_owned_slice_forms_and_colon_spans() {
+    for (source, has_start, has_end, colon_column) in [
+        ("values[1:3]", true, true, 9),
+        ("values[:3]", false, true, 8),
+        ("values[1:]", true, false, 9),
+        ("values[:]", false, false, 8),
+        ("text[1:3]", true, true, 7),
+    ] {
+        let expr = parse_expression(source).expect("owned slice syntax should parse");
+        let ExprKind::Slice {
+            object,
+            start,
+            end,
+            colon_span,
+        } = expr.kind
+        else {
+            panic!("expected `{source}` to produce a distinct slice AST node");
+        };
+        assert!(matches!(object.kind, ExprKind::Name(_)));
+        assert_eq!(start.is_some(), has_start, "{source}");
+        assert_eq!(end.is_some(), has_end, "{source}");
+        assert_eq!(colon_span.column, colon_column, "{source}");
+    }
+
+    let grouped = parse_expression("values[-2:(limit)]")
+        .expect("grouped and negative endpoints should parse");
+    let ExprKind::Slice { start, end, .. } = grouped.kind else {
+        panic!("expected a slice");
+    };
+    assert!(matches!(
+        start.as_deref().map(|expr| &expr.kind),
+        Some(ExprKind::Unary {
+            op: UnaryOp::Neg,
+            ..
+        })
+    ));
+    assert!(matches!(
+        end.as_deref().map(|expr| &expr.kind),
+        Some(ExprKind::Group(_))
+    ));
+
+    let multiline = parse_expression("values[\n    1\n    :\n    3\n]")
+        .expect("slice endpoints may use delimiter continuation");
+    let ExprKind::Slice { colon_span, .. } = multiline.kind else {
+        panic!("expected a multiline slice");
+    };
+    assert_eq!((colon_span.line, colon_span.column), (3, 5));
+
+    let fstring = parse_expression("f\"{values[1:3]}\"").expect("slice in f-string should parse");
+    let ExprKind::FString(parts) = fstring.kind else {
+        panic!("expected an f-string");
+    };
+    let FormatPart::Expr(interpolation) = &parts[0] else {
+        panic!("expected an interpolation");
+    };
+    let ExprKind::Slice { colon_span, .. } = &interpolation.kind else {
+        panic!("expected a slice interpolation");
+    };
+    assert_eq!(colon_span.column, 12);
+}
+
+#[test]
+fn phase72_parser_keeps_index_specialization_and_postfix_chains_distinct() {
+    let chained = parse_expression("values[1:][0]").expect("slice then index should parse");
+    let ExprKind::Index { object, .. } = chained.kind else {
+        panic!("outer postfix should remain an index");
+    };
+    assert!(matches!(object.kind, ExprKind::Slice { .. }));
+
+    let specialized =
+        parse_expression("Vec[int32]()[1:]").expect("specialization, call, and slice should chain");
+    let ExprKind::Slice { object, .. } = specialized.kind else {
+        panic!("outer postfix should be a slice");
+    };
+    let ExprKind::Call { callee, .. } = object.kind else {
+        panic!("slice base should remain a call");
+    };
+    assert!(matches!(callee.kind, ExprKind::Specialize { .. }));
+
+    let indexed = parse_expression("values[index]").expect("plain indexing should remain valid");
+    assert!(matches!(indexed.kind, ExprKind::Index { .. }));
+}
+
+#[test]
+fn phase72_parser_rejects_slice_steps_and_slice_assignment_with_teaching_diagnostics() {
+    for (source, column) in [("values[::]", 9), ("values[1:3:2]", 11)] {
+        let error = parse_expression(source).expect_err("slice steps are reserved");
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert_eq!(error.span, Some(Span::new(1, column)), "{source}");
+        assert!(
+            error.message.contains("slice steps are unavailable")
+                && error.message.contains("select a stride"),
+            "{source}: {}",
+            error.message
+        );
+    }
+
+    for (source, column) in [
+        ("values[1:3] = replacement\n", 9),
+        ("values[:] += replacement\n", 8),
+    ] {
+        let error = parse_stmt_from(source).expect_err("slice assignment is unavailable");
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert_eq!(error.span, Some(Span::new(1, column)), "{source}");
+        assert!(
+            error.message.contains("slice assignment is unavailable")
+                && error.message.contains("owned copies"),
+            "{source}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn phase72_parser_rejects_mixed_tuple_and_slice_delimiters() {
+    for (source, message) in [
+        ("values[0:1,2]", "expected RBracket, found Comma"),
+        ("values[0,1:2]", "expected RBracket, found Colon"),
+    ] {
+        let error =
+            parse_expression(source).expect_err("tuple and slice delimiters must not be mixed");
+        assert_eq!(error.code, "AU1101", "{source}");
+        assert_eq!(error.span, Some(Span::new(1, 11)), "{source}");
+        assert_eq!(error.message, message, "{source}");
+    }
+}
+
+#[test]
 fn parse_format_parts_reuses_the_current_recursion_budget() {
     let mut parser = Parser::new(lex("value\n").expect("tokenization should succeed"));
     parser.recursion_depth = crate::limits::RECURSION_LIMIT;

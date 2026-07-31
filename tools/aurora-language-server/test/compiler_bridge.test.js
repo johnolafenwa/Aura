@@ -5006,6 +5006,161 @@ test("compiler bridge exposes progressively scoped comprehension intelligence", 
   }
 });
 
+test("compiler bridge preserves owned slice result types, endpoint intelligence, and diagnostics", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-owned-slices-"));
+  const sourceLines = [
+    "def take_slice(values: Vec[String], start: int32, end: int32) -> Vec[String]:",
+    "    selected = values[start:end]",
+    "    return selected",
+    ""
+  ];
+  const source = sourceLines.join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    for (const [name, hover] of [
+      ["values", "param values: Vec[String]"],
+      ["start", "param start: int32"],
+      ["end", "param end: int32"]
+    ]) {
+      const startCharacter = sourceLines[1].indexOf(name);
+      assert.equal(
+        compilerHoverAtPosition(analysis, 1, startCharacter + 1)?.value,
+        `\`\`\`aurora\n${hover}\n\`\`\``
+      );
+    }
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nbinding selected: Vec[String]\n```"
+      ),
+      "an owned Vec slice should preserve the ordinary Vec result type"
+    );
+
+    const completionLine = "    values[start:end].";
+    const completionSource = [
+      sourceLines[0],
+      completionLine,
+      "    return values[:]",
+      ""
+    ].join("\n");
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      1,
+      completionLine.length,
+      "."
+    );
+    const names = new Set(completions.map((item) => item.name));
+    assert.ok(names.has("push"));
+    assert.ok(names.has("len"));
+
+    for (const receiver of [
+      "make_values()[1:]",
+      "values[endpoint(\"]\"):]"
+    ]) {
+      const receiverLine = `    ${receiver}.`;
+      const receiverSource = [
+        "def make_values() -> Vec[String]:",
+        "    return [\"Ada\", \"Grace\"]",
+        "",
+        "def endpoint(text: String) -> int32:",
+        "    return 0",
+        "",
+        "def inspect(values: Vec[String]):",
+        receiverLine,
+        ""
+      ].join("\n");
+      const receiverCompletions = await completeWithCompiler(
+        mainUri,
+        receiverSource,
+        7,
+        receiverLine.length,
+        "."
+      );
+      assert.ok(
+        receiverCompletions,
+        `completion should recover the slice receiver ${receiver}`
+      );
+      const receiverNames = new Set(receiverCompletions.map((item) => item.name));
+      assert.ok(receiverNames.has("push"), receiver);
+      assert.ok(receiverNames.has("len"), receiver);
+    }
+
+    const stepped = await analyzeWithCompiler(
+      `file://${path.join(tempRoot, "stepped.au")}`,
+      [
+        "def reject(values: Vec[int32]):",
+        "    print(values[::2])",
+        ""
+      ].join("\n")
+    );
+    assert.equal(stepped.diagnostics.length, 1);
+    assert.equal(stepped.diagnostics[0].code, "AU2005");
+    assert.equal(
+      stepped.diagnostics[0].message,
+      "slice steps are unavailable; use an explicit loop to select a stride"
+    );
+
+    for (const diagnosticCase of [
+      {
+        name: "endpoint-type",
+        source: [
+          "def reject(values: Vec[int32], endpoint: int64):",
+          "    print(values[endpoint:])",
+          ""
+        ].join("\n"),
+        expected: {
+          code: "AU2002",
+          message: "slice endpoints must have type `int32`, found `int64`",
+          line: 1,
+          startCharacter: 17,
+          endCharacter: 18
+        }
+      },
+      {
+        name: "assignment",
+        source: [
+          "def replace(values: Vec[int32]):",
+          "    values[1:3] = values",
+          ""
+        ].join("\n"),
+        expected: {
+          code: "AU2005",
+          message:
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+          line: 1,
+          startCharacter: 12,
+          endCharacter: 13
+        }
+      }
+    ]) {
+      const rejected = await analyzeWithCompiler(
+        `file://${path.join(tempRoot, `${diagnosticCase.name}.au`)}`,
+        diagnosticCase.source
+      );
+      assert.equal(rejected.diagnostics.length, 1);
+      assert.deepEqual(
+        {
+          code: rejected.diagnostics[0].code,
+          message: rejected.diagnostics[0].message,
+          line: rejected.diagnostics[0].line,
+          startCharacter: rejected.diagnostics[0].start_character,
+          endCharacter: rejected.diagnostics[0].end_character
+        },
+        diagnosticCase.expected
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves incomplete comprehension diagnostics without stale intelligence", async () => {
   const tempRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "aurora-lsp-incomplete-comprehension-")

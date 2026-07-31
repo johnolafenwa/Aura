@@ -61,7 +61,9 @@ The current tutorial set covers:
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals,
   storing APIs, bare-shared/`own` iteration, mutable Vec iteration, stable
   sorting, eager callback-powered `map`/`filter`, and eager owned list/set/map
-  comprehensions with filters and nested clauses
+  comprehensions with filters and nested clauses, plus owned Vec/String slices
+  with omitted endpoints, negative normalization, loud bounds, and
+  Unicode-scalar String positions
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls

@@ -193,6 +193,51 @@ an index that remains out of range after normalization. For example,
 `value` at the wrong position. `get(-999)` follows its existing optional
 contract and returns `None`.
 
+### Owned Vec And String Slices
+
+One-colon bracket forms select a half-open contiguous range and return a fresh
+owned value:
+
+    middle = values[1:3]
+    prefix = values[:2]
+    suffix = values[-2:]
+    all_values = values[:]
+    celebration = "A🎉Z"[1:2]
+
+The same four forms work for `Vec[T]` and `String`. An omitted start means zero
+and an omitted end means the source length. A written endpoint has exactly
+type `int32`; integer literals adopt that context, while an `int64` binding
+must be narrowed explicitly with a checked cast.
+
+Negative endpoints normalize once as `len + endpoint`. Each effective
+endpoint must then lie in `0..=len`, and start must not exceed end. Equal
+endpoints return an empty value. Any out-of-range or reversed range traps with
+`AU4003`.
+
+This is deliberately **not Python's clamping behavior**. Aurora never changes
+an invalid slice endpoint to the nearest boundary. For example,
+`values[-999:2]` and `values[3:1]` fail loudly instead of silently selecting a
+different or empty range.
+
+A Vec slice copies Copy elements and clones clone-safe non-Copy elements into
+the new Vec. This establishes the same specialization-time clone-safety
+obligation as other clone-producing operations. A value containing
+`random.Rng` is rejected with `AU3007`; a non-repeatable Task observation
+right is rejected with `AU3009`. The source remains usable and independent
+from the returned vector.
+
+A String slice counts Unicode scalar values, matching `String.len()`, rather
+than UTF-8 bytes or grapheme clusters. It scans the source to find scalar
+boundaries, so slicing is O(n), then returns a fresh valid UTF-8 String.
+Integer `text[index]` remains unavailable.
+
+The base, written start, and written end run exactly once from left to right,
+with the source retained through the endpoint expressions. A slice is not an
+assignable place or an ADR-0038 view. Step forms report `AU2005` with `slice
+steps are unavailable; use an explicit loop to select a stride`. Slice
+assignment reports `AU2005` with `slice assignment is unavailable because
+slices are owned copies; mutate the source by index or build a new value`.
+
 ### Vec Algorithms And Callbacks
 
 `sort` and `sort_by` are stable, in-place mutations. Equal elements or equal
@@ -350,6 +395,11 @@ def descending_key(value: int32) -> int32:
 
 def main():
     values: Vec[int32] = [3, 1, 2, 4]
+    middle = values[1:3]
+    prefix = values[:2]
+    suffix = values[-2:]
+    all_values = values[:]
+    celebration = "A🎉Z"[1:2]
     mapped = values.map(doubled)
     filtered = values.filter(is_even)
 
@@ -373,6 +423,11 @@ def main():
     assert 1 in remainders
     assert 2 in remainders
 
+    print(middle)
+    print(prefix)
+    print(suffix)
+    print(all_values)
+    print(celebration)
     print(mapped)
     print(filtered)
     print(ascending)
@@ -395,9 +450,9 @@ Use `Set[T]` when the question is "have I seen this before?"
 ## Grammar
 
 The normative productions for list, map, set, and empty collection literals;
-list/set/map comprehensions; generic collection types; indexing; indexed
-assignment; method calls; and loop ownership modifiers are in
-[Grammar](/manual/grammar). The first colon in
+list/set/map comprehensions; generic collection types; indexing; one-colon
+owned slicing; indexed assignment; method calls; and loop ownership modifiers
+are in [Grammar](/manual/grammar). The first colon in
 a nonempty brace literal selects map syntax. `{}` is grammatically a map but
 may type as an empty `Set[T]` under an expected set type. `Set{...}` is the
 explicit set-literal form, and `Set[T]()` is the typed constructor form.
@@ -406,8 +461,9 @@ explicit set-literal form, and `Set[T]()` is the typed constructor form.
 
 Every collection is homogeneous under one exact invariant specialization.
 Literal elements, keys, and values must agree after contextual literal typing,
-and empty literals require an expected collection type. Vec indexes have exact
-type `int32`; Map indexes and lookup keys have exact type `K`. Mutating and
+and empty literals require an expected collection type. Vec indexes and
+written Vec/String slice endpoints have exact type `int32`; Map indexes and
+lookup keys have exact type `K`. Mutating and
 retaining APIs use the owned positions shown in the tables above, and every
 mutating method or indexed assignment requires a mutable collection place.
 Bare Vec/Set iteration borrows the collection, `own` consumes it, and `mut` is
@@ -419,10 +475,12 @@ indexed assignment accepts any Vec element or Map value type and owns the
 assigned value; a Map also owns its key. Compound indexed assignment requires
 copy `T` for Vec and copy `V` for Map.
 
-Clone-producing APIs infer obligations when their relevant element, key, or
-value types are unresolved. The obligation is checked after specialization and
-propagates through generic callers; a produced type containing `random.Rng` is
-rejected with `AU3007`. `filter` establishes that obligation for `T`.
+Clone-producing APIs and Vec slicing infer obligations when their relevant
+element, key, or value types are unresolved. The obligation is checked after
+specialization and propagates through generic callers; a produced type
+containing `random.Rng` is rejected with `AU3007`. `filter` and Vec slicing
+establish that obligation for `T`; slicing a non-repeatable Task observation
+right is rejected with `AU3009`.
 
 `sort` requires a mutable `Vec[T]` place and an orderable `T`. `sort_by`
 requires a mutable `Vec[T]` place, exact callback type `def(T) -> K`, and an
@@ -458,6 +516,11 @@ missing direct Map index traps with `AU4003`; simple indexed assignment inserts
 or replaces for any `V`; compound indexed assignment requires a copy Vec
 element or Map value and traps with `AU4003` when a Map key is absent.
 
+Vec and String slices normalize each negative endpoint once, require both
+effective endpoints in `0..=len`, reject a reversed range, and copy the
+half-open range into a fresh owned result. They never clamp. String positions
+count Unicode scalars and require an O(n) scan of the source.
+
 Vec algorithms visit elements from left to right. `map` and `filter` append
 their eager results in visit order. Natural and keyed sorts are stable.
 `sort_by` computes and stores all keys before its first receiver mutation; a
@@ -489,6 +552,13 @@ order. Algorithm callbacks receive shared element access. `map` moves each
 callback result into the returned vector; `filter` retains the source and
 clones each accepted element into the result.
 
+Slicing retains its non-Copy base through written endpoint evaluation. The
+base, start, and end each run at most once from left to right. Vec slicing
+copies or clones elements under the inferred clone-safety and task-result
+repeatability obligations; String slicing copies scalar-aligned UTF-8 bytes.
+The result owns independent storage, does not consume the source, and creates
+no view or assignable place.
+
 Comprehension iterable, filter, key, value, and element expressions retain
 ADR-0016 sequencing. Every reached inner source is selected once for that
 surviving outer combination. Active shared collection sources stay frozen
@@ -508,6 +578,12 @@ generator-shaped call argument, with:
 
     generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
 
+The same code reserves unsupported slice evolution with exact guidance:
+
+    slice steps are unavailable; use an explicit loop to select a stride
+
+    slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
+
 `AU2001` reports unknown collection types and members. `AU2002` covers literal
 element/key/value mismatch, missing empty-literal context, generic arity,
 index/key type mismatch, method argument type mismatch, and a collection
@@ -522,23 +598,25 @@ reports mutation/move while a collection or element is borrowed and invalid
 mutable iteration. `AU3003` reports mutation through an immutable collection
 place. `AU3005` rejects a non-copy direct Vec/Map indexed read, and `AU3006`
 rejects a non-copy Vec/Map indexed compound assignment. `AU3007` rejects a
-clone-producing collection operation, including `filter`, whose result
-contains or may contain non-cloneable `random.Rng` state. `AU4003` (`bounds or
-lookup violation`) reports an out-of-range Vec
-index or a missing direct Map key.
+clone-producing collection operation, including `filter` or Vec slicing,
+whose result contains or may contain non-cloneable `random.Rng` state.
+`AU3009` rejects Vec slicing that would duplicate a non-repeatable Task result
+right. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
+index, an invalid or reversed Vec/String slice, or a missing direct Map key.
 Optional absence from `get` and Boolean absence from Set/Map membership or
 removal are typed values, not diagnostics.
 
 ## Backend Support
 
-Vec, Map, and Set literals, comprehensions, equality, cloning, iteration,
-indexing, mutation, eager callback algorithms, stable sorting, and the
-complete method tables
+Vec, Map, and Set literals, comprehensions, owned Vec/String slices, equality,
+cloning, iteration, indexing, mutation, eager callback algorithms, stable
+sorting, and the complete method tables
 above are implemented for MIR execution and direct native generation. Both
 backends use the same static collection types
 and are parity-tested for duplicate-key replacement, key-before-value effects,
-comprehension order and ownership, indexed reads and writes, missing-key traps,
-and maintained observable behavior. Compiler analysis and the LSP consume
+comprehension order and ownership, slice order/bounds/Unicode behavior,
+indexed reads and writes, missing-key traps, and maintained observable
+behavior. Compiler analysis and the LSP consume
 those same types, binding scopes, and builtin signatures.
 
 ## Limits And Implementation-Defined Behavior
@@ -549,9 +627,10 @@ generator expressions, comprehension source modifiers, and trailing commas
 are unavailable; collection literals and comprehensions may span physical
 lines through their own delimiters. A Queue comprehension is eager and
 continues receiving until the ordinary Queue-iteration termination condition;
-use an explicit loop for early exit or bounded streaming. The slice surface is
-reserved for Phase 7 and is not accepted in
-Aurora 0.1. Set iteration and rendering currently follow an insertion-oriented
+use an explicit loop for early exit or bounded streaming. Slices support one
+contiguous half-open range only. Steps, slice assignment, views, arbitrary
+sliceable types, String integer indexing, and clamping are unavailable. Set
+iteration and rendering currently follow an insertion-oriented
 representation, but Set order is not a promised API contract; algorithms MUST
 NOT depend on it. Allocation success is limited by available host resources.
 Map duplicate-key position, read ownership, simple-assignment ownership/order,
@@ -561,8 +640,9 @@ implementation-defined permission for backend divergence.
 
 ## Status
 
-Vec, Map, and Set typing, literals, eager owned comprehensions, constructors,
-equality, cloning, Vec/Set iteration modes, negative Vec indexing, and the
+Vec, Map, and Set typing, literals, eager owned comprehensions, owned Vec and
+String slices, constructors, equality, cloning, Vec/Set iteration modes,
+negative Vec indexing, and the
 documented method surfaces,
 including callable-powered Vec algorithms, are implemented for the post-Phase
 1.5 surface. The duplicate-key, direct-read,
@@ -577,6 +657,8 @@ and
 `crates/aurora-compiler/tests/fixtures/run-fail/map_index_missing_key.au`.
 Comprehensions are Accepted under ADR-0039 and pinned by the focused
 comprehension fixture family and `examples/collections/comprehensions.au`.
+Owned Vec and Unicode-scalar String slices are Accepted under ADR-0040 and
+pinned by the focused slice fixture family and
+`examples/collections/slices.au`.
 Mutable Set iteration, direct Map iteration, general iterable protocols, and
-generator expressions remain unavailable. Collection slicing is reserved for
-the Phase 7 slice work.
+generator expressions remain unavailable.

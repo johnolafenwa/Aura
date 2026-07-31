@@ -117,7 +117,10 @@ its first call. The existing move checker rejects another call or use.
 
 Capture-free lambdas dispatch as ordinary function values. Capturing closures
 carry an owned environment and are non-Copy, including when their captures
-are individually Copy.
+are individually Copy. They are also not clone-safe: a clone-producing
+generic specialization that would duplicate the environment reports
+`AU3007`. Use a named function or capture-free lambda when a callable must be
+copied or cloned.
 
 ## Ownership And Evaluation Order
 

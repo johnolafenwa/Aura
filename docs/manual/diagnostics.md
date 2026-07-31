@@ -89,9 +89,10 @@ corresponding `Vec` or `Map` indexed compound assignment because
 read-modify-write would otherwise require a hidden clone or destructive move
 of the stored value.
 
-`AU3007` rejects an operation that would duplicate non-cloneable state. The
-current protected state is `random.Rng`, and the check follows it through
-collections, user classes, enum payloads, and other value wrappers. A generic
+`AU3007` rejects an operation that would duplicate non-cloneable state.
+Protected values include `random.Rng`, opaque FFI handles, and capturing
+closure environments, and the check follows them through collections, user
+classes, enum payloads, and other value wrappers. A generic
 definition over unresolved types records an inferred clone-safety obligation;
 `AU3007` is emitted at an unsafe concrete specialization, when a concrete
 requirement cannot be proved, or when an implementation would strengthen its
@@ -330,6 +331,21 @@ The bare form preserves the iterable's ordinary contract, including owned
 receive items for Queue. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
+
+Owned Vec and String slicing is implemented, but step syntax and slice
+assignment remain reserved. They use `AU2005` with these exact messages:
+
+    slice steps are unavailable; use an explicit loop to select a stride
+
+    slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
+
+Written slice endpoints have exactly type `int32`; a mismatched bound uses
+`AU2002`. A Vec slice that would duplicate `random.Rng`, an opaque FFI handle,
+or a capturing closure environment uses `AU3007`; one that would duplicate a
+non-repeatable Task result right uses `AU3009`.
+An endpoint outside `0..=len` after one negative normalization, or a start
+greater than its end, traps with `AU4003`. Unlike Python, Aurora never clamps a
+slice endpoint.
 
 A hint is retired when Aurora implements the form it pointed at. `in`,
 `not in`, chained comparisons, `len(...)`, `str(...)`, and contextually typed

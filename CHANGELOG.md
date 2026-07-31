@@ -41,3 +41,9 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
   trap channel, so a normal `main` status of `1` is never mistaken for an
   `AU####` failure.
 - Kept native caching optional for installed immutable runtime layouts: disabling or losing the cache no longer prevents an otherwise valid direct build.
+- Added owned `Vec[T]` and Unicode-scalar `String` slices with all omitted
+  endpoint forms, exact `int32` bounds, one-time negative normalization, loud
+  `AU4003` invalid/reversed ranges instead of Python clamping, clone-safety
+  enforcement, and MIR/direct parity. Slice steps, slice assignment, String
+  integer indexing, and views remain unavailable; the step and assignment
+  diagnostics include explicit migration guidance.

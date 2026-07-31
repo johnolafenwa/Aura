@@ -886,6 +886,69 @@ grep -Fq 'examples/collections/comprehensions.au' tutorials/04-control-flow.md
 grep -Fq 'Comprehensions use the bare form' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'comprehensions with filters and nested clauses' tutorials/README.md
 
+# Phase 7.2: Accepted ADR-0040 keeps the owned Vec/String slice contract
+# synchronized across syntax, diagnostics, runtime fixtures, reference, and
+# maintained teaching material.
+test -s architecture_docs/decisions/0040-owned-vec-and-string-slices.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0040-owned-vec-and-string-slices.md
+grep -Fq '0040-owned-vec-and-string-slices.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.2' architecture_docs/decisions/README.md
+grep -Fq '| "[", [ expression ], ":", [ expression ], "]" ;' docs/manual/grammar.md
+grep -Fq 'both endpoints must be in the' architecture_docs/decisions/0040-owned-vec-and-string-slices.md
+grep -Fq 'slice steps are unavailable; use an explicit loop to select a stride' docs/manual/diagnostics.md
+grep -Fq 'slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value' docs/manual/diagnostics.md
+grep -Fq 'Aurora deliberately differs from Python here: slice endpoints are **not' docs/manual/expressions.md
+grep -Fq 'so slicing is O(n)' docs/manual/collections.md
+grep -Fq 'Accepted ADR-0040 owned Vec/String slices' docs/manual/conformance.md
+test -s crates/aurora-compiler/tests/fixtures/parse-pass/owned_slices.au
+test -s crates/aurora-compiler/tests/fixtures/check-pass/slice_static_semantics.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au
+test -s crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout
+for fixture in \
+  slice_step_explicit \
+  slice_step_fully_omitted \
+  slice_step_omitted_bounds \
+  slice_step_omitted_value; do
+  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.au"
+  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+  grep -Fq 'slice steps are unavailable; use an explicit loop to select a stride' \
+    "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+done
+for fixture in \
+  slice_assignment_unavailable \
+  slice_compound_assignment_unavailable; do
+  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.au"
+  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+  grep -Fq 'slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value' \
+    "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+done
+for fixture in \
+  vec_slice_start_out_of_bounds \
+  vec_slice_end_out_of_bounds \
+  vec_slice_reversed_bounds \
+  string_slice_start_out_of_bounds \
+  string_slice_end_out_of_bounds \
+  string_slice_reversed_bounds; do
+  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.au"
+  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+  grep -Fq 'error[AU4003]' \
+    "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+done
+test -s examples/collections/slices.au
+grep -Fq 'celebration = text[1:2]' examples/collections/slices.au
+grep -Fq '`slices.au`' examples/README.md
+grep -Fq 'examples/collections/slices.au' README.md
+grep -Fq 'examples/collections/slices.au' tutorials/02-bindings-and-types.md
+grep -Fq 'owned Vec/String slices' tutorials/README.md
+
+if rg -n 'slicing waits for Phase 7|slice surface is reserved for Phase 7|Collection slicing is reserved|integer indexing or slicing (is|are) not supported on `String`|integer indexing and slicing are not defined for `String`' \
+  architecture_docs/decisions \
+  docs/manual \
+  docs/learn \
+  tutorials; then
+  echo "maintained reference still describes implemented owned slicing as future work" >&2
+  exit 1
+fi
+
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 scripts/test_capability_migrate.py

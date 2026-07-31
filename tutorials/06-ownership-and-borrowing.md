@@ -124,6 +124,21 @@ route, and a class, enum, or collection containing one cannot be cloned through
 a public clone-producing operation. Generic clone helpers infer this
 requirement and reject an unsafe concrete specialization with `AU3007`.
 
+Vec and String slices are another explicit owned-copy boundary:
+
+```python
+names = ["Ada", "Grace", "Margaret"]
+selected = names[1:]       # fresh owned Vec[String]
+label = "A🎉Z"[1:2]       # fresh owned String containing 🎉
+print(names.len())         # the sources remain valid
+```
+
+A Vec slice copies Copy elements and clones non-Copy elements, so its element
+type must be clone-safe. It rejects a value containing `random.Rng` with
+`AU3007` and a non-repeatable Task result right with `AU3009`. A String slice
+copies its Unicode-scalar range. Neither slice is a view: mutating the returned
+Vec cannot mutate the source, and the slice cannot be an assignment target.
+
 ## Closures Capture By Value
 
 A contextually typed lambda owns every outer local it uses:

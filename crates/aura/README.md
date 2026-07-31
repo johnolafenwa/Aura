@@ -30,6 +30,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/collections/vec_basics.au
 ./target/release/aura run examples/collections/vec_polish.au
 ./target/release/aura run examples/collections/vec_algorithms.au
+./target/release/aura run examples/collections/slices.au
 ./target/release/aura run examples/collections/map_basics.au
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/basics/pass_keyword.au
@@ -78,6 +79,7 @@ You can do the same with the other current examples:
 ./target/release/aura run examples/collections/vec_iteration.au
 ./target/release/aura run examples/collections/vec_polish.au
 ./target/release/aura run examples/collections/vec_algorithms.au
+./target/release/aura run examples/collections/slices.au
 ./target/release/aura run examples/collections/map_basics.au
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/generics/box_and_wrapper.au

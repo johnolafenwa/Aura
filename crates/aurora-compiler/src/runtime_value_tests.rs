@@ -11,7 +11,8 @@ use super::{
     remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task, run_protocol_step, select_runtime_values, send_error_cancelled,
     send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
@@ -29,6 +30,71 @@ use super::{
     WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+
+#[test]
+fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() {
+    let vector = VecValue {
+        element_type: Type::named("String"),
+        elements: ["zero", "one", "two", "three"]
+            .into_iter()
+            .map(|value| Value::String(value.to_string()))
+            .collect(),
+    };
+
+    let middle = slice_vec_owned(&vector, Some(-3), Some(-1))
+        .expect("negative bounds should normalize once");
+    assert_eq!(middle.element_type, Type::named("String"));
+    assert_eq!(
+        middle.elements,
+        vec![
+            Value::String("one".to_string()),
+            Value::String("two".to_string())
+        ]
+    );
+    assert_ne!(
+        middle.elements.as_ptr(),
+        vector.elements.as_ptr(),
+        "a Vec slice must own fresh element storage"
+    );
+
+    let full = slice_vec_owned(&vector, None, None).expect("omitted bounds should select all");
+    assert_eq!(full, vector);
+    assert_ne!(
+        full.elements.as_ptr(),
+        vector.elements.as_ptr(),
+        "even a full Vec slice must be a fresh owned value"
+    );
+
+    let unicode = "aé🎉e\u{301}";
+    assert_eq!(
+        slice_string_owned(unicode, Some(1), Some(-1))
+            .expect("String bounds should count Unicode scalar values"),
+        "é🎉e"
+    );
+    assert_eq!(
+        slice_string_owned(unicode, None, None).expect("full String slice should succeed"),
+        unicode
+    );
+
+    for (start, end, message) in [
+        (
+            Some(-6),
+            None,
+            "slice start `-6` normalizes to `-1`, outside `0..=5`",
+        ),
+        (None, Some(6), "slice end `6` is outside `0..=5`"),
+        (
+            Some(4),
+            Some(2),
+            "slice start `4` is greater than slice end `2`",
+        ),
+    ] {
+        let error = slice_string_owned(unicode, start, end)
+            .expect_err("invalid slice bounds must trap instead of clamping");
+        assert_eq!(error.code, "AU4003");
+        assert_eq!(error.message, message);
+    }
+}
 
 #[test]
 fn retry_runtime_policy_validates_host_limits_and_checked_doubling() {

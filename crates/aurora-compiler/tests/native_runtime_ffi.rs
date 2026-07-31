@@ -572,6 +572,10 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let unicode = string_value("é🎉e\u{301}");
         assert_eq!(aurora_direct_string_len(unicode), 4);
         assert_eq!(aurora_direct_string_byte_len(unicode), 9);
+        assert_eq!(
+            expect_string(aurora_direct_string_slice(unicode, 1, 1, -1, 1, 1, 1)),
+            "🎉e"
+        );
         release(unicode);
 
         let write_arg = string_value("");
@@ -653,6 +657,9 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         ));
         assert_eq!(aurora_direct_vec_insert_in_place(vec, 1, int_value(2)), 1);
         assert_eq!(aurora_direct_vec_swap_in_place(vec, 0, 2), 1);
+        let vec_slice = aurora_direct_vec_slice(vec, 0, 0, -1, 1, 1, 1);
+        assert_eq!(cloned_value(vec_slice).render(), "[4, 2]");
+        release(vec_slice);
         release(aurora_direct_vec_reverse_in_place(vec));
         release(aurora_direct_vec_remove_in_place(vec, 1));
         release(aurora_direct_vec_pop_in_place(vec));

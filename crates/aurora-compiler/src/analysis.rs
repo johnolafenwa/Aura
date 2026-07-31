@@ -727,6 +727,17 @@ impl<'a> AnalysisBuilder<'a> {
                 self.extend_lambda_scope_from_expr(object, target_line, character, scope);
                 self.extend_lambda_scope_from_expr(index, target_line, character, scope);
             }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                self.extend_lambda_scope_from_expr(object, target_line, character, scope);
+                if let Some(start) = start {
+                    self.extend_lambda_scope_from_expr(start, target_line, character, scope);
+                }
+                if let Some(end) = end {
+                    self.extend_lambda_scope_from_expr(end, target_line, character, scope);
+                }
+            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {
@@ -2208,6 +2219,17 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(object, scope);
                 self.visit_expr(index, scope);
             }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                self.visit_expr(object, scope);
+                if let Some(start) = start {
+                    self.visit_expr(start, scope);
+                }
+                if let Some(end) = end {
+                    self.visit_expr(end, scope);
+                }
+            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {
@@ -3554,6 +3576,9 @@ impl<'a> AnalysisBuilder<'a> {
                         },
                     })
             }
+            ExprKind::Slice { object, .. } => self
+                .infer_expr_type(object, scope)
+                .and_then(|ty| matches!(base_type_name(&ty), "Vec" | "String").then_some(ty)),
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Conditional {
                 then_expr,
@@ -4486,7 +4511,7 @@ fn expression_start_span(expr: &Expr) -> Span {
         ExprKind::Call { callee, .. } => Some(callee.as_ref()),
         ExprKind::Binary { left, .. } => Some(left.as_ref()),
         ExprKind::Conditional { then_expr, .. } => Some(then_expr.as_ref()),
-        ExprKind::Index { object, .. } => Some(object.as_ref()),
+        ExprKind::Index { object, .. } | ExprKind::Slice { object, .. } => Some(object.as_ref()),
         _ => None,
     };
     leftmost_child
@@ -4576,6 +4601,21 @@ fn expression_end_line(expr: &Expr) -> usize {
         }
         ExprKind::Index { object, index } => {
             expression_end_line(object).max(expression_end_line(index))
+        }
+        ExprKind::Slice {
+            object,
+            start,
+            end,
+            colon_span,
+        } => {
+            let mut end_line = expression_end_line(object).max(colon_span.line);
+            if let Some(start) = start {
+                end_line = end_line.max(expression_end_line(start));
+            }
+            if let Some(end) = end {
+                end_line = end_line.max(expression_end_line(end));
+            }
+            end_line
         }
         ExprKind::Match {
             scrutinee, arms, ..
@@ -5969,23 +6009,22 @@ fn extract_receiver_ending_before(line_text: &str, end_index_exclusive: usize) -
 
 fn find_receiver_start(line_text: &str, index: usize) -> Option<usize> {
     let bytes = line_text.as_bytes();
+    if bytes.get(index).copied() == Some(b']') {
+        let opening = find_matching_open_delimiter(line_text, index)?;
+        let base_end = previous_non_whitespace_index(bytes, opening);
+        return base_end
+            .and_then(|base_end| find_receiver_start(line_text, base_end))
+            .or(Some(opening));
+    }
+
     if bytes.get(index).copied() == Some(b')') {
-        let mut depth = 1isize;
-        let mut cursor = index as isize - 1;
-        while cursor >= 0 {
-            match bytes[cursor as usize] {
-                b')' => depth += 1,
-                b'(' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(cursor as usize);
-                    }
-                }
-                _ => {}
+        let opening = find_matching_open_delimiter(line_text, index)?;
+        if let Some(base_end) = previous_non_whitespace_index(bytes, opening) {
+            if receiver_token_can_precede_call(bytes[base_end]) {
+                return find_receiver_start(line_text, base_end).or(Some(opening));
             }
-            cursor -= 1;
         }
-        return None;
+        return Some(opening);
     }
 
     if is_identifier_char(bytes.get(index).copied()? as char) {
@@ -5998,9 +6037,65 @@ fn find_receiver_start(line_text: &str, index: usize) -> Option<usize> {
             }
             break;
         }
-        return Some((cursor + 1) as usize);
+        let start = (cursor + 1) as usize;
+        if bytes.get(start).copied() == Some(b'.') && cursor >= 0 {
+            return find_receiver_start(line_text, cursor as usize).or(Some(start + 1));
+        }
+        return Some(start);
     }
 
+    None
+}
+
+fn previous_non_whitespace_index(bytes: &[u8], before: usize) -> Option<usize> {
+    (0..before)
+        .rev()
+        .find(|index| !bytes[*index].is_ascii_whitespace())
+}
+
+fn receiver_token_can_precede_call(byte: u8) -> bool {
+    is_identifier_char(byte as char) || matches!(byte, b')' | b']')
+}
+
+fn find_matching_open_delimiter(line_text: &str, close_index: usize) -> Option<usize> {
+    let bytes = line_text.as_bytes();
+    let close = *bytes.get(close_index)?;
+    let expected_open = match close {
+        b')' => b'(',
+        b']' => b'[',
+        _ => return None,
+    };
+    let mut delimiters = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, byte) in bytes.iter().copied().enumerate().take(close_index + 1) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'(' | b'[' | b'{' => delimiters.push((byte, index)),
+            b')' | b']' | b'}' => {
+                let (open, opening_index) = delimiters.pop()?;
+                if !matches!((open, byte), (b'(', b')') | (b'[', b']') | (b'{', b'}')) {
+                    return None;
+                }
+                if index == close_index {
+                    return (open == expected_open).then_some(opening_index);
+                }
+            }
+            _ => {}
+        }
+    }
     None
 }
 

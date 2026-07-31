@@ -1783,6 +1783,94 @@ fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
 }
 
 #[test]
+fn phase72_slice_analysis_visits_bounds_and_preserves_owned_result_types() {
+    let source = concat!(
+        "def take_slice(values: Vec[String], text: String, start: int32, end: int32) -> Vec[String]:\n",
+        "    selected = values[start:end]\n",
+        "    label = text[:end]\n",
+        "    print(label)\n",
+        "    return selected\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for expected_hover in [
+        "param values: Vec[String]",
+        "param start: int32",
+        "param end: int32",
+        "binding selected: Vec[String]",
+        "param text: String",
+        "binding label: String",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing slice occurrence `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+}
+
+#[test]
+fn phase72_slice_result_type_drives_member_completion_during_an_incomplete_edit() {
+    let source = concat!(
+        "def take_slice(values: Vec[String], start: int32, end: int32):\n",
+        "    selected = values[start:end]\n",
+        "    selected.\n",
+    );
+    let completions = complete_source(source, 2, 13, Some('.'))
+        .expect("slice result completion should recover from a dangling member");
+    assert!(completions.iter().any(|item| item.name == "push"));
+    assert!(completions.iter().any(|item| item.name == "len"));
+}
+
+#[test]
+fn phase72_slice_completion_recovers_call_bases_and_delimiters_inside_strings() {
+    for (receiver, line, character) in [
+        (
+            "make_values()[1:]",
+            "    make_values()[1:].\n",
+            "    make_values()[1:].".len(),
+        ),
+        (
+            "values[endpoint(\"]\"):]",
+            "    values[endpoint(\"]\"):].\n",
+            "    values[endpoint(\"]\"):].".len(),
+        ),
+    ] {
+        let source = format!(
+            "{}{}",
+            concat!(
+                "def make_values() -> Vec[String]:\n",
+                "    return [\"Ada\", \"Grace\"]\n",
+                "\n",
+                "def endpoint(text: String) -> int32:\n",
+                "    return 0\n",
+                "\n",
+                "def inspect(values: Vec[String]):\n",
+            ),
+            line,
+        );
+        let completions = complete_source(&source, 7, character, Some('.'))
+            .unwrap_or_else(|error| panic!("completion should recover `{receiver}`: {error:?}"));
+        assert!(
+            completions.iter().any(|item| item.name == "push"),
+            "missing Vec completion for `{receiver}`: {completions:?}"
+        );
+        assert!(
+            completions.iter().any(|item| item.name == "len"),
+            "missing Vec completion for `{receiver}`: {completions:?}"
+        );
+    }
+}
+
+#[test]
 fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape() {
     let source = r#"def inspect(
     names: Vec[String],
@@ -5241,9 +5329,12 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
     let line = "    values[idx].clone().";
     assert_eq!(
         extract_receiver_before_dot(line, line.len()),
-        Some("()".to_string())
+        Some("values[idx].clone()".to_string())
     );
-    assert_eq!(extract_receiver_ending_before(line, line.len()), Some("()"));
+    assert_eq!(
+        extract_receiver_ending_before(line, line.len()),
+        Some("values[idx].clone()")
+    );
     let field_line = "    value.";
     assert_eq!(
         extract_receiver_before_dot(field_line, field_line.len()),
@@ -5256,7 +5347,16 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
     );
     assert_eq!(extract_receiver_before_dot("      .   ", 10), None);
     assert_eq!(find_receiver_start("value.clone()", 10), Some(0));
-    assert_eq!(find_receiver_start("(value.clone())", 13), Some(12));
+    assert_eq!(find_receiver_start("(value.clone())", 13), Some(1));
+    assert_eq!(find_receiver_start("(value.clone())", 14), Some(0));
+    assert_eq!(
+        extract_receiver_before_dot("    values[start:end].", 23),
+        Some("values[start:end]".to_string())
+    );
+    assert_eq!(
+        extract_receiver_before_dot("    values[:][index].", 22),
+        Some("values[:][index]".to_string())
+    );
 
     let stmts = vec![
         crate::ast::Stmt::Pass(PassStmt {

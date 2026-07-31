@@ -103,6 +103,45 @@ for index in range(values.len() as int32):
     print(values[index])
 ```
 
+## Owned Slices
+
+Use one colon to copy a half-open range from a Vec or String:
+
+```python
+values = [10, 20, 30, 40]
+
+middle = values[1:3]  # [20, 30]
+prefix = values[:2]   # [10, 20]
+suffix = values[-2:]  # [30, 40]
+copy = values[:]      # all elements in a fresh Vec
+
+text = "A🎉Z"
+print(text[1:2])      # 🎉
+```
+
+Both results are owned copies, not views. Mutating a sliced Vec does not
+change the source. Copy elements are copied; non-Copy elements are cloned, so
+the element type must be clone-safe and cannot contain a non-repeatable Task
+result right.
+
+Written endpoints have exactly type `int32`. A negative endpoint is normalized
+once as `len + endpoint`. After that, both bounds must be between zero and the
+length, inclusive, and start must not exceed end.
+
+Aurora deliberately does **not** clamp slice bounds like Python. `values[-99:2]`
+and `values[3:1]` report `AU4003` instead of silently selecting a different or
+empty range. If invalid bounds are expected input, validate them before
+slicing.
+
+String endpoints count Unicode scalar values rather than UTF-8 bytes or
+grapheme clusters. Finding those boundaries scans the text, so String slicing
+is O(n). Integer String indexing remains unavailable: select a one-scalar
+owned String with `text[i:i + 1]` when the endpoint arithmetic is valid.
+
+Slice steps and slice assignment are not part of the current surface. Use an
+explicit loop to select a stride, and mutate the source by index or build a new
+value when replacing a range.
+
 ## Eager Vec Algorithms
 
 Function values let a vector apply named callbacks without introducing a lazy

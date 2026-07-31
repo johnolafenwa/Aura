@@ -150,6 +150,21 @@ printed-output order unless they explicitly coordinate that order.
     - `[4, 16]`
     - `{3: 30, 4: 40}`
     - `[11, 12, 21, 22]`
+- `slices.au`
+  - owned Vec and Unicode-scalar String slices with every omitted-endpoint
+    form, negative endpoints, and source/result independence
+  - prints:
+    - `[20, 30]`
+    - `[10, 20]`
+    - `[30, 40]`
+    - `[10, 20, 30, 40]`
+    - `[10, 20, 30, 40]`
+    - `[99, 30]`
+    - `🎉`
+    - `A🎉`
+    - `🎉Z`
+    - `A🎉Z`
+    - `A🎉Z`
 - `vec_basics.au`
   - list literals, indexed reads, `Vec[T]` methods, and indexed mutation through `set(...)`
   - prints:
@@ -901,6 +916,7 @@ cargo run -p aura -- run examples/basics/pass_keyword.au
 cargo run -p aura -- run examples/collections/vec_basics.au
 cargo run -p aura -- run examples/collections/vec_iteration.au
 cargo run -p aura -- run examples/collections/vec_polish.au
+cargo run -p aura -- run examples/collections/slices.au
 cargo run -p aura -- run examples/collections/map_basics.au
 cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au

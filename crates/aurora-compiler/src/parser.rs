@@ -1939,7 +1939,57 @@ impl Parser {
             if self.eat_simple(&TokenKind::LBracket).is_some() {
                 chain_len += 1;
                 self.check_expression_chain_limit(chain_len)?;
+                if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
+                    if self.at_simple(&TokenKind::Colon) {
+                        return Err(self.slice_step_error());
+                    }
+                    let end = if self.at_simple(&TokenKind::RBracket) {
+                        None
+                    } else {
+                        Some(Box::new(self.parse_expr()?))
+                    };
+                    if self.at_simple(&TokenKind::Colon) {
+                        return Err(self.slice_step_error());
+                    }
+                    self.expect_simple(TokenKind::RBracket)?;
+                    let span = expr.span;
+                    expr = Expr {
+                        kind: ExprKind::Slice {
+                            object: Box::new(expr),
+                            start: None,
+                            end,
+                            colon_span: colon.span,
+                        },
+                        span,
+                    };
+                    continue;
+                }
                 let first = self.parse_expr()?;
+                if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
+                    if self.at_simple(&TokenKind::Colon) {
+                        return Err(self.slice_step_error());
+                    }
+                    let end = if self.at_simple(&TokenKind::RBracket) {
+                        None
+                    } else {
+                        Some(Box::new(self.parse_expr()?))
+                    };
+                    if self.at_simple(&TokenKind::Colon) {
+                        return Err(self.slice_step_error());
+                    }
+                    self.expect_simple(TokenKind::RBracket)?;
+                    let span = expr.span;
+                    expr = Expr {
+                        kind: ExprKind::Slice {
+                            object: Box::new(expr),
+                            start: Some(Box::new(first)),
+                            end,
+                            colon_span: colon.span,
+                        },
+                        span,
+                    };
+                    continue;
+                }
                 let index = if self.eat_simple(&TokenKind::Comma).is_some() {
                     let mut elements = vec![first];
                     loop {
@@ -2389,6 +2439,22 @@ impl Parser {
         )
     }
 
+    fn slice_step_error(&self) -> Diagnostic {
+        Diagnostic::coded_at(
+            "AU2005",
+            self.current_span(),
+            "slice steps are unavailable; use an explicit loop to select a stride",
+        )
+    }
+
+    fn slice_assignment_error(&self) -> Diagnostic {
+        Diagnostic::coded_at(
+            "AU2005",
+            self.current_span(),
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+        )
+    }
+
     fn parse_args(&mut self) -> Result<Vec<Argument>> {
         let mut args = Vec::new();
 
@@ -2652,7 +2718,13 @@ impl Parser {
             }
 
             if self.eat_simple(&TokenKind::LBracket).is_some() {
+                if self.at_simple(&TokenKind::Colon) {
+                    return Err(self.slice_assignment_error());
+                }
                 let index = self.parse_expr()?;
+                if self.at_simple(&TokenKind::Colon) {
+                    return Err(self.slice_assignment_error());
+                }
                 self.expect_simple(TokenKind::RBracket)?;
                 let object = assign_target_to_expr(target, span);
                 target = AssignTarget::Index {
@@ -3358,6 +3430,22 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
             offset_expr_span(object, line, column_offset);
             offset_expr_span(index, line, column_offset);
         }
+        ExprKind::Slice {
+            object,
+            start,
+            end,
+            colon_span,
+        } => {
+            offset_expr_span(object, line, column_offset);
+            if let Some(start) = start {
+                offset_expr_span(start, line, column_offset);
+            }
+            if let Some(end) = end {
+                offset_expr_span(end, line, column_offset);
+            }
+            colon_span.line = line;
+            colon_span.column += column_offset;
+        }
         ExprKind::Match {
             scrutinee, arms, ..
         } => {
@@ -3434,6 +3522,7 @@ fn looks_like_lambda_type_annotation(expr: &Expr) -> bool {
                 ExprKind::Name(name) if name.chars().next().is_some_and(char::is_uppercase)
             ) && looks_like_lambda_type_annotation(index)
         }
+        ExprKind::Slice { .. } => false,
         ExprKind::Tuple(elements) => elements.iter().all(looks_like_lambda_type_annotation),
         _ => false,
     }

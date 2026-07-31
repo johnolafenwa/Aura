@@ -188,8 +188,42 @@ Last updated: 2026-07-31
   exclusion was added; the sole justified defensive comprehension invariant
   remains the unreachable no-filter-token fallback described above.
 
-  Phase 7.1 is signed off. Phase 7.2 owned Vec/String slicing is the active
-  stage. There is no current blocker.
+  Phase 7.1 is signed off. Phase 7.2 owned Vec/String slicing is implemented
+  across the compiler, both backends, editor tooling, fixtures, examples, and
+  the reference. All four one-colon forms produce fresh owned values. Written
+  endpoints are exact `int32`, omitted endpoints carry explicit presence
+  flags, negative bounds normalize once without clamping, and invalid or
+  reversed bounds use `AU4003`. String slicing uses Unicode-scalar positions
+  in O(n); Vec slicing clones only the selected clone-safe elements while
+  retaining the source. Steps and slice assignment use the ratified `AU2005`
+  guidance, and String integer indexing remains unavailable.
+
+  Independent audit found and closed three observable gaps. Completion after
+  a call-based slice receiver lost its callee, and a `]` inside an endpoint
+  string corrupted raw bracket matching; the receiver scanner is now
+  delimiter-stack and string aware, with compiler, LSP, and extension
+  regressions. The Manual conformance row claimed executable slice evidence
+  while its executable Collections block did not slice; that source-hash-
+  pinned block now runs Vec and Unicode String slices. A generic constructor
+  could form `Vec[consuming closure]`, after which slicing shared the
+  single-use closure environment between source and result; structural
+  clone-safety now rejects direct or nested capturing closure environments
+  with `AU3007`.
+
+  Focused verification is green: 19 slice compiler-library tests, both
+  forced-MIR/direct CLI parity tests, all 9 fixture gates, 94 compiler-analysis
+  tests, 100 language-server tests, 18 bundled-extension tests, the exact
+  maintained slice example, warning-denied compiler/CLI Clippy, formatting,
+  and diff hygiene. Reference integrity passes over 36 Manual pages, 258
+  fenced blocks, 125 verified blocks, 9 reference tests, 59 integrity tests,
+  and all 683 migration manifests; the docs build passes. Boundary fixtures
+  now pin valid `-len`, negative-end underflow, String integer-index
+  rejection, generic clone-safety specialization, and retained-base
+  consumption. No synthetic coverage test or exclusion has been added.
+
+  The exact clean Phase 7.2 full-CI and frozen-floor coverage replay remains
+  before sign-off; Phase 7.3 arrays have not started. There is no current
+  blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

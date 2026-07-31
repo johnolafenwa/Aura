@@ -516,6 +516,14 @@ pub enum ExprKind {
         object: Box<Expr>,
         index: Box<Expr>,
     },
+    /// An eager owned slice copy. Omitted endpoints remain distinct in the AST
+    /// so lowering can apply the language's `0`/`len` defaults exactly once.
+    Slice {
+        object: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        colon_span: Span,
+    },
     Try(Box<Expr>),
     Group(Box<Expr>),
     Match {
